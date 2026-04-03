@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod theme;
 pub mod cron;
 pub mod history;
 pub mod memory;
@@ -104,6 +105,7 @@ pub use search::{
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
 };
+pub use theme::{Rgb, Theme};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

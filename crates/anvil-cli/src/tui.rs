@@ -22,6 +22,8 @@ use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
+use runtime::{Rgb, Theme};
+
 use crossterm::event::{
     self, Event as CtEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -96,21 +98,21 @@ enum LogEntry {
 
 impl LogEntry {
     /// Render this entry as a list of ratatui `Line`s for display.
-    fn to_lines(&self, max_width: u16) -> Vec<Line<'static>> {
+    fn to_lines(&self, max_width: u16, theme: &Theme) -> Vec<Line<'static>> {
         let width = max_width.saturating_sub(4) as usize;
         match self {
             LogEntry::User(text) => {
                 let mut lines = vec![Line::from(vec![
-                    Span::styled("You  ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("You  ", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
                     Span::styled(
                         text.lines().next().unwrap_or("").to_string(),
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                        Style::default().fg(rgb(theme.text_primary)).add_modifier(Modifier::BOLD),
                     ),
                 ])];
                 for extra in text.lines().skip(1) {
                     lines.push(Line::from(Span::styled(
                         format!("     {extra}"),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(rgb(theme.text_primary)),
                     )));
                 }
                 lines.push(Line::from(""));
@@ -134,11 +136,11 @@ impl LogEntry {
                 is_error,
             } => {
                 let (border_color, icon, label) = if *is_error {
-                    (Color::Red, "✗", format!("{name} (error)"))
+                    (rgb(theme.error), "✗", format!("{name} (error)"))
                 } else if *done {
-                    (Color::Green, "✓", name.clone())
+                    (rgb(theme.success), "✓", name.clone())
                 } else {
-                    (Color::Yellow, "●", name.clone())
+                    (rgb(theme.accent), "●", name.clone())
                 };
 
                 let dash_count = (width.saturating_sub(label.len() + 6)).min(width);
@@ -307,6 +309,8 @@ pub struct AnvilTui {
     configure_state: ConfigureState,
     /// Snapshot of live config values shown in the configure menu.
     configure_data: ConfigureData,
+    /// Active colour theme — loaded from ~/.anvil/theme.json at startup.
+    pub theme: Theme,
 }
 
 /// Tracks the state of the slash-command completion popup.
@@ -329,6 +333,12 @@ struct CompletionItem {
 }
 
 const THINK_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Convert a runtime `Rgb` triple into a ratatui `Color`.
+#[inline]
+fn rgb(c: Rgb) -> Color {
+    Color::Rgb(c.0, c.1, c.2)
+}
 
 impl AnvilTui {
     /// Enter alternate screen and return the TUI + the sender for model events.
@@ -368,6 +378,7 @@ impl AnvilTui {
                 last_archive_status: String::new(),
                 configure_state: ConfigureState::Inactive,
                 configure_data: ConfigureData::default(),
+                theme: Theme::load(),
             },
             TuiSender(tx),
         ))
@@ -462,6 +473,11 @@ impl AnvilTui {
         self.active_tab_mut().session_id = id.into();
     }
 
+    /// Apply a new theme to the TUI immediately (live hot-swap).
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+
     // ─── Public interface ────────────────────────────────────────────────────
 
     /// Draw the current state.
@@ -503,6 +519,7 @@ impl AnvilTui {
         let last_archive_status = self.last_archive_status.clone();
         let configure_state = self.configure_state.clone();
         let configure_data = self.configure_data.clone();
+        let theme = self.theme.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -549,11 +566,11 @@ impl AnvilTui {
                 };
                 let style = if *is_active {
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(rgb(theme.accent))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
-                        .fg(Color::Rgb(0x66, 0x66, 0x88))
+                        .fg(rgb(theme.text_secondary))
                         .add_modifier(Modifier::DIM)
                 };
                 tab_spans.push(Span::styled(label, style));
@@ -562,7 +579,7 @@ impl AnvilTui {
             // Hint on the right side of the tab bar
             let hint = Span::styled(
                 "Ctrl+T new  Ctrl+W close  Ctrl+←/→ switch",
-                Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+                Style::default().fg(rgb(theme.border)),
             );
             let tab_bar_left_len: usize = tab_spans.iter().map(|s| s.content.chars().count()).sum();
             let hint_len = hint.content.chars().count();
@@ -570,7 +587,7 @@ impl AnvilTui {
             tab_spans.push(Span::raw(" ".repeat(pad)));
             tab_spans.push(hint);
             let tab_bar_widget = Paragraph::new(Line::from(tab_spans))
-                .style(Style::default().bg(Color::Rgb(0x12, 0x12, 0x22)));
+                .style(Style::default().bg(rgb(theme.bg_primary)));
             frame.render_widget(tab_bar_widget, tab_bar_area);
 
             // ── model/session bar (row 1) ────────────────────────────────────
@@ -587,8 +604,8 @@ impl AnvilTui {
             );
             let model_bar = Paragraph::new(model_bar_text).style(
                 Style::default()
-                    .fg(Color::Cyan)
-                    .bg(Color::Rgb(0x1a, 0x1a, 0x2e))
+                    .fg(rgb(theme.accent))
+                    .bg(rgb(theme.header_bg))
                     .add_modifier(Modifier::BOLD),
             );
             frame.render_widget(model_bar, model_bar_area);
@@ -603,7 +620,7 @@ impl AnvilTui {
                 let mut lines: Vec<Line<'static>> = Vec::new();
 
                 for entry in &log_snapshot {
-                    lines.extend(entry.to_lines(content_width));
+                    lines.extend(entry.to_lines(content_width, &theme));
                 }
 
                 // Streaming assistant text in progress
@@ -625,7 +642,7 @@ impl AnvilTui {
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("{think_frame} "),
-                            Style::default().fg(Color::Yellow),
+                            Style::default().fg(rgb(theme.thinking)),
                         ),
                         Span::styled(
                             think.clone(),
@@ -671,7 +688,7 @@ impl AnvilTui {
             let separator = "─".repeat(width);
             let line0 = Line::from(Span::styled(
                 separator,
-                Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+                Style::default().fg(rgb(theme.border)),
             ));
 
             // Line 1: input prompt + text (or configure breadcrumb in configure mode)
@@ -681,15 +698,15 @@ impl AnvilTui {
                 Line::from(vec![
                     Span::styled(
                         "⚒ ",
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         breadcrumb,
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+                        Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::DIM),
                     ),
                     Span::styled(
                         "   ↑↓ Navigate  Enter Select  Esc Back",
-                        Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+                        Style::default().fg(rgb(theme.border)),
                     ),
                 ])
             } else {
@@ -720,7 +737,7 @@ impl AnvilTui {
                     Span::styled(
                         "❯ ",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(rgb(theme.accent))
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(before_cursor, Style::default().fg(Color::White)),
@@ -804,12 +821,12 @@ impl AnvilTui {
             let mut line5_left = vec![
                 Span::styled(
                     "▸▸ ",
-                    Style::default().fg(Color::Rgb(0x88, 0x88, 0x44)),
+                    Style::default().fg(rgb(theme.warning)),
                 ),
                 Span::styled(
                     perm_display,
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(rgb(theme.warning))
                         .add_modifier(Modifier::DIM),
                 ),
             ];
@@ -852,9 +869,9 @@ impl AnvilTui {
                     .map(|(i, item)| {
                         let is_selected = i == completion_selected;
                         let (fg, bg) = if is_selected {
-                            (Color::Black, Color::Cyan)
+                            (rgb(theme.bg_primary), rgb(theme.accent))
                         } else {
-                            (Color::White, Color::Rgb(0x1a, 0x1a, 0x2e))
+                            (rgb(theme.text_primary), rgb(theme.bg_card))
                         };
                         let cmd_width = 24.min(popup_width as usize - 4);
                         let padded_cmd = format!("{:<width$}", item.0, width = cmd_width);
@@ -866,7 +883,7 @@ impl AnvilTui {
                             Span::styled(
                                 format!(" {}", item.1),
                                 Style::default()
-                                    .fg(if is_selected { Color::Black } else { Color::Rgb(0x88, 0x88, 0x88) })
+                                    .fg(if is_selected { rgb(theme.bg_primary) } else { rgb(theme.text_secondary) })
                                     .bg(bg)
                                     .add_modifier(Modifier::DIM),
                             ),
@@ -878,8 +895,8 @@ impl AnvilTui {
                     .block(
                         ratatui::widgets::Block::default()
                             .borders(ratatui::widgets::Borders::ALL)
-                            .border_style(Style::default().fg(Color::Rgb(0x44, 0x44, 0x66)))
-                            .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x2e))),
+                            .border_style(Style::default().fg(rgb(theme.border)))
+                            .style(Style::default().bg(rgb(theme.bg_card))),
                     );
                 frame.render_widget(ratatui::widgets::Clear, popup_area);
                 frame.render_widget(popup_widget, popup_area);

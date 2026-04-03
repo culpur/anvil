@@ -441,6 +441,14 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Core,
     },
+    SlashCommandSpec {
+        name: "theme",
+        aliases: &[],
+        summary: "Show, list, or change the TUI colour theme",
+        argument_hint: Some("[list | set <name> | reset]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -560,6 +568,10 @@ pub enum SlashCommand {
     Configure {
         /// Optional section and arguments, e.g. `Some("providers")`, `Some("models default claude-sonnet-4-6")`.
         args: Option<String>,
+    },
+    /// `/theme`, `/theme list`, `/theme set <name>`, `/theme reset`
+    Theme {
+        action: Option<String>,
     },
     Unknown(String),
 }
@@ -706,6 +718,9 @@ impl SlashCommand {
             },
             "configure" | "settings" | "config-menu" => Self::Configure {
                 args: remainder_after_command(trimmed, command),
+            },
+            "theme" => Self::Theme {
+                action: remainder_after_command(trimmed, command),
             },
             other => Self::Unknown(other.to_string()),
         })
@@ -2114,6 +2129,7 @@ pub fn handle_slash_command(
         | SlashCommand::GenerateImage { .. }
         | SlashCommand::HistoryArchive { .. }
         | SlashCommand::Configure { .. }
+        | SlashCommand::Theme { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }

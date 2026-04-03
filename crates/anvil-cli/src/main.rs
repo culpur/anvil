@@ -45,7 +45,7 @@ use runtime::{
     ConversationMessage, ConversationRuntime, CronDaemon, HistoryArchiver, LspManager,
     LspServerConfig, McpServerManager, MemoryManager, MessageRole, OAuthAuthorizationRequest,
     OAuthConfig, OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext,
-    QmdClient, RuntimeError, Session, TaskManager, TokenUsage, ToolError, ToolExecutor,
+    QmdClient, RuntimeError, Session, TaskManager, Theme, TokenUsage, ToolError, ToolExecutor,
     UsageTracker,
 };
 use crossterm::terminal;
@@ -1427,6 +1427,7 @@ fn run_resume_command(
         | SlashCommand::Search { .. }
         | SlashCommand::Failover { .. }
         | SlashCommand::GenerateImage { .. }
+        | SlashCommand::Theme { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2335,6 +2336,11 @@ impl LiveCli {
                 tui.enter_configure_mode(data);
                 return Ok(false);
             }
+            SlashCommand::Theme { action } => {
+                let msg = run_theme_command(action.as_deref(), Some(tui));
+                tui.push_system(msg);
+                return Ok(false);
+            }
             SlashCommand::Qmd { query } => {
                 // Handle /qmd inline in TUI — no alternate screen switch.
                 let q = query.as_deref().unwrap_or("").trim();
@@ -2544,6 +2550,10 @@ impl LiveCli {
             }
             SlashCommand::Configure { .. } => {
                 // Handled before run_command_for_tui via handle_repl_command_tui intercept.
+                (String::new(), false)
+            }
+            SlashCommand::Theme { .. } => {
+                // Intercepted in handle_repl_command_tui for live theme application.
                 (String::new(), false)
             }
             SlashCommand::Undo => {
@@ -3706,6 +3716,10 @@ impl LiveCli {
             }
             SlashCommand::Configure { args } => {
                 println!("{}", self.run_configure_command(args.as_deref()));
+                false
+            }
+            SlashCommand::Theme { action } => {
+                println!("{}", run_theme_command(action.as_deref(), None));
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5447,6 +5461,80 @@ fn render_configure_static(args: Option<&str>) -> String {
         _ => format!(
             "Run /configure {section} in an active session to view and edit settings.\n\n\
              For a read-only overview: /configure (main menu)"
+        ),
+    }
+}
+
+/// Handle the `/theme` slash command.
+///
+/// - `/theme`           — show the active theme name
+/// - `/theme list`      — list all built-in themes
+/// - `/theme set <n>`   — load built-in theme, persist, and optionally hot-apply
+/// - `/theme reset`     — revert to culpur-defense default
+///
+/// When `tui` is `Some` the theme is applied to the live TUI immediately.
+fn run_theme_command(action: Option<&str>, tui: Option<&mut AnvilTui>) -> String {
+    let action = action.unwrap_or("").trim();
+    let mut parts = action.splitn(2, ' ');
+    let sub = parts.next().unwrap_or("").trim();
+    let arg = parts.next().unwrap_or("").trim();
+
+    match sub {
+        "" => {
+            let current = Theme::load();
+            format!(
+                "Theme\n  Active           {}\n\nNext\n  /theme list      List available themes\n  /theme set <n>   Switch theme",
+                current.name
+            )
+        }
+        "list" => {
+            let names = Theme::builtin_names();
+            let active = Theme::load().name;
+            let mut lines = vec!["Available themes".to_string()];
+            for name in names {
+                let marker = if *name == active { "● " } else { "  " };
+                lines.push(format!("  {marker}{name}"));
+            }
+            lines.push(String::new());
+            lines.push("  /theme set <name>   Apply a theme".to_string());
+            lines.join("\n")
+        }
+        "set" if !arg.is_empty() => {
+            match Theme::builtin(arg) {
+                Some(theme) => {
+                    let name = theme.name.clone();
+                    if let Err(e) = theme.save() {
+                        return format!("Theme save error: {e}");
+                    }
+                    if let Some(tui) = tui {
+                        tui.set_theme(Theme::builtin(&name).unwrap_or_else(Theme::default_theme));
+                    }
+                    format!(
+                        "Theme changed\n  Active           {name}\n  Persisted        ~/.anvil/theme.json"
+                    )
+                }
+                None => {
+                    let names = Theme::builtin_names().join(", ");
+                    format!("Unknown theme: {arg}\n  Available: {names}")
+                }
+            }
+        }
+        "set" => "Usage: /theme set <name>  (try /theme list)".to_string(),
+        "reset" => {
+            let theme = Theme::default_theme();
+            let name = theme.name.clone();
+            if let Err(e) = theme.save() {
+                return format!("Theme reset error: {e}");
+            }
+            if let Some(tui) = tui {
+                tui.set_theme(Theme::default_theme());
+            }
+            format!(
+                "Theme reset\n  Active           {name}\n  Persisted        ~/.anvil/theme.json"
+            )
+        }
+        other => format!(
+            "Unknown theme action: {other}\n\n  /theme           Show current theme\n  /theme list      List themes\n  /theme set <n>   Apply a theme\n  /theme reset     Reset to default"
         ),
     }
 }
