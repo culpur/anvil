@@ -303,6 +303,10 @@ pub struct AnvilTui {
     qmd_status: String,
     /// Last archive info shown to user
     last_archive_status: String,
+    /// Current configure menu state (Inactive = not in configure mode).
+    configure_state: ConfigureState,
+    /// Snapshot of live config values shown in the configure menu.
+    configure_data: ConfigureData,
 }
 
 /// Tracks the state of the slash-command completion popup.
@@ -362,6 +366,8 @@ impl AnvilTui {
                 next_tab_id: 2,
                 qmd_status: String::new(),
                 last_archive_status: String::new(),
+                configure_state: ConfigureState::Inactive,
+                configure_data: ConfigureData::default(),
             },
             TuiSender(tx),
         ))
@@ -495,6 +501,8 @@ impl AnvilTui {
         let context_max_tokens = self.context_max_tokens;
         let qmd_status = self.qmd_status.clone();
         let last_archive_status = self.last_archive_status.clone();
+        let configure_state = self.configure_state.clone();
+        let configure_data = self.configure_data.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -587,51 +595,64 @@ impl AnvilTui {
 
             // ── content ─────────────────────────────────────────────────────
             let content_width = content_area.width;
-            let mut all_lines: Vec<Line<'static>> = Vec::new();
 
-            for entry in &log_snapshot {
-                all_lines.extend(entry.to_lines(content_width));
-            }
+            let all_lines: Vec<Line<'static>> = if configure_state != ConfigureState::Inactive {
+                // Configure mode — render the menu instead of the conversation log.
+                render_configure_menu(&configure_state, &configure_data, content_width as usize)
+            } else {
+                let mut lines: Vec<Line<'static>> = Vec::new();
 
-            // Streaming assistant text in progress
-            if !pending.is_empty() {
-                let clean = strip_ansi(&pending);
-                all_lines.extend(
-                    clean
-                        .lines()
-                        .map(|l| Line::from(Span::raw(l.to_string()))),
-                );
-            }
+                for entry in &log_snapshot {
+                    lines.extend(entry.to_lines(content_width));
+                }
 
-            // Thinking spinner
-            if !think.is_empty() {
-                let elapsed_think = format!("{:.1}s", {
-                    // estimate from think_frame count (ticks ~4/s)
-                    think_frame.len() as f64 * 0.25
-                });
-                all_lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{think_frame} "),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                    Span::styled(
-                        think.clone(),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                    Span::styled(
-                        format!("  ({})", elapsed_think),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]));
-            }
+                // Streaming assistant text in progress
+                if !pending.is_empty() {
+                    let clean = strip_ansi(&pending);
+                    lines.extend(
+                        clean
+                            .lines()
+                            .map(|l| Line::from(Span::raw(l.to_string()))),
+                    );
+                }
+
+                // Thinking spinner
+                if !think.is_empty() {
+                    let elapsed_think = format!("{:.1}s", {
+                        // estimate from think_frame count (ticks ~4/s)
+                        think_frame.len() as f64 * 0.25
+                    });
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{think_frame} "),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::styled(
+                            think.clone(),
+                            Style::default()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                        Span::styled(
+                            format!("  ({})", elapsed_think),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+
+                lines
+            };
 
             let total_lines = all_lines.len();
             let visible_height = content_area.height as usize;
-            // Auto-scroll: keep the bottom visible when not manually scrolled
-            let max_scroll = total_lines.saturating_sub(visible_height);
-            let effective_scroll = scroll.min(max_scroll);
+            // Auto-scroll: keep the bottom visible when not manually scrolled.
+            // In configure mode we always start from the top (scroll = 0).
+            let effective_scroll = if configure_state != ConfigureState::Inactive {
+                0
+            } else {
+                let max_scroll = total_lines.saturating_sub(visible_height);
+                scroll.min(max_scroll)
+            };
 
             let visible_lines: Vec<Line<'static>> = all_lines
                 .into_iter()
@@ -653,46 +674,65 @@ impl AnvilTui {
                 Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
             ));
 
-            // Line 1: input prompt + text
-            // We use a block-cursor character (█) appended at the cursor position.
-            let before_cursor = input_text
-                .char_indices()
-                .take_while(|(i, _)| *i < cursor_pos)
-                .map(|(_, c)| c)
-                .collect::<String>();
-            let cursor_char = input_text[cursor_pos..]
-                .chars()
-                .next()
-                .map(|_| {
-                    input_text[cursor_pos..]
-                        .chars()
-                        .next()
-                        .unwrap()
-                        .to_string()
-                })
-                .unwrap_or_else(|| " ".to_string());
-            let after_cursor = if cursor_pos < input_text.len() {
-                let next = next_char_boundary(&input_text, cursor_pos);
-                input_text[next..].to_string()
+            // Line 1: input prompt + text (or configure breadcrumb in configure mode)
+            let line1 = if configure_state != ConfigureState::Inactive {
+                // Show breadcrumb path instead of the normal input prompt.
+                let breadcrumb = configure_breadcrumb(&configure_state);
+                Line::from(vec![
+                    Span::styled(
+                        "⚒ ",
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        breadcrumb,
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+                    ),
+                    Span::styled(
+                        "   ↑↓ Navigate  Enter Select  Esc Back",
+                        Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+                    ),
+                ])
             } else {
-                String::new()
+                // Normal input line: We use a block-cursor character appended at the cursor position.
+                let before_cursor = input_text
+                    .char_indices()
+                    .take_while(|(i, _)| *i < cursor_pos)
+                    .map(|(_, c)| c)
+                    .collect::<String>();
+                let cursor_char = input_text[cursor_pos..]
+                    .chars()
+                    .next()
+                    .map(|_| {
+                        input_text[cursor_pos..]
+                            .chars()
+                            .next()
+                            .unwrap()
+                            .to_string()
+                    })
+                    .unwrap_or_else(|| " ".to_string());
+                let after_cursor = if cursor_pos < input_text.len() {
+                    let next = next_char_boundary(&input_text, cursor_pos);
+                    input_text[next..].to_string()
+                } else {
+                    String::new()
+                };
+                Line::from(vec![
+                    Span::styled(
+                        "❯ ",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(before_cursor, Style::default().fg(Color::White)),
+                    Span::styled(
+                        cursor_char,
+                        Style::default()
+                            .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+                            .bg(Color::White),
+                    ),
+                    Span::styled(after_cursor, Style::default().fg(Color::White)),
+                ])
             };
-            let line1 = Line::from(vec![
-                Span::styled(
-                    "❯ ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(before_cursor, Style::default().fg(Color::White)),
-                Span::styled(
-                    cursor_char,
-                    Style::default()
-                        .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
-                        .bg(Color::White),
-                ),
-                Span::styled(after_cursor, Style::default().fg(Color::White)),
-            ]);
 
             // Line 2: blank
             let line2 = Line::from("");
@@ -1173,6 +1213,18 @@ impl AnvilTui {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
+        // Configure mode intercepts all keys except Ctrl+C/D (exit safety).
+        if self.configure_state != ConfigureState::Inactive {
+            // Allow Ctrl+C to bail out of configure mode.
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                    self.configure_state = ConfigureState::Inactive;
+                    return Ok(ReadResult::Continue);
+                }
+            }
+            return self.handle_configure_key(key);
+        }
+
         // Ctrl combos
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.handle_ctrl_key(key);
@@ -1498,6 +1550,319 @@ impl AnvilTui {
     pub fn is_exiting(&self) -> bool {
         self.exiting
     }
+
+    // ─── Configure mode ──────────────────────────────────────────────────────
+
+    /// Enter the interactive configure menu.  Call this when the user runs
+    /// `/configure` in the TUI.  `data` is a snapshot of live config values
+    /// built by the caller (LiveCli).
+    pub fn enter_configure_mode(&mut self, data: ConfigureData) {
+        self.configure_data = data;
+        self.configure_state = ConfigureState::MainMenu { selected: 0 };
+    }
+
+    /// Exit configure mode and return to the normal conversation view.
+    pub fn exit_configure_mode(&mut self) {
+        self.configure_state = ConfigureState::Inactive;
+    }
+
+    /// True when the configure menu is currently active.
+    pub fn is_configure_active(&self) -> bool {
+        self.configure_state != ConfigureState::Inactive
+    }
+
+    /// Key handler for configure mode.
+    fn handle_configure_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
+        // EditingValue has its own character-level handler.
+        if let ConfigureState::EditingValue { ref mut value, ref mut cursor, .. } =
+            self.configure_state
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    // Abort the edit — go back to the parent section.
+                    let section = match &self.configure_state {
+                        ConfigureState::EditingValue { section, .. } => section.clone(),
+                        _ => String::new(),
+                    };
+                    self.configure_state = section_state_from_name(&section, 0);
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Enter => {
+                    // Commit the edit — produce a ConfigureAction.
+                    let (section, key_name, value_str) = match &self.configure_state {
+                        ConfigureState::EditingValue { section, key, value, .. } => {
+                            (section.clone(), key.clone(), value.clone())
+                        }
+                        _ => unreachable!(),
+                    };
+                    let action = configure_action_for(&section, &key_name, &value_str);
+                    // Return to the parent section.
+                    self.configure_state = section_state_from_name(&section, 0);
+                    if let Some(action) = action {
+                        return Ok(ReadResult::ConfigureAction(action));
+                    }
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Char(ch) => {
+                    value.insert(*cursor, ch);
+                    *cursor += ch.len_utf8();
+                }
+                KeyCode::Backspace => {
+                    if *cursor > 0 {
+                        let prev = prev_char_boundary(value, *cursor);
+                        value.drain(prev..*cursor);
+                        *cursor = prev;
+                    }
+                }
+                KeyCode::Delete => {
+                    if *cursor < value.len() {
+                        let next = next_char_boundary(value, *cursor);
+                        value.drain(*cursor..next);
+                    }
+                }
+                KeyCode::Left => {
+                    if *cursor > 0 {
+                        *cursor = prev_char_boundary(value, *cursor);
+                    }
+                }
+                KeyCode::Right => {
+                    if *cursor < value.len() {
+                        *cursor = next_char_boundary(value, *cursor);
+                    }
+                }
+                KeyCode::Home => *cursor = 0,
+                KeyCode::End => *cursor = value.len(),
+                _ => {}
+            }
+            return Ok(ReadResult::Continue);
+        }
+
+        // Navigation / selection for all other states.
+        match key.code {
+            KeyCode::Up => {
+                self.configure_move(-1);
+            }
+            KeyCode::Down => {
+                self.configure_move(1);
+            }
+            KeyCode::Enter => {
+                return self.configure_select();
+            }
+            KeyCode::Esc => {
+                self.configure_back();
+            }
+            _ => {}
+        }
+        Ok(ReadResult::Continue)
+    }
+
+    /// Move the selected item index by `delta` (-1 = up, +1 = down).
+    fn configure_move(&mut self, delta: i32) {
+        let count = configure_item_count(&self.configure_state, &self.configure_data);
+        if count == 0 {
+            return;
+        }
+        let selected = configure_selected(&self.configure_state);
+        let new_selected = if delta < 0 {
+            selected.saturating_sub((-delta) as usize)
+        } else {
+            (selected + delta as usize).min(count - 1)
+        };
+        configure_set_selected(&mut self.configure_state, new_selected);
+    }
+
+    /// Handle Enter on the currently selected item.
+    fn configure_select(&mut self) -> io::Result<ReadResult> {
+        let selected = configure_selected(&self.configure_state);
+        match self.configure_state.clone() {
+            ConfigureState::MainMenu { .. } => {
+                self.configure_state = match selected {
+                    0 => ConfigureState::Providers { selected: 0 },
+                    1 => ConfigureState::Models { selected: 0 },
+                    2 => ConfigureState::Context { selected: 0 },
+                    3 => ConfigureState::Search { selected: 0 },
+                    4 => ConfigureState::Permissions { selected: 0 },
+                    5 => ConfigureState::Display { selected: 0 },
+                    6 => ConfigureState::Integrations { selected: 0 },
+                    _ => ConfigureState::MainMenu { selected },
+                };
+            }
+            ConfigureState::Providers { .. } => {
+                let provider = match selected {
+                    0 => "anthropic",
+                    1 => "openai",
+                    2 => "ollama",
+                    3 => "xai",
+                    _ => return Ok(ReadResult::Continue),
+                };
+                self.configure_state = ConfigureState::ProviderDetail {
+                    provider: provider.to_string(),
+                    selected: 0,
+                };
+            }
+            ConfigureState::ProviderDetail { ref provider, selected } => {
+                let p = provider.clone();
+                match (p.as_str(), selected) {
+                    ("anthropic", 0) => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(
+                            ConfigureAction::RefreshAnthropicOAuth,
+                        ));
+                    }
+                    ("anthropic", 1) | ("openai", 0) | ("xai", 0) => {
+                        // Open inline editor for API key.
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Providers".to_string(),
+                            key: format!("{p}_api_key"),
+                            value: String::new(),
+                            cursor: 0,
+                        };
+                    }
+                    ("ollama", 0) => {
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Providers".to_string(),
+                            key: "ollama_host".to_string(),
+                            value: self.configure_data.ollama_host.clone(),
+                            cursor: self.configure_data.ollama_host.len(),
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Models { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.default_model.clone();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Models".to_string(),
+                            key: "default_model".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    1 => {
+                        let current = self.configure_data.image_model.clone();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Models".to_string(),
+                            key: "image_model".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Context { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.context_size.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Context".to_string(),
+                            key: "context_size".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    1 => {
+                        let current = self.configure_data.compact_threshold.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Context".to_string(),
+                            key: "compact_threshold".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    2 => {
+                        // Toggle QMD.
+                        self.configure_state = ConfigureState::Inactive;
+                        let enabled = !self.configure_data.qmd_status.contains("disabled");
+                        return Ok(ReadResult::ConfigureAction(
+                            ConfigureAction::SetQmdEnabled { enabled: !enabled },
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Search { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.default_search.clone();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Search".to_string(),
+                            key: "default_search".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    n if n >= 1 && n <= self.configure_data.search_providers.len() => {
+                        let provider_name =
+                            self.configure_data.search_providers[n - 1].0.clone();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Search".to_string(),
+                            key: format!("{provider_name}_key"),
+                            value: String::new(),
+                            cursor: 0,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Permissions { selected } => {
+                let mode = match selected {
+                    0 => "read-only",
+                    1 => "workspace-write",
+                    2 => "danger-full-access",
+                    _ => return Ok(ReadResult::Continue),
+                };
+                self.configure_state = ConfigureState::Inactive;
+                return Ok(ReadResult::ConfigureAction(
+                    ConfigureAction::SetPermissionMode { mode: mode.to_string() },
+                ));
+            }
+            ConfigureState::Display { selected } => {
+                match selected {
+                    0 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleVim));
+                    }
+                    1 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleChat));
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Integrations { .. } => {
+                // No writable integrations from the TUI yet.
+            }
+            _ => {}
+        }
+        Ok(ReadResult::Continue)
+    }
+
+    /// Go back one level in the configure hierarchy.
+    fn configure_back(&mut self) {
+        self.configure_state = match &self.configure_state {
+            ConfigureState::MainMenu { .. } => ConfigureState::Inactive,
+            ConfigureState::Providers { .. }
+            | ConfigureState::Models { .. }
+            | ConfigureState::Context { .. }
+            | ConfigureState::Search { .. }
+            | ConfigureState::Permissions { .. }
+            | ConfigureState::Display { .. }
+            | ConfigureState::Integrations { .. } => ConfigureState::MainMenu { selected: 0 },
+            ConfigureState::ProviderDetail { .. } => ConfigureState::Providers { selected: 0 },
+            ConfigureState::EditingValue { section, .. } => {
+                section_state_from_name(section, 0)
+            }
+            ConfigureState::Inactive => ConfigureState::Inactive,
+        };
+    }
 }
 
 impl Drop for AnvilTui {
@@ -1524,7 +1889,111 @@ pub enum ReadResult {
     /// User requested a new tab (Ctrl+T).  Caller should create a new session
     /// and call `tui.new_tab(name, model, session_id)` then `tui.switch_tab(idx)`.
     NewTab,
+    /// User triggered a configure action from the interactive configure menu.
+    ConfigureAction(ConfigureAction),
 }
+
+// ─── Configure mode ───────────────────────────────────────────────────────────
+
+/// Actions that can be triggered from the interactive configure menu.
+/// The main REPL loop in main.rs handles each variant.
+#[derive(Debug, Clone)]
+pub enum ConfigureAction {
+    /// Open an OAuth browser flow for Anthropic.
+    RefreshAnthropicOAuth,
+    /// Set a provider API key.
+    SetApiKey { provider: String, key: String },
+    /// Persist the default startup model.
+    SetDefaultModel { model: String },
+    /// Persist the image generation model.
+    SetImageModel { model: String },
+    /// Persist the context window size.
+    SetContextSize { size: u64 },
+    /// Persist the auto-compact threshold (percentage).
+    SetCompactThreshold { pct: u8 },
+    /// Toggle QMD integration on/off.
+    SetQmdEnabled { enabled: bool },
+    /// Persist a search provider API key.
+    SetSearchKey { provider: String, key: String },
+    /// Set the default search provider.
+    SetDefaultSearch { provider: String },
+    /// Toggle vim keybindings.
+    ToggleVim,
+    /// Toggle chat-only (no tools) mode.
+    ToggleChat,
+    /// Set permission mode.
+    SetPermissionMode { mode: String },
+    /// Set Ollama host URL.
+    SetOllamaHost { url: String },
+}
+
+/// Snapshot of live configuration values read from `LiveCli` and environment
+/// variables.  Built just before entering configure mode so the menu always
+/// reflects the current state.
+#[derive(Debug, Clone, Default)]
+pub struct ConfigureData {
+    // Providers
+    pub anthropic_status: String,
+    pub openai_status: String,
+    pub ollama_status: String,
+    pub ollama_host: String,
+    pub xai_status: String,
+    // Models
+    pub current_model: String,
+    pub default_model: String,
+    pub image_model: String,
+    pub failover_chain: Vec<String>,
+    // Context
+    pub context_size: u64,
+    pub compact_threshold: u8,
+    pub qmd_status: String,
+    pub history_count: usize,
+    pub pinned_count: usize,
+    // Search
+    pub default_search: String,
+    pub search_providers: Vec<(String, bool, bool)>, // (name, enabled, has_key)
+    // Display
+    pub vim_mode: bool,
+    pub chat_mode: bool,
+    pub permission_mode: String,
+    // Integrations
+    pub anvilhub_url: String,
+    pub wp_configured: bool,
+    pub github_configured: bool,
+}
+
+/// Which screen the configure mode is showing.
+#[derive(Debug, Clone, PartialEq)]
+enum ConfigureState {
+    Inactive,
+    MainMenu { selected: usize },
+    Providers { selected: usize },
+    ProviderDetail { provider: String, selected: usize },
+    Models { selected: usize },
+    Context { selected: usize },
+    Search { selected: usize },
+    Permissions { selected: usize },
+    Display { selected: usize },
+    Integrations { selected: usize },
+    /// Inline text input for editing a single value.
+    EditingValue {
+        /// E.g. "Models" — shown in the breadcrumb.
+        section: String,
+        /// Key being edited, e.g. "default_model".
+        key: String,
+        /// The current edit buffer.
+        value: String,
+        /// Cursor byte position inside `value`.
+        cursor: usize,
+    },
+}
+
+impl Default for ConfigureState {
+    fn default() -> Self {
+        ConfigureState::Inactive
+    }
+}
+
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1887,4 +2356,434 @@ fn update_completions(input: &str) -> CompletionPopup {
             selected: 0,
         }
     }
+}
+
+// ─── Configure mode helpers ───────────────────────────────────────────────────
+
+/// Return the breadcrumb string shown in the footer while in configure mode.
+fn configure_breadcrumb(state: &ConfigureState) -> String {
+    match state {
+        ConfigureState::Inactive => String::new(),
+        ConfigureState::MainMenu { .. } => "Configure".to_string(),
+        ConfigureState::Providers { .. } => "Configure > Providers".to_string(),
+        ConfigureState::ProviderDetail { provider, .. } => {
+            let p = match provider.as_str() {
+                "anthropic" => "Anthropic",
+                "openai" => "OpenAI",
+                "ollama" => "Ollama",
+                "xai" => "xAI",
+                other => other,
+            };
+            format!("Configure > Providers > {p}")
+        }
+        ConfigureState::Models { .. } => "Configure > Models".to_string(),
+        ConfigureState::Context { .. } => "Configure > Context".to_string(),
+        ConfigureState::Search { .. } => "Configure > Search".to_string(),
+        ConfigureState::Permissions { .. } => "Configure > Permissions".to_string(),
+        ConfigureState::Display { .. } => "Configure > Display".to_string(),
+        ConfigureState::Integrations { .. } => "Configure > Integrations".to_string(),
+        ConfigureState::EditingValue { section, key, .. } => {
+            format!("Configure > {section} > edit:{key}")
+        }
+    }
+}
+
+/// Return the current selected index for a configure state.
+fn configure_selected(state: &ConfigureState) -> usize {
+    match state {
+        ConfigureState::MainMenu { selected }
+        | ConfigureState::Providers { selected }
+        | ConfigureState::Models { selected }
+        | ConfigureState::Context { selected }
+        | ConfigureState::Search { selected }
+        | ConfigureState::Permissions { selected }
+        | ConfigureState::Display { selected }
+        | ConfigureState::Integrations { selected } => *selected,
+        ConfigureState::ProviderDetail { selected, .. } => *selected,
+        _ => 0,
+    }
+}
+
+/// Update the selected index in a configure state.
+fn configure_set_selected(state: &mut ConfigureState, new: usize) {
+    match state {
+        ConfigureState::MainMenu { selected }
+        | ConfigureState::Providers { selected }
+        | ConfigureState::Models { selected }
+        | ConfigureState::Context { selected }
+        | ConfigureState::Search { selected }
+        | ConfigureState::Permissions { selected }
+        | ConfigureState::Display { selected }
+        | ConfigureState::Integrations { selected } => *selected = new,
+        ConfigureState::ProviderDetail { selected, .. } => *selected = new,
+        _ => {}
+    }
+}
+
+/// Return the number of navigable items for a given configure state.
+fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
+    match state {
+        ConfigureState::MainMenu { .. } => 7, // providers, models, context, search, permissions, display, integrations
+        ConfigureState::Providers { .. } => 4, // anthropic, openai, ollama, xai
+        ConfigureState::ProviderDetail { provider, .. } => match provider.as_str() {
+            "anthropic" => 2, // refresh oauth, set api key
+            "openai" => 1,    // set api key
+            "ollama" => 1,    // set host
+            "xai" => 1,       // set api key
+            _ => 0,
+        },
+        ConfigureState::Models { .. } => 2, // default model, image model
+        ConfigureState::Context { .. } => 3, // context size, compact threshold, qmd toggle
+        ConfigureState::Search { .. } => 1 + data.search_providers.len(),
+        ConfigureState::Permissions { .. } => 3, // read-only, workspace-write, full-access
+        ConfigureState::Display { .. } => 2, // vim, chat
+        ConfigureState::Integrations { .. } => 3, // anvilhub, wordpress, github
+        _ => 0,
+    }
+}
+
+/// Given a section name string, return the corresponding menu state.
+fn section_state_from_name(section: &str, selected: usize) -> ConfigureState {
+    match section {
+        "Providers" => ConfigureState::Providers { selected },
+        "Models" => ConfigureState::Models { selected },
+        "Context" => ConfigureState::Context { selected },
+        "Search" => ConfigureState::Search { selected },
+        "Permissions" => ConfigureState::Permissions { selected },
+        "Display" => ConfigureState::Display { selected },
+        "Integrations" => ConfigureState::Integrations { selected },
+        _ => ConfigureState::MainMenu { selected },
+    }
+}
+
+/// Map a (section, key, value) triple from the inline editor to a ConfigureAction.
+/// Returns None if the value is empty or the combination is unrecognised.
+fn configure_action_for(section: &str, key: &str, value: &str) -> Option<ConfigureAction> {
+    let v = value.trim().to_string();
+    if v.is_empty() {
+        return None;
+    }
+    match (section, key) {
+        ("Models", "default_model") => Some(ConfigureAction::SetDefaultModel { model: v }),
+        ("Models", "image_model") => Some(ConfigureAction::SetImageModel { model: v }),
+        ("Context", "context_size") => {
+            // Accept raw numbers or suffixes like 200K, 1M.
+            let n = v.to_lowercase()
+                .replace("k", "000")
+                .replace("m", "000000")
+                .parse::<u64>().ok()?;
+            Some(ConfigureAction::SetContextSize { size: n })
+        }
+        ("Context", "compact_threshold") => {
+            let n = v.parse::<u8>().ok()?;
+            Some(ConfigureAction::SetCompactThreshold { pct: n })
+        }
+        ("Providers", "ollama_host") => Some(ConfigureAction::SetOllamaHost { url: v }),
+        ("Providers", key) if key.ends_with("_api_key") => {
+            let provider = key.trim_end_matches("_api_key").to_string();
+            Some(ConfigureAction::SetApiKey { provider, key: v })
+        }
+        ("Search", "default_search") => Some(ConfigureAction::SetDefaultSearch { provider: v }),
+        ("Search", key) if key.ends_with("_key") => {
+            let provider = key.trim_end_matches("_key").to_string();
+            Some(ConfigureAction::SetSearchKey { provider, key: v })
+        }
+        _ => None,
+    }
+}
+
+/// Render the configure menu for the current state as a Vec of ratatui Lines.
+fn render_configure_menu(
+    state: &ConfigureState,
+    data: &ConfigureData,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Helper that builds one menu row.
+    // selected = true → cyan bold label + dim-cyan value
+    // is_cursor = true → `▸` marker, bg highlight on the entire row
+    let make_row = |label: &str, value: &str, is_cursor: bool| -> Line<'static> {
+        let marker = if is_cursor { "  ▸ " } else { "    " };
+        let label_str = label.to_string();
+        let value_str = value.to_string();
+        // Right-pad the label to keep value hints aligned.
+        let label_padded = format!("{label_str:<40}");
+        if is_cursor {
+            Line::from(vec![
+                Span::styled(marker.to_string(), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    label_padded,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    value_str,
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::raw(marker.to_string()),
+                Span::styled(label_padded, Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))),
+                Span::styled(
+                    value_str,
+                    Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)).add_modifier(Modifier::DIM),
+                ),
+            ])
+        }
+    };
+
+    // Heading.
+    let heading = configure_breadcrumb(state);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("  ⚒  {heading}"),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", "─".repeat(width.saturating_sub(4))),
+        Style::default().fg(Color::Rgb(0x33, 0x33, 0x44)),
+    )));
+    lines.push(Line::from(""));
+
+    let sel = configure_selected(state);
+
+    match state {
+        ConfigureState::Inactive => {}
+
+        ConfigureState::MainMenu { .. } => {
+            let items = [
+                ("Providers & Authentication", format!("[{}]", {
+                    let mut n = 0;
+                    if !data.anthropic_status.contains('✗') { n += 1; }
+                    if !data.openai_status.contains('✗') { n += 1; }
+                    if !data.ollama_status.contains('✗') { n += 1; }
+                    if !data.xai_status.contains('✗') { n += 1; }
+                    format!("{n} configured")
+                })),
+                ("Models & Defaults", format!("[{}]", data.current_model)),
+                ("Context & Memory", format!("[{}]", {
+                    let kb = data.context_size / 1000;
+                    format!("{kb}K")
+                })),
+                ("Search Providers", format!("[{}]", data.default_search)),
+                ("Permissions", format!("[{}]", data.permission_mode)),
+                ("Display & Interface", format!("[vim:{}]", if data.vim_mode { "on" } else { "off" })),
+                ("Integrations", format!("[AnvilHub {}]", if data.anvilhub_url.is_empty() { "✗" } else { "✓" })),
+            ];
+            for (i, (label, value)) in items.iter().enumerate() {
+                lines.push(make_row(label, value, i == sel));
+            }
+        }
+
+        ConfigureState::Providers { .. } => {
+            let items = [
+                ("Anthropic", data.anthropic_status.clone()),
+                ("OpenAI", data.openai_status.clone()),
+                ("Ollama", format!("{} ({})", data.ollama_status, data.ollama_host)),
+                ("xAI", data.xai_status.clone()),
+            ];
+            for (i, (label, value)) in items.iter().enumerate() {
+                lines.push(make_row(label, value, i == sel));
+            }
+        }
+
+        ConfigureState::ProviderDetail { provider, .. } => {
+            match provider.as_str() {
+                "anthropic" => {
+                    lines.push(Line::from(vec![
+                        Span::raw("    Status:  "),
+                        Span::styled(data.anthropic_status.clone(), Style::default().fg(Color::Cyan)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(make_row("Refresh OAuth token", "[opens browser]", sel == 0));
+                    lines.push(make_row("Set API key instead", "[enter key]", sel == 1));
+                }
+                "openai" => {
+                    lines.push(Line::from(vec![
+                        Span::raw("    Status:  "),
+                        Span::styled(data.openai_status.clone(), Style::default().fg(Color::Cyan)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(make_row("Set OPENAI_API_KEY", "[enter key]", sel == 0));
+                }
+                "ollama" => {
+                    lines.push(Line::from(vec![
+                        Span::raw("    Status:  "),
+                        Span::styled(data.ollama_status.clone(), Style::default().fg(Color::Cyan)),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::raw("    Host:    "),
+                        Span::styled(data.ollama_host.clone(), Style::default().fg(Color::Yellow)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(make_row("Set Ollama host URL", "[edit]", sel == 0));
+                }
+                "xai" => {
+                    lines.push(Line::from(vec![
+                        Span::raw("    Status:  "),
+                        Span::styled(data.xai_status.clone(), Style::default().fg(Color::Cyan)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(make_row("Set XAI_API_KEY", "[enter key]", sel == 0));
+                }
+                _ => {}
+            }
+        }
+
+        ConfigureState::Models { .. } => {
+            lines.push(make_row(
+                "Default model",
+                &data.default_model,
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Image model",
+                &data.image_model,
+                sel == 1,
+            ));
+            if !data.failover_chain.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Failover chain:",
+                    Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
+                )));
+                for (i, m) in data.failover_chain.iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      {}. {m}", i + 1),
+                        Style::default().fg(Color::Rgb(0x66, 0x88, 0x66)),
+                    )));
+                }
+            }
+        }
+
+        ConfigureState::Context { .. } => {
+            let size_label = {
+                let kb = data.context_size / 1000;
+                let mb = data.context_size / 1_000_000;
+                if mb > 0 { format!("{mb}M tokens") } else { format!("{kb}K tokens") }
+            };
+            lines.push(make_row("Context window size", &size_label, sel == 0));
+            lines.push(make_row(
+                "Auto-compact threshold",
+                &format!("{}%", data.compact_threshold),
+                sel == 1,
+            ));
+            let qmd_label = if data.qmd_status.contains("disabled") { "off" } else { "on" };
+            lines.push(make_row(
+                "QMD integration",
+                &format!("{qmd_label}  ({}) ", data.qmd_status),
+                sel == 2,
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                format!("    History archives: {}  |  Pinned files: {}", data.history_count, data.pinned_count),
+                Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
+            )));
+        }
+
+        ConfigureState::Search { .. } => {
+            lines.push(make_row(
+                "Default search provider",
+                &data.default_search,
+                sel == 0,
+            ));
+            for (i, (name, enabled, has_key)) in data.search_providers.iter().enumerate() {
+                let status = if *has_key { "✓ key set" } else { "✗ no key" };
+                let enabled_str = if *enabled { "" } else { " [disabled]" };
+                lines.push(make_row(
+                    name.as_str(),
+                    &format!("{status}{enabled_str}"),
+                    sel == i + 1,
+                ));
+            }
+        }
+
+        ConfigureState::Permissions { .. } => {
+            let current = &data.permission_mode;
+            let modes = [
+                ("read-only", "Read-only — no file writes"),
+                ("workspace-write", "Workspace write — within project"),
+                ("danger-full-access", "Full access — no restrictions"),
+            ];
+            for (i, (mode, desc)) in modes.iter().enumerate() {
+                let active = if current == *mode { " [active]" } else { "" };
+                lines.push(make_row(&format!("{desc}{active}"), "", i == sel));
+            }
+        }
+
+        ConfigureState::Display { .. } => {
+            lines.push(make_row(
+                "Vim keybindings",
+                if data.vim_mode { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Chat-only mode (no tools)",
+                if data.chat_mode { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 1,
+            ));
+        }
+
+        ConfigureState::Integrations { .. } => {
+            let hub = if data.anvilhub_url.is_empty() {
+                "✗ not configured".to_string()
+            } else {
+                format!("✓ {}", data.anvilhub_url)
+            };
+            lines.push(make_row("AnvilHub", &hub, sel == 0));
+            lines.push(make_row(
+                "WordPress",
+                if data.wp_configured { "✓ configured" } else { "✗ not configured" },
+                sel == 1,
+            ));
+            lines.push(make_row(
+                "GitHub",
+                if data.github_configured { "✓ configured" } else { "✗ not configured" },
+                sel == 2,
+            ));
+        }
+
+        ConfigureState::EditingValue { key, value, cursor, .. } => {
+            let prompt = format!("Edit {key}:");
+            lines.push(Line::from(Span::styled(
+                format!("    {prompt}"),
+                Style::default().fg(Color::Yellow),
+            )));
+            lines.push(Line::from(""));
+            // Render the inline text input with a cursor.
+            let before: String = value.char_indices()
+                .take_while(|(i, _)| *i < *cursor)
+                .map(|(_, c)| c)
+                .collect();
+            let cursor_char = value[*cursor..].chars().next()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| " ".to_string());
+            let after = if *cursor < value.len() {
+                let next = next_char_boundary(value, *cursor);
+                value[next..].to_string()
+            } else {
+                String::new()
+            };
+            lines.push(Line::from(vec![
+                Span::raw("    ❯ "),
+                Span::styled(before, Style::default().fg(Color::White)),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(Color::Rgb(0x1a, 0x1a, 0x1a)).bg(Color::White),
+                ),
+                Span::styled(after, Style::default().fg(Color::White)),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "    Enter to confirm  Esc to cancel",
+                Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines
 }

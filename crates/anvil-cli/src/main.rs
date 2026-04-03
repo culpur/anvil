@@ -51,7 +51,7 @@ use runtime::{
 use crossterm::terminal;
 use serde_json::json;
 use tools::{execute_tool as execute_builtin_tool, GlobalToolRegistry, McpToolDefinition};
-use tui::{AnvilTui, ReadResult, TuiEvent, TuiSender};
+use tui::{AnvilTui, ConfigureAction, ConfigureData, ReadResult, TuiEvent, TuiSender};
 
 /// A shared slot for the TUI sender.  Created once at startup and cloned into
 /// `DefaultRuntimeClient` and `CliToolExecutor`.  When the TUI is active the
@@ -59,11 +59,11 @@ use tui::{AnvilTui, ReadResult, TuiEvent, TuiSender};
 type TuiSenderSlot = Arc<Mutex<Option<TuiSender>>>;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
-const DEFAULT_DATE: &str = "2026-03-31";
+const DEFAULT_DATE: &str = env!("BUILD_DATE");
 const DEFAULT_OAUTH_CALLBACK_PORT: u16 = 4545;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const BUILD_TARGET: Option<&str> = option_env!("TARGET");
-const GIT_SHA: Option<&str> = option_env!("GIT_SHA");
+const BUILD_TARGET: &str = env!("TARGET");
+const GIT_SHA: &str = env!("GIT_SHA");
 const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
 type AllowedToolSet = BTreeSet<String>;
@@ -1578,6 +1578,16 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 cli.persist_session()?;
                 break 'outer;
             }
+            ReadResult::ConfigureAction(action) => {
+                let msg = cli.apply_configure_action(action);
+                // Rebuild a fresh ConfigureData snapshot and re-enter configure mode
+                // so the menu immediately reflects the change.
+                let data = cli.build_configure_data();
+                tui.enter_configure_mode(data);
+                if !msg.is_empty() {
+                    tui.push_system(msg);
+                }
+            }
             ReadResult::NewTab => {
                 // Ctrl+T: open a new in-memory tab.  All tabs share the same
                 // model and runtime for now; the new tab just gets a fresh
@@ -2319,6 +2329,12 @@ impl LiveCli {
                 tui.push_system(result);
                 return Ok(false);
             }
+            SlashCommand::Configure { .. } => {
+                // Enter the interactive configure menu instead of printing text.
+                let data = self.build_configure_data();
+                tui.enter_configure_mode(data);
+                return Ok(false);
+            }
             SlashCommand::Qmd { query } => {
                 // Handle /qmd inline in TUI — no alternate screen switch.
                 let q = query.as_deref().unwrap_or("").trim();
@@ -2400,7 +2416,7 @@ impl LiveCli {
                 (format!("Tokens: ↑{} ↓{} (total: {})", c.input_tokens, c.output_tokens, c.input_tokens + c.output_tokens), false)
             }
             SlashCommand::Version => {
-                (format!("Anvil CLI v{}\nBuild: {} / {}", VERSION, BUILD_TARGET.unwrap_or("unknown"), GIT_SHA.unwrap_or("unknown")), false)
+                (format!("Anvil CLI v{}\nBuild: {} / {}", VERSION, BUILD_TARGET, GIT_SHA), false)
             }
             SlashCommand::Config { section } => {
                 let report = render_config_report(section.as_deref())?;
@@ -2526,8 +2542,9 @@ impl LiveCli {
             SlashCommand::HistoryArchive { action } => {
                 (self.run_history_archive_command(action.as_deref()), false)
             }
-            SlashCommand::Configure { args } => {
-                (self.run_configure_command(args.as_deref()), false)
+            SlashCommand::Configure { .. } => {
+                // Handled before run_command_for_tui via handle_repl_command_tui intercept.
+                (String::new(), false)
             }
             SlashCommand::Undo => {
                 // Undo is interactive (stdin prompts) — not suitable for TUI.
@@ -4811,6 +4828,219 @@ impl LiveCli {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Interactive configure mode support
+    // -----------------------------------------------------------------------
+
+    /// Build a `ConfigureData` snapshot from the current live state and
+    /// environment variables.  Called when entering the interactive configure menu.
+    pub fn build_configure_data(&self) -> ConfigureData {
+        let cfg = Self::load_anvil_ui_config();
+        let cfg_str = |key: &str, fallback: &str| -> String {
+            cfg.get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or(fallback)
+                .to_string()
+        };
+        let cfg_bool = |key: &str, fallback: bool| -> bool {
+            cfg.get(key)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(fallback)
+        };
+        let cfg_u64 = |key: &str, fallback: u64| -> u64 {
+            cfg.get(key)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(fallback)
+        };
+
+        // Providers.
+        let anthropic_key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|s| !s.is_empty());
+        let anthropic_oauth = runtime::load_oauth_credentials().ok().flatten().is_some();
+        let anthropic_status = if anthropic_oauth {
+            "✓ OAuth active".to_string()
+        } else if anthropic_key.is_some() {
+            "✓ API key".to_string()
+        } else {
+            "✗ not configured".to_string()
+        };
+
+        let openai_status = if std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.is_empty()).is_some() {
+            "✓ API key".to_string()
+        } else {
+            "✗ not configured".to_string()
+        };
+
+        let ollama_host = std::env::var("OLLAMA_HOST")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg_str("ollama_host", "http://localhost:11434"));
+
+        let ollama_alive = std::process::Command::new("curl")
+            .args(["-sf", "--max-time", "1", &format!("{ollama_host}/api/tags")])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let ollama_status = if ollama_alive {
+            "✓ reachable".to_string()
+        } else {
+            "✗ not reachable".to_string()
+        };
+
+        let xai_status = if std::env::var("XAI_API_KEY").ok().filter(|s| !s.is_empty()).is_some() {
+            "✓ API key".to_string()
+        } else {
+            "✗ not configured".to_string()
+        };
+
+        // Models.
+        let default_model = cfg_str("default_model", &self.model);
+        let image_model = cfg_str("image_model", "gpt-image-1.5");
+        let failover_chain = {
+            let chain = api::FailoverChain::from_config_file();
+            let mut models = Vec::new();
+            let mut idx = 0;
+            while let Some(m) = chain.model_at(idx) {
+                models.push(m.to_string());
+                idx += 1;
+            }
+            models
+        };
+
+        // Context.
+        let context_size = cfg_u64("context_size", 1_000_000);
+        let compact_threshold = cfg_u64("compact_threshold", 85) as u8;
+        let qmd_enabled = cfg_bool("qmd_enabled", true);
+        let qmd_status = if !self.qmd.is_enabled() {
+            "disabled (binary not found)".to_string()
+        } else if !qmd_enabled {
+            "disabled (config)".to_string()
+        } else {
+            match self.qmd.status() {
+                Some(s) => format!("enabled ({} docs, {} vectors)", s.total_docs, s.total_vectors),
+                None => "enabled".to_string(),
+            }
+        };
+        let history_count = self.history_archiver.list_archives().len();
+        let pinned_count = anvil_pinned_path()
+            .ok()
+            .and_then(|p| load_pinned_paths(&p).ok())
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        // Search.
+        let engine = runtime::SearchEngine::from_env_and_config();
+        let default_search = engine.default_provider().to_string();
+        let search_providers = vec![
+            ("Tavily".to_string(), true, std::env::var("TAVILY_API_KEY").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("tavily_api_key").is_some()),
+            ("Brave".to_string(), true, std::env::var("BRAVE_SEARCH_API_KEY").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("brave_search_api_key").is_some()),
+            ("SearXNG".to_string(), true, !cfg_str("searxng_url", "").is_empty()),
+            ("Exa".to_string(), true, std::env::var("EXA_API_KEY").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("exa_api_key").is_some()),
+            ("Perplexity".to_string(), true, std::env::var("PERPLEXITY_API_KEY").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("perplexity_api_key").is_some()),
+        ];
+
+        // Display.
+        let vim_mode = cfg_bool("vim_mode", false);
+        let chat_mode = cfg_bool("chat_mode", false);
+        let permission_mode = self.permission_mode.as_str().to_string();
+
+        // Integrations.
+        let anvilhub_url = cfg_str("anvilhub_url", "");
+        let wp_configured = cfg.get("wp_url").is_some() || std::env::var("WP_URL").ok().filter(|s| !s.is_empty()).is_some();
+        let github_configured = std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("github_token").is_some();
+
+        ConfigureData {
+            anthropic_status,
+            openai_status,
+            ollama_status,
+            ollama_host,
+            xai_status,
+            current_model: self.model.clone(),
+            default_model,
+            image_model,
+            failover_chain,
+            context_size,
+            compact_threshold,
+            qmd_status,
+            history_count,
+            pinned_count,
+            default_search,
+            search_providers,
+            vim_mode,
+            chat_mode,
+            permission_mode,
+            anvilhub_url,
+            wp_configured,
+            github_configured,
+        }
+    }
+
+    /// Apply a `ConfigureAction` triggered from the interactive configure menu.
+    /// Persists the change and returns a human-readable confirmation message.
+    pub fn apply_configure_action(&mut self, action: ConfigureAction) -> String {
+        match action {
+            ConfigureAction::RefreshAnthropicOAuth => {
+                // Delegate to the existing /login flow (leaves alternate screen temporarily).
+                self.run_inline_login(Some("anthropic"))
+            }
+            ConfigureAction::SetApiKey { provider, key } => {
+                let config_key = match provider.as_str() {
+                    "anthropic" => "anthropic_api_key",
+                    "openai" => "openai_api_key",
+                    "xai" => "xai_api_key",
+                    other => return format!("Unknown provider: {other}"),
+                };
+                Self::save_anvil_ui_config_key(config_key, serde_json::Value::String(key))
+            }
+            ConfigureAction::SetOllamaHost { url } => {
+                Self::save_anvil_ui_config_key("ollama_host", serde_json::Value::String(url))
+            }
+            ConfigureAction::SetDefaultModel { model } => {
+                Self::save_anvil_ui_config_key("default_model", serde_json::Value::String(model))
+            }
+            ConfigureAction::SetImageModel { model } => {
+                Self::save_anvil_ui_config_key("image_model", serde_json::Value::String(model))
+            }
+            ConfigureAction::SetContextSize { size } => {
+                Self::save_anvil_ui_config_key("context_size", serde_json::Value::Number(size.into()))
+            }
+            ConfigureAction::SetCompactThreshold { pct } => {
+                Self::save_anvil_ui_config_key("compact_threshold", serde_json::Value::Number((pct as u64).into()))
+            }
+            ConfigureAction::SetQmdEnabled { enabled } => {
+                Self::save_anvil_ui_config_key("qmd_enabled", serde_json::Value::Bool(enabled))
+            }
+            ConfigureAction::SetSearchKey { provider, key } => {
+                let config_key = match provider.as_str() {
+                    "Tavily" | "tavily" => "tavily_api_key",
+                    "Brave" | "brave" => "brave_search_api_key",
+                    "Exa" | "exa" => "exa_api_key",
+                    "Perplexity" | "perplexity" => "perplexity_api_key",
+                    "SearXNG" | "searxng" => "searxng_url",
+                    other => return format!("Unknown search provider: {other}"),
+                };
+                Self::save_anvil_ui_config_key(config_key, serde_json::Value::String(key))
+            }
+            ConfigureAction::SetDefaultSearch { provider } => {
+                Self::save_anvil_ui_config_key("default_search_provider", serde_json::Value::String(provider))
+            }
+            ConfigureAction::ToggleVim => {
+                self.toggle_vim_mode()
+            }
+            ConfigureAction::ToggleChat => {
+                match self.toggle_chat_mode() {
+                    Ok(msg) => msg,
+                    Err(e) => format!("chat toggle error: {e}"),
+                }
+            }
+            ConfigureAction::SetPermissionMode { mode } => {
+                match self.set_permissions(Some(mode)) {
+                    Ok(_) => format!("Permissions set to: {}", self.permission_mode.as_str()),
+                    Err(e) => format!("permissions error: {e}"),
+                }
+            }
+        }
+    }
+
     fn run_internal_prompt_text_with_progress(
         &self,
         prompt: &str,
@@ -5745,8 +5975,8 @@ fn parse_titled_body(value: &str) -> Option<(String, String)> {
 }
 
 fn render_version_report() -> String {
-    let git_sha = GIT_SHA.unwrap_or("unknown");
-    let target = BUILD_TARGET.unwrap_or("unknown");
+    let git_sha = GIT_SHA;
+    let target = BUILD_TARGET;
     format!(
         "Anvil CLI\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}\n\nSupport\n  Help             anvil --help\n  REPL             /help"
     )
