@@ -1,0 +1,9 @@
+target/
+.omx/
+.clawd-agents/
+.anvil/
+.env
+.env.local
+.DS_Store
+*.swp
+*.swo
