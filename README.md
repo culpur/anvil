@@ -6,10 +6,53 @@ The Rust workspace is the current main product surface. The `anvil` binary provi
 
 ## Current status
 
-- **Version:** `0.1.0`
-- **Release stage:** initial public release, source-build distribution
+- **Version:** `1.0.1`
+- **Release stage:** general availability, binary distribution via GitHub Releases
 - **Primary implementation:** Rust workspace in this repository
-- **Platform focus:** macOS and Linux developer workstations
+- **Platform focus:** macOS, Linux, and Windows developer workstations
+
+## Install
+
+### Quick install (macOS / Linux)
+
+```bash
+curl -fsSL https://anvilhub.culpur.net/install.sh | bash
+```
+
+### Quick install (Windows)
+
+```powershell
+irm https://anvilhub.culpur.net/install.ps1 | iex
+```
+
+### Manual download
+
+Pre-built binaries are published to GitHub Releases for each version:
+
+```
+https://github.com/culpur/anvil-source/releases/latest
+```
+
+Available targets:
+
+| Platform | Binary |
+|---|---|
+| macOS Apple Silicon | `anvil-aarch64-apple-darwin` |
+| macOS Intel | `anvil-x86_64-apple-darwin` |
+| Linux x86_64 | `anvil-x86_64-unknown-linux-gnu` |
+| Linux ARM64 | `anvil-aarch64-unknown-linux-gnu` |
+| Windows x86_64 | `anvil-x86_64-pc-windows-msvc.exe` |
+
+Each binary has a corresponding `.sha256` checksum file at the same release URL.
+
+Example (macOS Apple Silicon):
+
+```bash
+curl -fsSL https://github.com/culpur/anvil-source/releases/download/v1.0.1/anvil-aarch64-apple-darwin -o anvil
+curl -fsSL https://github.com/culpur/anvil-source/releases/download/v1.0.1/anvil-aarch64-apple-darwin.sha256 -o anvil.sha256
+shasum -a 256 -c anvil.sha256
+chmod +x anvil && sudo mv anvil /usr/local/bin/anvil
+```
 
 ## Dependencies
 
@@ -25,7 +68,7 @@ npm install -g @tobilu/qmd
 - npm: [@tobilu/qmd](https://www.npmjs.com/package/@tobilu/qmd)
 - Anvil works without QMD but memory, history search, and auto-context features will be disabled.
 
-## Install, build, and run
+## Build from source
 
 ### Prerequisites
 
@@ -63,7 +106,7 @@ cargo run --bin anvil -- login
 cargo install --path crates/anvil-cli --locked
 ```
 
-### Build from source
+### Build
 
 ```bash
 cargo build --release -p anvil-cli
@@ -100,11 +143,10 @@ From the release build:
 
 ## Current limitations
 
-- Public distribution is **source-build only** today; this workspace is not set up for crates.io publishing
-- GitHub CI verifies `cargo check`, `cargo test`, and release builds, but automated release packaging is not yet present
-- Current CI targets Ubuntu and macOS; Windows release readiness is still to be established
+- GitHub CI verifies `cargo check`, `cargo test`, and release builds
+- Current CI targets Ubuntu, macOS, and Windows
 - Some live-provider integration coverage is opt-in because it requires external credentials and network access
-- The command surface may continue to evolve during the `0.x` series
+- The command surface may continue to evolve during the `1.x` series
 
 ## Implementation
 
@@ -121,15 +163,12 @@ The Rust workspace is the active product implementation. It currently includes t
 
 ## Roadmap
 
-- Publish packaged release artifacts for public installs
-- Add a repeatable release workflow and longer-lived changelog discipline
-- Expand platform verification beyond the current CI matrix
 - Add more task-focused examples and operator documentation
 - Continue tightening feature coverage and UX polish across the Rust implementation
 
 ## Release notes
 
-- Draft 0.1.0 release notes: [`docs/releases/0.1.0.md`](docs/releases/0.1.0.md)
+- Draft 1.0.1 release notes: [`docs/releases/1.0.1.md`](docs/releases/1.0.1.md)
 
 ## License
 
