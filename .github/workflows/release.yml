@@ -1,0 +1,91 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: anvil-aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: anvil-x86_64-apple-darwin
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: anvil-x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: anvil-aarch64-unknown-linux-gnu
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: anvil-x86_64-pc-windows-msvc.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/anvil.exe ${{ matrix.name }}
+          else
+            cp target/${{ matrix.target }}/release/anvil ${{ matrix.name }}
+          fi
+          shasum -a 256 ${{ matrix.name }} > ${{ matrix.name }}.sha256 || sha256sum ${{ matrix.name }} > ${{ matrix.name }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            anvil-aarch64-apple-darwin/anvil-aarch64-apple-darwin
+            anvil-aarch64-apple-darwin/anvil-aarch64-apple-darwin.sha256
+            anvil-x86_64-apple-darwin/anvil-x86_64-apple-darwin
+            anvil-x86_64-apple-darwin/anvil-x86_64-apple-darwin.sha256
+            anvil-x86_64-unknown-linux-gnu/anvil-x86_64-unknown-linux-gnu
+            anvil-x86_64-unknown-linux-gnu/anvil-x86_64-unknown-linux-gnu.sha256
+            anvil-aarch64-unknown-linux-gnu/anvil-aarch64-unknown-linux-gnu
+            anvil-aarch64-unknown-linux-gnu/anvil-aarch64-unknown-linux-gnu.sha256
+            anvil-x86_64-pc-windows-msvc.exe/anvil-x86_64-pc-windows-msvc.exe
+            anvil-x86_64-pc-windows-msvc.exe/anvil-x86_64-pc-windows-msvc.exe.sha256
+          generate_release_notes: true

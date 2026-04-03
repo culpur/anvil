@@ -11,6 +11,20 @@ The Rust workspace is the current main product surface. The `anvil` binary provi
 - **Primary implementation:** Rust workspace in this repository
 - **Platform focus:** macOS and Linux developer workstations
 
+## Dependencies
+
+### QMD (Recommended)
+QMD is the knowledge base engine that powers Anvil's intelligent context system.
+It indexes your codebase and previous sessions, enabling automatic context injection.
+
+```bash
+npm install -g @tobilu/qmd
+```
+
+- Repository: https://github.com/tobi/qmd
+- npm: [@tobilu/qmd](https://www.npmjs.com/package/@tobilu/qmd)
+- Anvil works without QMD but memory, history search, and auto-context features will be disabled.
+
 ## Install, build, and run
 
 ### Prerequisites
