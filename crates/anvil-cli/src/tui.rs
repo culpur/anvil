@@ -1418,19 +1418,46 @@ impl AnvilTui {
         };
         let input_clone = self.active_tab().input.clone();
         let word_count = input_clone.split_whitespace().count();
-        let new_input = if word_count <= 1 && !ends_with_space {
+        let trailing_space = input_clone.ends_with(' ');
+        let new_input = if word_count <= 1 && !trailing_space {
             // Completing a command: "/the" → "/theme "
             format!("{insert} ")
-        } else if word_count == 1 && ends_with_space {
+        } else if word_count == 1 && trailing_space {
             // Completing first subcommand: "/theme " + "set" → "/theme set "
-            format!("{first_part} {insert} ")
-        } else if word_count == 2 && ends_with_space {
-            // Completing third level: "/theme set " + "cyberpunk" → "/theme set cyberpunk"
-            let prefix = input_clone.trim_end();
-            format!("{prefix} {insert}")
+            let base = input_clone.trim_end();
+            format!("{base} {insert} ")
+        } else if word_count == 2 && trailing_space {
+            // Completing third level: "/theme set " + "cyberpunk" → "/theme set cyberpunk "
+            let base = input_clone.trim_end();
+            // Check if there are deeper levels
+            let cmd = input_clone.split_whitespace().next().unwrap_or("");
+            let fourth = third_level_completions(cmd, &insert);
+            if fourth.is_empty() {
+                format!("{base} {insert}")
+            } else {
+                format!("{base} {insert} ")
+            }
+        } else if word_count == 2 && !trailing_space {
+            // Filtering second subcommand: "/theme se" → "/theme set "
+            let base = input_clone.split_whitespace().next().unwrap_or("");
+            let cmd = base;
+            let fourth = third_level_completions(cmd, &insert);
+            if fourth.is_empty() {
+                format!("{base} {insert}")
+            } else {
+                format!("{base} {insert} ")
+            }
+        } else if word_count == 3 && trailing_space {
+            // Completing fourth level: "/configure context size " + "1M"
+            let base = input_clone.trim_end();
+            format!("{base} {insert}")
+        } else if word_count >= 3 {
+            // Filtering at any deeper level
+            let parts: Vec<&str> = input_clone.split_whitespace().collect();
+            let base = parts[..parts.len()-1].join(" ");
+            format!("{base} {insert}")
         } else {
-            // Filtering a subcommand: "/theme se" → "/theme set "
-            format!("{first_part} {insert} ")
+            format!("{first_part} {insert}")
         };
         let new_len = new_input.len();
         let tab = self.active_tab_mut();
@@ -2367,7 +2394,20 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "remove".into(), hint: "Remove model from chain".into() },
             CompletionItem { insert: "reset".into(), hint: "Clear all cooldowns".into() },
         ],
-        "/image" | "/generate-image" => vec![],
+        "/model" => vec![
+            CompletionItem { insert: "claude-opus-4-6".into(), hint: "Anthropic Opus (most capable)".into() },
+            CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet (balanced)".into() },
+            CompletionItem { insert: "claude-haiku-4-5".into(), hint: "Anthropic Haiku (fast)".into() },
+            CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
+            CompletionItem { insert: "gpt-5.4".into(), hint: "OpenAI GPT-5.4 (flagship)".into() },
+            CompletionItem { insert: "gpt-5".into(), hint: "OpenAI GPT-5".into() },
+            CompletionItem { insert: "o3".into(), hint: "OpenAI o3 (reasoning)".into() },
+            CompletionItem { insert: "llama3.2".into(), hint: "Ollama Llama 3.2 (local)".into() },
+            CompletionItem { insert: "grok".into(), hint: "xAI Grok".into() },
+        ],
+        "/image" | "/generate-image" => vec![
+            CompletionItem { insert: "--wp".into(), hint: "Upload to WordPress as featured image".into() },
+        ],
         "/history-archive" => vec![
             CompletionItem { insert: "search".into(), hint: "Search archived sessions".into() },
             CompletionItem { insert: "view".into(), hint: "View a specific archive".into() },
@@ -2413,6 +2453,53 @@ fn third_level_completions(command: &str, subcommand: &str) -> Vec<CompletionIte
             CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet".into() },
             CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
             CompletionItem { insert: "llama3.2".into(), hint: "Ollama local".into() },
+        ],
+        // Configure → context → size values
+        ("/configure", "size") => vec![
+            CompletionItem { insert: "200K".into(), hint: "200,000 tokens".into() },
+            CompletionItem { insert: "500K".into(), hint: "500,000 tokens".into() },
+            CompletionItem { insert: "1M".into(), hint: "1,000,000 tokens (default)".into() },
+            CompletionItem { insert: "2M".into(), hint: "2,000,000 tokens".into() },
+        ],
+        // Configure → context → threshold values
+        ("/configure", "threshold") => vec![
+            CompletionItem { insert: "75".into(), hint: "75% of context window".into() },
+            CompletionItem { insert: "80".into(), hint: "80% of context window".into() },
+            CompletionItem { insert: "85".into(), hint: "85% (default)".into() },
+            CompletionItem { insert: "90".into(), hint: "90% of context window".into() },
+            CompletionItem { insert: "95".into(), hint: "95% of context window".into() },
+        ],
+        // Configure → context → qmd toggle
+        ("/configure", "qmd") => vec![
+            CompletionItem { insert: "on".into(), hint: "Enable QMD integration".into() },
+            CompletionItem { insert: "off".into(), hint: "Disable QMD integration".into() },
+        ],
+        // Configure → display → vim/chat toggle
+        ("/configure", "vim") | ("/configure", "chat") => vec![
+            CompletionItem { insert: "on".into(), hint: "Enable".into() },
+            CompletionItem { insert: "off".into(), hint: "Disable".into() },
+        ],
+        // Configure → models → default model
+        ("/configure", "default") | ("/configure", "image") => vec![
+            CompletionItem { insert: "claude-opus-4-6".into(), hint: "Anthropic Opus".into() },
+            CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet".into() },
+            CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
+            CompletionItem { insert: "gpt-image-1.5".into(), hint: "OpenAI Image Gen".into() },
+            CompletionItem { insert: "llama3.2".into(), hint: "Ollama local".into() },
+        ],
+        // Configure → permissions modes
+        ("/configure", "read-only") | ("/configure", "workspace-write") | ("/configure", "danger-full-access") => vec![],
+        // Configure → search → provider key
+        ("/configure", "tavily") | ("/configure", "brave") | ("/configure", "exa")
+        | ("/configure", "perplexity") | ("/configure", "bing") | ("/configure", "google") => vec![
+            CompletionItem { insert: "<api-key>".into(), hint: "Paste your API key".into() },
+        ],
+        // Configure → integrations values
+        ("/configure", "wp") => vec![
+            CompletionItem { insert: "<url>".into(), hint: "WordPress URL (e.g. https://culpur.net)".into() },
+        ],
+        ("/configure", "github") => vec![
+            CompletionItem { insert: "<token>".into(), hint: "GitHub personal access token".into() },
         ],
         ("/login", _) if !subcommand.trim().is_empty() => vec![],
         _ => vec![],
@@ -2503,12 +2590,44 @@ fn update_completions(input: &str) -> CompletionPopup {
             return CompletionPopup::default();
         }
 
-        if words.len() >= 2 {
+        if words.len() == 2 && !remainder.ends_with(' ') {
             // "/theme set cy" — filter third level
             let subcmd = words[0];
             let prefix = words[1];
             let third = third_level_completions(command, subcmd);
             let matches: Vec<CompletionItem> = third.into_iter()
+                .filter(|c| c.insert.starts_with(prefix))
+                .collect();
+            // If exact match, try 4th level
+            if matches.len() == 1 && matches[0].insert == prefix {
+                let fourth = third_level_completions(command, prefix);
+                if !fourth.is_empty() {
+                    return CompletionPopup { visible: true, matches: fourth, selected: 0 };
+                }
+                return CompletionPopup::default();
+            }
+            if matches.is_empty() {
+                return CompletionPopup::default();
+            }
+            return CompletionPopup { visible: true, matches, selected: 0 };
+        }
+
+        if words.len() == 2 && remainder.ends_with(' ') {
+            // "/configure context size " — show 4th level (values)
+            let value = words[1];
+            let fourth = third_level_completions(command, value);
+            if !fourth.is_empty() {
+                return CompletionPopup { visible: true, matches: fourth, selected: 0 };
+            }
+            return CompletionPopup::default();
+        }
+
+        if words.len() >= 3 {
+            // "/configure context size 1" — filter 4th level
+            let value = words[1];
+            let prefix = words[2];
+            let fourth = third_level_completions(command, value);
+            let matches: Vec<CompletionItem> = fourth.into_iter()
                 .filter(|c| c.insert.starts_with(prefix))
                 .collect();
             if matches.is_empty() {
