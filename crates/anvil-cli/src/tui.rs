@@ -1416,11 +1416,21 @@ impl AnvilTui {
             let first = input.splitn(2, ' ').next().unwrap_or("").to_string();
             (selected, ends_space, first)
         };
-        let parts_len = self.active_tab().input.splitn(2, ' ').count();
-        let new_input = if parts_len == 1 && !ends_with_space {
+        let input_clone = self.active_tab().input.clone();
+        let word_count = input_clone.split_whitespace().count();
+        let new_input = if word_count <= 1 && !ends_with_space {
+            // Completing a command: "/the" → "/theme "
             format!("{insert} ")
+        } else if word_count == 1 && ends_with_space {
+            // Completing first subcommand: "/theme " + "set" → "/theme set "
+            format!("{first_part} {insert} ")
+        } else if word_count == 2 && ends_with_space {
+            // Completing third level: "/theme set " + "cyberpunk" → "/theme set cyberpunk"
+            let prefix = input_clone.trim_end();
+            format!("{prefix} {insert}")
         } else {
-            format!("{first_part} {insert}")
+            // Filtering a subcommand: "/theme se" → "/theme set "
+            format!("{first_part} {insert} ")
         };
         let new_len = new_input.len();
         let tab = self.active_tab_mut();
@@ -2366,6 +2376,49 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
     }
 }
 
+/// Third-level completions — shown after "/command subcommand ".
+/// For example: "/theme set " → show theme names, "/provider " + "anthropic " → show "login"
+fn third_level_completions(command: &str, subcommand: &str) -> Vec<CompletionItem> {
+    match (command, subcommand.trim()) {
+        ("/theme", "set") => vec![
+            CompletionItem { insert: "cyberpunk".into(), hint: "Neon pink + electric blue".into() },
+            CompletionItem { insert: "nord".into(), hint: "Arctic blues + muted greens".into() },
+            CompletionItem { insert: "solarized-dark".into(), hint: "Classic calibrated colors".into() },
+            CompletionItem { insert: "dracula".into(), hint: "Purple + pink + green".into() },
+            CompletionItem { insert: "culpur-defense".into(), hint: "Navy + cyan (default)".into() },
+        ],
+        ("/provider", "anthropic") | ("/provider", "openai") | ("/provider", "ollama") => vec![
+            CompletionItem { insert: "login".into(), hint: "Login/refresh credentials".into() },
+        ],
+        ("/configure", "providers") => vec![
+            CompletionItem { insert: "anthropic".into(), hint: "Anthropic settings".into() },
+            CompletionItem { insert: "openai".into(), hint: "OpenAI settings".into() },
+            CompletionItem { insert: "ollama".into(), hint: "Ollama settings".into() },
+        ],
+        ("/configure", "models") => vec![
+            CompletionItem { insert: "default".into(), hint: "Set default model".into() },
+            CompletionItem { insert: "image".into(), hint: "Set image model".into() },
+        ],
+        ("/configure", "context") => vec![
+            CompletionItem { insert: "size".into(), hint: "Set context size (e.g. 1M)".into() },
+            CompletionItem { insert: "threshold".into(), hint: "Set auto-compact % (e.g. 85)".into() },
+            CompletionItem { insert: "qmd".into(), hint: "Toggle QMD (on/off)".into() },
+        ],
+        ("/configure", "display") => vec![
+            CompletionItem { insert: "vim".into(), hint: "Toggle vim mode (on/off)".into() },
+            CompletionItem { insert: "chat".into(), hint: "Toggle chat mode (on/off)".into() },
+        ],
+        ("/failover", "add") | ("/failover", "remove") => vec![
+            CompletionItem { insert: "claude-opus-4-6".into(), hint: "Anthropic Opus".into() },
+            CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet".into() },
+            CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
+            CompletionItem { insert: "llama3.2".into(), hint: "Ollama local".into() },
+        ],
+        ("/login", _) if !subcommand.trim().is_empty() => vec![],
+        _ => vec![],
+    }
+}
+
 /// Update the completion popup based on current input.
 fn update_completions(input: &str) -> CompletionPopup {
     if input.is_empty() || !input.starts_with('/') {
@@ -2381,36 +2434,90 @@ fn update_completions(input: &str) -> CompletionPopup {
             .into_iter()
             .filter(|c| c.insert.starts_with(input))
             .collect();
-        if matches.is_empty() || (matches.len() == 1 && matches[0].insert == input) {
+
+        if matches.is_empty() {
             return CompletionPopup::default();
         }
+
+        // If exact match AND this command has subcommands, show them instead
+        if matches.len() == 1 && matches[0].insert == input {
+            let subs = subcommands_for(input);
+            if !subs.is_empty() {
+                // Show subcommands immediately when the command is fully typed
+                return CompletionPopup {
+                    visible: true,
+                    matches: subs,
+                    selected: 0,
+                };
+            }
+            // No subcommands — hide popup (command is complete)
+            return CompletionPopup::default();
+        }
+
         CompletionPopup {
             visible: true,
             matches,
             selected: 0,
         }
     } else {
-        // After a space — show sub-commands
-        let sub_prefix = parts.get(1).unwrap_or(&"").trim();
-        let subs = subcommands_for(command);
-        if subs.is_empty() {
+        // After a space — determine level from word count
+        let remainder = parts.get(1).unwrap_or(&"").to_string();
+        let words: Vec<&str> = remainder.split_whitespace().collect();
+
+        if words.is_empty() {
+            // "/command " with trailing space — show subcommands
+            let subs = subcommands_for(command);
+            if subs.is_empty() {
+                return CompletionPopup::default();
+            }
+            return CompletionPopup { visible: true, matches: subs, selected: 0 };
+        }
+
+        if words.len() == 1 && !remainder.ends_with(' ') {
+            // Typing first subcommand: "/theme se" → filter subcommands
+            let prefix = words[0];
+            let subs = subcommands_for(command);
+            let matches: Vec<CompletionItem> = subs.into_iter()
+                .filter(|c| c.insert.starts_with(prefix))
+                .collect();
+            if matches.is_empty() || (matches.len() == 1 && matches[0].insert == prefix) {
+                // Exact match on subcommand — show third level if available
+                if matches.len() == 1 && matches[0].insert == prefix {
+                    let third = third_level_completions(command, prefix);
+                    if !third.is_empty() {
+                        return CompletionPopup { visible: true, matches: third, selected: 0 };
+                    }
+                }
+                return CompletionPopup::default();
+            }
+            return CompletionPopup { visible: true, matches, selected: 0 };
+        }
+
+        if words.len() == 1 && remainder.ends_with(' ') {
+            // "/theme set " — show third level
+            let subcmd = words[0];
+            let third = third_level_completions(command, subcmd);
+            if !third.is_empty() {
+                return CompletionPopup { visible: true, matches: third, selected: 0 };
+            }
             return CompletionPopup::default();
         }
-        let matches: Vec<CompletionItem> = if sub_prefix.is_empty() {
-            subs
-        } else {
-            subs.into_iter()
-                .filter(|c| c.insert.starts_with(sub_prefix))
-                .collect()
-        };
-        if matches.is_empty() {
-            return CompletionPopup::default();
+
+        if words.len() >= 2 {
+            // "/theme set cy" — filter third level
+            let subcmd = words[0];
+            let prefix = words[1];
+            let third = third_level_completions(command, subcmd);
+            let matches: Vec<CompletionItem> = third.into_iter()
+                .filter(|c| c.insert.starts_with(prefix))
+                .collect();
+            if matches.is_empty() {
+                return CompletionPopup::default();
+            }
+            return CompletionPopup { visible: true, matches, selected: 0 };
         }
-        CompletionPopup {
-            visible: true,
-            matches,
-            selected: 0,
-        }
+
+        CompletionPopup::default()
     }
 }
 
