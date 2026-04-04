@@ -2257,6 +2257,12 @@ fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/skills".into(), hint: "List available skills".into() },
         CompletionItem { insert: "/plugins".into(), hint: "Manage plugins".into() },
         CompletionItem { insert: "/debug-tool-call".into(), hint: "Replay last tool call".into() },
+        CompletionItem { insert: "/configure".into(), hint: "Interactive configuration menu".into() },
+        CompletionItem { insert: "/theme".into(), hint: "Switch terminal color theme".into() },
+        CompletionItem { insert: "/search".into(), hint: "Multi-provider web search".into() },
+        CompletionItem { insert: "/failover".into(), hint: "AI provider failover chain".into() },
+        CompletionItem { insert: "/image".into(), hint: "Generate image via GPT Image".into() },
+        CompletionItem { insert: "/history-archive".into(), hint: "Browse archived sessions".into() },
         CompletionItem { insert: "/exit".into(), hint: "Exit Anvil".into() },
         CompletionItem { insert: "/tab".into(), hint: "Manage tabs (new/close/list/rename)".into() },
     ]
@@ -2322,6 +2328,39 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
         ],
         "/history" => vec![
             CompletionItem { insert: "all".into(), hint: "Show full history".into() },
+        ],
+        "/configure" | "/settings" => vec![
+            CompletionItem { insert: "providers".into(), hint: "Provider & auth settings".into() },
+            CompletionItem { insert: "models".into(), hint: "Default model & failover".into() },
+            CompletionItem { insert: "context".into(), hint: "Context, memory, QMD".into() },
+            CompletionItem { insert: "search".into(), hint: "Search provider keys".into() },
+            CompletionItem { insert: "permissions".into(), hint: "Permission mode".into() },
+            CompletionItem { insert: "display".into(), hint: "Vim, chat, theme".into() },
+            CompletionItem { insert: "integrations".into(), hint: "AnvilHub, WordPress, GitHub".into() },
+        ],
+        "/theme" => vec![
+            CompletionItem { insert: "list".into(), hint: "Show available themes".into() },
+            CompletionItem { insert: "set".into(), hint: "Apply a theme".into() },
+            CompletionItem { insert: "reset".into(), hint: "Reset to default (culpur-defense)".into() },
+            CompletionItem { insert: "cyberpunk".into(), hint: "Neon pink + electric blue".into() },
+            CompletionItem { insert: "nord".into(), hint: "Arctic blues + muted greens".into() },
+            CompletionItem { insert: "solarized-dark".into(), hint: "Classic calibrated colors".into() },
+            CompletionItem { insert: "dracula".into(), hint: "Purple + pink + green".into() },
+            CompletionItem { insert: "culpur-defense".into(), hint: "Navy + cyan (default)".into() },
+        ],
+        "/search" => vec![
+            CompletionItem { insert: "providers".into(), hint: "List search providers".into() },
+        ],
+        "/failover" => vec![
+            CompletionItem { insert: "status".into(), hint: "Show failover chain status".into() },
+            CompletionItem { insert: "add".into(), hint: "Add model to chain".into() },
+            CompletionItem { insert: "remove".into(), hint: "Remove model from chain".into() },
+            CompletionItem { insert: "reset".into(), hint: "Clear all cooldowns".into() },
+        ],
+        "/image" | "/generate-image" => vec![],
+        "/history-archive" => vec![
+            CompletionItem { insert: "search".into(), hint: "Search archived sessions".into() },
+            CompletionItem { insert: "view".into(), hint: "View a specific archive".into() },
         ],
         _ => vec![],
     }
