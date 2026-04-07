@@ -206,6 +206,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 wants_version = true;
                 index += 1;
             }
+            "--update" => {
+                run_self_update();
+                std::process::exit(0);
+            }
             "--model" => {
                 let value = args
                     .get(index + 1)
@@ -8523,6 +8527,134 @@ fn parse_line_range(s: &str) -> (usize, usize) {
 }
 
 
+/// Self-update: download the latest release and replace the current binary.
+fn run_self_update() {
+    println!("Anvil self-update");
+    println!("  Current version: {VERSION}");
+    println!();
+
+    // Check for latest version
+    print!("  Checking for updates... ");
+    let latest_info = check_for_update(VERSION);
+    if latest_info.is_none() {
+        println!("already up to date!");
+        return;
+    }
+    println!("update found!");
+
+    // Detect platform
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let target = match (os, arch) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        _ => {
+            eprintln!("  Unsupported platform: {os}/{arch}");
+            std::process::exit(1);
+        }
+    };
+
+    // Get latest tag from GitHub
+    let tag_output = Command::new("curl")
+        .args(["-sfL", "--max-time", "10", "-H", "User-Agent: anvil-cli",
+               "https://api.github.com/repos/culpur/anvil/releases/latest"])
+        .output();
+    let tag = match tag_output {
+        Ok(o) if o.status.success() => {
+            let body = String::from_utf8_lossy(&o.stdout);
+            body.split("\"tag_name\"")
+                .nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .unwrap_or("latest")
+                .to_string()
+        }
+        _ => {
+            eprintln!("  Failed to check GitHub releases");
+            std::process::exit(1);
+        }
+    };
+
+    let url = format!(
+        "https://github.com/culpur/anvil/releases/download/{tag}/anvil-{target}.tar.gz"
+    );
+    println!("  Downloading {tag} for {target}...");
+
+    // Download to temp
+    let tmp_dir = std::env::temp_dir().join("anvil-update");
+    let _ = fs::create_dir_all(&tmp_dir);
+    let tarball = tmp_dir.join("anvil.tar.gz");
+
+    let dl = Command::new("curl")
+        .args(["-fSL", "--max-time", "120", "-o"])
+        .arg(&tarball)
+        .arg(&url)
+        .status();
+
+    match dl {
+        Ok(s) if s.success() => {}
+        _ => {
+            eprintln!("  Download failed from: {url}");
+            std::process::exit(1);
+        }
+    }
+
+    // Extract
+    println!("  Extracting...");
+    let extract = Command::new("tar")
+        .args(["xzf"])
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&tmp_dir)
+        .status();
+
+    match extract {
+        Ok(s) if s.success() => {}
+        _ => {
+            eprintln!("  Extraction failed");
+            std::process::exit(1);
+        }
+    }
+
+    // Find the binary
+    let new_binary = tmp_dir.join("anvil");
+    if !new_binary.exists() {
+        eprintln!("  Binary not found in archive");
+        std::process::exit(1);
+    }
+
+    // Replace current binary
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("anvil"));
+    println!("  Replacing {}...", current_exe.display());
+
+    // Backup current
+    let backup = current_exe.with_extension("bak");
+    let _ = fs::rename(&current_exe, &backup);
+
+    match fs::copy(&new_binary, &current_exe) {
+        Ok(_) => {
+            // Make executable on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&current_exe, fs::Permissions::from_mode(0o755));
+            }
+            let _ = fs::remove_file(&backup);
+            let _ = fs::remove_dir_all(&tmp_dir);
+            println!();
+            println!("  ✓ Updated to {tag}!");
+            println!("  Restart Anvil to use the new version.");
+        }
+        Err(e) => {
+            // Restore backup
+            let _ = fs::rename(&backup, &current_exe);
+            eprintln!("  Failed to replace binary: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Check GitHub Releases for a newer version of Anvil.
 /// Returns `Some("Update available: v1.0.3 → Run: ...")` or `None`.
 fn check_for_update(current_version: &str) -> Option<String> {
@@ -8549,7 +8681,7 @@ fn check_for_update(current_version: &str) -> Option<String> {
         let latest = tag.trim_start_matches('v');
         if latest != current_version && version_is_newer(latest, current_version) {
             return Some(format!(
-                "Update available! {current_version} → {latest}  Run: curl -fsSL https://anvilhub.culpur.net/install.sh | sh"
+                "Update available! {current_version} → {latest}  Run: anvil --update"
             ));
         }
         return None; // Successfully checked, no update needed
@@ -10774,6 +10906,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
         "  --version, -V                         Print version and build information"
+    )?;
+    writeln!(
+        out,
+        "  --update                              Self-update to the latest release"
     )?;
     writeln!(out)?;
     writeln!(out, "Slash command reference")?;
