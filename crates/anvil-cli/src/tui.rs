@@ -311,6 +311,8 @@ pub struct AnvilTui {
     configure_data: ConfigureData,
     /// Active colour theme — loaded from ~/.anvil/theme.json at startup.
     pub theme: Theme,
+    /// Update notification message (empty = no update available).
+    update_available: String,
 }
 
 /// Tracks the state of the slash-command completion popup.
@@ -379,6 +381,7 @@ impl AnvilTui {
                 configure_state: ConfigureState::Inactive,
                 configure_data: ConfigureData::default(),
                 theme: Theme::load(),
+                update_available: String::new(),
             },
             TuiSender(tx),
         ))
@@ -517,6 +520,7 @@ impl AnvilTui {
         let context_max_tokens = self.context_max_tokens;
         let qmd_status = self.qmd_status.clone();
         let last_archive_status = self.last_archive_status.clone();
+        let update_available = self.update_available.clone();
         let configure_state = self.configure_state.clone();
         let configure_data = self.configure_data.clone();
         let theme = self.theme.clone();
@@ -842,6 +846,15 @@ impl AnvilTui {
                 line5_left.push(Span::styled(
                     format!("  │  📦 {last_archive_status}"),
                     Style::default().fg(Color::Rgb(0x55, 0x77, 0xAA)),
+                ));
+            }
+            // Update available notification
+            if !update_available.is_empty() {
+                line5_left.push(Span::styled(
+                    format!("  │  ⬆ {update_available}"),
+                    Style::default()
+                        .fg(Color::Rgb(0xFF, 0xAA, 0x00))
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             let line5 = Line::from(line5_left);
@@ -1591,6 +1604,11 @@ impl AnvilTui {
     /// Update the last archive status shown in the footer.
     pub fn set_archive_status(&mut self, status: impl Into<String>) {
         self.last_archive_status = status.into();
+    }
+
+    /// Set the update notification message shown in the footer.
+    pub fn set_update_available(&mut self, msg: impl Into<String>) {
+        self.update_available = msg.into();
     }
 
     /// Signal that the TUI should close on the next `read_input` loop tick.

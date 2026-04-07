@@ -1589,11 +1589,32 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // Background update check — non-blocking, fires once at startup.
+    let update_check: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    {
+        let update_slot = Arc::clone(&update_check);
+        let current_version = VERSION.to_string();
+        thread::spawn(move || {
+            if let Some(msg) = check_for_update(&current_version) {
+                if let Ok(mut slot) = update_slot.lock() {
+                    *slot = Some(msg);
+                }
+            }
+        });
+    }
+
     let mut task_check_instant = Instant::now();
 
     'outer: loop {
         // Check for background task completions.
         task_check_instant = inject_task_notifications_tui(&mut cli, &mut tui, task_check_instant);
+
+        // Check if the background update check completed.
+        if let Ok(mut slot) = update_check.try_lock() {
+            if let Some(msg) = slot.take() {
+                tui.set_update_available(msg);
+            }
+        }
 
         // Drain any queued TUI events (e.g. from previous turn).
         tui.poll_events();
@@ -1789,6 +1810,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     let mut editor = input::LineEditor::new("> ", slash_command_completion_candidates());
     println!("{}", cli.startup_banner());
+
+    // Check for updates (blocking but with short timeout)
+    if let Some(msg) = check_for_update(VERSION) {
+        println!("\x1b[33;1m⬆ {msg}\x1b[0m");
+    }
 
     let _cron_daemon = if std::env::var("ANVIL_NO_CRON").as_deref() != Ok("1") {
         Some(CronDaemon::start())
@@ -8496,6 +8522,59 @@ fn parse_line_range(s: &str) -> (usize, usize) {
     }
 }
 
+
+/// Check GitHub Releases for a newer version of Anvil.
+/// Returns `Some("Update available: v1.0.3 → Run: ...")` or `None`.
+fn check_for_update(current_version: &str) -> Option<String> {
+    // Try GitHub API first, fall back to AnvilHub
+    let urls = [
+        "https://api.github.com/repos/culpur/anvil/releases/latest",
+    ];
+
+    for url in &urls {
+        let output = Command::new("curl")
+            .args(["-sfL", "--max-time", "5", "-H", "User-Agent: anvil-cli", url])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            continue;
+        }
+        let body = String::from_utf8_lossy(&output.stdout);
+        // Parse tag_name from JSON (minimal parsing, no serde needed)
+        let tag = body
+            .split("\"tag_name\"")
+            .nth(1)?
+            .split('"')
+            .nth(1)?;
+        let latest = tag.trim_start_matches('v');
+        if latest != current_version && version_is_newer(latest, current_version) {
+            return Some(format!(
+                "Update available! {current_version} → {latest}  Run: curl -fsSL https://anvilhub.culpur.net/install.sh | sh"
+            ));
+        }
+        return None; // Successfully checked, no update needed
+    }
+    None
+}
+
+/// Simple semver comparison: returns true if `a` is newer than `b`.
+fn version_is_newer(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u32> {
+        v.split(|c: char| !c.is_ascii_digit())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect()
+    };
+    let va = parse(a);
+    let vb = parse(b);
+    for i in 0..va.len().max(vb.len()) {
+        let x = va.get(i).copied().unwrap_or(0);
+        let y = vb.get(i).copied().unwrap_or(0);
+        if x > y { return true; }
+        if x < y { return false; }
+    }
+    false
+}
 
 fn sanitize_generated_message(value: &str) -> String {
     value.trim().trim_matches('`').trim().replace("\r\n", "\n")
