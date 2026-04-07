@@ -9,6 +9,7 @@ pub mod qmd;
 pub mod search;
 pub mod task;
 pub mod team;
+pub mod vault;
 mod compact;
 mod config;
 mod conversation;
@@ -111,6 +112,7 @@ pub use hub::{
     HubPackage,
 };
 pub use theme::{Rgb, Theme};
+pub use vault::{Credential, TotpCode, TotpEntry, VaultError, VaultManager};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

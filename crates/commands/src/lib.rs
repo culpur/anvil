@@ -623,6 +623,188 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Core,
     },
+    // Feature A — LSP autocomplete
+    SlashCommandSpec {
+        name: "lsp",
+        aliases: &[],
+        summary: "Language server protocol helpers — start, list symbols, find references",
+        argument_hint: Some("[start <lang>|symbols <file>|references <symbol>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature B — Jupyter notebook support
+    SlashCommandSpec {
+        name: "notebook",
+        aliases: &[],
+        summary: "Jupyter notebook runner — execute, run a cell, or export",
+        argument_hint: Some("[run <file>|cell <file> <n>|export <file> <format>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature C — Kubernetes management
+    SlashCommandSpec {
+        name: "k8s",
+        aliases: &["kubectl"],
+        summary: "Kubernetes helpers — pods, logs, apply, describe",
+        argument_hint: Some("[pods|logs <pod>|apply <file>|describe <resource>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature D — Terraform/IaC
+    SlashCommandSpec {
+        name: "iac",
+        aliases: &["terraform"],
+        summary: "Infrastructure-as-code helpers — plan, apply, validate, drift",
+        argument_hint: Some("[plan|apply|validate|drift]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature E — CI/CD pipeline builder
+    SlashCommandSpec {
+        name: "pipeline",
+        aliases: &[],
+        summary: "CI/CD pipeline builder — generate, lint, or run a local pipeline",
+        argument_hint: Some("[generate|lint|run]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature F — Code review
+    SlashCommandSpec {
+        name: "review",
+        aliases: &[],
+        summary: "AI-powered code review — file, staged changes, or PR diff",
+        argument_hint: Some("[<file>|staged|pr]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature G — Dependency graph
+    SlashCommandSpec {
+        name: "deps",
+        aliases: &[],
+        summary: "Dependency graph helpers — tree, outdated, audit, why",
+        argument_hint: Some("[tree|outdated|audit|why <pkg>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature H — Monorepo awareness
+    SlashCommandSpec {
+        name: "mono",
+        aliases: &[],
+        summary: "Monorepo workspace helpers — list, graph, changed, run",
+        argument_hint: Some("[list|graph|changed|run <cmd> [--filter <pkg>]]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature I — Browser automation
+    SlashCommandSpec {
+        name: "browser",
+        aliases: &[],
+        summary: "Browser automation — open URL, screenshot, accessibility test",
+        argument_hint: Some("[open <url>|screenshot <url>|test <url>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature J — Desktop & webhook notifications
+    SlashCommandSpec {
+        name: "notify",
+        aliases: &[],
+        summary: "Send notifications — desktop, webhook, or Matrix room",
+        argument_hint: Some("[send <msg>|webhook <url> <msg>|matrix <room> <msg>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 21 — Credential Vault
+    SlashCommandSpec {
+        name: "vault",
+        aliases: &[],
+        summary: "Encrypted credential vault and TOTP manager (AES-256-GCM + Argon2id)",
+        argument_hint: Some("[setup|unlock|lock|store <label>|get <label>|list|delete <label>|totp add <label>|totp <label>|totp list|totp delete <label>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 11 — codebase migration
+    SlashCommandSpec {
+        name: "migrate",
+        aliases: &[],
+        summary: "AI-assisted codebase migration — framework, language, or dependency manager",
+        argument_hint: Some("[framework <from> <to>|language <from> <to>|deps]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 12 — regex builder / tester
+    SlashCommandSpec {
+        name: "regex",
+        aliases: &[],
+        summary: "Regex builder and tester — build from description, test, or explain a pattern",
+        argument_hint: Some("[build <description>|test <pattern> <input>|explain <pattern>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 13 — SSH session manager
+    SlashCommandSpec {
+        name: "ssh",
+        aliases: &[],
+        summary: "SSH session manager — list hosts, connect, set up tunnel, or list keys",
+        argument_hint: Some("[list|connect <host>|tunnel <host> <local:remote>|keys]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 14 — log analysis
+    SlashCommandSpec {
+        name: "logs",
+        aliases: &[],
+        summary: "Log analysis — tail, search, AI-powered analysis, or statistics",
+        argument_hint: Some("[tail <file>|search <file> <pattern>|analyze <file>|stats <file>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 15 — markdown preview
+    SlashCommandSpec {
+        name: "markdown",
+        aliases: &["md"],
+        summary: "Markdown helpers — preview in TUI, generate table of contents, or lint",
+        argument_hint: Some("[preview <file>|toc <file>|lint <file>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 16 — snippet library
+    SlashCommandSpec {
+        name: "snippets",
+        aliases: &[],
+        summary: "Snippet library — save, list, retrieve, or search code snippets",
+        argument_hint: Some("[save <name>|list|get <name>|search <query>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 17 — AI fine-tuning assistant
+    SlashCommandSpec {
+        name: "finetune",
+        aliases: &[],
+        summary: "AI fine-tuning assistant — prepare data, validate, submit job, or check status",
+        argument_hint: Some("[prepare <file>|validate <file>|start|status]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 18 — webhook manager
+    SlashCommandSpec {
+        name: "webhook",
+        aliases: &[],
+        summary: "Webhook manager — list, add, test, or remove configured endpoints",
+        argument_hint: Some("[list|add <name> <url>|test <name>|remove <name>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 19 — cost optimization (extends existing /cost)
+    // Note: the existing /cost spec (show cumulative usage) is replaced/extended below.
+    // Feature 20 — plugin SDK
+    SlashCommandSpec {
+        name: "plugin-sdk",
+        aliases: &[],
+        summary: "Plugin SDK — scaffold, build, test, or publish an Anvil plugin",
+        argument_hint: Some("[init <name>|build|test|publish]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -818,6 +1000,86 @@ pub enum SlashCommand {
     /// `/language [en|de|es|fr|ja|zh-CN|ru]`
     Language {
         lang: Option<String>,
+    },
+    /// `/lsp [start <lang>|symbols <file>|references <symbol>]`
+    Lsp {
+        action: Option<String>,
+    },
+    /// `/notebook [run <file>|cell <file> <n>|export <file> <format>]`
+    Notebook {
+        action: Option<String>,
+    },
+    /// `/k8s [pods|logs <pod>|apply <file>|describe <resource>]`
+    K8s {
+        action: Option<String>,
+    },
+    /// `/iac [plan|apply|validate|drift]`
+    Iac {
+        action: Option<String>,
+    },
+    /// `/pipeline [generate|lint|run]`
+    Pipeline {
+        action: Option<String>,
+    },
+    /// `/review [<file>|staged|pr]`
+    Review {
+        action: Option<String>,
+    },
+    /// `/deps [tree|outdated|audit|why <pkg>]`
+    Deps {
+        action: Option<String>,
+    },
+    /// `/mono [list|graph|changed|run <cmd> [--filter <pkg>]]`
+    Mono {
+        action: Option<String>,
+    },
+    /// `/browser [open <url>|screenshot <url>|test <url>]`
+    Browser {
+        action: Option<String>,
+    },
+    /// `/notify [send <msg>|webhook <url> <msg>|matrix <room> <msg>]`
+    Notify {
+        action: Option<String>,
+    },
+    /// `/vault [setup|unlock|lock|store <label>|get <label>|list|delete <label>|totp ...]`
+    Vault {
+        action: Option<String>,
+    },
+    /// `/migrate [framework <from> <to>|language <from> <to>|deps]`
+    Migrate {
+        action: Option<String>,
+    },
+    /// `/regex [build <description>|test <pattern> <input>|explain <pattern>]`
+    Regex {
+        action: Option<String>,
+    },
+    /// `/ssh [list|connect <host>|tunnel <host> <local:remote>|keys]`
+    Ssh {
+        action: Option<String>,
+    },
+    /// `/logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]`
+    Logs {
+        action: Option<String>,
+    },
+    /// `/markdown [preview <file>|toc <file>|lint <file>]`
+    Markdown {
+        action: Option<String>,
+    },
+    /// `/snippets [save <name>|list|get <name>|search <query>]`
+    Snippets {
+        action: Option<String>,
+    },
+    /// `/finetune [prepare <file>|validate <file>|start|status]`
+    Finetune {
+        action: Option<String>,
+    },
+    /// `/webhook [list|add <name> <url>|test <name>|remove <name>]`
+    Webhook {
+        action: Option<String>,
+    },
+    /// `/plugin-sdk [init <name>|build|test|publish]`
+    PluginSdk {
+        action: Option<String>,
     },
     Unknown(String),
 }
@@ -1020,6 +1282,76 @@ impl SlashCommand {
             },
             "language" | "lang" => Self::Language {
                 lang: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "lsp" => Self::Lsp {
+                action: remainder_after_command(trimmed, command),
+            },
+            "notebook" => Self::Notebook {
+                action: remainder_after_command(trimmed, command),
+            },
+            "k8s" | "kubectl" => Self::K8s {
+                action: remainder_after_command(trimmed, command),
+            },
+            "iac" | "terraform" => Self::Iac {
+                action: remainder_after_command(trimmed, command),
+            },
+            "pipeline" => Self::Pipeline {
+                action: remainder_after_command(trimmed, command),
+            },
+            "review" => Self::Review {
+                action: remainder_after_command(trimmed, command),
+            },
+            "deps" => Self::Deps {
+                action: remainder_after_command(trimmed, command),
+            },
+            "mono" => Self::Mono {
+                action: remainder_after_command(trimmed, command),
+            },
+            "browser" => Self::Browser {
+                action: remainder_after_command(trimmed, command),
+            },
+            "notify" => Self::Notify {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 21 — Credential Vault
+            "vault" => Self::Vault {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 11 — codebase migration
+            "migrate" => Self::Migrate {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 12 — regex builder / tester
+            "regex" => Self::Regex {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 13 — SSH session manager
+            "ssh" => Self::Ssh {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 14 — log analysis
+            "logs" => Self::Logs {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 15 — markdown preview
+            "markdown" | "md" => Self::Markdown {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 16 — snippet library
+            "snippets" => Self::Snippets {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 17 — AI fine-tuning assistant
+            "finetune" => Self::Finetune {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 18 — webhook manager
+            "webhook" => Self::Webhook {
+                action: remainder_after_command(trimmed, command),
+            },
+            // Feature 20 — plugin SDK
+            "plugin-sdk" => Self::PluginSdk {
+                action: remainder_after_command(trimmed, command),
             },
             other => Self::Unknown(other.to_string()),
         })
@@ -2448,6 +2780,26 @@ pub fn handle_slash_command(
         | SlashCommand::Env { .. }
         | SlashCommand::Hub { .. }
         | SlashCommand::Language { .. }
+        | SlashCommand::Lsp { .. }
+        | SlashCommand::Notebook { .. }
+        | SlashCommand::K8s { .. }
+        | SlashCommand::Iac { .. }
+        | SlashCommand::Pipeline { .. }
+        | SlashCommand::Review { .. }
+        | SlashCommand::Deps { .. }
+        | SlashCommand::Mono { .. }
+        | SlashCommand::Browser { .. }
+        | SlashCommand::Notify { .. }
+        | SlashCommand::Vault { .. }
+        | SlashCommand::Migrate { .. }
+        | SlashCommand::Regex { .. }
+        | SlashCommand::Ssh { .. }
+        | SlashCommand::Logs { .. }
+        | SlashCommand::Markdown { .. }
+        | SlashCommand::Snippets { .. }
+        | SlashCommand::Finetune { .. }
+        | SlashCommand::Webhook { .. }
+        | SlashCommand::PluginSdk { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }

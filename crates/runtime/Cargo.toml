@@ -16,6 +16,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
 walkdir = "2"
+# Feature 21 — Credential Vault
+aes-gcm = "0.10"
+argon2 = { version = "0.5", features = ["password-hash"] }
+base32 = "0.5"
+hmac = "0.12"
+sha1 = "0.10"
+rand = "0.8"
 
 [lints]
 workspace = true

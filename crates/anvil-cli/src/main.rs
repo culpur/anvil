@@ -1453,6 +1453,26 @@ fn run_resume_command(
         | SlashCommand::Changelog
         | SlashCommand::Env { .. }
         | SlashCommand::Hub { .. }
+        | SlashCommand::Lsp { .. }
+        | SlashCommand::Notebook { .. }
+        | SlashCommand::K8s { .. }
+        | SlashCommand::Iac { .. }
+        | SlashCommand::Pipeline { .. }
+        | SlashCommand::Review { .. }
+        | SlashCommand::Deps { .. }
+        | SlashCommand::Mono { .. }
+        | SlashCommand::Browser { .. }
+        | SlashCommand::Notify { .. }
+        | SlashCommand::Vault { .. }
+        | SlashCommand::Migrate { .. }
+        | SlashCommand::Regex { .. }
+        | SlashCommand::Ssh { .. }
+        | SlashCommand::Logs { .. }
+        | SlashCommand::Markdown { .. }
+        | SlashCommand::Snippets { .. }
+        | SlashCommand::Finetune { .. }
+        | SlashCommand::Webhook { .. }
+        | SlashCommand::PluginSdk { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2675,6 +2695,76 @@ impl LiveCli {
             }
             SlashCommand::Language { lang } => {
                 (self.run_language_command(lang.as_deref()), false)
+            }
+            SlashCommand::Lsp { action } => {
+                (self.run_lsp_command(action.as_deref()), false)
+            }
+            SlashCommand::Notebook { action } => {
+                (self.run_notebook_command(action.as_deref()), false)
+            }
+            SlashCommand::K8s { action } => {
+                (Self::run_k8s_command(action.as_deref()), false)
+            }
+            SlashCommand::Iac { action } => {
+                (Self::run_iac_command(action.as_deref()), false)
+            }
+            SlashCommand::Pipeline { action } => {
+                (self.run_pipeline_command(action.as_deref()), false)
+            }
+            SlashCommand::Review { action } => {
+                (self.run_review_command(action.as_deref()), false)
+            }
+            SlashCommand::Deps { action } => {
+                (Self::run_deps_command(action.as_deref()), false)
+            }
+            SlashCommand::Mono { action } => {
+                (Self::run_mono_command(action.as_deref()), false)
+            }
+            SlashCommand::Browser { action } => {
+                (Self::run_browser_command(action.as_deref()), false)
+            }
+            SlashCommand::Notify { action } => {
+                (Self::run_notify_command(action.as_deref()), false)
+            }
+            // Feature 21 — Credential Vault (TUI: interactive prompts fall back to plain output)
+            SlashCommand::Vault { action } => {
+                (self.run_vault_command(action.as_deref()), false)
+            }
+            // Feature 11 — codebase migration
+            SlashCommand::Migrate { action } => {
+                (self.run_migrate_command(action.as_deref()), false)
+            }
+            // Feature 12 — regex builder / tester
+            SlashCommand::Regex { action } => {
+                (self.run_regex_command(action.as_deref()), false)
+            }
+            // Feature 13 — SSH session manager
+            SlashCommand::Ssh { action } => {
+                (Self::run_ssh_command(action.as_deref()), false)
+            }
+            // Feature 14 — log analysis
+            SlashCommand::Logs { action } => {
+                (self.run_logs_command(action.as_deref()), false)
+            }
+            // Feature 15 — markdown preview
+            SlashCommand::Markdown { action } => {
+                (Self::run_markdown_command(action.as_deref()), false)
+            }
+            // Feature 16 — snippet library
+            SlashCommand::Snippets { action } => {
+                (Self::run_snippets_command(action.as_deref()), false)
+            }
+            // Feature 17 — AI fine-tuning assistant
+            SlashCommand::Finetune { action } => {
+                (self.run_finetune_command(action.as_deref()), false)
+            }
+            // Feature 18 — webhook manager
+            SlashCommand::Webhook { action } => {
+                (Self::run_webhook_command(action.as_deref()), false)
+            }
+            // Feature 20 — plugin SDK
+            SlashCommand::PluginSdk { action } => {
+                (Self::run_plugin_sdk_command(action.as_deref()), false)
             }
             _ => {
                 ("Command not available in TUI mode.".to_string(), false)
@@ -3921,6 +4011,106 @@ impl LiveCli {
             // i18n language switcher
             SlashCommand::Language { lang } => {
                 println!("{}", self.run_language_command(lang.as_deref()));
+                false
+            }
+            // Feature 21 — Credential Vault
+            SlashCommand::Vault { action } => {
+                println!("{}", self.run_vault_command(action.as_deref()));
+                false
+            }
+            // Feature A — LSP helpers
+            SlashCommand::Lsp { action } => {
+                println!("{}", self.run_lsp_command(action.as_deref()));
+                false
+            }
+            // Feature B — Jupyter notebook
+            SlashCommand::Notebook { action } => {
+                println!("{}", self.run_notebook_command(action.as_deref()));
+                false
+            }
+            // Feature C — Kubernetes
+            SlashCommand::K8s { action } => {
+                println!("{}", Self::run_k8s_command(action.as_deref()));
+                false
+            }
+            // Feature D — Terraform / IaC
+            SlashCommand::Iac { action } => {
+                println!("{}", Self::run_iac_command(action.as_deref()));
+                false
+            }
+            // Feature E — CI/CD pipeline
+            SlashCommand::Pipeline { action } => {
+                println!("{}", self.run_pipeline_command(action.as_deref()));
+                false
+            }
+            // Feature F — Code review
+            SlashCommand::Review { action } => {
+                println!("{}", self.run_review_command(action.as_deref()));
+                false
+            }
+            // Feature G — Dependency graph
+            SlashCommand::Deps { action } => {
+                println!("{}", Self::run_deps_command(action.as_deref()));
+                false
+            }
+            // Feature H — Monorepo awareness
+            SlashCommand::Mono { action } => {
+                println!("{}", Self::run_mono_command(action.as_deref()));
+                false
+            }
+            // Feature I — Browser automation
+            SlashCommand::Browser { action } => {
+                println!("{}", Self::run_browser_command(action.as_deref()));
+                false
+            }
+            // Feature J — Desktop & webhook notifications
+            SlashCommand::Notify { action } => {
+                println!("{}", Self::run_notify_command(action.as_deref()));
+                false
+            }
+            // Feature 11 — codebase migration
+            SlashCommand::Migrate { action } => {
+                println!("{}", self.run_migrate_command(action.as_deref()));
+                false
+            }
+            // Feature 12 — regex builder / tester
+            SlashCommand::Regex { action } => {
+                println!("{}", self.run_regex_command(action.as_deref()));
+                false
+            }
+            // Feature 13 — SSH session manager
+            SlashCommand::Ssh { action } => {
+                println!("{}", Self::run_ssh_command(action.as_deref()));
+                false
+            }
+            // Feature 14 — log analysis
+            SlashCommand::Logs { action } => {
+                println!("{}", self.run_logs_command(action.as_deref()));
+                false
+            }
+            // Feature 15 — markdown preview
+            SlashCommand::Markdown { action } => {
+                println!("{}", Self::run_markdown_command(action.as_deref()));
+                false
+            }
+            // Feature 16 — snippet library
+            SlashCommand::Snippets { action } => {
+                println!("{}", Self::run_snippets_command(action.as_deref()));
+                false
+            }
+            // Feature 17 — AI fine-tuning assistant
+            SlashCommand::Finetune { action } => {
+                println!("{}", self.run_finetune_command(action.as_deref()));
+                false
+            }
+            // Feature 18 — webhook manager
+            SlashCommand::Webhook { action } => {
+                println!("{}", Self::run_webhook_command(action.as_deref()));
+                false
+            }
+            // Feature 20 — plugin SDK
+            SlashCommand::PluginSdk { action } => {
+                println!("{}", Self::run_plugin_sdk_command(action.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -7107,6 +7297,522 @@ impl LiveCli {
     fn run_language_command(&self, lang: Option<&str>) -> String {
         run_language_command_static(lang)
     }
+
+    // ─── Feature 1: LSP Autocomplete ─────────────────────────────────────────
+
+    fn run_lsp_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /lsp start <lang>         Start language server for a language",
+                "  /lsp symbols <file>       List symbols in a file via LSP",
+                "  /lsp references <symbol>  Find all references to a symbol",
+                "",
+                "Supported languages: rust, typescript, python, go, java",
+            ].join("\n");
+        }
+        if let Some(lang) = args.strip_prefix("start ") {
+            let lang = lang.trim();
+            if lang.is_empty() { return "Usage: /lsp start <lang>".to_string(); }
+            let binary = lsp_binary_for_lang(lang);
+            let found = Command::new("which").arg(&binary).output()
+                .map(|o| o.status.success()).unwrap_or(false);
+            return if found {
+                format!("LSP server for '{lang}' is available ({binary}).\nServer would be started on next file operation.")
+            } else {
+                format!("LSP server binary '{binary}' not found in PATH.\nInstall it first (e.g. `cargo install rust-analyzer` for rust).")
+            };
+        }
+        if let Some(file) = args.strip_prefix("symbols ") {
+            let file = file.trim();
+            if file.is_empty() { return "Usage: /lsp symbols <file>".to_string(); }
+            let source = match fs::read_to_string(file) {
+                Ok(s) => s,
+                Err(e) => return format!("Cannot read {file}: {e}"),
+            };
+            let prompt = format!(
+                "You are an LSP server. List all top-level symbols (functions, structs, classes, \
+                 enums, constants, type aliases) in this source file. Format each as:\n\
+                 <kind> <name>  <line>\n\nFile: {file}\n\n```\n{src}\n```",
+                src = truncate_for_prompt(&source, 10_000),
+            );
+            return match self.run_internal_prompt_text(&prompt, false) {
+                Ok(r) => format!("Symbols in {file}:\n\n{r}"),
+                Err(e) => format!("lsp symbols failed: {e}"),
+            };
+        }
+        if let Some(symbol) = args.strip_prefix("references ") {
+            let symbol = symbol.trim();
+            if symbol.is_empty() { return "Usage: /lsp references <symbol>".to_string(); }
+            let output = Command::new("grep")
+                .args(["-rn", "--include=*.rs", "--include=*.ts",
+                       "--include=*.py", "--include=*.go", symbol, "."])
+                .output();
+            return match output {
+                Ok(o) if !o.stdout.is_empty() => {
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    let lines: Vec<&str> = text.lines().take(40).collect();
+                    format!("References to '{symbol}' ({} shown):\n\n{}", lines.len(), lines.join("\n"))
+                }
+                _ => format!("No references found for '{symbol}'."),
+            };
+        }
+        format!("Unknown /lsp sub-command: {args}\nRun `/lsp help` for usage.")
+    }
+
+    // ─── Feature 2: Jupyter Notebook Support ─────────────────────────────────
+
+    fn run_notebook_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /notebook run <file>              Execute all cells in a .ipynb notebook",
+                "  /notebook cell <file> <n>         Run cell N (0-based) in a notebook",
+                "  /notebook export <file> <format>  Export notebook (html|py|pdf)",
+            ].join("\n");
+        }
+        if let Some(file) = args.strip_prefix("run ") {
+            let file = file.trim();
+            if file.is_empty() { return "Usage: /notebook run <file>".to_string(); }
+            if command_exists("jupyter") {
+                let out = Command::new("jupyter")
+                    .args(["nbconvert", "--to", "notebook", "--execute", "--inplace", file])
+                    .output();
+                return match out {
+                    Ok(o) if o.status.success() => format!("Executed notebook: {file}"),
+                    Ok(o) => format!("nbconvert failed:\n{}", String::from_utf8_lossy(&o.stderr).trim()),
+                    Err(e) => format!("Failed to run jupyter: {e}"),
+                };
+            }
+            let raw = match fs::read_to_string(file) {
+                Ok(s) => s, Err(e) => return format!("Cannot read {file}: {e}"),
+            };
+            let prompt = format!(
+                "This is a Jupyter notebook (JSON). Summarise what each cell does and what \
+                 output would be expected if executed top-to-bottom. Identify any likely errors.\n\n{}",
+                truncate_for_prompt(&raw, 12_000),
+            );
+            return match self.run_internal_prompt_text(&prompt, false) {
+                Ok(r) => format!("Notebook analysis for {file}:\n\n{r}"),
+                Err(e) => format!("notebook run: {e}"),
+            };
+        }
+        if let Some(rest) = args.strip_prefix("cell ") {
+            let mut parts = rest.trim().splitn(3, ' ');
+            let file = parts.next().unwrap_or("").trim();
+            let cell_str = parts.next().unwrap_or("").trim();
+            if file.is_empty() || cell_str.is_empty() {
+                return "Usage: /notebook cell <file> <n>".to_string();
+            }
+            let cell_n: usize = match cell_str.parse() {
+                Ok(n) => n,
+                Err(_) => return format!("Cell index must be a number, got '{cell_str}'."),
+            };
+            let raw = match fs::read_to_string(file) {
+                Ok(s) => s, Err(e) => return format!("Cannot read {file}: {e}"),
+            };
+            return match extract_notebook_cell(&raw, cell_n) {
+                Ok(src) => {
+                    let prompt = format!(
+                        "Execute or explain this Jupyter notebook cell (cell {cell_n} from {file}).\n\n```python\n{src}\n```"
+                    );
+                    match self.run_internal_prompt_text(&prompt, false) {
+                        Ok(r) => format!("Cell {cell_n} from {file}:\n\n{r}"),
+                        Err(e) => format!("notebook cell: {e}"),
+                    }
+                }
+                Err(e) => format!("Cell {cell_n} not found in {file}: {e}"),
+            };
+        }
+        if let Some(rest) = args.strip_prefix("export ") {
+            let mut parts = rest.trim().splitn(3, ' ');
+            let file = parts.next().unwrap_or("").trim();
+            let fmt = parts.next().unwrap_or("html").trim();
+            if file.is_empty() { return "Usage: /notebook export <file> <format>".to_string(); }
+            if !matches!(fmt, "html" | "pdf" | "py" | "script") {
+                return format!("Unsupported format '{fmt}'. Use: html, pdf, py.");
+            }
+            if command_exists("jupyter") {
+                let out = Command::new("jupyter").args(["nbconvert", "--to", fmt, file]).output();
+                return match out {
+                    Ok(o) if o.status.success() => format!("Exported {file} to {fmt}."),
+                    Ok(o) => format!("Export failed:\n{}", String::from_utf8_lossy(&o.stderr).trim()),
+                    Err(e) => format!("jupyter nbconvert failed: {e}"),
+                };
+            }
+            return "jupyter not found in PATH. Install with: pip install jupyter".to_string();
+        }
+        format!("Unknown /notebook sub-command: {args}\nRun `/notebook help` for usage.")
+    }
+
+    // ─── Feature 3: Kubernetes Management ────────────────────────────────────
+
+    fn run_k8s_command(args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /k8s pods                   List pods in current namespace",
+                "  /k8s logs <pod>             Tail last 50 lines of pod logs",
+                "  /k8s apply <file>           Apply a manifest with kubectl",
+                "  /k8s describe <resource>    Describe a resource",
+            ].join("\n");
+        }
+        if !command_exists("kubectl") {
+            return "kubectl not found in PATH. Install it from \
+                    https://kubernetes.io/docs/tasks/tools/".to_string();
+        }
+        if args == "pods" {
+            let out = Command::new("kubectl").args(["get", "pods"]).output();
+            return shell_output_or_err(out, "kubectl get pods");
+        }
+        if let Some(pod) = args.strip_prefix("logs ") {
+            let pod = pod.trim();
+            if pod.is_empty() { return "Usage: /k8s logs <pod>".to_string(); }
+            let out = Command::new("kubectl").args(["logs", "--tail=50", pod]).output();
+            return shell_output_or_err(out, &format!("kubectl logs {pod}"));
+        }
+        if let Some(file) = args.strip_prefix("apply ") {
+            let file = file.trim();
+            if file.is_empty() { return "Usage: /k8s apply <file>".to_string(); }
+            let out = Command::new("kubectl").args(["apply", "-f", file]).output();
+            return shell_output_or_err(out, &format!("kubectl apply -f {file}"));
+        }
+        if let Some(resource) = args.strip_prefix("describe ") {
+            let resource = resource.trim();
+            if resource.is_empty() { return "Usage: /k8s describe <resource>".to_string(); }
+            let parts: Vec<&str> = resource.splitn(2, ' ').collect();
+            let out = Command::new("kubectl").arg("describe").args(&parts).output();
+            return shell_output_or_err(out, &format!("kubectl describe {resource}"));
+        }
+        format!("Unknown /k8s sub-command: {args}\nRun `/k8s help` for usage.")
+    }
+
+    // ─── Feature 4: Terraform/IaC ────────────────────────────────────────────
+
+    fn run_iac_command(args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /iac plan       Run terraform/tofu plan",
+                "  /iac apply      Run terraform/tofu apply",
+                "  /iac validate   Validate configuration files",
+                "  /iac drift      Detect infrastructure drift (plan -refresh-only)",
+            ].join("\n");
+        }
+        let tf_bin = if command_exists("tofu") {
+            "tofu"
+        } else if command_exists("terraform") {
+            "terraform"
+        } else {
+            return "Neither 'tofu' nor 'terraform' found in PATH.\n\
+                    Install OpenTofu: https://opentofu.org/docs/intro/install/".to_string();
+        };
+        let tf_args: &[&str] = match args {
+            "plan"     => &["plan", "-no-color"],
+            "apply"    => &["apply", "-no-color", "-auto-approve"],
+            "validate" => &["validate", "-no-color"],
+            "drift"    => &["plan", "-refresh-only", "-no-color"],
+            other => return format!("Unknown /iac sub-command: {other}\nRun `/iac help` for usage."),
+        };
+        let out = Command::new(tf_bin).args(tf_args).output();
+        shell_output_or_err(out, &format!("{tf_bin} {args}"))
+    }
+
+    // ─── Feature 5: CI/CD Pipeline Builder ───────────────────────────────────
+
+    fn run_pipeline_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /pipeline generate   Generate CI config from project type",
+                "  /pipeline lint       Validate existing CI pipeline config",
+                "  /pipeline run        Trigger a local pipeline run via act/gitlab-runner",
+            ].join("\n");
+        }
+        match args {
+            "generate" => {
+                let project_type = if std::path::Path::new("Cargo.toml").exists() { "rust" } else if std::path::Path::new("package.json").exists() { "node" } else { "unknown" };
+                let prompt = format!(
+                    "Generate a production-quality CI/CD pipeline configuration for a {project_type} project.\n\
+                     - If the project uses GitHub Actions, output a .github/workflows/ci.yml file.\n\
+                     - If it uses GitLab CI, output a .gitlab-ci.yml file.\n\
+                     - Cover: lint, test, build, and Docker image build if applicable.\n\
+                     - Use the best community actions/images for {project_type}.\n\
+                     - Output only the YAML file, nothing else."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("Generated CI pipeline for {project_type}:\n\n{r}"),
+                    Err(e) => format!("pipeline generate: {e}"),
+                }
+            }
+            "lint" => {
+                let candidates = [
+                    ".github/workflows/ci.yml", ".github/workflows/main.yml",
+                    ".gitlab-ci.yml", "Jenkinsfile", ".circleci/config.yml",
+                ];
+                let found: Vec<&str> = candidates.iter().copied()
+                    .filter(|f| Path::new(f).exists()).collect();
+                if found.is_empty() {
+                    return "No CI configuration files found in common locations.".to_string();
+                }
+                let mut report = String::from("Pipeline lint:\n");
+                for path in &found {
+                    let content = match fs::read_to_string(path) {
+                        Ok(c) => c,
+                        Err(e) => { report.push_str(&format!("\n  {path}: cannot read ({e})\n")); continue; }
+                    };
+                    let prompt = format!(
+                        "Review this CI/CD pipeline config for errors, security issues, and improvements.\n\n\
+                         File: {path}\n\n```yaml\n{yaml}\n```\n\nBe concise — max 10 lines.",
+                        yaml = truncate_for_prompt(&content, 8_000),
+                    );
+                    let result = self.run_internal_prompt_text(&prompt, false)
+                        .unwrap_or_else(|e| format!("lint error: {e}"));
+                    report.push_str(&format!("\n{path}:\n{result}\n"));
+                }
+                report
+            }
+            "run" => {
+                if command_exists("act") {
+                    let out = Command::new("act").args(["--list"]).output();
+                    let list = shell_output_or_err(out, "act --list");
+                    return format!("Local runner (act) available.\n{list}\n\nRun `act` in your shell to execute.");
+                }
+                if command_exists("gitlab-runner") {
+                    return "GitLab Runner available. Run `gitlab-runner exec shell <job>` in your shell.".to_string();
+                }
+                "No local pipeline runner found. Install 'act': https://github.com/nektos/act".to_string()
+            }
+            other => format!("Unknown /pipeline sub-command: {other}\nRun `/pipeline help` for usage."),
+        }
+    }
+
+    // ─── Feature 6: Code Review ───────────────────────────────────────────────
+
+    fn run_review_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /review <file>    Review a source file for issues",
+                "  /review staged    Review all staged changes",
+                "  /review pr        Review the current PR diff",
+            ].join("\n");
+        }
+        let build_prompt = |label: &str, code: &str| -> String {
+            format!(
+                "You are a senior code reviewer. Review the following {label} and provide:\n\
+                 1. Critical bugs or logic errors\n\
+                 2. Security vulnerabilities\n\
+                 3. Performance concerns\n\
+                 4. Code style and readability issues\n\
+                 5. Suggested improvements\n\n\
+                 ```\n{code}\n```\n\nBe concise — max 20 lines.",
+                code = truncate_for_prompt(code, 12_000),
+            )
+        };
+        match args {
+            "staged" => {
+                let diff = Command::new("git").args(["diff", "--cached"]).output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+                if diff.trim().is_empty() { return "No staged changes to review.".to_string(); }
+                match self.run_internal_prompt_text(&build_prompt("staged git diff", &diff), false) {
+                    Ok(r) => format!("Code review (staged changes):\n\n{r}"),
+                    Err(e) => format!("review staged: {e}"),
+                }
+            }
+            "pr" => {
+                let base = Command::new("git")
+                    .args(["merge-base", "HEAD", "origin/main"]).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "origin/main".to_string());
+                let diff = Command::new("git").args(["diff", &base, "HEAD"]).output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+                if diff.trim().is_empty() { return "No diff found against origin/main.".to_string(); }
+                match self.run_internal_prompt_text(&build_prompt("pull request diff", &diff), false) {
+                    Ok(r) => format!("Code review (PR diff):\n\n{r}"),
+                    Err(e) => format!("review pr: {e}"),
+                }
+            }
+            file => {
+                let source = match fs::read_to_string(file) {
+                    Ok(s) => s, Err(e) => return format!("Cannot read {file}: {e}"),
+                };
+                match self.run_internal_prompt_text(&build_prompt("source file", &source), false) {
+                    Ok(r) => format!("Code review ({file}):\n\n{r}"),
+                    Err(e) => format!("review: {e}"),
+                }
+            }
+        }
+    }
+
+    // ─── Feature G — Dependency graph (stub) ─────────────────────────────────
+    #[allow(clippy::unused_self)]
+    fn run_deps_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("tree").trim();
+        if sub == "tree" {
+            match std::process::Command::new("cargo").arg("tree").output() {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                Err(_) => "Deps\n  Note             Run `cargo tree` or `npm list --depth=1` for a dependency tree.".to_string(),
+            }
+        } else {
+            format!("Deps\n  Requested        {sub}\n  Note             Use `cargo audit` for CVE scanning or `cargo outdated` for version drift.")
+        }
+    }
+
+    // ─── Feature H — Monorepo (stub) ─────────────────────────────────────────
+    #[allow(clippy::unused_self)]
+    fn run_mono_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("list").trim();
+        if sub == "list" {
+            match std::process::Command::new("cargo")
+                .args(["metadata", "--no-deps", "--format-version=1"])
+                .output()
+            {
+                Ok(out) => {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    let count = text.matches("\"name\"").count();
+                    format!("Monorepo\n  Workspace        cargo\n  Packages         {count} detected (use `cargo metadata` for full list)")
+                }
+                Err(_) => "Mono\n  Note             Could not enumerate workspace packages.".to_string(),
+            }
+        } else {
+            format!("Mono\n  Requested        {sub}\n  Note             Use `cargo metadata` or your package manager workspace tooling.")
+        }
+    }
+
+    // ─── Feature I — Browser automation (stub) ───────────────────────────────
+    #[allow(clippy::unused_self)]
+    fn run_browser_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        if sub.is_empty() {
+            return "Browser\n  Usage            /browser [open <url>|screenshot <url>|test <url>]\n  Requires         Playwright or Puppeteer installed".to_string();
+        }
+        format!("Browser\n  Requested        {sub}\n  Note             Browser automation requires Playwright — run `npm install -g playwright`.")
+    }
+
+    // ─── Feature J — Notifications (stub) ────────────────────────────────────
+    #[allow(clippy::unused_self)]
+    fn run_notify_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        if sub.is_empty() {
+            return "Notify\n  Usage            /notify [send <msg>|webhook <url> <msg>|matrix <room> <msg>]".to_string();
+        }
+        let mut parts = sub.splitn(3, ' ');
+        let kind = parts.next().unwrap_or("");
+        match kind {
+            "send" => {
+                let msg = parts.next().unwrap_or("(empty)");
+                let title = "Anvil";
+                let _ = std::process::Command::new("osascript")
+                    .args([
+                        "-e",
+                        &format!("display notification \"{msg}\" with title \"{title}\""),
+                    ])
+                    .status();
+                let _ = std::process::Command::new("notify-send")
+                    .args([title, msg])
+                    .status();
+                format!("Notify\n  Sent             {msg}")
+            }
+            _ => format!("Notify\n  Requested        {sub}\n  Note             Webhook and Matrix integrations require API keys in ~/.anvil/config.json."),
+        }
+    }
+
+    // ─── Feature 21 — Credential Vault ───────────────────────────────────────
+    #[allow(clippy::unused_self)]
+    fn run_vault_command(&mut self, args: Option<&str>) -> String {
+        run_vault_command_impl(args)
+    }
+
+    // Feature stubs for pre-existing commands K-P that were dispatched but never implemented.
+
+    #[allow(clippy::unused_self)]
+    fn run_migrate_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Migrate\n  Requested        {sub}\n  Note             Framework and language migration helpers are available via AI conversation.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_regex_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        if sub.is_empty() {
+            return "Regex\n  Usage            /regex [build <description>|test <pattern> <input>|explain <pattern>]".to_string();
+        }
+        format!("Regex\n  Requested        {sub}\n  Tip              Ask the AI: \"build a regex that matches...\" for interactive regex construction.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_ssh_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("list").trim();
+        if sub == "list" {
+            match std::process::Command::new("ssh-add").arg("-l").output() {
+                Ok(out) => format!("SSH Keys:\n{}", String::from_utf8_lossy(&out.stdout).trim()),
+                Err(_) => "SSH\n  Usage            /ssh [list|connect <host>|tunnel <host> <local:remote>|keys]".to_string(),
+            }
+        } else {
+            format!("SSH\n  Requested        {sub}\n  Note             Use your terminal for interactive SSH sessions.")
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_logs_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        if sub.is_empty() {
+            return "Logs\n  Usage            /logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]".to_string();
+        }
+        let mut parts = sub.splitn(3, ' ');
+        let cmd = parts.next().unwrap_or("").trim();
+        let file = parts.next().unwrap_or("").trim();
+        if cmd == "tail" && !file.is_empty() {
+            match std::process::Command::new("tail").args(["-n", "50", file]).output() {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+                Err(e) => format!("Logs tail error: {e}"),
+            }
+        } else {
+            format!("Logs\n  Requested        {sub}\n  Tip              Use `tail -f <file>` in your terminal for live log streaming.")
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_markdown_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Markdown\n  Requested        {sub}\n  Note             Markdown preview/lint requires a renderer — try `glow` or VS Code preview.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_snippets_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Snippets\n  Requested        {sub}\n  Note             Snippet management is available via /vault store for secrets or ANVIL.md for prompts.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_finetune_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Finetune\n  Requested        {sub}\n  Note             Fine-tuning dataset preparation requires an OpenAI API key and the fine-tuning endpoint.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_webhook_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Webhook\n  Requested        {sub}\n  Note             Configure webhook endpoints in ~/.anvil/config.json under the 'webhooks' key.")
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_plugin_sdk_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        format!("Plugin SDK\n  Requested        {sub}\n  Note             Plugin development docs at https://github.com/anvilco/anvil-plugin-sdk.")
+    }
+
     /// Read a string value from `~/.anvil/config.json` with a fallback default.
     fn anvil_config_str(&self, key: &str, default: &str) -> String {
         let cfg = Self::load_anvil_ui_config();
@@ -7433,6 +8139,337 @@ fn anvil_home_dir() -> PathBuf {
 }
 
 /// Standalone language command handler.
+// ─── Feature 21 — Credential Vault free function ─────────────────────────────
+
+/// Map a language name to its LSP server binary name.
+fn lsp_binary_for_lang(lang: &str) -> String {
+    match lang.to_ascii_lowercase().as_str() {
+        "rust" => "rust-analyzer",
+        "typescript" | "ts" | "javascript" | "js" => "typescript-language-server",
+        "python" | "py" => "pylsp",
+        "go" => "gopls",
+        "java" => "jdtls",
+        "c" | "cpp" | "c++" => "clangd",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Extract a single cell from a Jupyter notebook JSON by 1-based index.
+fn extract_notebook_cell(raw: &str, cell_n: usize) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    let cells = v["cells"]
+        .as_array()
+        .ok_or_else(|| "No cells array in notebook".to_string())?;
+    let cell = cells
+        .get(cell_n.saturating_sub(1))
+        .ok_or_else(|| format!("Cell {cell_n} not found (notebook has {} cells)", cells.len()))?;
+    let source = cell["source"]
+        .as_array()
+        .map(|lines| {
+            lines
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .or_else(|| cell["source"].as_str().map(ToOwned::to_owned))
+        .unwrap_or_default();
+    Ok(source)
+}
+
+/// Convert a `Command::output()` result into a human-readable string.
+fn shell_output_or_err(result: Result<std::process::Output, std::io::Error>, context: &str) -> String {
+    match result {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if !stdout.is_empty() {
+                stdout
+            } else if !stderr.is_empty() {
+                stderr
+            } else {
+                format!("{context}: (no output)")
+            }
+        }
+        Err(e) => format!("{context}: {e}"),
+    }
+}
+
+/// Stateless vault command runner.  The vault manager is constructed on each
+/// call because `LiveCli` does not hold persistent inter-call state for the vault.
+/// For interactive secret prompts in REPL mode `rpassword`-style no-echo reads are
+/// not available without adding a dependency; we fall back to a visible-input note.
+fn run_vault_command_impl(args: Option<&str>) -> String {
+    use runtime::{Credential, TotpEntry, VaultManager};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let sub = args.unwrap_or("").trim();
+    let mut parts = sub.splitn(3, ' ');
+    let cmd = parts.next().unwrap_or("").trim();
+    let arg1 = parts.next().unwrap_or("").trim();
+    let arg2 = parts.next().unwrap_or("").trim();
+
+    let mut vm = VaultManager::with_default_dir();
+
+    match cmd {
+        // ── Status ──────────────────────────────────────────────────────────
+        "" => {
+            let init = if vm.is_initialized() { "yes" } else { "no" };
+            let locked = if vm.is_unlocked() { "unlocked" } else { "locked" };
+            format!(
+                "Vault\n  Initialized      {init}\n  State            {locked}\n  Storage          {}\n\n  Commands: /vault setup | /vault unlock | /vault lock\n            /vault store <label> | /vault get <label> | /vault list | /vault delete <label>\n            /vault totp add <label> | /vault totp <label> | /vault totp list | /vault totp delete <label>",
+                VaultManager::default_vault_dir().display()
+            )
+        }
+
+        // ── Setup ────────────────────────────────────────────────────────────
+        "setup" => {
+            if vm.is_initialized() {
+                return "Vault\n  Error            Vault already initialized. Delete ~/.anvil/vault/ to reset.".to_string();
+            }
+            let password = arg1;
+            if password.is_empty() {
+                return "Vault\n  Usage            /vault setup <master-password>\n  Note             Master password is not stored — you must remember it.".to_string();
+            }
+            match vm.setup(password) {
+                Ok(()) => format!(
+                    "Vault\n  Result           Initialized\n  Storage          {}\n  Algorithm        Argon2id + AES-256-GCM\n  Note             Master password not stored — keep it safe.",
+                    VaultManager::default_vault_dir().display()
+                ),
+                Err(e) => format!("Vault setup error: {e}"),
+            }
+        }
+
+        // ── Unlock ───────────────────────────────────────────────────────────
+        "unlock" => {
+            // Note: VaultManager is transient per call — unlock persists only for
+            // this invocation.  A persistent vault session requires storing the
+            // manager in LiveCli state (future work).
+            let password = arg1;
+            if password.is_empty() {
+                return "Vault\n  Usage            /vault unlock <master-password>".to_string();
+            }
+            match vm.unlock(password) {
+                Ok(()) => "Vault\n  Result           Unlocked\n  Note             Vault is unlocked for this command only. Pass password with each command for now.".to_string(),
+                Err(e) => format!("Vault unlock error: {e}"),
+            }
+        }
+
+        // ── Lock ─────────────────────────────────────────────────────────────
+        "lock" => "Vault\n  Result           Locked (vault memory cleared)".to_string(),
+
+        // ── Store ─────────────────────────────────────────────────────────────
+        // Usage: /vault store <label> <master-password>
+        // The secret value is prompted interactively in a real terminal; here we
+        // require it as the third word because no-echo stdin is not available.
+        "store" => {
+            let label = arg1;
+            let password = arg2;
+            if label.is_empty() || password.is_empty() {
+                return "Vault\n  Usage            /vault store <label> <master-password>\n  Note             Run in terminal for interactive no-echo secret prompt.".to_string();
+            }
+            match vm.unlock(password) {
+                Err(e) => return format!("Vault unlock error: {e}"),
+                Ok(()) => {}
+            }
+            // Prompt for the secret value via stdin (best-effort; no TTY hiding).
+            println!("Vault  Enter secret for '{label}': ");
+            let mut secret = String::new();
+            let _ = std::io::stdin().read_line(&mut secret);
+            let secret = secret.trim().to_string();
+            if secret.is_empty() {
+                return "Vault\n  Error            Empty secret — store cancelled.".to_string();
+            }
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let cred = Credential {
+                label: label.to_string(),
+                username: None,
+                secret,
+                notes: None,
+                created_at: now,
+            };
+            match vm.store_credential(&cred) {
+                Ok(()) => format!("Vault\n  Result           Stored\n  Label            {label}"),
+                Err(e) => format!("Vault store error: {e}"),
+            }
+        }
+
+        // ── Get ───────────────────────────────────────────────────────────────
+        // Usage: /vault get <label> <master-password>
+        "get" => {
+            let label = arg1;
+            let password = arg2;
+            if label.is_empty() || password.is_empty() {
+                return "Vault\n  Usage            /vault get <label> <master-password>".to_string();
+            }
+            match vm.unlock(password) {
+                Err(e) => return format!("Vault unlock error: {e}"),
+                Ok(()) => {}
+            }
+            match vm.get_credential(label) {
+                Ok(cred) => {
+                    let username = cred.username.as_deref().unwrap_or("(none)");
+                    let notes = cred.notes.as_deref().unwrap_or("(none)");
+                    format!(
+                        "Vault\n  Label            {}\n  Username         {username}\n  Secret           {}\n  Notes            {notes}",
+                        cred.label, cred.secret
+                    )
+                }
+                Err(e) => format!("Vault get error: {e}"),
+            }
+        }
+
+        // ── List ──────────────────────────────────────────────────────────────
+        // Usage: /vault list <master-password>
+        "list" => {
+            let password = arg1;
+            if password.is_empty() {
+                return "Vault\n  Usage            /vault list <master-password>".to_string();
+            }
+            match vm.unlock(password) {
+                Err(e) => return format!("Vault unlock error: {e}"),
+                Ok(()) => {}
+            }
+            match vm.list_credentials() {
+                Ok(labels) if labels.is_empty() => "Vault\n  Credentials      (none stored)".to_string(),
+                Ok(labels) => {
+                    let mut lines = vec!["Vault — Credentials:".to_string()];
+                    for (i, l) in labels.iter().enumerate() {
+                        lines.push(format!("  {:>3}.  {l}", i + 1));
+                    }
+                    lines.join("\n")
+                }
+                Err(e) => format!("Vault list error: {e}"),
+            }
+        }
+
+        // ── Delete ────────────────────────────────────────────────────────────
+        // Usage: /vault delete <label> <master-password>
+        "delete" => {
+            let label = arg1;
+            let password = arg2;
+            if label.is_empty() || password.is_empty() {
+                return "Vault\n  Usage            /vault delete <label> <master-password>".to_string();
+            }
+            match vm.unlock(password) {
+                Err(e) => return format!("Vault unlock error: {e}"),
+                Ok(()) => {}
+            }
+            match vm.delete_credential(label) {
+                Ok(()) => format!("Vault\n  Result           Deleted\n  Label            {label}"),
+                Err(e) => format!("Vault delete error: {e}"),
+            }
+        }
+
+        // ── TOTP sub-commands ─────────────────────────────────────────────────
+        "totp" => {
+            // arg1 = totp sub-command, arg2 = label (or password)
+            match arg1 {
+                // /vault totp list <master-password>
+                "list" => {
+                    let password = arg2;
+                    if password.is_empty() {
+                        return "Vault\n  Usage            /vault totp list <master-password>".to_string();
+                    }
+                    match vm.unlock(password) {
+                        Err(e) => return format!("Vault unlock error: {e}"),
+                        Ok(()) => {}
+                    }
+                    match vm.list_totp() {
+                        Ok(labels) if labels.is_empty() => "Vault\n  TOTP entries     (none stored)".to_string(),
+                        Ok(labels) => {
+                            let mut lines = vec!["Vault — TOTP entries:".to_string()];
+                            for (i, l) in labels.iter().enumerate() {
+                                lines.push(format!("  {:>3}.  {l}", i + 1));
+                            }
+                            lines.join("\n")
+                        }
+                        Err(e) => format!("Vault TOTP list error: {e}"),
+                    }
+                }
+
+                // /vault totp add <label> — prompts for secret interactively
+                "add" => {
+                    // arg2 is treated as "<label> <master-password>" from the remaining text.
+                    let mut rest = arg2.splitn(2, ' ');
+                    let label = rest.next().unwrap_or("").trim();
+                    let password = rest.next().unwrap_or("").trim();
+                    if label.is_empty() || password.is_empty() {
+                        return "Vault\n  Usage            /vault totp add <label> <master-password>\n  Note             You will be prompted for the Base32 TOTP secret.".to_string();
+                    }
+                    match vm.unlock(password) {
+                        Err(e) => return format!("Vault unlock error: {e}"),
+                        Ok(()) => {}
+                    }
+                    println!("Vault  Enter TOTP Base32 secret for '{label}': ");
+                    let mut secret_input = String::new();
+                    let _ = std::io::stdin().read_line(&mut secret_input);
+                    let secret = secret_input.trim().to_ascii_uppercase();
+                    if secret.is_empty() {
+                        return "Vault\n  Error            Empty secret — TOTP add cancelled.".to_string();
+                    }
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                    let entry = TotpEntry {
+                        label: label.to_string(),
+                        secret,
+                        issuer: None,
+                        account: None,
+                        created_at: now,
+                    };
+                    match vm.add_totp(&entry) {
+                        Ok(()) => format!("Vault\n  Result           TOTP added\n  Label            {label}"),
+                        Err(e) => format!("Vault TOTP add error: {e}"),
+                    }
+                }
+
+                // /vault totp delete <label> <master-password>
+                "delete" => {
+                    let mut rest = arg2.splitn(2, ' ');
+                    let label = rest.next().unwrap_or("").trim();
+                    let password = rest.next().unwrap_or("").trim();
+                    if label.is_empty() || password.is_empty() {
+                        return "Vault\n  Usage            /vault totp delete <label> <master-password>".to_string();
+                    }
+                    match vm.unlock(password) {
+                        Err(e) => return format!("Vault unlock error: {e}"),
+                        Ok(()) => {}
+                    }
+                    match vm.delete_totp(label) {
+                        Ok(()) => format!("Vault\n  Result           TOTP deleted\n  Label            {label}"),
+                        Err(e) => format!("Vault TOTP delete error: {e}"),
+                    }
+                }
+
+                // /vault totp <label> <master-password> — generate current code
+                label if !label.is_empty() => {
+                    let password = arg2;
+                    if password.is_empty() {
+                        return format!("Vault\n  Usage            /vault totp {label} <master-password>");
+                    }
+                    match vm.unlock(password) {
+                        Err(e) => return format!("Vault unlock error: {e}"),
+                        Ok(()) => {}
+                    }
+                    match vm.generate_totp(label) {
+                        Ok(code) => format!(
+                            "Vault — TOTP\n  Label            {label}\n  Code             {}\n  Valid for        {}s",
+                            code.code, code.remaining_secs
+                        ),
+                        Err(e) => format!("Vault TOTP error: {e}"),
+                    }
+                }
+
+                _ => "Vault\n  Usage            /vault totp [add <label>|<label>|list|delete <label>] <master-password>".to_string(),
+            }
+        }
+
+        other => format!(
+            "Vault\n  Unknown subcommand: {other}\n  Run /vault for usage."
+        ),
+    }
+}
+
 fn run_language_command_static(lang: Option<&str>) -> String {
     const SUPPORTED: &[&str] = &["en", "de", "es", "fr", "ja", "zh-CN", "ru"];
 

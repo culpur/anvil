@@ -2358,6 +2358,8 @@ fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/changelog".into(), hint: "Generate CHANGELOG.md entry from git log".into() },
         // Feature 20 — environment variable management
         CompletionItem { insert: "/env".into(), hint: "Manage session environment variables".into() },
+        // Feature 21 — Credential Vault
+        CompletionItem { insert: "/vault".into(), hint: "Encrypted credential vault and TOTP manager".into() },
     ]
 }
 
@@ -2594,6 +2596,17 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "load".into(), hint: "Load variables from a .env file".into() },
             CompletionItem { insert: "diff".into(), hint: "Diff current env against a .env file".into() },
         ],
+        // Feature 21 — Credential Vault
+        "/vault" => vec![
+            CompletionItem { insert: "setup".into(), hint: "Initialize vault with master password".into() },
+            CompletionItem { insert: "unlock".into(), hint: "Unlock vault (provide master password)".into() },
+            CompletionItem { insert: "lock".into(), hint: "Lock vault and clear KEK from memory".into() },
+            CompletionItem { insert: "store".into(), hint: "Store an encrypted credential".into() },
+            CompletionItem { insert: "get".into(), hint: "Decrypt and display a credential".into() },
+            CompletionItem { insert: "list".into(), hint: "List stored credential labels".into() },
+            CompletionItem { insert: "delete".into(), hint: "Delete a credential".into() },
+            CompletionItem { insert: "totp".into(), hint: "TOTP sub-commands (add/generate/list/delete)".into() },
+        ],
         _ => vec![],
     }
 }
@@ -2697,6 +2710,12 @@ fn third_level_completions(command: &str, subcommand: &str) -> Vec<CompletionIte
             CompletionItem { insert: "<token>".into(), hint: "GitHub personal access token".into() },
         ],
         ("/login", _) if !subcommand.trim().is_empty() => vec![],
+        // Feature 21 — vault totp sub-commands
+        ("/vault", "totp") => vec![
+            CompletionItem { insert: "add".into(), hint: "Add a TOTP entry (Base32 secret)".into() },
+            CompletionItem { insert: "list".into(), hint: "List TOTP labels".into() },
+            CompletionItem { insert: "delete".into(), hint: "Delete a TOTP entry".into() },
+        ],
         _ => vec![],
     }
 }
