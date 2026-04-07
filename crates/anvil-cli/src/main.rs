@@ -196,7 +196,18 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    let mut model = DEFAULT_MODEL.to_string();
+    // Read default model from config if available, otherwise use hardcoded default
+    let mut model = {
+        let config_path = anvil_home_dir().join("config.json");
+        if let Ok(data) = std::fs::read_to_string(&config_path) {
+            serde_json::from_str::<serde_json::Value>(&data)
+                .ok()
+                .and_then(|v| v.get("default_model").and_then(|m| m.as_str()).map(String::from))
+                .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+        } else {
+            DEFAULT_MODEL.to_string()
+        }
+    };
     let mut output_format = CliOutputFormat::Text;
     let mut permission_mode = default_permission_mode();
     let mut wants_version = false;
