@@ -10621,18 +10621,18 @@ fn run_self_update() {
     };
 
     let url = format!(
-        "https://github.com/culpur/anvil/releases/download/{tag}/anvil-{target}.tar.gz"
+        "https://github.com/culpur/anvil/releases/download/{tag}/anvil-{target}"
     );
     println!("  Downloading {tag} for {target}...");
 
     // Download to temp
     let tmp_dir = std::env::temp_dir().join("anvil-update");
     let _ = fs::create_dir_all(&tmp_dir);
-    let tarball = tmp_dir.join("anvil.tar.gz");
+    let new_binary = tmp_dir.join("anvil");
 
     let dl = Command::new("curl")
         .args(["-fSL", "--max-time", "120", "-o"])
-        .arg(&tarball)
+        .arg(&new_binary)
         .arg(&url)
         .status();
 
@@ -10643,26 +10643,6 @@ fn run_self_update() {
             std::process::exit(1);
         }
     }
-
-    // Extract
-    println!("  Extracting...");
-    let extract = Command::new("tar")
-        .args(["xzf"])
-        .arg(&tarball)
-        .arg("-C")
-        .arg(&tmp_dir)
-        .status();
-
-    match extract {
-        Ok(s) if s.success() => {}
-        _ => {
-            eprintln!("  Extraction failed");
-            std::process::exit(1);
-        }
-    }
-
-    // Find the binary
-    let new_binary = tmp_dir.join("anvil");
     if !new_binary.exists() {
         eprintln!("  Binary not found in archive");
         std::process::exit(1);
