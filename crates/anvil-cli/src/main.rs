@@ -7887,7 +7887,12 @@ impl LiveCli {
                 "Usage:",
                 "  /notify send <message>               Send a desktop notification",
                 "  /notify webhook <url> <message>      POST message to a webhook URL",
-                "  /notify matrix <room> <message>      Send a message to a Matrix room",
+                "  /notify matrix <room> <message>      Send to Matrix room (needs MATRIX_TOKEN)",
+                "  /notify discord <webhook_url> <msg>  Send to Discord channel via webhook",
+                "  /notify slack <webhook_url> <msg>    Send to Slack channel via webhook",
+                "  /notify telegram <chat_id> <msg>     Send to Telegram (needs TELEGRAM_BOT_TOKEN)",
+                "  /notify whatsapp <number> <msg>      Send via WhatsApp (needs WHATSAPP_API_URL, WHATSAPP_TOKEN)",
+                "  /notify signal <number> <msg>        Send via Signal (needs SIGNAL_CLI_PATH or signal-cli)",
             ].join("\n");
         }
         if let Some(message) = args.strip_prefix("send ") {
@@ -7959,6 +7964,161 @@ impl LiveCli {
                 Err(e) => format!("curl failed: {e}"),
             };
         }
+        // Discord — via webhook URL
+        if let Some(rest) = args.strip_prefix("discord ") {
+            let rest = rest.trim();
+            let (url, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify discord <webhook_url> <message>".to_string(),
+            };
+            if !url.contains("discord.com/api/webhooks") {
+                return "Discord webhook URL should contain discord.com/api/webhooks".to_string();
+            }
+            let payload = format!(r#"{{"content":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST", "-H", "Content-Type: application/json",
+                       "-d", &payload, url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code == "204" || code.starts_with('2') {
+                        format!("Discord message delivered (HTTP {code}).")
+                    } else { format!("Discord webhook returned HTTP {code}.") }
+                }
+                Err(e) => format!("curl failed: {e}"),
+            };
+        }
+
+        // Slack — via webhook URL
+        if let Some(rest) = args.strip_prefix("slack ") {
+            let rest = rest.trim();
+            let (url, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify slack <webhook_url> <message>".to_string(),
+            };
+            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST", "-H", "Content-Type: application/json",
+                       "-d", &payload, url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code.starts_with('2') {
+                        format!("Slack message delivered (HTTP {code}).")
+                    } else { format!("Slack webhook returned HTTP {code}.") }
+                }
+                Err(e) => format!("curl failed: {e}"),
+            };
+        }
+
+        // Telegram — via Bot API
+        if let Some(rest) = args.strip_prefix("telegram ") {
+            let rest = rest.trim();
+            let (chat_id, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify telegram <chat_id> <message>".to_string(),
+            };
+            let token = match env::var("TELEGRAM_BOT_TOKEN") {
+                Ok(t) => t,
+                Err(_) => return "TELEGRAM_BOT_TOKEN environment variable not set.\n\
+                                  Create a bot via @BotFather and set the token.".to_string(),
+            };
+            let url = format!(
+                "https://api.telegram.org/bot{token}/sendMessage"
+            );
+            let payload = format!(
+                r#"{{"chat_id":"{chat_id}","text":"{msg}","parse_mode":"Markdown"}}"#,
+                msg = message.replace('"', "\\\"")
+            );
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST", "-H", "Content-Type: application/json",
+                       "-d", &payload, &url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code.starts_with('2') {
+                        format!("Telegram message sent to {chat_id} (HTTP {code}).")
+                    } else { format!("Telegram API returned HTTP {code}.") }
+                }
+                Err(e) => format!("curl failed: {e}"),
+            };
+        }
+
+        // WhatsApp — via WhatsApp Business API or compatible gateway
+        if let Some(rest) = args.strip_prefix("whatsapp ") {
+            let rest = rest.trim();
+            let (number, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify whatsapp <number> <message>".to_string(),
+            };
+            let api_url = match env::var("WHATSAPP_API_URL") {
+                Ok(u) => u,
+                Err(_) => return "WHATSAPP_API_URL environment variable not set.\n\
+                                  Set it to your WhatsApp Business API endpoint\n\
+                                  (e.g., https://graph.facebook.com/v18.0/<phone_id>/messages).".to_string(),
+            };
+            let token = match env::var("WHATSAPP_TOKEN") {
+                Ok(t) => t,
+                Err(_) => return "WHATSAPP_TOKEN environment variable not set.".to_string(),
+            };
+            let payload = format!(
+                r#"{{"messaging_product":"whatsapp","to":"{number}","type":"text","text":{{"body":"{msg}"}}}}"#,
+                msg = message.replace('"', "\\\"")
+            );
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST",
+                       "-H", &format!("Authorization: Bearer {token}"),
+                       "-H", "Content-Type: application/json",
+                       "-d", &payload, &api_url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code.starts_with('2') {
+                        format!("WhatsApp message sent to {number} (HTTP {code}).")
+                    } else { format!("WhatsApp API returned HTTP {code}.") }
+                }
+                Err(e) => format!("curl failed: {e}"),
+            };
+        }
+
+        // Signal — via signal-cli
+        if let Some(rest) = args.strip_prefix("signal ") {
+            let rest = rest.trim();
+            let (number, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify signal <number> <message>".to_string(),
+            };
+            let signal_cli = env::var("SIGNAL_CLI_PATH")
+                .unwrap_or_else(|_| "signal-cli".to_string());
+            let sender = match env::var("SIGNAL_SENDER") {
+                Ok(s) => s,
+                Err(_) => return "SIGNAL_SENDER environment variable not set.\n\
+                                  Set it to your registered Signal number (e.g., +1234567890).".to_string(),
+            };
+            let out = Command::new(&signal_cli)
+                .args(["send", "-m", message, number, "-a", &sender])
+                .output();
+            return match out {
+                Ok(o) if o.status.success() => {
+                    format!("Signal message sent to {number}.")
+                }
+                Ok(o) => {
+                    let err = String::from_utf8_lossy(&o.stderr);
+                    format!("signal-cli error: {err}")
+                }
+                Err(e) => format!("signal-cli not found or failed: {e}\n\
+                                   Install signal-cli: https://github.com/AsamK/signal-cli"),
+            };
+        }
+
         format!("Unknown /notify sub-command: {args}\nRun `/notify help` for usage.")
     }
 

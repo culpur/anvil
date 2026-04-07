@@ -2379,7 +2379,7 @@ fn all_slash_commands() -> Vec<CompletionItem> {
         // Feature I — Browser automation
         CompletionItem { insert: "/browser".into(), hint: "Browser: open URL, screenshot, test".into() },
         // Feature J — Desktop & webhook notifications
-        CompletionItem { insert: "/notify".into(), hint: "Notifications: desktop, webhook, Matrix".into() },
+        CompletionItem { insert: "/notify".into(), hint: "Notifications: desktop, webhook, Matrix, Discord, Slack, Telegram, WhatsApp, Signal".into() },
         // Feature 11 — codebase migration
         CompletionItem { insert: "/migrate".into(), hint: "Migrate framework, language, or dependency manager".into() },
         // Feature 12 — regex builder / tester
@@ -2706,7 +2706,12 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
         "/notify" => vec![
             CompletionItem { insert: "send".into(), hint: "Send a desktop notification".into() },
             CompletionItem { insert: "webhook".into(), hint: "POST message to a webhook URL".into() },
-            CompletionItem { insert: "matrix".into(), hint: "Send message to a Matrix room".into() },
+            CompletionItem { insert: "matrix".into(), hint: "Send to Matrix room (MATRIX_TOKEN)".into() },
+            CompletionItem { insert: "discord".into(), hint: "Send to Discord channel via webhook".into() },
+            CompletionItem { insert: "slack".into(), hint: "Send to Slack channel via webhook".into() },
+            CompletionItem { insert: "telegram".into(), hint: "Send to Telegram chat (TELEGRAM_BOT_TOKEN)".into() },
+            CompletionItem { insert: "whatsapp".into(), hint: "Send via WhatsApp Business API".into() },
+            CompletionItem { insert: "signal".into(), hint: "Send via Signal (signal-cli)".into() },
         ],
         // Feature 11 — codebase migration
         "/migrate" => vec![
