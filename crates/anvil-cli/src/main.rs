@@ -1,3 +1,4 @@
+mod agents;
 mod file_drop;
 mod init;
 mod input;
@@ -2341,6 +2342,38 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         // Check for background task completions.
         task_check_instant = inject_task_notifications_tui(&mut cli, &mut tui, task_check_instant);
 
+        // ── Agent manager: poll for completed agents ───────────────────────
+        // Drain completed agents and inject their results as system messages.
+        let completed_agents = cli.agent_manager.poll();
+        for (id, result) in completed_agents {
+            let status = if result.success { "completed" } else { "failed" };
+            let summary: String = result.output.lines().take(3).collect::<Vec<_>>().join(" | ");
+            tui.push_system(format!(
+                "Agent #{id} {status} in {:.1}s{}",
+                result.duration.as_secs_f64(),
+                if summary.is_empty() { String::new() } else { format!(": {summary}") },
+            ));
+        }
+
+        // Refresh the TUI agent panel rows from the current manager state.
+        {
+            let rows: Vec<(usize, String, String, String, &'static str)> = cli
+                .agent_manager
+                .agents()
+                .iter()
+                .map(|a| {
+                    (
+                        a.id,
+                        a.agent_type.label().to_string(),
+                        a.task.clone(),
+                        a.elapsed_str(),
+                        a.status.icon(),
+                    )
+                })
+                .collect();
+            tui.update_agent_rows(rows);
+        }
+
         // Check if the background update check completed.
         if let Ok(mut slot) = update_check.try_lock() {
             if let Some(msg) = slot.take() {
@@ -2766,6 +2799,8 @@ struct LiveCli {
     /// Whether vim keybindings are requested; propagated to the LineEditor.
     vim_mode: bool,
     thinking_enabled: bool,
+    /// Sub-agent manager — tracks spawned agents and their status.
+    agent_manager: agents::AgentManager,
 }
 
 impl LiveCli {
@@ -2806,6 +2841,7 @@ impl LiveCli {
             context_files: Vec::new(),
             chat_mode: false,
             vim_mode: false,
+            agent_manager: agents::AgentManager::new(),
             thinking_enabled: {
                 let cfg = anvil_home_dir().join("config.json");
                 std::fs::read_to_string(&cfg).ok()
@@ -3274,10 +3310,25 @@ impl LiveCli {
                 self.compact()?;
                 ("Session compacted.".to_string(), false)
             }
-            SlashCommand::Agents { args } => {
-                let cwd = env::current_dir().unwrap_or_default();
-                let output = handle_agents_slash_command(args.as_deref(), &cwd);
-                (output.unwrap_or_else(|e| format!("Error: {e}")), false)
+            SlashCommand::Agents { ref args } => {
+                // Route subcommands that target the live agent manager
+                // (list, view, stop, clear) to the manager first.  If the
+                // subcommand is not recognised locally, fall through to the
+                // global handle_agents_slash_command which handles hub lookups.
+                let arg_str = args.as_deref().unwrap_or("").trim();
+                let is_manager_cmd = arg_str.is_empty()
+                    || arg_str.starts_with("list")
+                    || arg_str.starts_with("view")
+                    || arg_str.starts_with("stop")
+                    || arg_str.starts_with("clear");
+                if is_manager_cmd {
+                    let msg = self.agent_manager.handle_command(Some(arg_str));
+                    (msg, false)
+                } else {
+                    let cwd = env::current_dir().unwrap_or_default();
+                    let output = handle_agents_slash_command(args.as_deref(), &cwd);
+                    (output.unwrap_or_else(|e| format!("Error: {e}")), false)
+                }
             }
             SlashCommand::Skills { args } => {
                 let cwd = env::current_dir().unwrap_or_default();

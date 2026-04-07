@@ -313,6 +313,11 @@ pub struct AnvilTui {
     pub theme: Theme,
     /// Update notification message (empty = no update available).
     update_available: String,
+    /// Whether the agent panel is visible (toggled with Ctrl+A).
+    pub agent_panel_visible: bool,
+    /// Agent panel rows snapshot — refreshed by the caller each frame.
+    /// Each entry: (id, type_label, task, elapsed_str, icon).
+    pub agent_rows: Vec<(usize, String, String, String, &'static str)>,
 }
 
 /// Tracks the state of the slash-command completion popup.
@@ -382,6 +387,8 @@ impl AnvilTui {
                 configure_data: ConfigureData::default(),
                 theme: Theme::load(),
                 update_available: String::new(),
+                agent_panel_visible: true,
+                agent_rows: Vec::new(),
             },
             TuiSender(tx),
         ))
@@ -514,13 +521,18 @@ impl AnvilTui {
         let configure_state = self.configure_state.clone();
         let configure_data = self.configure_data.clone();
         let theme = self.theme.clone();
+        let agent_panel_visible = self.agent_panel_visible;
+        let agent_rows = self.agent_rows.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
             let width = size.width as usize;
 
             // ── layout ──────────────────────────────────────────────────────
-            // header=2 (tab bar + model/session line), content=fill, footer=6
+            // header=2 (tab bar + model/session line), content=fill,
+            // [agent panel = 2+N lines when visible and agents exist],
+            // footer=6
+            //
             // footer breakdown (rendered manually within the 6-line block):
             //   line 0: separator ─────
             //   line 1: ❯ input text
@@ -528,18 +540,50 @@ impl AnvilTui {
             //   line 3: model | git | tokens
             //   line 4: context bar | session%
             //   line 5: permission mode | hints
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(2),
-                    Constraint::Min(4),
-                    Constraint::Length(6),
-                ])
-                .split(size);
+
+            // Agent panel height: 2 lines for border + 1 per agent row (max 6).
+            let agent_panel_height: u16 = if agent_panel_visible && !agent_rows.is_empty() {
+                (agent_rows.len().min(6) as u16) + 2
+            } else {
+                0
+            };
+
+            let chunks = if agent_panel_height > 0 {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(2),
+                        Constraint::Min(4),
+                        Constraint::Length(agent_panel_height),
+                        Constraint::Length(6),
+                    ])
+                    .split(size)
+            } else {
+                // No agent panel — use the 3-zone layout.
+                let base = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Length(2),
+                        Constraint::Min(4),
+                        Constraint::Length(6),
+                    ])
+                    .split(size);
+                // Return a 4-element slice by padding (agent area = zero-height at footer y).
+                // We build a synthetic 4-element array where [2] == [3] == footer.
+                let mut v = base.to_vec();
+                v.push(v[2]);  // duplicate footer slot as placeholder
+                v.into()
+            };
 
             let header_area = chunks[0];
             let content_area = chunks[1];
-            let footer_area = chunks[2];
+            // When agent_panel_height > 0: chunks[2] = agent panel, chunks[3] = footer.
+            // When agent_panel_height == 0: chunks[2] = footer (chunks[3] is a duplicate).
+            let (agent_panel_area, footer_area) = if agent_panel_height > 0 {
+                (Some(chunks[2]), chunks[3])
+            } else {
+                (None, chunks[2])
+            };
 
             // Split header into two rows: tab bar (row 0) + model/session (row 1).
             let header_rows = Layout::default()
@@ -671,9 +715,136 @@ impl AnvilTui {
                 .take(visible_height)
                 .collect();
 
+            // Clear the content area first.  This prevents ghost text from a
+            // previous frame bleeding into the footer when the content shrinks
+            // or when long lines were truncated by ratatui but cells were left
+            // dirty from a prior render.
+            frame.render_widget(ratatui::widgets::Clear, content_area);
+
+            // Truncate each line to content_area.width so that no Span content
+            // is wider than the allocated area.  ratatui clips at the rect
+            // boundary, but explicit truncation prevents any line-wrapping
+            // side-effects in edge cases (e.g. wide Unicode, embedded \r).
+            let max_col = content_area.width as usize;
+            let visible_lines: Vec<Line<'static>> = visible_lines
+                .into_iter()
+                .map(|line| {
+                    // Measure total display columns in this line's spans.
+                    let total: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
+                    if total <= max_col {
+                        line
+                    } else {
+                        // Rebuild spans truncated to max_col columns total.
+                        let mut remaining = max_col.saturating_sub(1); // leave room for ellipsis
+                        let mut new_spans: Vec<Span<'static>> = Vec::new();
+                        for span in line.spans {
+                            if remaining == 0 {
+                                break;
+                            }
+                            let chars: usize = span.content.chars().count();
+                            if chars <= remaining {
+                                remaining -= chars;
+                                new_spans.push(span);
+                            } else {
+                                let truncated: String = span.content.chars().take(remaining).collect();
+                                new_spans.push(Span::styled(
+                                    format!("{truncated}…"),
+                                    span.style,
+                                ));
+                                remaining = 0;
+                            }
+                        }
+                        Line::from(new_spans)
+                    }
+                })
+                .collect();
+
             let content_widget =
                 Paragraph::new(Text::from(visible_lines)).style(Style::default().fg(Color::White));
             frame.render_widget(content_widget, content_area);
+
+            // ── agent panel ──────────────────────────────────────────────────
+            // Shown between content and footer when there are active/recent
+            // agents and agent_panel_visible is true.
+            if let Some(panel_area) = agent_panel_area {
+                frame.render_widget(ratatui::widgets::Clear, panel_area);
+                let panel_width = panel_area.width as usize;
+
+                // Header line: "─ Agents (N running, M completed) ──────"
+                let running = agent_rows.iter().filter(|r| r.4 == "⟳").count();
+                let done = agent_rows.iter().filter(|r| r.4 == "✓").count();
+                let failed = agent_rows.iter().filter(|r| r.4 == "✗").count();
+                let mut status_parts = Vec::new();
+                if running > 0 { status_parts.push(format!("{running} running")); }
+                if done > 0 { status_parts.push(format!("{done} completed")); }
+                if failed > 0 { status_parts.push(format!("{failed} failed")); }
+                let status_str = status_parts.join(", ");
+                let header_label = format!(" Agents ({status_str}) ");
+                let dashes_after = "─".repeat(
+                    panel_width.saturating_sub(header_label.len() + 2)
+                );
+                let header_line = Line::from(vec![
+                    Span::styled("─", Style::default().fg(rgb(theme.border))),
+                    Span::styled(
+                        header_label,
+                        Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(dashes_after, Style::default().fg(rgb(theme.border))),
+                ]);
+
+                // One row per agent (up to 6).
+                let mut panel_lines: Vec<Line<'static>> = vec![header_line];
+                for (id, type_label, task, elapsed, icon) in agent_rows.iter().take(6) {
+                    let icon_style = match *icon {
+                        "⟳" => Style::default().fg(rgb(theme.accent)),
+                        "✓" => Style::default().fg(rgb(theme.success)),
+                        "✗" => Style::default().fg(rgb(theme.error)),
+                        _ => Style::default().fg(Color::DarkGray),
+                    };
+                    // Layout: " ⟳ #01  backend    task text...           12s "
+                    let id_str = format!("#{id:02}");
+                    let type_str = format!("{type_label:<10}");
+                    let elapsed_str = format!("{elapsed:>6}");
+                    // Available chars for task text.
+                    let fixed_width = 2 + 4 + 2 + 10 + 2 + elapsed_str.len() + 2;
+                    let task_width = panel_width.saturating_sub(fixed_width);
+                    let task_truncated = if task.chars().count() > task_width {
+                        let t: String = task.chars().take(task_width.saturating_sub(1)).collect();
+                        format!("{t}…")
+                    } else {
+                        format!("{task:<task_width$}", task = task, task_width = task_width)
+                    };
+                    panel_lines.push(Line::from(vec![
+                        Span::styled(format!(" {icon} "), icon_style),
+                        Span::styled(
+                            format!("{id_str}  "),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled(
+                            type_str,
+                            Style::default().fg(rgb(theme.text_secondary)),
+                        ),
+                        Span::styled(
+                            format!("  {task_truncated}"),
+                            Style::default().fg(rgb(theme.text_primary)),
+                        ),
+                        Span::styled(
+                            format!("  {elapsed_str} "),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]));
+                }
+
+                // Bottom border line.
+                panel_lines.push(Line::from(Span::styled(
+                    "─".repeat(panel_width),
+                    Style::default().fg(rgb(theme.border)),
+                )));
+
+                let panel_widget = Paragraph::new(Text::from(panel_lines))
+                    .style(Style::default().bg(rgb(theme.bg_primary)));
+                frame.render_widget(panel_widget, panel_area);
+            }
 
             // ── footer (6 lines) ─────────────────────────────────────────────
             // Build all 6 lines as a Paragraph rendered into footer_area.
@@ -1385,7 +1556,14 @@ impl AnvilTui {
                 let cursor = self.active_tab().cursor;
                 self.active_tab_mut().input.truncate(cursor);
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => self.cursor_home(),
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if self.active_tab().input.is_empty() && !self.agent_rows.is_empty() {
+                    // Ctrl+A on empty input toggles the agent panel.
+                    self.agent_panel_visible = !self.agent_panel_visible;
+                } else {
+                    self.cursor_home();
+                }
+            }
             KeyCode::Char('e') | KeyCode::Char('E') => self.cursor_end(),
             KeyCode::Char('j') | KeyCode::Char('J') => {
                 // Ctrl+J = newline in input
@@ -1598,6 +1776,27 @@ impl AnvilTui {
     /// Set the update notification message shown in the footer.
     pub fn set_update_available(&mut self, msg: impl Into<String>) {
         self.update_available = msg.into();
+    }
+
+    // ─── Agent panel ─────────────────────────────────────────────────────────
+
+    /// Refresh the agent panel rows snapshot from the caller's `AgentManager`.
+    ///
+    /// Each tuple: `(id, type_label, task, elapsed_str, status_icon)`.
+    pub fn update_agent_rows(
+        &mut self,
+        rows: Vec<(usize, String, String, String, &'static str)>,
+    ) {
+        self.agent_rows = rows;
+        // If the panel was hidden and new rows appear, re-show it automatically.
+        if !self.agent_rows.is_empty() {
+            self.agent_panel_visible = true;
+        }
+    }
+
+    /// Toggle the agent panel visibility.
+    pub fn toggle_agent_panel(&mut self) {
+        self.agent_panel_visible = !self.agent_panel_visible;
     }
 
     /// Signal that the TUI should close on the next `read_input` loop tick.
@@ -2425,11 +2624,14 @@ impl Default for ConfigureState {
 /// Remove ANSI escape codes from a string for plain text rendering.
 fn strip_ansi(s: &str) -> String {
     // Simple state-machine based stripper.
+    // Also removes bare \r characters which can cause the terminal cursor to
+    // jump to column 0 mid-line, producing ghost-text that overwrites the
+    // footer when rendered through ratatui's buffer.
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\x1b' {
-            // Consume the escape sequence
+            // Consume the escape sequence.
             if chars.peek() == Some(&'[') {
                 chars.next(); // consume '['
                 // consume up to and including the final byte (letter)
@@ -2439,6 +2641,13 @@ fn strip_ansi(s: &str) -> String {
                     }
                 }
             }
+            // Other ESC sequences (e.g. ESC O for SS3) — skip the next char.
+            else if chars.peek().is_some() {
+                chars.next();
+            }
+        } else if ch == '\r' {
+            // Strip bare carriage-return; \r\n is handled by str::lines() but
+            // a lone \r would appear as a non-printing character in a Span.
         } else {
             out.push(ch);
         }
