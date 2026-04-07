@@ -690,6 +690,15 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
         payload["stream_options"] = json!({"include_usage": true});
     }
 
+    // For Ollama models: pass think parameter to control reasoning mode.
+    // Ollama's /v1/ endpoint may not support this yet, but native /api/chat does.
+    // We pass it anyway for forward compatibility, and it's harmless for other providers.
+    if request.model.contains(':') || request.model.starts_with("qwen") || request.model.starts_with("llama") || request.model.starts_with("glm") {
+        // Default to think: false unless explicitly enabled
+        // This dramatically speeds up responses for thinking-capable models
+        payload["think"] = json!(false);
+    }
+
     if let Some(tools) = &request.tools {
         payload["tools"] =
             Value::Array(tools.iter().map(openai_tool_definition).collect::<Vec<_>>());
