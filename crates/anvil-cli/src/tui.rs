@@ -2857,17 +2857,43 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "remove".into(), hint: "Remove model from chain".into() },
             CompletionItem { insert: "reset".into(), hint: "Clear all cooldowns".into() },
         ],
-        "/model" => vec![
-            CompletionItem { insert: "claude-opus-4-6".into(), hint: "Anthropic Opus (most capable)".into() },
-            CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet (balanced)".into() },
-            CompletionItem { insert: "claude-haiku-4-5".into(), hint: "Anthropic Haiku (fast)".into() },
-            CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
-            CompletionItem { insert: "gpt-5.4".into(), hint: "OpenAI GPT-5.4 (flagship)".into() },
-            CompletionItem { insert: "gpt-5".into(), hint: "OpenAI GPT-5".into() },
-            CompletionItem { insert: "o3".into(), hint: "OpenAI o3 (reasoning)".into() },
-            CompletionItem { insert: "llama3.2".into(), hint: "Ollama Llama 3.2 (local)".into() },
-            CompletionItem { insert: "grok".into(), hint: "xAI Grok".into() },
-        ],
+        "/model" => {
+            let mut models = vec![
+                CompletionItem { insert: "claude-opus-4-6".into(), hint: "Anthropic Opus (most capable)".into() },
+                CompletionItem { insert: "claude-sonnet-4-6".into(), hint: "Anthropic Sonnet (balanced)".into() },
+                CompletionItem { insert: "claude-haiku-4-5".into(), hint: "Anthropic Haiku (fast)".into() },
+                CompletionItem { insert: "gpt-5.4-mini".into(), hint: "OpenAI GPT-5.4 Mini".into() },
+                CompletionItem { insert: "gpt-5.4".into(), hint: "OpenAI GPT-5.4 (flagship)".into() },
+                CompletionItem { insert: "gpt-5".into(), hint: "OpenAI GPT-5".into() },
+                CompletionItem { insert: "o3".into(), hint: "OpenAI o3 (reasoning)".into() },
+                CompletionItem { insert: "grok".into(), hint: "xAI Grok".into() },
+            ];
+            // Dynamically query Ollama for locally available models
+            let ollama_url = std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            if let Ok(output) = std::process::Command::new("curl")
+                .args(["-s", "--max-time", "2", &format!("{ollama_url}/api/tags")])
+                .output()
+            {
+                if output.status.success() {
+                    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                        if let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
+                            for m in arr {
+                                if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
+                                    let size = m.get("size").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                                    let gb = size / 1_000_000_000.0;
+                                    models.push(CompletionItem {
+                                        insert: name.to_string(),
+                                        hint: format!("Ollama local ({gb:.1}GB)"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            models
+        },
         "/image" | "/generate-image" => vec![
             CompletionItem { insert: "--wp".into(), hint: "Upload to WordPress as featured image".into() },
         ],
