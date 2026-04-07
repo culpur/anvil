@@ -2434,11 +2434,14 @@ impl LiveCli {
                 tui.push_system(format!("Unknown command: /{name}"));
                 return Ok(false);
             }
-            SlashCommand::Model { model } if model.is_some() => {
-                let result = self.handle_repl_command(command)?;
+            SlashCommand::Model { ref model } if model.is_some() => {
+                let new_model = model.as_deref().unwrap();
+                let previous = self.model.clone();
+                self.model = new_model.to_string();
+                let msg_count = self.runtime.session().messages.len();
                 tui.set_model(self.model.clone());
-                tui.push_system(format!("Switched to model: {}", self.model));
-                return Ok(result);
+                tui.push_system(format_model_switch_report(&previous, &self.model, msg_count));
+                return Ok(false);
             }
             SlashCommand::GenerateImage { ref prompt, ref wp_post_id } => {
                 // Image generation takes 10-30 seconds — temporarily leave the alternate
