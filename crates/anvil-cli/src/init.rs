@@ -354,10 +354,10 @@ mod tests {
 
         let report = initialize_repo(&root).expect("init should succeed");
         let rendered = report.render();
-        assert!(rendered.contains(".anvil/           created"));
-        assert!(rendered.contains(".anvil.json       created"));
+        assert!(rendered.contains(".anvil/          created"));
+        assert!(rendered.contains(".anvil.json      created"));
         assert!(rendered.contains(".gitignore       created"));
-        assert!(rendered.contains("ANVIL.md          created"));
+        assert!(rendered.contains("ANVIL.md         created"));
         assert!(root.join(".anvil").is_dir());
         assert!(root.join(".anvil.json").is_file());
         assert!(root.join("ANVIL.md").is_file());
@@ -392,13 +392,13 @@ mod tests {
         let first = initialize_repo(&root).expect("first init should succeed");
         assert!(first
             .render()
-            .contains("ANVIL.md          skipped (already exists)"));
+            .contains("ANVIL.md         skipped (already exists)"));
         let second = initialize_repo(&root).expect("second init should succeed");
         let second_rendered = second.render();
-        assert!(second_rendered.contains(".anvil/           skipped (already exists)"));
-        assert!(second_rendered.contains(".anvil.json       skipped (already exists)"));
+        assert!(second_rendered.contains(".anvil/          skipped (already exists)"));
+        assert!(second_rendered.contains(".anvil.json      skipped (already exists)"));
         assert!(second_rendered.contains(".gitignore       skipped (already exists)"));
-        assert!(second_rendered.contains("ANVIL.md          skipped (already exists)"));
+        assert!(second_rendered.contains("ANVIL.md         skipped (already exists)"));
         assert_eq!(
             fs::read_to_string(root.join("ANVIL.md")).expect("read existing anvil md"),
             "custom guidance\n"
