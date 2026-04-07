@@ -2302,6 +2302,44 @@ fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/history-archive".into(), hint: "Browse archived sessions".into() },
         CompletionItem { insert: "/exit".into(), hint: "Exit Anvil".into() },
         CompletionItem { insert: "/tab".into(), hint: "Manage tabs (new/close/list/rename)".into() },
+        // Feature 3 — semantic search
+        CompletionItem { insert: "/semantic-search".into(), hint: "Search symbols grouped by type".into() },
+        // Feature 4 — Docker
+        CompletionItem { insert: "/docker".into(), hint: "Docker container & compose helpers".into() },
+        // Feature 5 — test generation
+        CompletionItem { insert: "/test".into(), hint: "Generate, run, or show test coverage".into() },
+        // Feature 6 — advanced git
+        CompletionItem { insert: "/git".into(), hint: "Advanced git: rebase, conflicts, stash".into() },
+        // Feature 7 — refactoring
+        CompletionItem { insert: "/refactor".into(), hint: "Rename, extract, or move code".into() },
+        // Feature 8 — screenshot
+        CompletionItem { insert: "/screenshot".into(), hint: "Capture screen and send to AI".into() },
+        // Feature 9 — database tools
+        CompletionItem { insert: "/db".into(), hint: "Database: connect, schema, query, migrate".into() },
+        // Feature 10 — security scanning
+        CompletionItem { insert: "/security".into(), hint: "Security: scan, secrets, deps, report".into() },
+        // Feature 11 — API helpers
+        CompletionItem { insert: "/api".into(), hint: "API: spec, mock, test, docs".into() },
+        // Feature 12 — docs generation
+        CompletionItem { insert: "/docs".into(), hint: "Docs: generate, readme, architecture, changelog".into() },
+        // AnvilHub marketplace
+        CompletionItem { insert: "/hub".into(), hint: "Browse AnvilHub marketplace".into() },
+        // i18n language switcher
+        CompletionItem { insert: "/language".into(), hint: "Set display language (en, de, es, fr, ja, zh-CN, ru)".into() },
+        // Feature 13 — project scaffolding
+        CompletionItem { insert: "/scaffold".into(), hint: "Scaffold a new project from a template".into() },
+        // Feature 14 — performance profiling
+        CompletionItem { insert: "/perf".into(), hint: "Performance profiling and benchmarking".into() },
+        // Feature 15 — debugging helpers
+        CompletionItem { insert: "/debug".into(), hint: "Debugging helpers: start, breakpoint, watch, explain".into() },
+        // Feature 16 — voice input (coming soon)
+        CompletionItem { insert: "/voice".into(), hint: "Voice input (coming soon)".into() },
+        // Feature 17 — collaborative sessions (coming soon)
+        CompletionItem { insert: "/collab".into(), hint: "Collaborative session sharing (coming soon)".into() },
+        // Feature 19 — changelog generation
+        CompletionItem { insert: "/changelog".into(), hint: "Generate CHANGELOG.md entry from git log".into() },
+        // Feature 20 — environment variable management
+        CompletionItem { insert: "/env".into(), hint: "Manage session environment variables".into() },
     ]
 }
 
@@ -2379,11 +2417,17 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "list".into(), hint: "Show available themes".into() },
             CompletionItem { insert: "set".into(), hint: "Apply a theme".into() },
             CompletionItem { insert: "reset".into(), hint: "Reset to default (culpur-defense)".into() },
+            CompletionItem { insert: "create".into(), hint: "Create a new custom theme".into() },
+            CompletionItem { insert: "import".into(), hint: "Import theme from a JSON file".into() },
+            CompletionItem { insert: "export".into(), hint: "Export current theme to a JSON file".into() },
             CompletionItem { insert: "cyberpunk".into(), hint: "Neon pink + electric blue".into() },
             CompletionItem { insert: "nord".into(), hint: "Arctic blues + muted greens".into() },
             CompletionItem { insert: "solarized-dark".into(), hint: "Classic calibrated colors".into() },
             CompletionItem { insert: "dracula".into(), hint: "Purple + pink + green".into() },
             CompletionItem { insert: "culpur-defense".into(), hint: "Navy + cyan (default)".into() },
+            CompletionItem { insert: "monokai".into(), hint: "Gold + green + magenta classic".into() },
+            CompletionItem { insert: "gruvbox".into(), hint: "Warm retro browns + gold".into() },
+            CompletionItem { insert: "catppuccin".into(), hint: "Pastel lavender + pink".into() },
         ],
         "/search" => vec![
             CompletionItem { insert: "providers".into(), hint: "List search providers".into() },
@@ -2412,6 +2456,126 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "search".into(), hint: "Search archived sessions".into() },
             CompletionItem { insert: "view".into(), hint: "View a specific archive".into() },
         ],
+        // Feature 3 — semantic search
+        "/semantic-search" | "/symsearch" => vec![
+            CompletionItem { insert: "--type fn".into(), hint: "Filter to function definitions".into() },
+            CompletionItem { insert: "--type class".into(), hint: "Filter to class definitions".into() },
+            CompletionItem { insert: "--type struct".into(), hint: "Filter to struct definitions".into() },
+            CompletionItem { insert: "--type import".into(), hint: "Filter to import statements".into() },
+            CompletionItem { insert: "--lang rs".into(), hint: "Limit to Rust files".into() },
+            CompletionItem { insert: "--lang ts".into(), hint: "Limit to TypeScript files".into() },
+            CompletionItem { insert: "--lang py".into(), hint: "Limit to Python files".into() },
+        ],
+        // Feature 4 — Docker
+        "/docker" => vec![
+            CompletionItem { insert: "ps".into(), hint: "List running containers".into() },
+            CompletionItem { insert: "logs".into(), hint: "Show container logs".into() },
+            CompletionItem { insert: "compose".into(), hint: "Show docker-compose services".into() },
+            CompletionItem { insert: "build".into(), hint: "Build from Dockerfile in cwd".into() },
+        ],
+        // Feature 5 — test generation
+        "/test" => vec![
+            CompletionItem { insert: "generate".into(), hint: "Generate unit tests for a file".into() },
+            CompletionItem { insert: "run".into(), hint: "Run the project test suite".into() },
+            CompletionItem { insert: "coverage".into(), hint: "Show test coverage summary".into() },
+        ],
+        // Feature 6 — advanced git
+        "/git" => vec![
+            CompletionItem { insert: "rebase".into(), hint: "Interactive rebase assistant".into() },
+            CompletionItem { insert: "conflicts".into(), hint: "Detect and resolve merge conflicts".into() },
+            CompletionItem { insert: "cherry-pick".into(), hint: "Cherry-pick commit assistant".into() },
+            CompletionItem { insert: "stash".into(), hint: "Stash management".into() },
+        ],
+        // Feature 7 — refactoring
+        "/refactor" => vec![
+            CompletionItem { insert: "rename".into(), hint: "Rename symbol across codebase".into() },
+            CompletionItem { insert: "extract".into(), hint: "Extract lines to a new function".into() },
+            CompletionItem { insert: "move".into(), hint: "Move code between files".into() },
+        ],
+        // Feature 9 — database tools
+        "/db" => vec![
+            CompletionItem { insert: "connect".into(), hint: "Connect to a database URL".into() },
+            CompletionItem { insert: "schema".into(), hint: "Inspect schema files in project".into() },
+            CompletionItem { insert: "query".into(), hint: "Analyse a SQL query with AI".into() },
+            CompletionItem { insert: "migrate".into(), hint: "Detect drift & suggest migrations".into() },
+        ],
+        // Feature 10 — security scanning
+        "/security" => vec![
+            CompletionItem { insert: "scan".into(), hint: "Grep for vulnerability patterns".into() },
+            CompletionItem { insert: "secrets".into(), hint: "Detect hardcoded secrets".into() },
+            CompletionItem { insert: "deps".into(), hint: "Check dependencies for CVEs".into() },
+            CompletionItem { insert: "report".into(), hint: "Generate combined security report".into() },
+        ],
+        // Feature 11 — API helpers
+        "/api" => vec![
+            CompletionItem { insert: "spec".into(), hint: "Generate OpenAPI spec from file".into() },
+            CompletionItem { insert: "mock".into(), hint: "Start mock server from spec".into() },
+            CompletionItem { insert: "test".into(), hint: "Test an endpoint via curl".into() },
+            CompletionItem { insert: "docs".into(), hint: "Generate API documentation".into() },
+        ],
+        // Feature 12 — documentation generation
+        "/docs" => vec![
+            CompletionItem { insert: "generate".into(), hint: "Auto-generate project docs".into() },
+            CompletionItem { insert: "readme".into(), hint: "Generate or update README.md".into() },
+            CompletionItem { insert: "architecture".into(), hint: "Generate architecture description".into() },
+            CompletionItem { insert: "changelog".into(), hint: "Generate changelog from git log".into() },
+        ],
+        // AnvilHub marketplace
+        "/hub" => vec![
+            CompletionItem { insert: "search".into(), hint: "Search packages by keyword".into() },
+            CompletionItem { insert: "skills".into(), hint: "Browse top community skills".into() },
+            CompletionItem { insert: "plugins".into(), hint: "Browse top plugins".into() },
+            CompletionItem { insert: "agents".into(), hint: "Browse top agents".into() },
+            CompletionItem { insert: "themes".into(), hint: "Browse top themes".into() },
+            CompletionItem { insert: "install".into(), hint: "Install a package by name".into() },
+            CompletionItem { insert: "info".into(), hint: "Show package details".into() },
+        ],
+        // i18n language switcher
+        "/language" | "/lang" => vec![
+            CompletionItem { insert: "en".into(), hint: "English (default)".into() },
+            CompletionItem { insert: "de".into(), hint: "Deutsch — German".into() },
+            CompletionItem { insert: "es".into(), hint: "Español — Spanish".into() },
+            CompletionItem { insert: "fr".into(), hint: "Français — French".into() },
+            CompletionItem { insert: "ja".into(), hint: "日本語 — Japanese".into() },
+            CompletionItem { insert: "zh-CN".into(), hint: "简体中文 — Chinese Simplified".into() },
+            CompletionItem { insert: "ru".into(), hint: "Русский — Russian".into() },
+        ],
+        // Feature 13 — project scaffolding
+        "/scaffold" => vec![
+            CompletionItem { insert: "new".into(), hint: "Create a new project from a template".into() },
+            CompletionItem { insert: "list".into(), hint: "List available project templates".into() },
+        ],
+        // Feature 14 — performance profiling
+        "/perf" => vec![
+            CompletionItem { insert: "profile".into(), hint: "Profile a command and show wall-time".into() },
+            CompletionItem { insert: "benchmark".into(), hint: "Benchmark functions in a file".into() },
+            CompletionItem { insert: "flamegraph".into(), hint: "Generate a flamegraph with cargo-flamegraph".into() },
+            CompletionItem { insert: "analyze".into(), hint: "AI-assisted performance analysis".into() },
+        ],
+        // Feature 15 — debugging helpers
+        "/debug" => vec![
+            CompletionItem { insert: "start".into(), hint: "Start debugger for a file".into() },
+            CompletionItem { insert: "breakpoint".into(), hint: "Set a breakpoint at file:line".into() },
+            CompletionItem { insert: "watch".into(), hint: "Watch an expression".into() },
+            CompletionItem { insert: "explain".into(), hint: "Explain an error message".into() },
+        ],
+        // Feature 16 — voice input (coming soon)
+        "/voice" => vec![
+            CompletionItem { insert: "start".into(), hint: "Start microphone capture (coming soon)".into() },
+            CompletionItem { insert: "stop".into(), hint: "Stop microphone capture (coming soon)".into() },
+        ],
+        // Feature 17 — collaborative sessions (coming soon)
+        "/collab" => vec![
+            CompletionItem { insert: "share".into(), hint: "Share this session (coming soon)".into() },
+            CompletionItem { insert: "join".into(), hint: "Join a shared session by ID (coming soon)".into() },
+        ],
+        // Feature 20 — environment variable management
+        "/env" => vec![
+            CompletionItem { insert: "show".into(), hint: "Show current environment variables".into() },
+            CompletionItem { insert: "set".into(), hint: "Set an environment variable".into() },
+            CompletionItem { insert: "load".into(), hint: "Load variables from a .env file".into() },
+            CompletionItem { insert: "diff".into(), hint: "Diff current env against a .env file".into() },
+        ],
         _ => vec![],
     }
 }
@@ -2426,6 +2590,19 @@ fn third_level_completions(command: &str, subcommand: &str) -> Vec<CompletionIte
             CompletionItem { insert: "solarized-dark".into(), hint: "Classic calibrated colors".into() },
             CompletionItem { insert: "dracula".into(), hint: "Purple + pink + green".into() },
             CompletionItem { insert: "culpur-defense".into(), hint: "Navy + cyan (default)".into() },
+            CompletionItem { insert: "monokai".into(), hint: "Gold + green + magenta classic".into() },
+            CompletionItem { insert: "gruvbox".into(), hint: "Warm retro browns + gold".into() },
+            CompletionItem { insert: "catppuccin".into(), hint: "Pastel lavender + pink".into() },
+        ],
+        // Feature 13 — scaffold new: show template names
+        ("/scaffold", "new") => vec![
+            CompletionItem { insert: "rust".into(), hint: "Rust binary project (Cargo)".into() },
+            CompletionItem { insert: "node".into(), hint: "Node.js project (npm)".into() },
+            CompletionItem { insert: "python".into(), hint: "Python project (venv + pyproject.toml)".into() },
+            CompletionItem { insert: "react".into(), hint: "React + TypeScript (Vite)".into() },
+            CompletionItem { insert: "nextjs".into(), hint: "Next.js + TypeScript".into() },
+            CompletionItem { insert: "go".into(), hint: "Go module project".into() },
+            CompletionItem { insert: "docker".into(), hint: "Dockerfile + compose boilerplate".into() },
         ],
         ("/provider", "anthropic") | ("/provider", "openai") | ("/provider", "ollama") => vec![
             CompletionItem { insert: "login".into(), hint: "Login/refresh credentials".into() },

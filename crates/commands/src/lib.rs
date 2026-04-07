@@ -444,9 +444,183 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "theme",
         aliases: &[],
-        summary: "Show, list, or change the TUI colour theme",
-        argument_hint: Some("[list | set <name> | reset]"),
+        summary: "Show, list, or change the TUI colour theme; create/import/export custom themes",
+        argument_hint: Some("[list | set <name> | reset | create <name> | import <file> | export <name>]"),
         resume_supported: false,
+        category: SlashCommandCategory::Core,
+    },
+    // Feature 3 — semantic code search
+    SlashCommandSpec {
+        name: "semantic-search",
+        aliases: &["symsearch"],
+        summary: "Search for symbols (functions, classes, structs, imports) grouped by type",
+        argument_hint: Some("<query> [--lang <ext>] [--type fn|class|struct|import]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 4 — Docker / container awareness
+    SlashCommandSpec {
+        name: "docker",
+        aliases: &[],
+        summary: "Inspect and manage Docker containers and compose services",
+        argument_hint: Some("[ps|logs <container>|compose|build]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 5 — test generation
+    SlashCommandSpec {
+        name: "test",
+        aliases: &[],
+        summary: "Generate unit tests, run the test suite, or show coverage",
+        argument_hint: Some("[generate <file>|run|coverage]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 6 — advanced git
+    SlashCommandSpec {
+        name: "git",
+        aliases: &[],
+        summary: "Advanced git helpers: rebase, conflicts, cherry-pick, stash",
+        argument_hint: Some("[rebase|conflicts|cherry-pick <sha>|stash [list|pop|drop]]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Git,
+    },
+    // Feature 7 — refactoring tools
+    SlashCommandSpec {
+        name: "refactor",
+        aliases: &[],
+        summary: "Refactoring helpers: rename, extract function, move code",
+        argument_hint: Some("[rename <old> <new>|extract <file> <lines>|move <src> <dst>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 8 — screenshot / clipboard image input
+    SlashCommandSpec {
+        name: "screenshot",
+        aliases: &[],
+        summary: "Capture a screenshot and send it to the AI for analysis",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 9 — database tools
+    SlashCommandSpec {
+        name: "db",
+        aliases: &[],
+        summary: "Database tools — connect, inspect schema, run queries, suggest migrations",
+        argument_hint: Some("[connect <url>|schema|query <sql>|migrate]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 10 — security scanning
+    SlashCommandSpec {
+        name: "security",
+        aliases: &[],
+        summary: "Security scanning — vulnerabilities, secrets, dependency CVEs, report",
+        argument_hint: Some("[scan|secrets|deps|report]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 11 — API development helpers
+    SlashCommandSpec {
+        name: "api",
+        aliases: &[],
+        summary: "API development helpers — spec, mock server, endpoint test, docs",
+        argument_hint: Some("[spec <file>|mock <spec>|test <endpoint>|docs]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 12 — documentation generation
+    SlashCommandSpec {
+        name: "docs",
+        aliases: &[],
+        summary: "Documentation generation — readme, architecture, changelog",
+        argument_hint: Some("[generate|readme|architecture|changelog]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 13 — project scaffolding
+    SlashCommandSpec {
+        name: "scaffold",
+        aliases: &[],
+        summary: "Scaffold a new project from a template (rust, node, python, react, nextjs, go, docker)",
+        argument_hint: Some("[new <template>|list]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // Feature 14 — performance profiling
+    SlashCommandSpec {
+        name: "perf",
+        aliases: &[],
+        summary: "Performance profiling and benchmarking helpers",
+        argument_hint: Some("[profile <command>|benchmark <file>|flamegraph|analyze]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 15 — debugging integration
+    SlashCommandSpec {
+        name: "debug",
+        aliases: &[],
+        summary: "Debugging helpers — start debugger, set breakpoints, watch expressions, explain errors",
+        argument_hint: Some("[start <file>|breakpoint <file:line>|watch <expr>|explain <error>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // Feature 16 — voice input (placeholder)
+    SlashCommandSpec {
+        name: "voice",
+        aliases: &[],
+        summary: "Voice input — start/stop microphone capture (coming soon)",
+        argument_hint: Some("[start|stop]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+    },
+    // Feature 17 — collaboration (placeholder)
+    SlashCommandSpec {
+        name: "collab",
+        aliases: &[],
+        summary: "Collaborative session sharing — share or join a session (coming soon)",
+        argument_hint: Some("[share|join <id>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Session,
+    },
+    // Feature 18 — custom user themes (extends existing /theme)
+    // Note: /theme create, /theme import, /theme export are new sub-commands handled inside run_theme_command.
+    // No separate spec entry — the existing /theme spec covers them via its argument_hint update.
+    // Feature 19 — changelog generator
+    SlashCommandSpec {
+        name: "changelog",
+        aliases: &[],
+        summary: "Generate a CHANGELOG.md entry from git log since the last tag",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Git,
+    },
+    // Feature 20 — environment manager
+    SlashCommandSpec {
+        name: "env",
+        aliases: &[],
+        summary: "Manage session environment variables — show, set, load .env, diff environments",
+        argument_hint: Some("[show|set <key> <value>|load <file>|diff]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+    },
+    // AnvilHub marketplace
+    SlashCommandSpec {
+        name: "hub",
+        aliases: &[],
+        summary: "Browse and install packages from the AnvilHub marketplace",
+        argument_hint: Some("[search <q>|skills|plugins|agents|themes|install <name>|info <name>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+    },
+    // i18n language switcher
+    SlashCommandSpec {
+        name: "language",
+        aliases: &["lang"],
+        summary: "Set display language (en, de, es, fr, ja, zh-CN, ru)",
+        argument_hint: Some("[en|de|es|fr|ja|zh-CN|ru]"),
+        resume_supported: true,
         category: SlashCommandCategory::Core,
     },
 ];
@@ -572,6 +746,78 @@ pub enum SlashCommand {
     /// `/theme`, `/theme list`, `/theme set <name>`, `/theme reset`
     Theme {
         action: Option<String>,
+    },
+    /// `/semantic-search <query> …`
+    SemanticSearch {
+        args: Option<String>,
+    },
+    /// `/docker [ps|logs <container>|compose|build]`
+    Docker {
+        action: Option<String>,
+    },
+    /// `/test [generate <file>|run|coverage]`
+    Test {
+        action: Option<String>,
+    },
+    /// `/git [rebase|conflicts|cherry-pick <sha>|stash …]`
+    Git {
+        action: Option<String>,
+    },
+    /// `/refactor [rename <old> <new>|extract <file> <lines>|move <src> <dst>]`
+    Refactor {
+        action: Option<String>,
+    },
+    /// `/screenshot` — capture screen and send to AI via vision
+    Screenshot,
+    /// `/db [connect <url>|schema|query <sql>|migrate]`
+    Db {
+        action: Option<String>,
+    },
+    /// `/security [scan|secrets|deps|report]`
+    Security {
+        action: Option<String>,
+    },
+    /// `/api [spec <file>|mock <spec>|test <endpoint>|docs]`
+    Api {
+        action: Option<String>,
+    },
+    /// `/docs [generate|readme|architecture|changelog]`
+    Docs {
+        action: Option<String>,
+    },
+    /// `/scaffold [new <template>|list]`
+    Scaffold {
+        action: Option<String>,
+    },
+    /// `/perf [profile <command>|benchmark <file>|flamegraph|analyze]`
+    Perf {
+        action: Option<String>,
+    },
+    /// `/debug [start <file>|breakpoint <file:line>|watch <expr>|explain <error>]`
+    Debug {
+        action: Option<String>,
+    },
+    /// `/voice [start|stop]`
+    Voice {
+        action: Option<String>,
+    },
+    /// `/collab [share|join <id>]`
+    Collab {
+        action: Option<String>,
+    },
+    /// `/changelog` — generate CHANGELOG.md entry from git log since last tag
+    Changelog,
+    /// `/env [show|set <key> <value>|load <file>|diff]`
+    Env {
+        action: Option<String>,
+    },
+    /// `/hub [search <q>|skills|plugins|agents|themes|install <name>|info <name>]`
+    Hub {
+        action: Option<String>,
+    },
+    /// `/language [en|de|es|fr|ja|zh-CN|ru]`
+    Language {
+        lang: Option<String>,
     },
     Unknown(String),
 }
@@ -721,6 +967,59 @@ impl SlashCommand {
             },
             "theme" => Self::Theme {
                 action: remainder_after_command(trimmed, command),
+            },
+            "semantic-search" | "symsearch" => Self::SemanticSearch {
+                args: remainder_after_command(trimmed, command),
+            },
+            "docker" => Self::Docker {
+                action: remainder_after_command(trimmed, command),
+            },
+            "test" => Self::Test {
+                action: remainder_after_command(trimmed, command),
+            },
+            "git" => Self::Git {
+                action: remainder_after_command(trimmed, command),
+            },
+            "refactor" => Self::Refactor {
+                action: remainder_after_command(trimmed, command),
+            },
+            "screenshot" => Self::Screenshot,
+            "db" => Self::Db {
+                action: remainder_after_command(trimmed, command),
+            },
+            "security" => Self::Security {
+                action: remainder_after_command(trimmed, command),
+            },
+            "api" => Self::Api {
+                action: remainder_after_command(trimmed, command),
+            },
+            "docs" => Self::Docs {
+                action: remainder_after_command(trimmed, command),
+            },
+            "scaffold" => Self::Scaffold {
+                action: remainder_after_command(trimmed, command),
+            },
+            "perf" => Self::Perf {
+                action: remainder_after_command(trimmed, command),
+            },
+            "debug" => Self::Debug {
+                action: remainder_after_command(trimmed, command),
+            },
+            "voice" => Self::Voice {
+                action: remainder_after_command(trimmed, command),
+            },
+            "collab" => Self::Collab {
+                action: remainder_after_command(trimmed, command),
+            },
+            "changelog" => Self::Changelog,
+            "env" => Self::Env {
+                action: remainder_after_command(trimmed, command),
+            },
+            "hub" => Self::Hub {
+                action: remainder_after_command(trimmed, command),
+            },
+            "language" | "lang" => Self::Language {
+                lang: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             other => Self::Unknown(other.to_string()),
         })
@@ -2130,6 +2429,25 @@ pub fn handle_slash_command(
         | SlashCommand::HistoryArchive { .. }
         | SlashCommand::Configure { .. }
         | SlashCommand::Theme { .. }
+        | SlashCommand::SemanticSearch { .. }
+        | SlashCommand::Docker { .. }
+        | SlashCommand::Test { .. }
+        | SlashCommand::Git { .. }
+        | SlashCommand::Refactor { .. }
+        | SlashCommand::Screenshot
+        | SlashCommand::Db { .. }
+        | SlashCommand::Security { .. }
+        | SlashCommand::Api { .. }
+        | SlashCommand::Docs { .. }
+        | SlashCommand::Scaffold { .. }
+        | SlashCommand::Perf { .. }
+        | SlashCommand::Debug { .. }
+        | SlashCommand::Voice { .. }
+        | SlashCommand::Collab { .. }
+        | SlashCommand::Changelog
+        | SlashCommand::Env { .. }
+        | SlashCommand::Hub { .. }
+        | SlashCommand::Language { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }

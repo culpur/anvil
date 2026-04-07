@@ -13,6 +13,7 @@ path = "src/main.rs"
 api = { path = "../api" }
 base64 = "0.22"
 commands = { path = "../commands" }
+rust-i18n.workspace = true
 compat-harness = { path = "../compat-harness" }
 crossterm = "0.28"
 lsp-types.workspace = true

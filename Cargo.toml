@@ -3,13 +3,14 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.1-alpha.1"
+version = "1.0.2"
 edition = "2021"
 license = "MIT"
 publish = false
 
 [workspace.dependencies]
 lsp-types = "0.97"
+rust-i18n = "3"
 serde_json = "1"
 
 [workspace.lints.rust]

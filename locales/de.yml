@@ -1,0 +1,98 @@
+de:
+  # TUI header / footer
+  footer.help: "Tab: vervollständigen  Enter: senden  Ctrl+C: abbrechen  Ctrl+D: beenden  /help: Befehle"
+  footer.configure: "↑↓: navigieren  Enter: auswählen  Esc: zurück  Ctrl+C: beenden"
+  header.title: "Anvil"
+  header.version: "v%{version}"
+
+  # Status / session
+  status.model: "Modell"
+  status.provider: "Anbieter"
+  status.permission: "Berechtigungsmodus"
+  status.session: "Sitzung"
+  status.messages: "Nachrichten"
+  status.turns: "Runden"
+  status.tokens_used: "Verbrauchte Token"
+
+  # Command descriptions
+  cmd.help.summary: "Verfügbare Slash-Befehle anzeigen"
+  cmd.status.summary: "Aktuellen Sitzungsstatus anzeigen"
+  cmd.compact.summary: "Lokalen Sitzungsverlauf komprimieren"
+  cmd.model.summary: "Aktives Modell anzeigen oder wechseln"
+  cmd.permissions.summary: "Berechtigungsmodus anzeigen oder wechseln"
+  cmd.clear.summary: "Neue Sitzung starten"
+  cmd.cost.summary: "Kumulativen Token-Verbrauch anzeigen"
+  cmd.provider.summary: "Anbieter anzeigen, wechseln oder auflisten"
+  cmd.login.summary: "Anmelden oder Anmeldedaten aktualisieren"
+  cmd.resume.summary: "Gespeicherte Sitzung laden"
+  cmd.config.summary: "Anvil-Konfigurationsdateien anzeigen"
+  cmd.memory.summary: "Geladene Anvil-Speicherdateien anzeigen"
+  cmd.init.summary: "ANVIL.md für dieses Repository erstellen"
+  cmd.diff.summary: "Git-Diff der Workspace-Änderungen anzeigen"
+  cmd.version.summary: "CLI-Version und Build-Informationen anzeigen"
+  cmd.bughunter.summary: "Codebase auf wahrscheinliche Fehler prüfen"
+  cmd.branch.summary: "Git-Branches auflisten, erstellen oder wechseln"
+  cmd.worktree.summary: "Git-Worktrees verwalten"
+  cmd.commit.summary: "Commit-Nachricht generieren und Commit erstellen"
+  cmd.pr.summary: "Pull Request aus Unterhaltung entwerfen oder erstellen"
+  cmd.issue.summary: "GitHub-Issue aus Unterhaltung entwerfen oder erstellen"
+  cmd.hub.summary: "Pakete aus dem AnvilHub-Marktplatz durchsuchen und installieren"
+  cmd.language.summary: "Anzeigesprache festlegen (en, de, es, fr, ja, zh-CN, ru)"
+
+  # Error messages
+  error.unknown_command: "Unbekannter Befehl: /%{name}"
+  error.missing_argument: "Pflichtargument fehlt für /%{cmd}"
+  error.not_available_tui: "Befehl im TUI-Modus nicht verfügbar."
+  error.provider_not_found: "Anbieter nicht gefunden: %{name}"
+  error.hub_fetch_failed: "Pakete konnten nicht von AnvilHub abgerufen werden: %{reason}"
+  error.hub_install_failed: "Installation von Paket '%{name}' fehlgeschlagen: %{reason}"
+  error.hub_not_found: "Paket nicht gefunden: %{name}"
+  error.invalid_language: "Nicht unterstützte Sprache '%{lang}'. Verfügbar: en, de, es, fr, ja, zh-CN, ru"
+  error.config_save_failed: "Konfiguration konnte nicht gespeichert werden: %{reason}"
+
+  # Hub command messages
+  hub.top_packages: "Top-Pakete auf AnvilHub"
+  hub.search_results: "Suchergebnisse für \"%{query}\""
+  hub.no_results: "Keine Pakete gefunden."
+  hub.installing: "%{name} %{version} wird installiert..."
+  hub.installed: "%{name} %{version} wurde in %{path} installiert"
+  hub.downloads: "%{count} Downloads"
+  hub.package_info: "Paket: %{name} v%{version} von %{author}"
+  hub.package_type: "Typ: %{type}"
+  hub.package_desc: "Beschreibung: %{desc}"
+  hub.usage_hint: |
+    Verwendung:
+      /hub                     Top-Pakete nach Kategorie anzeigen
+      /hub search <Abfrage>    Alle Pakete durchsuchen
+      /hub skills              Top-Skills
+      /hub plugins             Top-Plugins
+      /hub agents              Top-Agenten
+      /hub themes              Top-Themes
+      /hub install <Name>      Paket herunterladen und installieren
+      /hub info <Name>         Paketdetails anzeigen
+
+  # Language command messages
+  language.current: "Aktuelle Sprache: %{lang}"
+  language.changed: "Sprache geändert auf: %{lang}"
+  language.available: "Verfügbare Sprachen: en, de, es, fr, ja, zh-CN, ru"
+  language.usage: "Verwendung: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+  # Configure menu labels
+  configure.title: "Anvil konfigurieren"
+  configure.providers: "Anbieter"
+  configure.models: "Modelle"
+  configure.context: "Kontext"
+  configure.search: "Suche"
+  configure.permissions: "Berechtigungen"
+  configure.display: "Anzeige"
+  configure.integrations: "Integrationen"
+  configure.language: "Sprache"
+
+  # Login/provider prompts
+  login.prompt_provider: "Anbieter für Anmeldung auswählen [anthropic/openai/ollama]: "
+  login.success: "Anmeldung für %{provider} erfolgreich."
+  login.failed: "Anmeldung fehlgeschlagen: %{reason}"
+  login.enter_api_key: "API-Schlüssel eingeben: "
+  login.testing_connection: "Verbindung zu %{host} wird getestet..."
+  login.connected: "Verbunden"
+  login.connection_failed: "Verbindung nicht möglich"

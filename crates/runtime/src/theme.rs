@@ -149,6 +149,9 @@ impl Theme {
             "nord" => Some(Self::nord()),
             "solarized-dark" => Some(Self::solarized_dark()),
             "dracula" => Some(Self::dracula()),
+            "monokai" => Some(Self::monokai()),
+            "gruvbox" => Some(Self::gruvbox()),
+            "catppuccin" => Some(Self::catppuccin()),
             _ => None,
         }
     }
@@ -156,7 +159,16 @@ impl Theme {
     /// Names of all built-in themes.
     #[must_use]
     pub fn builtin_names() -> &'static [&'static str] {
-        &["culpur-defense", "cyberpunk", "nord", "solarized-dark", "dracula"]
+        &[
+            "culpur-defense",
+            "cyberpunk",
+            "nord",
+            "solarized-dark",
+            "dracula",
+            "monokai",
+            "gruvbox",
+            "catppuccin",
+        ]
     }
 
     fn culpur_defense() -> Self {
@@ -246,6 +258,60 @@ impl Theme {
             border:           Rgb(0x44, 0x47, 0x5A),
             header_bg:        Rgb(0x28, 0x2A, 0x36),
             thinking:         Rgb(0xBD, 0x93, 0xF9),
+        }
+    }
+
+    fn monokai() -> Self {
+        Self {
+            name: "monokai".to_string(),
+            bg_primary:       Rgb(0x27, 0x28, 0x22),
+            bg_card:          Rgb(0x3E, 0x3D, 0x32),
+            text_primary:     Rgb(0xF8, 0xF8, 0xF2),
+            text_secondary:   Rgb(0x75, 0x71, 0x5E),
+            accent:           Rgb(0xA6, 0xE2, 0x2E),
+            accent_secondary: Rgb(0x66, 0xD9, 0xE8),
+            success:          Rgb(0xA6, 0xE2, 0x2E),
+            warning:          Rgb(0xE6, 0xDB, 0x74),
+            error:            Rgb(0xF9, 0x26, 0x72),
+            border:           Rgb(0x49, 0x48, 0x3E),
+            header_bg:        Rgb(0x1E, 0x1F, 0x1C),
+            thinking:         Rgb(0xAE, 0x81, 0xFF),
+        }
+    }
+
+    fn gruvbox() -> Self {
+        Self {
+            name: "gruvbox".to_string(),
+            bg_primary:       Rgb(0x28, 0x28, 0x28),
+            bg_card:          Rgb(0x3C, 0x38, 0x36),
+            text_primary:     Rgb(0xEB, 0xDB, 0xB2),
+            text_secondary:   Rgb(0xA8, 0x99, 0x84),
+            accent:           Rgb(0xD7, 0x99, 0x21),
+            accent_secondary: Rgb(0xB8, 0xBB, 0x26),
+            success:          Rgb(0xB8, 0xBB, 0x26),
+            warning:          Rgb(0xFE, 0x80, 0x19),
+            error:            Rgb(0xCC, 0x24, 0x1D),
+            border:           Rgb(0x50, 0x49, 0x45),
+            header_bg:        Rgb(0x1D, 0x20, 0x21),
+            thinking:         Rgb(0x83, 0xA5, 0x98),
+        }
+    }
+
+    fn catppuccin() -> Self {
+        Self {
+            name: "catppuccin".to_string(),
+            bg_primary:       Rgb(0x1E, 0x1E, 0x2E),
+            bg_card:          Rgb(0x31, 0x32, 0x44),
+            text_primary:     Rgb(0xCA, 0xD3, 0xF5),
+            text_secondary:   Rgb(0xA5, 0xAD, 0xCE),
+            accent:           Rgb(0xCA, 0xA6, 0xF7),
+            accent_secondary: Rgb(0xF5, 0xBD, 0xE2),
+            success:          Rgb(0xA6, 0xDA, 0x95),
+            warning:          Rgb(0xEE, 0xD4, 0x9F),
+            error:            Rgb(0xED, 0x87, 0x96),
+            border:           Rgb(0x45, 0x47, 0x5A),
+            header_bg:        Rgb(0x18, 0x18, 0x26),
+            thinking:         Rgb(0x8B, 0xD5, 0xCA),
         }
     }
 

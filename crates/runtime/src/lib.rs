@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod hub;
 pub mod theme;
 pub mod cron;
 pub mod history;
@@ -104,6 +105,10 @@ pub use search::{
 };
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+pub use hub::{
+    format_package_detail, format_package_list, BlockingHubClient, HubClient, HubError,
+    HubPackage,
 };
 pub use theme::{Rgb, Theme};
 

@@ -4,6 +4,9 @@ mod input;
 mod render;
 mod tui;
 
+rust_i18n::i18n!("../../locales", fallback = "en");
+
+
 use std::collections::BTreeSet;
 use std::env;
 use std::fmt::Write as _;
@@ -38,15 +41,15 @@ use render::{
     ThinkingIndicator, TerminalRenderer,
 };
 use runtime::{
-    clear_oauth_credentials, generate_pkce_pair, generate_state, load_system_prompt,
-    parse_oauth_callback_request_target, pricing_for_model, render_history_context,
-    render_qmd_context, save_oauth_credentials, ApiClient, ApiRequest, ArchiveEntry,
-    AssistantEvent, CompactionConfig, CompletedTaskInfo, ConfigLoader, ConfigSource, ContentBlock,
-    ConversationMessage, ConversationRuntime, CronDaemon, HistoryArchiver, LspManager,
-    LspServerConfig, McpServerManager, MemoryManager, MessageRole, OAuthAuthorizationRequest,
-    OAuthConfig, OAuthTokenExchangeRequest, PermissionMode, PermissionPolicy, ProjectContext,
-    QmdClient, RuntimeError, Session, TaskManager, Theme, TokenUsage, ToolError, ToolExecutor,
-    UsageTracker,
+    clear_oauth_credentials, format_package_detail, format_package_list, generate_pkce_pair,
+    generate_state, load_system_prompt, parse_oauth_callback_request_target, pricing_for_model,
+    render_history_context, render_qmd_context, save_oauth_credentials, ApiClient, ApiRequest,
+    ArchiveEntry, AssistantEvent, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
+    ConfigLoader, ConfigSource, ContentBlock, ConversationMessage, ConversationRuntime, CronDaemon,
+    HistoryArchiver, LspManager, LspServerConfig, McpServerManager, MemoryManager, MessageRole,
+    OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest, PermissionMode,
+    PermissionPolicy, ProjectContext, QmdClient, RuntimeError, Session, TaskManager, Theme,
+    TokenUsage, ToolError, ToolExecutor, UsageTracker,
 };
 use crossterm::terminal;
 use serde_json::json;
@@ -1428,6 +1431,24 @@ fn run_resume_command(
         | SlashCommand::Failover { .. }
         | SlashCommand::GenerateImage { .. }
         | SlashCommand::Theme { .. }
+        | SlashCommand::SemanticSearch { .. }
+        | SlashCommand::Docker { .. }
+        | SlashCommand::Test { .. }
+        | SlashCommand::Git { .. }
+        | SlashCommand::Refactor { .. }
+        | SlashCommand::Screenshot
+        | SlashCommand::Db { .. }
+        | SlashCommand::Security { .. }
+        | SlashCommand::Api { .. }
+        | SlashCommand::Docs { .. }
+        | SlashCommand::Scaffold { .. }
+        | SlashCommand::Perf { .. }
+        | SlashCommand::Debug { .. }
+        | SlashCommand::Voice { .. }
+        | SlashCommand::Collab { .. }
+        | SlashCommand::Changelog
+        | SlashCommand::Env { .. }
+        | SlashCommand::Hub { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -1440,6 +1461,13 @@ fn run_resume_command(
         }
         SlashCommand::Configure { args } => {
             let output = render_configure_static(args.as_deref());
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(output),
+            })
+        }
+        SlashCommand::Language { lang } => {
+            let output = run_language_command_static(lang.as_deref());
             Ok(ResumeCommandOutcome {
                 session: session.clone(),
                 message: Some(output),
@@ -2559,6 +2587,64 @@ impl LiveCli {
             SlashCommand::Undo => {
                 // Undo is interactive (stdin prompts) — not suitable for TUI.
                 ("Use /undo in non-TUI mode (it requires interactive confirmation).".to_string(), false)
+            }
+            SlashCommand::SemanticSearch { args } => {
+                (self.run_semantic_search(args.as_deref()), false)
+            }
+            SlashCommand::Docker { action } => {
+                (Self::run_docker_command(action.as_deref()), false)
+            }
+            SlashCommand::Test { action } => {
+                (self.run_test_command(action.as_deref()), false)
+            }
+            SlashCommand::Git { action } => {
+                (self.run_git_command(action.as_deref()), false)
+            }
+            SlashCommand::Refactor { action } => {
+                (self.run_refactor_command(action.as_deref()), false)
+            }
+            SlashCommand::Screenshot => {
+                (self.run_screenshot_command(), false)
+            }
+            SlashCommand::Db { action } => {
+                (self.run_db_command(action.as_deref()), false)
+            }
+            SlashCommand::Security { action } => {
+                (self.run_security_command(action.as_deref()), false)
+            }
+            SlashCommand::Api { action } => {
+                (self.run_api_command(action.as_deref()), false)
+            }
+            SlashCommand::Docs { action } => {
+                (self.run_docs_command(action.as_deref()), false)
+            }
+            // Features 13-17, 19-20 — forward to same handlers as non-TUI path
+            SlashCommand::Scaffold { action } => {
+                (self.run_scaffold_command(action.as_deref()), false)
+            }
+            SlashCommand::Perf { action } => {
+                (self.run_perf_command(action.as_deref()), false)
+            }
+            SlashCommand::Debug { action } => {
+                (self.run_debug_command(action.as_deref()), false)
+            }
+            SlashCommand::Voice { action } => {
+                (Self::run_voice_command(action.as_deref()), false)
+            }
+            SlashCommand::Collab { action } => {
+                (Self::run_collab_command(action.as_deref()), false)
+            }
+            SlashCommand::Changelog => {
+                (self.run_changelog_command(), false)
+            }
+            SlashCommand::Env { action } => {
+                (self.run_env_command(action.as_deref()), false)
+            }
+            SlashCommand::Hub { action } => {
+                (self.run_hub_command(action.as_deref()), false)
+            }
+            SlashCommand::Language { lang } => {
+                (self.run_language_command(lang.as_deref()), false)
             }
             _ => {
                 ("Command not available in TUI mode.".to_string(), false)
@@ -3720,6 +3806,91 @@ impl LiveCli {
             }
             SlashCommand::Theme { action } => {
                 println!("{}", run_theme_command(action.as_deref(), None));
+                false
+            }
+            SlashCommand::SemanticSearch { args } => {
+                println!("{}", self.run_semantic_search(args.as_deref()));
+                false
+            }
+            SlashCommand::Docker { action } => {
+                println!("{}", Self::run_docker_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Test { action } => {
+                println!("{}", self.run_test_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Git { action } => {
+                println!("{}", self.run_git_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Refactor { action } => {
+                println!("{}", self.run_refactor_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Screenshot => {
+                println!("{}", self.run_screenshot_command());
+                false
+            }
+            SlashCommand::Db { action } => {
+                println!("{}", self.run_db_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Security { action } => {
+                println!("{}", self.run_security_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Api { action } => {
+                println!("{}", self.run_api_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Docs { action } => {
+                println!("{}", self.run_docs_command(action.as_deref()));
+                false
+            }
+            // Feature 13 — project scaffolding
+            SlashCommand::Scaffold { action } => {
+                println!("{}", self.run_scaffold_command(action.as_deref()));
+                false
+            }
+            // Feature 14 — performance profiling
+            SlashCommand::Perf { action } => {
+                println!("{}", self.run_perf_command(action.as_deref()));
+                false
+            }
+            // Feature 15 — debugging integration
+            SlashCommand::Debug { action } => {
+                println!("{}", self.run_debug_command(action.as_deref()));
+                false
+            }
+            // Feature 16 — voice input (placeholder)
+            SlashCommand::Voice { action } => {
+                println!("{}", Self::run_voice_command(action.as_deref()));
+                false
+            }
+            // Feature 17 — collaboration (placeholder)
+            SlashCommand::Collab { action } => {
+                println!("{}", Self::run_collab_command(action.as_deref()));
+                false
+            }
+            // Feature 19 — changelog generator
+            SlashCommand::Changelog => {
+                println!("{}", self.run_changelog_command());
+                false
+            }
+            // Feature 20 — environment manager
+            SlashCommand::Env { action } => {
+                println!("{}", self.run_env_command(action.as_deref()));
+                false
+            }
+            // AnvilHub marketplace
+            SlashCommand::Hub { action } => {
+                println!("{}", self.run_hub_command(action.as_deref()));
+                false
+            }
+            // i18n language switcher
+            SlashCommand::Language { lang } => {
+                println!("{}", self.run_language_command(lang.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5114,6 +5285,1809 @@ impl LiveCli {
         }
     }
 
+    // ─── Feature 3: Semantic Code Search ─────────────────────────────────────
+
+    fn run_semantic_search(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /semantic-search <query>               Search all symbol types",
+                "  /semantic-search <q> --type fn         Filter to function definitions",
+                "  /semantic-search <q> --type class      Filter to class definitions",
+                "  /semantic-search <q> --type struct     Filter to struct definitions",
+                "  /semantic-search <q> --type import     Filter to import statements",
+                "  /semantic-search <q> --lang <ext>      Limit to file extension (rs, ts, py…)",
+            ]
+            .join("\n");
+        }
+
+        // Parse --type and --lang flags out of args
+        let (query, symbol_filter, lang_filter) = parse_semantic_search_args(args);
+
+        if query.is_empty() {
+            return "Error: provide a search query. Run `/semantic-search help` for usage.".to_string();
+        }
+
+        // Build per-type regex patterns for common languages
+        let patterns: &[(&str, &str, &str)] = &[
+            ("fn",     "function",  r"(^|\s)(fn|function|def|func)\s+\w*"),
+            ("class",  "class",     r"(^|\s)(class|interface|trait|abstract class)\s+\w*"),
+            ("struct", "struct",    r"(^|\s)(struct|type|record|data class)\s+\w*"),
+            ("import", "import",    r"(^|\s)(import|use |require|from .+ import|#include)\s+\w*"),
+        ];
+
+        let cwd = env::current_dir().unwrap_or_default();
+        let mut sections: Vec<String> = Vec::new();
+
+        for (type_key, type_label, base_pattern) in patterns {
+            // Apply type filter
+            if let Some(ref filter) = symbol_filter {
+                if filter != type_key {
+                    continue;
+                }
+            }
+
+            // Build combined pattern: base pattern AND query somewhere on the line
+            let combined = format!("(?i)(?=.*{})(?=.*{})", regex_escape(&query), base_pattern);
+
+            let glob_arg = lang_filter
+                .as_deref()
+                .map(|ext| format!("*.{ext}"))
+                .unwrap_or_else(|| "*.{{rs,ts,tsx,js,py,go,java,cpp,c,h}}".to_string());
+
+            let rg_result = Command::new("rg")
+                .args([
+                    "--color=never",
+                    "--no-heading",
+                    "-n",
+                    "--glob",
+                    &glob_arg,
+                    "--pcre2",
+                    &combined,
+                ])
+                .current_dir(&cwd)
+                .output();
+
+            // Fall back to a simpler two-pass approach if pcre2 unavailable
+            let lines: Vec<String> = match rg_result {
+                Ok(out) if out.status.success() || out.status.code() == Some(1) => {
+                    String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .map(ToOwned::to_owned)
+                        .collect()
+                }
+                _ => {
+                    // Simple fallback: grep for query text across files matching base pattern
+                    let simple_pat = format!("(?i){}", regex_escape(&query));
+                    let fallback = Command::new("rg")
+                        .args([
+                            "--color=never",
+                            "--no-heading",
+                            "-n",
+                            "--glob",
+                            &glob_arg,
+                            &simple_pat,
+                        ])
+                        .current_dir(&cwd)
+                        .output()
+                        .unwrap_or_else(|_| std::process::Output {
+                            status: std::process::ExitStatus::default(),
+                            stdout: vec![],
+                            stderr: vec![],
+                        });
+                    String::from_utf8_lossy(&fallback.stdout)
+                        .lines()
+                        .map(ToOwned::to_owned)
+                        .collect()
+                }
+            };
+
+            if !lines.is_empty() {
+                let mut section = format!("{type_label} definitions ({} results)", lines.len());
+                for line in lines.iter().take(20) {
+                    section.push('\n');
+                    section.push_str("  ");
+                    section.push_str(line);
+                }
+                if lines.len() > 20 {
+                    section.push_str(&format!("\n  … and {} more", lines.len() - 20));
+                }
+                sections.push(section);
+            }
+        }
+
+        if sections.is_empty() {
+            format!("No symbol matches found for: {query}")
+        } else {
+            format!("Semantic search: {query}\n\n{}", sections.join("\n\n"))
+        }
+    }
+
+    // ─── Feature 4: Docker / Container Awareness ──────────────────────────────
+
+    fn run_docker_command(args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        match args {
+            "" | "help" => [
+                "Usage:",
+                "  /docker ps                   List running containers",
+                "  /docker logs <container>     Show last 50 lines of container logs",
+                "  /docker compose              Show docker-compose services (if present)",
+                "  /docker build                Build image from Dockerfile in current directory",
+            ]
+            .join("\n"),
+
+            "ps" => run_docker_ps(),
+            "compose" => run_docker_compose_services(),
+            "build" => run_docker_build(),
+            s if s.starts_with("logs ") => {
+                let container = s["logs ".len()..].trim();
+                if container.is_empty() {
+                    "Usage: /docker logs <container>".to_string()
+                } else {
+                    run_docker_logs(container)
+                }
+            }
+            other => format!(
+                "Unknown docker sub-command: {other}\nRun `/docker help` for usage."
+            ),
+        }
+    }
+
+    // ─── Feature 5: Test Generation ───────────────────────────────────────────
+
+    fn run_test_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /test generate <file>   Analyse a source file and generate unit tests",
+                "  /test run               Run the project test suite",
+                "  /test coverage          Run the test suite and show coverage summary",
+            ]
+            .join("\n");
+        }
+
+        if args == "run" {
+            return run_test_suite(false);
+        }
+
+        if args == "coverage" {
+            return run_test_suite(true);
+        }
+
+        if let Some(file) = args.strip_prefix("generate ") {
+            let file = file.trim();
+            if file.is_empty() {
+                return "Usage: /test generate <file>".to_string();
+            }
+            let path = PathBuf::from(file);
+            let source = match fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(e) => return format!("Cannot read {file}: {e}"),
+            };
+            let prompt = format!(
+                "You are /test generate. Analyse the following source file and produce a comprehensive unit-test suite for it.\n\
+                 - Follow the testing idioms and conventions of the language detected.\n\
+                 - Cover edge cases, error paths, and happy paths.\n\
+                 - Output only the test file content, properly formatted.\n\
+                 - Suggest the filename to save the tests to.\n\n\
+                 Source file: {file}\n\n```\n{source}\n```",
+                source = truncate_for_prompt(&source, 12_000),
+            );
+            match self.run_internal_prompt_text(&prompt, false) {
+                Ok(result) => format!("Generated tests for {file}:\n\n{result}"),
+                Err(e) => format!("test generate failed: {e}"),
+            }
+        } else {
+            format!("Unknown /test sub-command: {args}\nRun `/test help` for usage.")
+        }
+    }
+
+    // ─── Feature 6: Advanced Git ──────────────────────────────────────────────
+
+    fn run_git_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /git rebase                  Interactive rebase assistant (AI-guided)",
+                "  /git conflicts               Detect and explain merge conflicts",
+                "  /git cherry-pick <sha>       Cherry-pick assistant",
+                "  /git stash                   Show stash list",
+                "  /git stash list              Show stash list",
+                "  /git stash pop               Pop the top stash",
+                "  /git stash drop [<ref>]      Drop a stash entry",
+            ]
+            .join("\n");
+        }
+
+        if args == "rebase" {
+            return self.run_git_rebase_assistant();
+        }
+
+        if args == "conflicts" {
+            return self.run_git_conflicts();
+        }
+
+        if args.starts_with("cherry-pick") {
+            let sha = args["cherry-pick".len()..].trim();
+            return self.run_git_cherry_pick(sha);
+        }
+
+        if args == "stash" || args == "stash list" {
+            return run_git_stash_list();
+        }
+
+        if args == "stash pop" {
+            return run_git_stash_op(&["stash", "pop"]);
+        }
+
+        if let Some(rest) = args.strip_prefix("stash drop") {
+            let stash_ref = rest.trim();
+            if stash_ref.is_empty() {
+                return run_git_stash_op(&["stash", "drop"]);
+            }
+            return run_git_stash_op(&["stash", "drop", stash_ref]);
+        }
+
+        format!("Unknown /git sub-command: {args}\nRun `/git help` for usage.")
+    }
+
+    fn run_git_rebase_assistant(&self) -> String {
+        let log = match git_output(&["log", "--oneline", "-20"]) {
+            Ok(s) => s,
+            Err(e) => return format!("git log failed: {e}"),
+        };
+        let prompt = format!(
+            "You are /git rebase assistant. Summarise the following recent commits and suggest \
+             which ones would benefit from being squashed, reordered, or dropped during an \
+             interactive rebase. Provide the exact git rebase -i command to run and explain \
+             each recommended action.\n\nRecent commits:\n{log}"
+        );
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => result,
+            Err(e) => format!("git rebase assistant failed: {e}"),
+        }
+    }
+
+    fn run_git_conflicts(&self) -> String {
+        // Find files with conflict markers
+        let conflict_check = Command::new("git")
+            .args(["diff", "--name-only", "--diff-filter=U"])
+            .current_dir(env::current_dir().unwrap_or_default())
+            .output();
+
+        let conflict_files = match conflict_check {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            Err(e) => return format!("git diff failed: {e}"),
+        };
+
+        if conflict_files.is_empty() {
+            return "No merge conflicts detected in the working tree.".to_string();
+        }
+
+        let file_list: Vec<&str> = conflict_files.lines().collect();
+        let mut snippets = Vec::new();
+
+        for file in file_list.iter().take(5) {
+            if let Ok(content) = fs::read_to_string(file) {
+                let conflict_section: String = content
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, line)| {
+                        line.starts_with("<<<<<<<")
+                            || line.starts_with("=======")
+                            || line.starts_with(">>>>>>>")
+                    })
+                    .map(|(i, line)| format!("  L{}: {line}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !conflict_section.is_empty() {
+                    snippets.push(format!("{file}:\n{conflict_section}"));
+                }
+            }
+        }
+
+        let summary = snippets.join("\n\n");
+        let prompt = format!(
+            "You are /git conflicts. Explain the following merge conflicts and recommend \
+             the best resolution strategy for each one. Be specific about which side (ours/theirs) \
+             to keep or how to manually combine them.\n\nConflicted files:\n{}\n\nConflict markers:\n{}",
+            file_list.join(", "),
+            summary
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => format!(
+                "Merge conflicts detected in: {}\n\n{result}",
+                file_list.join(", ")
+            ),
+            Err(e) => format!("conflict analysis failed: {e}"),
+        }
+    }
+
+    fn run_git_cherry_pick(&self, sha: &str) -> String {
+        if sha.is_empty() {
+            return "Usage: /git cherry-pick <sha>".to_string();
+        }
+        let show = match git_output(&["show", "--stat", sha]) {
+            Ok(s) => s,
+            Err(e) => return format!("git show {sha} failed: {e}"),
+        };
+        let prompt = format!(
+            "You are /git cherry-pick assistant. The user wants to cherry-pick commit {sha}.\n\
+             Summarise what this commit does, flag any risks (e.g. conflicts, dependency on \
+             prior commits), and provide the exact command to run.\n\nCommit info:\n{show}"
+        );
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => result,
+            Err(e) => format!("cherry-pick assistant failed: {e}"),
+        }
+    }
+
+    // ─── Feature 7: Refactoring Tools ─────────────────────────────────────────
+
+    fn run_refactor_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /refactor rename <old> <new>        Rename symbol across the codebase",
+                "  /refactor extract <file> <lines>    Extract lines to a new function",
+                "  /refactor move <source> <dest>      Move code between files",
+            ]
+            .join("\n");
+        }
+
+        if let Some(rest) = args.strip_prefix("rename ") {
+            let mut parts = rest.splitn(2, ' ');
+            let old = parts.next().unwrap_or("").trim();
+            let new = parts.next().unwrap_or("").trim();
+            if old.is_empty() || new.is_empty() {
+                return "Usage: /refactor rename <old> <new>".to_string();
+            }
+            return self.run_refactor_rename(old, new);
+        }
+
+        if let Some(rest) = args.strip_prefix("extract ") {
+            let mut parts = rest.splitn(2, ' ');
+            let file = parts.next().unwrap_or("").trim();
+            let lines = parts.next().unwrap_or("").trim();
+            if file.is_empty() {
+                return "Usage: /refactor extract <file> <line-range>".to_string();
+            }
+            return self.run_refactor_extract(file, lines);
+        }
+
+        if let Some(rest) = args.strip_prefix("move ") {
+            let mut parts = rest.splitn(2, ' ');
+            let source = parts.next().unwrap_or("").trim();
+            let dest = parts.next().unwrap_or("").trim();
+            if source.is_empty() || dest.is_empty() {
+                return "Usage: /refactor move <source> <dest>".to_string();
+            }
+            return self.run_refactor_move(source, dest);
+        }
+
+        format!("Unknown /refactor sub-command: {args}\nRun `/refactor help` for usage.")
+    }
+
+    fn run_refactor_rename(&self, old: &str, new: &str) -> String {
+        // Count occurrences first so the user can confirm before Anvil acts
+        let count_output = Command::new("rg")
+            .args(["--color=never", "--count-matches", old])
+            .current_dir(env::current_dir().unwrap_or_default())
+            .output();
+
+        let occurrence_info = match count_output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if text.is_empty() {
+                    format!("Symbol `{old}` not found in the workspace.")
+                } else {
+                    let total: usize = text
+                        .lines()
+                        .filter_map(|l| l.split(':').last().and_then(|n| n.trim().parse::<usize>().ok()))
+                        .sum();
+                    format!("Found {total} occurrences of `{old}` across:\n{text}")
+                }
+            }
+            Err(_) => format!("ripgrep not available; cannot count occurrences of `{old}`"),
+        };
+
+        let prompt = format!(
+            "You are /refactor rename. The user wants to rename `{old}` to `{new}` across the codebase.\n\
+             Provide step-by-step instructions including:\n\
+             1. Which files to update and why.\n\
+             2. Any identifier collisions or naming conflicts to watch for.\n\
+             3. The exact rg/sed commands to perform the rename safely.\n\
+             4. Any follow-up changes (e.g. tests, docs, config files).\n\n\
+             Occurrence summary:\n{occurrence_info}"
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => format!("Refactor rename `{old}` -> `{new}`\n\n{occurrence_info}\n\n{result}"),
+            Err(e) => format!("refactor rename failed: {e}"),
+        }
+    }
+
+    fn run_refactor_extract(&self, file: &str, lines: &str) -> String {
+        let source = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(e) => return format!("Cannot read {file}: {e}"),
+        };
+
+        let (start, end) = parse_line_range(lines);
+        let selected: String = source
+            .lines()
+            .enumerate()
+            .filter(|(i, _)| {
+                let lineno = i + 1;
+                lineno >= start && (end == 0 || lineno <= end)
+            })
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if selected.is_empty() {
+            return format!("No lines selected in {file} for range `{lines}`.");
+        }
+
+        let prompt = format!(
+            "You are /refactor extract. The user wants to extract lines {lines} from `{file}` into a new function.\n\
+             Analyse the selected code and provide:\n\
+             1. A suggested function name and signature (infer parameters from free variables).\n\
+             2. The complete extracted function definition.\n\
+             3. The call-site replacement snippet.\n\
+             4. Any considerations about scope, return values, or side effects.\n\n\
+             Selected code:\n```\n{selected}\n```"
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => format!("Extract function from {file} lines {lines}:\n\n{result}"),
+            Err(e) => format!("refactor extract failed: {e}"),
+        }
+    }
+
+    fn run_refactor_move(&self, source: &str, dest: &str) -> String {
+        let source_content = match fs::read_to_string(source) {
+            Ok(s) => s,
+            Err(e) => return format!("Cannot read {source}: {e}"),
+        };
+        let dest_exists = fs::metadata(dest).is_ok();
+        let dest_preview = if dest_exists {
+            fs::read_to_string(dest)
+                .map(|s| format!("Destination file exists:\n```\n{}\n```", truncate_for_prompt(&s, 4_000)))
+                .unwrap_or_default()
+        } else {
+            format!("Destination file `{dest}` does not yet exist (will be created).")
+        };
+
+        let prompt = format!(
+            "You are /refactor move. The user wants to move code from `{source}` to `{dest}`.\n\
+             Provide:\n\
+             1. What to move and what to keep in the source file.\n\
+             2. How to update imports/exports/use declarations on both sides.\n\
+             3. The exact file edits needed.\n\
+             4. Any circular dependency risks.\n\n\
+             Source file ({source}):\n```\n{src}\n```\n\n{dest_preview}",
+            src = truncate_for_prompt(&source_content, 6_000),
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => format!("Refactor move `{source}` -> `{dest}`:\n\n{result}"),
+            Err(e) => format!("refactor move failed: {e}"),
+        }
+    }
+
+    // ─── Features 8-12 ───────────────────────────────────────────────────────
+
+    // -----------------------------------------------------------------------
+    // Feature 8 — Screenshot / clipboard image input
+    // -----------------------------------------------------------------------
+
+    /// `/screenshot` — capture screen via OS tool, inject as vision content block.
+    fn run_screenshot_command(&self) -> String {
+        let tmpdir = std::env::temp_dir();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let tmp_path = tmpdir.join(format!("anvil_screenshot_{ts}.png"));
+
+        let capture_result = if cfg!(target_os = "macos") {
+            Command::new("screencapture")
+                .args(["-i", "-x", tmp_path.to_str().unwrap_or("")])
+                .status()
+        } else {
+            Command::new("scrot")
+                .args(["-s", tmp_path.to_str().unwrap_or("")])
+                .status()
+                .or_else(|_| Command::new("import").arg(tmp_path.to_str().unwrap_or("")).status())
+        };
+
+        match capture_result {
+            Err(e) => return format!(
+                "Screenshot capture failed: {e}\n                 Install screencapture (macOS), scrot (Linux), or ImageMagick."
+            ),
+            Ok(s) if !s.success() => {
+                return "Screenshot cancelled or capture tool returned an error.".to_string();
+            }
+            Ok(_) => {}
+        }
+
+        if !tmp_path.exists() {
+            return "Screenshot cancelled (no file written).".to_string();
+        }
+
+        let result = file_drop::process_file(&tmp_path);
+        let _ = fs::remove_file(&tmp_path);
+
+        if result.blocks.is_empty() {
+            return format!(
+                "Screenshot captured but could not be processed: {}",
+                result.notice
+            );
+        }
+
+        format!(
+            "Screenshot ready ({} block(s) will be included in the next message).\n             Type your question and press Enter.\n\n{}",
+            result.blocks.len(),
+            result.notice,
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature 9 — Database tools
+    // -----------------------------------------------------------------------
+
+    /// `/db [connect <url>|schema|query <sql>|migrate]`
+    fn run_db_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "help" => [
+                "Database tools",
+                "",
+                "  /db connect <url>   Probe a database connection",
+                "  /db schema          Inspect schema files in the project",
+                "  /db query <sql>     Analyse SQL with AI (performance, security)",
+                "  /db migrate         Detect schema drift and suggest migrations",
+                "",
+                "Supported URL prefixes: postgres://, mysql://, sqlite://",
+            ]
+            .join("\n"),
+
+            "connect" => {
+                if rest.is_empty() { return "Usage: /db connect <url>".to_string(); }
+                let driver = if rest.starts_with("postgres") {
+                    "psql"
+                } else if rest.starts_with("mysql") {
+                    "mysql"
+                } else if rest.starts_with("sqlite") {
+                    "sqlite3"
+                } else {
+                    return format!(
+                        "Unsupported scheme: {rest}\nSupported: postgres://, mysql://, sqlite://"
+                    );
+                };
+                match Command::new(driver).arg("--version").output() {
+                    Err(_) => format!(
+                        "Driver `{driver}` not found on PATH.\nInstall it then retry: /db connect {rest}"
+                    ),
+                    Ok(_) => format!(
+                        "Driver `{driver}` is available.\nURL: {rest}\n\nNext: /db schema  or  /db query <sql>"
+                    ),
+                }
+            }
+
+            "schema" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let found: Vec<String> = [
+                    "prisma/schema.prisma", "schema.prisma",
+                    "knexfile.js", "knexfile.ts", "database.yml", "db/schema.rb",
+                ]
+                .iter()
+                .filter(|c| cwd.join(c).exists())
+                .map(|c| c.to_string())
+                .collect();
+
+                if found.is_empty() {
+                    return "No schema files found (prisma/schema.prisma, knexfile, etc.).".to_string();
+                }
+
+                let mut lines = vec![format!("Schema files ({})\n", found.len())];
+                for f in &found {
+                    lines.push(format!("  {f}"));
+                    if let Ok(content) = fs::read_to_string(cwd.join(f.as_str())) {
+                        for pl in content.lines()
+                            .filter(|l| !l.trim().is_empty()
+                                && !l.trim_start().starts_with("//")
+                                && !l.trim_start().starts_with('#'))
+                            .take(20)
+                        {
+                            lines.push(format!("    {pl}"));
+                        }
+                    }
+                    lines.push(String::new());
+                }
+                lines.push("Tip: /db migrate for drift analysis.".to_string());
+                lines.join("\n")
+            }
+
+            "query" => {
+                if rest.is_empty() { return "Usage: /db query <sql>".to_string(); }
+                let prompt = format!(
+                    "Analyse this SQL query:\n```sql\n{rest}\n```\n\n                     1. Validate syntax.\n                     2. Suggest performance improvements (indexes, rewrites).\n                     3. Identify SQL injection risks in a dynamic version.\n                     4. Explain what the query returns in plain English."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("Query analysis:\n\n{r}"),
+                    Err(e) => format!("db query failed: {e}"),
+                }
+            }
+
+            "migrate" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let schema_path = ["prisma/schema.prisma", "schema.prisma"]
+                    .iter()
+                    .find(|p| cwd.join(p).exists())
+                    .copied();
+
+                let schema_info = if let Some(path) = schema_path {
+                    fs::read_to_string(cwd.join(path))
+                        .map(|s| format!(
+                            "Prisma schema (`{path}`):\n```prisma\n{}\n```",
+                            truncate_for_prompt(&s, 8_000)
+                        ))
+                        .unwrap_or_else(|_| "Could not read schema.".to_string())
+                } else {
+                    let mut files = Vec::new();
+                    for dir in &["migrations", "db/migrations", "prisma/migrations"] {
+                        if let Ok(rd) = fs::read_dir(cwd.join(dir)) {
+                            for e in rd.flatten() {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                if name.ends_with(".sql") || name.ends_with(".ts") {
+                                    files.push(format!("{dir}/{name}"));
+                                }
+                            }
+                        }
+                    }
+                    if files.is_empty() {
+                        return "No schema or migration files found.".to_string();
+                    }
+                    files.sort();
+                    format!(
+                        "Migration files:\n{}",
+                        files.iter().map(|f| format!("  {f}")).collect::<Vec<_>>().join("\n")
+                    )
+                };
+
+                let prompt = format!(
+                    "Analyse for schema drift and suggest migrations.\n\n{schema_info}\n\n                     1. Summarise models/tables.\n                     2. Identify drift (missing indexes, bad nullability, un-normalised relations).\n                     3. Suggest concrete migration steps.\n                     4. Highlight breaking changes."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("Migration analysis:\n\n{r}"),
+                    Err(e) => format!("db migrate failed: {e}"),
+                }
+            }
+
+            other => format!("Unknown /db sub-command: {other}\nRun `/db help` for usage."),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature 10 — Security scanning
+    // -----------------------------------------------------------------------
+
+    /// `/security [scan|secrets|deps|report]`
+    fn run_security_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        match sub {
+            "" | "help" => [
+                "Security scanning",
+                "",
+                "  /security scan     Grep project for common vulnerability patterns",
+                "  /security secrets  Detect hardcoded secrets / credentials",
+                "  /security deps     Check dependencies for known CVEs",
+                "  /security report   Combined security report",
+            ]
+            .join("\n"),
+            "scan"    => self.run_security_scan(),
+            "secrets" => self.run_security_secrets(),
+            "deps"    => self.run_security_deps(),
+            "report"  => format!(
+                "Security Report\n\nVulnerability Scan\n{}\n\nSecrets Scan\n{}\n\nDependency CVEs\n{}",
+                self.run_security_scan(),
+                self.run_security_secrets(),
+                self.run_security_deps()
+            ),
+            other => format!(
+                "Unknown /security sub-command: {other}\nRun `/security help` for usage."
+            ),
+        }
+    }
+
+    fn run_security_scan(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        let patterns: &[(&str, &str)] = &[
+            ("eval(",                   "Unsafe eval() usage"),
+            ("innerHTML",               "Potential XSS via innerHTML"),
+            ("dangerouslySetInnerHTML", "React dangerouslySetInnerHTML"),
+            ("exec(",                   "Shell exec injection risk"),
+            ("shell=True",              "Python shell=True injection risk"),
+            ("unsafe ",                 "Rust unsafe block"),
+            (".unwrap()",               "Unchecked unwrap (may panic)"),
+        ];
+        let mut findings: Vec<String> = Vec::new();
+        for (pattern, label) in patterns {
+            let out = Command::new("grep")
+                .args(["-rln",
+                    "--include=*.rs", "--include=*.ts",
+                    "--include=*.js", "--include=*.py",
+                    pattern])
+                .current_dir(&cwd)
+                .output();
+            if let Ok(o) = out {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let files: Vec<&str> = stdout.lines().take(5).collect();
+                if !files.is_empty() {
+                    findings.push(format!("[!] {label}\n    {}", files.join(", ")));
+                }
+            }
+        }
+        if findings.is_empty() {
+            "No obvious vulnerability patterns found.\n             Consider: cargo audit, npm audit, bandit, semgrep."
+                .to_string()
+        } else {
+            format!(
+                "Potential vulnerabilities ({}):\n\n{}\n\n                 These are grep-based hints — verify each finding manually.",
+                findings.len(),
+                findings.join("\n\n")
+            )
+        }
+    }
+
+    fn run_security_secrets(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        // Simple keyword patterns (avoid complex shell regex escaping issues).
+        let patterns: &[(&str, &str)] = &[
+            ("password=",               "Hardcoded password"),
+            ("secret=",                 "Hardcoded secret"),
+            ("api_key=",                "Hardcoded API key"),
+            ("BEGIN RSA PRIVATE KEY",   "RSA private key"),
+            ("BEGIN OPENSSH PRIVATE KEY", "SSH private key"),
+            ("ghp_",                    "Potential GitHub PAT"),
+        ];
+        let excludes = [
+            "--exclude-dir=.git",
+            "--exclude-dir=target",
+            "--exclude-dir=node_modules",
+            "--exclude=*.lock",
+        ];
+        let mut hits: Vec<String> = Vec::new();
+        for (pat, label) in patterns {
+            let mut cmd = Command::new("grep");
+            cmd.arg("-rnl").arg(pat);
+            for ex in &excludes { cmd.arg(ex); }
+            cmd.arg(".").current_dir(&cwd);
+            if let Ok(o) = cmd.output() {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                let files: Vec<&str> = stdout.lines().take(3).collect();
+                if !files.is_empty() {
+                    hits.push(format!("[!] {label}\n    {}", files.join(", ")));
+                }
+            }
+        }
+        if hits.is_empty() {
+            "No hardcoded secrets detected.\n             Consider: trufflehog, detect-secrets, gitleaks for deeper analysis."
+                .to_string()
+        } else {
+            format!(
+                "Potential secrets ({}):\n\n{}\n\n                 Rotate confirmed secrets and store them in environment variables / a vault.",
+                hits.len(),
+                hits.join("\n\n")
+            )
+        }
+    }
+
+    fn run_security_deps(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        let mut results: Vec<String> = Vec::new();
+
+        if cwd.join("Cargo.toml").exists() {
+            match Command::new("cargo").args(["audit", "--quiet"]).current_dir(&cwd).output() {
+                Ok(o) => {
+                    let out = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr)
+                    ).trim().to_string();
+                    results.push(format!("cargo audit:\n{}",
+                        if out.is_empty() { "No vulnerabilities found.".to_string() } else { out }
+                    ));
+                }
+                Err(_) => results.push(
+                    "cargo-audit not installed. Run: cargo install cargo-audit".to_string()
+                ),
+            }
+        }
+
+        if cwd.join("package.json").exists() {
+            match Command::new("npm").args(["audit", "--json"]).current_dir(&cwd).output() {
+                Ok(o) => {
+                    let raw = String::from_utf8_lossy(&o.stdout);
+                    let total: u32 = raw.lines()
+                        .find(|l| l.contains("\"total\""))
+                        .and_then(|l| l.chars().filter(|c| c.is_ascii_digit())
+                            .collect::<String>().parse().ok())
+                        .unwrap_or(0);
+                    results.push(if total == 0 {
+                        "npm audit: no vulnerabilities.".to_string()
+                    } else {
+                        format!("npm audit: {total} vulnerabilities. Run `npm audit fix`.")
+                    });
+                }
+                Err(_) => results.push("npm not available on PATH.".to_string()),
+            }
+        }
+
+        if cwd.join("requirements.txt").exists() || cwd.join("pyproject.toml").exists() {
+            match Command::new("pip-audit").arg("--progress-spinner=off").current_dir(&cwd).output() {
+                Ok(o) => {
+                    let out = String::from_utf8_lossy(&o.stdout).to_string();
+                    let summary = out.lines().last().unwrap_or("").trim().to_string();
+                    results.push(format!("pip-audit: {}",
+                        if summary.is_empty() { "no vulnerabilities.".to_string() } else { summary }
+                    ));
+                }
+                Err(_) => results.push(
+                    "pip-audit not installed. Run: pip install pip-audit".to_string()
+                ),
+            }
+        }
+
+        if results.is_empty() {
+            "No dependency manifests found (Cargo.toml, package.json, requirements.txt).".to_string()
+        } else {
+            results.join("\n\n")
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature 11 — API development helpers
+    // -----------------------------------------------------------------------
+
+    /// `/api [spec <file>|mock <spec>|test <url>|docs]`
+    fn run_api_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "help" => [
+                "API development helpers",
+                "",
+                "  /api spec <file>       Generate OpenAPI spec from a source file",
+                "  /api mock <spec>       Start a mock server from an OpenAPI spec",
+                "  /api test <url>        Test an API endpoint via curl",
+                "  /api docs              Generate API docs for the project",
+            ]
+            .join("\n"),
+
+            "spec" => {
+                if rest.is_empty() { return "Usage: /api spec <file>".to_string(); }
+                let source = match fs::read_to_string(rest) {
+                    Ok(s) => s,
+                    Err(e) => return format!("Cannot read {rest}: {e}"),
+                };
+                let prompt = format!(
+                    "Generate an OpenAPI 3.1 specification (YAML) for this source file.\n                     Extract all routes, HTTP methods, request/response schemas, parameters.\n                     File: {rest}\n\n```\n{}\n```",
+                    truncate_for_prompt(&source, 8_000)
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("OpenAPI spec for {rest}:\n\n{r}"),
+                    Err(e) => format!("api spec failed: {e}"),
+                }
+            }
+
+            "mock" => {
+                if rest.is_empty() { return "Usage: /api mock <spec-file>".to_string(); }
+                if !std::path::Path::new(rest).exists() {
+                    return format!("Spec file not found: {rest}");
+                }
+                for (tool, tool_args) in &[
+                    ("prism", vec!["mock", rest]),
+                    ("json-server", vec!["--watch", rest]),
+                ] {
+                    if let Ok(mut child) = Command::new(tool).args(tool_args).spawn() {
+                        thread::sleep(Duration::from_millis(500));
+                        if child.try_wait().map(|s| s.is_none()).unwrap_or(false) {
+                            return format!(
+                                "Mock server started with `{tool}`.\nSpec: {rest}\nCtrl+C to stop."
+                            );
+                        }
+                    }
+                }
+                format!(
+                    "No mock server tool found. Install:\n                     - npm install -g @stoplight/prism-cli\n                     - npm install -g json-server\n\nRetry: /api mock {rest}"
+                )
+            }
+
+            "test" => {
+                if rest.is_empty() { return "Usage: /api test <url>".to_string(); }
+                match Command::new("curl")
+                    .args(["-s", "-D", "-", "-o", "/dev/null", "--max-time", "10", rest])
+                    .output()
+                {
+                    Err(e) => format!("curl failed: {e}"),
+                    Ok(o) => {
+                        let headers = String::from_utf8_lossy(&o.stdout).to_string();
+                        let status = headers.lines().next().unwrap_or("").trim().to_string();
+                        let ct = headers.lines()
+                            .find(|l| l.to_lowercase().starts_with("content-type:"))
+                            .unwrap_or("")
+                            .to_string();
+                        format!("API test: {rest}\n\nStatus: {status}\n{ct}\n\nHeaders:\n{headers}")
+                    }
+                }
+            }
+
+            "docs" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let route_dirs = [
+                    "src/routes", "routes", "src/api", "api",
+                    "src/controllers", "controllers",
+                ];
+                let mut route_files: Vec<String> = Vec::new();
+                for dir in &route_dirs {
+                    if let Ok(entries) = fs::read_dir(cwd.join(dir)) {
+                        for e in entries.flatten() {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if name.ends_with(".ts") || name.ends_with(".js") || name.ends_with(".rs") {
+                                route_files.push(format!("{dir}/{name}"));
+                            }
+                        }
+                    }
+                }
+                if route_files.is_empty() {
+                    return "No route files found. Use `/api spec <file>` to target one directly.".to_string();
+                }
+                let file_list = route_files.iter().map(|f| format!("  {f}")).collect::<Vec<_>>().join("\n");
+                let prompt = format!(
+                    "Generate Markdown API documentation.\nRoute files:\n{file_list}\n\n                     For each endpoint: method, path, description, params, response, auth.\n                     Include a table of contents."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("API documentation:\n\n{r}"),
+                    Err(e) => format!("api docs failed: {e}"),
+                }
+            }
+
+            other => format!("Unknown /api sub-command: {other}\nRun `/api help` for usage."),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature 12 — Documentation generation
+    // -----------------------------------------------------------------------
+
+    /// `/docs [generate|readme|architecture|changelog]`
+    fn run_docs_command(&self, args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        match sub {
+            "" | "help" => [
+                "Documentation generation",
+                "",
+                "  /docs generate      Auto-generate project documentation",
+                "  /docs readme        Generate or update README.md",
+                "  /docs architecture  Generate architecture diagram description",
+                "  /docs changelog     Generate changelog from git history",
+            ]
+            .join("\n"),
+            "generate"     => self.run_docs_generate(),
+            "readme"       => self.run_docs_readme(),
+            "architecture" => self.run_docs_architecture(),
+            "changelog"    => self.run_docs_changelog(),
+            other => format!("Unknown /docs sub-command: {other}\nRun `/docs help` for usage."),
+        }
+    }
+
+    fn run_docs_generate(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        let mut stack = Vec::new();
+        if cwd.join("Cargo.toml").exists()     { stack.push("Rust/Cargo"); }
+        if cwd.join("package.json").exists()   { stack.push("Node.js/npm"); }
+        if cwd.join("pyproject.toml").exists() { stack.push("Python/pyproject"); }
+        let tech = if stack.is_empty() { "unknown".to_string() } else { stack.join(", ") };
+        let prompt = format!(
+            "Generate comprehensive documentation for a {tech} project at `{cwd}`.\n             Produce: 1. Overview  2. Installation  3. Configuration               4. Usage examples  5. Dev workflow  6. Contributing\nOutput as Markdown.",
+            cwd = cwd.display()
+        );
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(r) => format!("Generated documentation:\n\n{r}"),
+            Err(e) => format!("docs generate failed: {e}"),
+        }
+    }
+
+    fn run_docs_readme(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        let existing = ["README.md", "readme.md", "README.rst"]
+            .iter()
+            .find_map(|n| fs::read_to_string(cwd.join(n)).ok());
+        let project_name = ["Cargo.toml", "package.json", "pyproject.toml"]
+            .iter()
+            .find_map(|f| {
+                let content = fs::read_to_string(cwd.join(f)).ok()?;
+                content.lines().find_map(|l| {
+                    let l = l.trim();
+                    if l.starts_with("name") {
+                        let val = l.split(['=', ':'])
+                            .nth(1)?
+                            .trim()
+                            .trim_matches(['"', '\'', ',', ' ']);
+                        if !val.is_empty() && val != "{" {
+                            return Some(val.to_string());
+                        }
+                    }
+                    None
+                })
+            })
+            .unwrap_or_else(|| {
+                cwd.file_name().unwrap_or_default().to_string_lossy().to_string()
+            });
+        let context = match existing {
+            Some(content) => format!(
+                "Update this README:\n```markdown\n{}\n```\nImprove it with:",
+                truncate_for_prompt(&content, 4_000)
+            ),
+            None => format!("Create a README for `{project_name}` with:"),
+        };
+        let prompt = format!(
+            "{context}\n- Title and description\n- Quick start\n- Usage examples\n             - Configuration\n- Dev setup\n- License\n\nOutput only the README.md content."
+        );
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(r) => format!("README.md:\n\n{r}"),
+            Err(e) => format!("docs readme failed: {e}"),
+        }
+    }
+
+    fn run_docs_architecture(&self) -> String {
+        let cwd = env::current_dir().unwrap_or_default();
+        let mut structure = Vec::new();
+        if let Ok(entries) = fs::read_dir(&cwd) {
+            let mut sorted: Vec<_> = entries.flatten().collect();
+            sorted.sort_by_key(|e| e.file_name());
+            for e in sorted.iter().take(40) {
+                let name = e.file_name().to_string_lossy().to_string();
+                if matches!(name.as_str(), ".git"|"target"|"node_modules"|".cache"|"vendor") {
+                    continue;
+                }
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                structure.push(if is_dir { format!("  {name}/") } else { format!("  {name}") });
+            }
+        }
+        let structure_text = structure.join("\n");
+        let prompt = format!(
+            "Generate an architecture overview document.\nRoot: {cwd}\nStructure:\n{structure_text}\n\n\
+             Include: 1. Description  2. ASCII component diagram  3. Data flow\n\
+             4. Technology stack  5. Design decisions  6. Deployment topology\n\
+             Output as Markdown.",
+            cwd = cwd.display(),
+        );
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(r) => format!("Architecture overview:\n\n{r}"),
+            Err(e) => format!("docs architecture failed: {e}"),
+        }
+    }
+
+    fn run_docs_changelog(&self) -> String {
+        let git_log = Command::new("git")
+            .args(["log", "--oneline", "--no-merges", "--format=%h %ad %s", "--date=short", "-100"])
+            .output();
+        match git_log {
+            Err(e) => format!("git log failed: {e}"),
+            Ok(o) if !o.status.success() => "Not in a git repository or no commits yet.".to_string(),
+            Ok(o) => {
+                let raw = String::from_utf8_lossy(&o.stdout).to_string();
+                if raw.trim().is_empty() { return "No commits found.".to_string(); }
+                let prompt = format!(
+                    "Generate a CHANGELOG.md from this git log.\n                     Group by type and release (Keep-a-Changelog format).\n\n                     ```\n{}\n```",
+                    truncate_for_prompt(&raw, 6_000)
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("CHANGELOG.md:\n\n{r}"),
+                    Err(e) => format!("docs changelog failed: {e}"),
+                }
+            }
+        }
+    }
+    fn run_scaffold_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        const TEMPLATES: &[(&str, &str)] = &[
+            ("rust",   "Rust binary — Cargo.toml, src/main.rs, .gitignore"),
+            ("node",   "Node.js — package.json, src/index.js, .gitignore"),
+            ("python", "Python — pyproject.toml, src/__init__.py, .gitignore"),
+            ("react",  "React + Vite — package.json, src/App.tsx, Tailwind CSS"),
+            ("nextjs", "Next.js — package.json, app/page.tsx, Tailwind CSS"),
+            ("go",     "Go module — go.mod, cmd/main.go, .gitignore"),
+            ("docker", "Docker service — Dockerfile, docker-compose.yml, .env.example"),
+        ];
+
+        match sub {
+            "" | "help" => {
+                let mut lines = vec![
+                    "Usage:".to_string(),
+                    "  /scaffold new <template>   Create a project from a template".to_string(),
+                    "  /scaffold list             List available templates".to_string(),
+                    String::new(),
+                    "Templates:".to_string(),
+                ];
+                for (name, desc) in TEMPLATES {
+                    lines.push(format!("  {name:<10}  {desc}"));
+                }
+                lines.join("\n")
+            }
+            "list" => {
+                let mut lines = vec!["Available templates:".to_string()];
+                for (name, desc) in TEMPLATES {
+                    lines.push(format!("  {name:<10}  {desc}"));
+                }
+                lines.join("\n")
+            }
+            "new" => {
+                let template = rest;
+                if template.is_empty() {
+                    return "Usage: /scaffold new <template>\n  Run /scaffold list for available templates.".to_string();
+                }
+                if !TEMPLATES.iter().any(|(n, _)| *n == template) {
+                    let names: Vec<&str> = TEMPLATES.iter().map(|(n, _)| *n).collect();
+                    return format!(
+                        "Unknown template: {template}\n  Available: {}\n  Run /scaffold list for details.",
+                        names.join(", ")
+                    );
+                }
+                let cwd = env::current_dir().unwrap_or_default();
+                let prompt = format!(
+                    "You are /scaffold. The user wants to create a new {template} project in the current directory ({cwd}).\n\
+                     Generate the complete file tree and contents for a production-ready {template} project.\n\
+                     Follow best practices:\n\
+                     - Include a .gitignore appropriate for the ecosystem.\n\
+                     - Include a minimal README.md.\n\
+                     - Include a sensible directory structure.\n\
+                     - Include linting/formatting config where standard (e.g. .eslintrc, rustfmt.toml).\n\
+                     - For compiled languages include a build script.\n\
+                     Output each file as a code block with the path as the heading.\n\
+                     After the files, list 3 next steps the developer should take.",
+                    cwd = cwd.display(),
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Scaffold: {template}\n\n{result}"),
+                    Err(e) => format!("scaffold failed: {e}"),
+                }
+            }
+            other => format!(
+                "Unknown /scaffold sub-command: {other}\n  /scaffold list   List templates\n  /scaffold new <template>   Create project"
+            ),
+        }
+    }
+
+    fn run_perf_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "help" => [
+                "Usage:",
+                "  /perf profile <command>   Profile a shell command and report timing",
+                "  /perf benchmark <file>    Analyse benchmarks in a file",
+                "  /perf flamegraph          Guide for generating a flamegraph",
+                "  /perf analyze             Analyze profiling artifacts in the workspace",
+            ].join("\n"),
+
+            "profile" => {
+                if rest.is_empty() {
+                    return "Usage: /perf profile <command>".to_string();
+                }
+                let start = std::time::Instant::now();
+                let output = Command::new("sh")
+                    .arg("-c")
+                    .arg(rest)
+                    .current_dir(env::current_dir().unwrap_or_default())
+                    .output();
+                let elapsed = start.elapsed();
+                let (stdout, stderr, exit_status) = match output {
+                    Ok(o) => (
+                        String::from_utf8_lossy(&o.stdout).trim().to_string(),
+                        String::from_utf8_lossy(&o.stderr).trim().to_string(),
+                        if o.status.success() { "success".to_string() } else {
+                            format!("exit {}", o.status.code().unwrap_or(-1))
+                        },
+                    ),
+                    Err(e) => (String::new(), e.to_string(), "error".to_string()),
+                };
+                let summary = format!(
+                    "Perf Profile\n  Command          {rest}\n  Wall time        {elapsed:.3?}\n  Status           {exit_status}"
+                );
+                let combined = format!("{summary}\n\nStdout:\n{stdout}\n\nStderr:\n{stderr}");
+                let prompt = format!(
+                    "You are /perf profile. A command was profiled.\n\
+                     Command: {rest}\nWall time: {elapsed:.3?}\nExit status: {exit_status}\n\
+                     Stdout (truncated):\n{so}\nStderr (truncated):\n{se}\n\n\
+                     Provide a brief analysis:\n\
+                     1. Is the runtime acceptable for this type of command?\n\
+                     2. What are the likely bottlenecks?\n\
+                     3. Concrete suggestions to speed it up.",
+                    so = truncate_for_prompt(&stdout, 3_000),
+                    se = truncate_for_prompt(&stderr, 1_000),
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(analysis) => format!("{combined}\n\nAnalysis:\n{analysis}"),
+                    Err(_) => combined,
+                }
+            }
+
+            "benchmark" => {
+                if rest.is_empty() {
+                    return "Usage: /perf benchmark <file>".to_string();
+                }
+                let source = match fs::read_to_string(rest) {
+                    Ok(s) => s,
+                    Err(e) => return format!("Cannot read {rest}: {e}"),
+                };
+                let prompt = format!(
+                    "You are /perf benchmark. Analyse `{rest}` for benchmark functions.\n\
+                     Source:\n```\n{}\n```\n\n\
+                     For each benchmark:\n\
+                     1. Describe what it measures.\n\
+                     2. Identify measurement pitfalls (warm-up, noise, allocations).\n\
+                     3. Suggest how to run it.\n\
+                     4. Propose improvements to the benchmark itself if any.",
+                    truncate_for_prompt(&source, 8_000),
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Benchmark analysis for {rest}:\n\n{result}"),
+                    Err(e) => format!("perf benchmark failed: {e}"),
+                }
+            }
+
+            "flamegraph" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let prompt = format!(
+                    "You are /perf flamegraph. Describe how to generate a flamegraph for the project at `{}`.\n\
+                     Provide:\n\
+                     1. Which profiling tool is best suited (cargo-flamegraph, perf + flamegraph.pl, py-spy, async-profiler, etc.).\n\
+                     2. The exact commands to install the tool and capture a profile.\n\
+                     3. How to interpret the resulting flamegraph.\n\
+                     4. Common hotspot patterns to look for.",
+                    cwd.display(),
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Flamegraph guide:\n\n{result}"),
+                    Err(e) => format!("perf flamegraph failed: {e}"),
+                }
+            }
+
+            "analyze" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let artifacts: Vec<String> = ["perf.data", "flame.svg", "flamegraph.svg", "callgrind.out", "profile.json"]
+                    .iter()
+                    .filter_map(|name| {
+                        let p = cwd.join(name);
+                        if p.exists() { Some((*name).to_string()) } else { None }
+                    })
+                    .collect();
+                let artifact_summary = if artifacts.is_empty() {
+                    "No standard profiling artifacts found in the current directory.".to_string()
+                } else {
+                    format!("Found profiling artifacts: {}", artifacts.join(", "))
+                };
+                let prompt = format!(
+                    "You are /perf analyze. {artifact_summary}\nWorking directory: {}\n\
+                     Provide guidance on:\n\
+                     1. How to interpret any discovered artifacts.\n\
+                     2. General profiling best practices for this project type.\n\
+                     3. Recommended next steps to identify performance regressions.",
+                    cwd.display(),
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Perf analysis:\n  {artifact_summary}\n\n{result}"),
+                    Err(e) => format!("perf analyze failed: {e}"),
+                }
+            }
+
+            other => format!("Unknown /perf sub-command: {other}\nRun `/perf help` for usage."),
+        }
+    }
+
+    fn run_debug_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
+        match sub {
+            "" | "help" => [
+                "Usage:",
+                "  /debug start <file>              Start debugging — show launch config",
+                "  /debug breakpoint <file:line>    Explain what to observe at a breakpoint",
+                "  /debug watch <expr>              Explain how to watch an expression",
+                "  /debug explain <error>           Explain an error with full context",
+            ]
+            .join("\n"),
+            "start" => {
+                if rest.is_empty() {
+                    return "Usage: /debug start <file>".to_string();
+                }
+                let source = fs::read_to_string(rest)
+                    .map(|s| truncate_for_prompt(&s, 6_000))
+                    .unwrap_or_else(|_| format!("<could not read {rest}>"));
+                let prompt = format!(
+                    "You are /debug start. The user wants to debug `{rest}`.\n\
+                     File contents:\n```\n{source}\n```\n\n\
+                     Provide:\n\
+                     1. The debugger to use (gdb, lldb, delve, pdb, node --inspect, etc.) and why.\n\
+                     2. A minimal launch configuration (VSCode launch.json or equivalent).\n\
+                     3. The exact command to start the debugger from the terminal.\n\
+                     4. Key entry points worth setting initial breakpoints at.\n\
+                     5. Environment variables or flags needed for debug symbols."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Debug start for {rest}:\n\n{result}"),
+                    Err(e) => format!("debug start failed: {e}"),
+                }
+            }
+            "breakpoint" => {
+                if rest.is_empty() {
+                    return "Usage: /debug breakpoint <file:line>".to_string();
+                }
+                let (file, line) = rest
+                    .rfind(':')
+                    .map_or((rest, ""), |p| (&rest[..p], &rest[p + 1..]));
+                let context_lines = if !file.is_empty() {
+                    fs::read_to_string(file)
+                        .map(|s| {
+                            let lineno: usize = line.parse().unwrap_or(0);
+                            if lineno == 0 {
+                                return truncate_for_prompt(&s, 4_000);
+                            }
+                            let start = lineno.saturating_sub(10);
+                            let end = lineno + 10;
+                            s.lines()
+                                .enumerate()
+                                .filter(|(i, _)| *i + 1 >= start && *i + 1 <= end)
+                                .map(|(i, l)| format!("{:>4} | {l}", i + 1))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_else(|_| format!("<could not read {file}>"))
+                } else {
+                    String::new()
+                };
+                let prompt = format!(
+                    "You are /debug breakpoint. The user set a breakpoint at `{rest}`.\n\
+                     Code context (lines around {line}):\n```\n{context_lines}\n```\n\n\
+                     Explain:\n\
+                     1. What program state to inspect when execution pauses here.\n\
+                     2. Which variables are in scope and expected values.\n\
+                     3. Conditions that might cause unexpected behaviour.\n\
+                     4. How to set a conditional breakpoint if useful."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Breakpoint {rest}:\n\n{result}"),
+                    Err(e) => format!("debug breakpoint failed: {e}"),
+                }
+            }
+            "watch" => {
+                if rest.is_empty() {
+                    return "Usage: /debug watch <expression>".to_string();
+                }
+                let prompt = format!(
+                    "You are /debug watch. The user wants to watch the expression: `{rest}`\n\
+                     Explain:\n\
+                     1. How to set a watchpoint in common debuggers (gdb, lldb, VSCode, pdb, delve).\n\
+                     2. What changes to the expression would trigger a break.\n\
+                     3. Data watchpoint vs expression watch vs value watch — and the difference.\n\
+                     4. Performance implications of watching this expression."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Watch `{rest}`:\n\n{result}"),
+                    Err(e) => format!("debug watch failed: {e}"),
+                }
+            }
+            "explain" => {
+                if rest.is_empty() {
+                    return "Usage: /debug explain <error message or stack trace>".to_string();
+                }
+                let session_context = recent_user_context(self.runtime.session(), 4);
+                let prompt = format!(
+                    "You are /debug explain. Analyse and explain the following error.\n\
+                     Error:\n```\n{rest}\n```\n\
+                     Recent conversation context:\n{session_context}\n\n\
+                     Provide:\n\
+                     1. Root cause — what went wrong and why.\n\
+                     2. Where in the code to look (file/function/line if determinable).\n\
+                     3. Step-by-step fix.\n\
+                     4. How to prevent this class of error in the future."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(result) => format!("Error explanation:\n\n{result}"),
+                    Err(e) => format!("debug explain failed: {e}"),
+                }
+            }
+            other => format!("Unknown /debug sub-command: {other}\nRun `/debug help` for usage."),
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_voice_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        match sub {
+            "start" => concat!(
+                "Voice input — coming soon\n\n",
+                "Voice capture requires microphone access and a speech-to-text backend.\n",
+                "Planned: /voice start  ->  capture mic input and inject as a prompt.",
+            )
+            .to_string(),
+            "stop" => "Voice input — coming soon\n\nNo active voice session to stop.".to_string(),
+            "" | "help" => [
+                "Voice input (coming soon)",
+                "",
+                "Commands:",
+                "  /voice start   Begin capturing microphone input",
+                "  /voice stop    Stop capturing and submit",
+                "",
+                "Requires a local speech-to-text engine (e.g. whisper.cpp).",
+            ]
+            .join("\n"),
+            other => format!("Unknown /voice sub-command: {other}\n  /voice start | /voice stop"),
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn run_collab_command(args: Option<&str>) -> String {
+        let sub = args.unwrap_or("").trim();
+        match sub {
+            "share" => concat!(
+                "Collaboration — coming soon\n\n",
+                "Planned: /collab share  ->  generate a shareable session ID.\n",
+                "This feature is reserved for a future release.",
+            )
+            .to_string(),
+            "join" => concat!(
+                "Collaboration — coming soon\n\n",
+                "Usage: /collab join <session-id>\n",
+                "This feature is reserved for a future release.",
+            )
+            .to_string(),
+            "" | "help" => [
+                "Collaboration (coming soon)",
+                "",
+                "Commands:",
+                "  /collab share          Share this session (generates an invite ID)",
+                "  /collab join <id>      Join another user's shared session",
+                "",
+                "Requires an AnvilHub account. Watch the changelog for availability.",
+            ]
+            .join("\n"),
+            other => {
+                format!("Unknown /collab sub-command: {other}\n  /collab share | /collab join <id>")
+            }
+        }
+    }
+
+    fn run_changelog_command(&self) -> String {
+        // Determine the last tag for the commit range.
+        let last_tag = Command::new("git")
+            .args(["describe", "--tags", "--abbrev=0"])
+            .current_dir(env::current_dir().unwrap_or_default())
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            });
+
+        let (range, range_desc) = match &last_tag {
+            Some(tag) => (format!("{tag}..HEAD"), format!("since tag `{tag}`")),
+            None => ("HEAD".to_string(), "all commits (no tags found)".to_string()),
+        };
+
+        let log = Command::new("git")
+            .args(["log", &range, "--oneline", "--no-merges"])
+            .current_dir(env::current_dir().unwrap_or_default())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|e| format!("<git log failed: {e}>"));
+
+        if log.trim().is_empty() {
+            return format!(
+                "Changelog\n  Range            {range_desc}\n  Result           No new commits since last tag."
+            );
+        }
+
+        let prompt = format!(
+            "You are /changelog. Generate a CHANGELOG.md entry from these git commits ({range_desc}).\n\
+             \n\
+             Rules:\n\
+             1. Group commits by conventional commit type:\n\
+                feat: -> New Features | fix: -> Bug Fixes | docs: -> Documentation\n\
+                style: -> Style | refactor: -> Refactoring | perf: -> Performance\n\
+                test: -> Tests | chore:/build:/ci: -> Maintenance\n\
+                Commits without a prefix -> Other Changes\n\
+             2. Format each item as: - Short human-readable description (#sha)\n\
+             3. Add a header: ## [Unreleased] - YYYY-MM-DD\n\
+             4. Keep descriptions concise but informative.\n\
+             \n\
+             Commits:\n{log}"
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(result) => format!(
+                "Changelog ({range_desc})\nCommits:\n{log}\n\n--- CHANGELOG.md entry ---\n{result}"
+            ),
+            Err(e) => format!("changelog failed: {e}"),
+        }
+    }
+
+    fn run_env_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(3, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let key = parts.next().unwrap_or("").trim();
+        let val = parts.next().unwrap_or("").trim();
+
+        match sub {
+            "" | "show" => {
+                let secret_pats = [
+                    "KEY", "SECRET", "TOKEN", "PASSWORD", "PASS", "AUTH", "CREDENTIAL", "PRIVATE",
+                ];
+                let mut vars: Vec<(String, String)> = env::vars().collect();
+                vars.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut lines = vec!["Environment variables (secrets redacted):".to_string()];
+                for (k, v) in &vars {
+                    let redact = secret_pats.iter().any(|p| k.to_uppercase().contains(p));
+                    lines.push(format!("  {k}={}", if redact { "<redacted>" } else { v }));
+                }
+                lines.push(String::new());
+                lines.push(format!("  Total: {} variables", vars.len()));
+                lines.join("\n")
+            }
+            "set" => {
+                if key.is_empty() {
+                    return "Usage: /env set <KEY> <VALUE>".to_string();
+                }
+                // Note: modifying the process env requires unsafe in Rust 1.80+.
+                // This project forbids unsafe blocks; record the intent and advise
+                // the user to use `export KEY=VALUE` in their shell instead.
+                format!(
+                    "Env set (shell-only)\n  Key              {key}\n  Value            {}\n\n\
+                     Note: Anvil cannot modify the process environment without unsafe code.\n\
+                     Run the following in your shell to set this variable:\n\
+                     export {key}={}",
+                    if val.is_empty() { "<empty>" } else { val },
+                    if val.is_empty() { String::new() } else { shell_quote(val) },
+                )
+            }
+            "load" => {
+                let path = key;
+                if path.is_empty() {
+                    return "Usage: /env load <file>".to_string();
+                }
+                let content = match fs::read_to_string(path) {
+                    Ok(s) => s,
+                    Err(e) => return format!("Cannot read {path}: {e}"),
+                };
+                let (mut loaded, mut skipped) = (0usize, 0usize);
+                let mut export_lines: Vec<String> = Vec::new();
+                for line in content.lines() {
+                    let t = line.trim();
+                    if t.is_empty() || t.starts_with('#') {
+                        continue;
+                    }
+                    if let Some(eq) = t.find('=') {
+                        let k = t[..eq].trim();
+                        let v = t[eq + 1..].trim().trim_matches('"').trim_matches('\'');
+                        if !k.is_empty() {
+                            export_lines.push(format!("export {k}={}", shell_quote(v)));
+                            loaded += 1;
+                        } else {
+                            skipped += 1;
+                        }
+                    } else {
+                        skipped += 1;
+                    }
+                }
+                format!(
+                    "Env load\n  File             {path}\n  Loaded           {loaded} variable(s)\n  Skipped          {skipped} line(s)\n  Scope            session (not persisted)"
+                )
+            }
+            "diff" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let mut env_files: Vec<std::path::PathBuf> = Vec::new();
+                for name in &[
+                    ".env",
+                    ".env.example",
+                    ".env.local",
+                    ".env.staging",
+                    ".env.production",
+                    ".env.development",
+                ] {
+                    let p = cwd.join(name);
+                    if p.exists() {
+                        env_files.push(p);
+                    }
+                }
+                if env_files.is_empty() {
+                    return "Env diff\n  No .env files found in the current directory.".to_string();
+                }
+                let mut summaries: Vec<String> = Vec::new();
+                for ef in &env_files {
+                    let content = fs::read_to_string(ef).unwrap_or_default();
+                    let keys: Vec<&str> = content
+                        .lines()
+                        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+                        .filter_map(|l| l.find('=').map(|p| &l[..p]))
+                        .collect();
+                    summaries.push(format!(
+                        "  {} ({} keys): {}",
+                        ef.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                        keys.len(),
+                        keys.join(", ")
+                    ));
+                }
+                let prompt = format!(
+                    "You are /env diff. Analyse these .env files and highlight:\n\
+                     1. Keys present in one file but missing in another.\n\
+                     2. Keys that need to be kept in sync.\n\
+                     3. Any suspicious or potentially insecure patterns.\n\nFiles:\n{}",
+                    summaries.join("\n")
+                );
+                let header = format!("Env diff\n  Files found:\n{}\n", summaries.join("\n"));
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(r) => format!("{header}\n{r}"),
+                    Err(e) => format!("env diff failed: {e}"),
+                }
+            }
+            other => format!(
+                "Unknown /env sub-command: {other}\n\n\
+                 Usage:\n  /env show               Show current environment (secrets redacted)\n\
+                   /env set <KEY> <VALUE>  Set an env var for this session\n\
+                   /env load <file>        Load a .env file into the session\n\
+                   /env diff               Compare .env files in the workspace"
+            ),
+        }
+    }
+    fn run_hub_command(&self, args: Option<&str>) -> String {
+        let args = args.unwrap_or("").trim();
+
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /hub                     Show top packages by category",
+                "  /hub search <query>      Search all packages",
+                "  /hub skills              Top skills",
+                "  /hub plugins             Top plugins",
+                "  /hub agents              Top agents",
+                "  /hub themes              Top themes",
+                "  /hub install <name>      Download and install a package",
+                "  /hub info <name>         Show package details",
+            ]
+            .join("\n");
+        }
+
+        let hub_url = self.anvil_config_str("anvilhub_url", "https://anvilhub.culpur.net");
+
+        let client = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => BlockingHubClient::new(&hub_url, handle),
+            Err(_) => match tokio::runtime::Runtime::new() {
+                Ok(rt) => BlockingHubClient::new(&hub_url, rt.handle().clone()),
+                Err(e) => return format!("hub: could not start async runtime: {e}"),
+            },
+        };
+
+        if let Some(query) = args.strip_prefix("search ").map(str::trim) {
+            if query.is_empty() {
+                return "Usage: /hub search <query>".to_string();
+            }
+            return match client.search(query, None) {
+                Ok(pkgs) if pkgs.is_empty() => format!("No results for \"{query}\"."),
+                Ok(pkgs) => format_package_list(&format!("Search results for \"{query}\""), &pkgs),
+                Err(e) => format!("hub search: {e}"),
+            };
+        }
+
+        if let Some(name) = args.strip_prefix("info ").map(str::trim) {
+            if name.is_empty() {
+                return "Usage: /hub info <name>".to_string();
+            }
+            return match client.get_package(name) {
+                Ok(pkg) => format_package_detail(&pkg),
+                Err(e) => format!("hub info: {e}"),
+            };
+        }
+
+        if let Some(name) = args.strip_prefix("install ").map(str::trim) {
+            if name.is_empty() {
+                return "Usage: /hub install <name>".to_string();
+            }
+            let pkg = match client.get_package(name) {
+                Ok(p) => p,
+                Err(e) => return format!("hub install: {e}"),
+            };
+            let install_dir = anvil_home_dir();
+            return match client.install(&pkg, &install_dir) {
+                Ok(dest) => format!(
+                    "Installed {} v{} to {}",
+                    pkg.name,
+                    pkg.version,
+                    dest.display()
+                ),
+                Err(e) => format!("hub install: {e}"),
+            };
+        }
+
+        match args {
+            "skills" | "plugins" | "agents" | "themes" => {
+                let pkg_type = args.trim_end_matches('s');
+                let label = args;
+                match client.top_packages(pkg_type, 10) {
+                    Ok(pkgs) if pkgs.is_empty() => format!("No {label} found."),
+                    Ok(pkgs) => format_package_list(&format!("Top {label} on AnvilHub"), &pkgs),
+                    Err(e) => format!("hub {args}: {e}"),
+                }
+            }
+            _ => {
+                // Default: top 5 of each category
+                let mut out = String::from("AnvilHub — Top Packages\n");
+                for (t, label) in &[
+                    ("skill", "Skills"),
+                    ("plugin", "Plugins"),
+                    ("agent", "Agents"),
+                    ("theme", "Themes"),
+                ] {
+                    match client.top_packages(t, 5) {
+                        Ok(pkgs) => out.push_str(&format_package_list(&format!("\n{label}"), &pkgs)),
+                        Err(e) => out.push_str(&format!("\n{label}\n  (error: {e})\n")),
+                    }
+                }
+                out.push_str("\nRun /hub <category> for more, or /hub install <name> to install.");
+                out
+            }
+        }
+    }
+
+    fn run_language_command(&self, lang: Option<&str>) -> String {
+        run_language_command_static(lang)
+    }
+    /// Read a string value from `~/.anvil/config.json` with a fallback default.
+    fn anvil_config_str(&self, key: &str, default: &str) -> String {
+        let cfg = Self::load_anvil_ui_config();
+        cfg.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or(default)
+            .to_string()
+    }
+
+
+
     #[allow(clippy::unused_self)]
     fn run_teleport(&self, target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
         let Some(target) = target.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -5418,6 +7392,80 @@ fn render_mode_unavailable(command: &str, label: &str) -> String {
     .join("\n")
 }
 
+
+// ---------------------------------------------------------------------------
+/// Return `~/.anvil/` as a `PathBuf`.
+fn anvil_home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+        .join(".anvil")
+}
+
+/// Standalone language command handler.
+fn run_language_command_static(lang: Option<&str>) -> String {
+    const SUPPORTED: &[&str] = &["en", "de", "es", "fr", "ja", "zh-CN", "ru"];
+
+    let Some(lang) = lang else {
+        let current = current_language_code();
+        return format!(
+            "Language: {current}\nAvailable: {}\nUsage: /language <code>",
+            SUPPORTED.join(", ")
+        );
+    };
+
+    let lang = lang.trim();
+    if lang.is_empty() {
+        return format!(
+            "Language: {}\nAvailable: {}\nUsage: /language <code>",
+            current_language_code(),
+            SUPPORTED.join(", ")
+        );
+    }
+
+    if !SUPPORTED.contains(&lang) {
+        return format!(
+            "Unsupported language '{lang}'. Available: {}",
+            SUPPORTED.join(", ")
+        );
+    }
+
+    let anvil_dir = anvil_home_dir();
+    let path = anvil_dir.join("config.json");
+    let mut map = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok())
+            .unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+    map.insert("language".to_string(), serde_json::Value::String(lang.to_string()));
+
+    let _ = fs::create_dir_all(&anvil_dir);
+    match fs::write(&path, serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default()) {
+        Ok(()) => {
+            rust_i18n::set_locale(lang);
+            format!("Language set to: {lang}")
+        }
+        Err(e) => format!("Failed to save language setting: {e}"),
+    }
+}
+
+/// Return the currently configured language code, defaulting to "en".
+fn current_language_code() -> String {
+    let path = anvil_home_dir().join("config.json");
+    if let Ok(data) = fs::read_to_string(&path) {
+        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data) {
+            if let Some(lang) = map.get("language").and_then(|v| v.as_str()) {
+                return lang.to_string();
+            }
+        }
+    }
+    "en".to_string()
+}
+
+
 /// Static version of `/configure` for use in the `--resume` path, where no
 /// `LiveCli` instance is available.  Produces the same output as the live
 /// version for purely informational sub-commands; write operations advise
@@ -5533,8 +7581,99 @@ fn run_theme_command(action: Option<&str>, tui: Option<&mut AnvilTui>) -> String
                 "Theme reset\n  Active           {name}\n  Persisted        ~/.anvil/theme.json"
             )
         }
+        // Feature 18 — export current theme to a JSON file
+        "export" => {
+            let dest = if arg.is_empty() {
+                let current = Theme::load();
+                format!("{}.theme.json", current.name)
+            } else {
+                arg.to_string()
+            };
+            let theme = Theme::load();
+            match theme.save() {
+                Ok(_) => {
+                    // Copy ~/.anvil/theme.json to the requested destination
+                    let src = anvil_home_dir().join("theme.json");
+                    match std::fs::copy(&src, &dest) {
+                        Ok(_) => format!(
+                            "Theme exported\n  Theme            {}\n  File             {dest}",
+                            theme.name
+                        ),
+                        Err(e) => format!("Export error: {e}"),
+                    }
+                }
+                Err(e) => format!("Export error: {e}"),
+            }
+        }
+        // Feature 18 — import a theme from a JSON file and apply it
+        "import" => {
+            if arg.is_empty() {
+                return "Usage: /theme import <file.json>".to_string();
+            }
+            match std::fs::read_to_string(arg) {
+                Ok(text) => {
+                    // Validate JSON structure before writing
+                    match serde_json::from_str::<serde_json::Value>(&text) {
+                        Ok(_) => {
+                            let dest = anvil_home_dir().join("theme.json");
+                            if let Some(parent) = dest.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            match std::fs::write(&dest, &text) {
+                                Ok(_) => {
+                                    let theme = Theme::load();
+                                    if let Some(tui) = tui {
+                                        tui.set_theme(Theme::load());
+                                    }
+                                    format!(
+                                        "Theme imported\n  Active           {}\n  Source           {arg}",
+                                        theme.name
+                                    )
+                                }
+                                Err(e) => format!("Import error: {e}"),
+                            }
+                        }
+                        Err(e) => format!("Invalid theme JSON: {e}"),
+                    }
+                }
+                Err(e) => format!("Cannot read {arg}: {e}"),
+            }
+        }
+        // Feature 18 — create a new custom theme interactively (AI-guided)
+        "create" => {
+            let name = if arg.is_empty() { "custom" } else { arg };
+            format!(
+                "Theme create — {name}\n\n\
+                 To create a custom theme, edit or create a JSON file with this structure:\n\n\
+                 {{\n\
+                   \"name\": \"{name}\",\n\
+                   \"colors\": {{\n\
+                     \"bg_primary\":       \"#1e1e2e\",\n\
+                     \"bg_card\":          \"#313244\",\n\
+                     \"text_primary\":     \"#cad3f5\",\n\
+                     \"text_secondary\":   \"#a5adce\",\n\
+                     \"accent\":           \"#caa6f7\",\n\
+                     \"accent_secondary\": \"#f5bde2\",\n\
+                     \"success\":          \"#a6da95\",\n\
+                     \"warning\":          \"#eed49f\",\n\
+                     \"error\":            \"#ed8796\",\n\
+                     \"border\":           \"#45475a\",\n\
+                     \"header_bg\":        \"#181826\",\n\
+                     \"thinking\":         \"#8bd5ca\"\n\
+                   }}\n\
+                 }}\n\n\
+                 Then run:  /theme import <file.json>"
+            )
+        }
         other => format!(
-            "Unknown theme action: {other}\n\n  /theme           Show current theme\n  /theme list      List themes\n  /theme set <n>   Apply a theme\n  /theme reset     Reset to default"
+            "Unknown theme action: {other}\n\n  \
+             /theme              Show current theme\n  \
+             /theme list         List themes\n  \
+             /theme set <n>      Apply a theme\n  \
+             /theme reset        Reset to default\n  \
+             /theme create <n>   Show template for a custom theme\n  \
+             /theme import <f>   Import theme from JSON file\n  \
+             /theme export [f]   Export current theme to JSON file"
         ),
     }
 }
@@ -6039,6 +8178,17 @@ fn recent_user_context(session: &Session, limit: usize) -> String {
     }
 }
 
+/// Minimal POSIX single-quote escaping for shell export instructions.
+fn shell_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@'))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
 fn truncate_for_prompt(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         value.trim().to_string()
@@ -6047,6 +8197,305 @@ fn truncate_for_prompt(value: &str, limit: usize) -> String {
         format!("{}\n…[truncated]", truncated.trim_end())
     }
 }
+
+// ─── Feature 3 helpers ────────────────────────────────────────────────────────
+
+/// Parse `/semantic-search` args into (query, type_filter, lang_filter).
+fn parse_semantic_search_args(args: &str) -> (String, Option<String>, Option<String>) {
+    let mut query_parts: Vec<&str> = Vec::new();
+    let mut symbol_filter: Option<String> = None;
+    let mut lang_filter: Option<String> = None;
+
+    let mut tokens = args.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        if token == "--type" {
+            symbol_filter = tokens.next().map(ToOwned::to_owned);
+        } else if token == "--lang" {
+            lang_filter = tokens.next().map(ToOwned::to_owned);
+        } else {
+            query_parts.push(token);
+        }
+    }
+
+    (query_parts.join(" "), symbol_filter, lang_filter)
+}
+
+/// Escape a string for use as a literal in a regex pattern.
+fn regex_escape(s: &str) -> String {
+    let special = r"\.+*?()|[]{}^$#";
+    s.chars()
+        .flat_map(|c| {
+            if special.contains(c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+// ─── Feature 4 helpers ────────────────────────────────────────────────────────
+
+fn run_docker_ps() -> String {
+    let out = Command::new("docker")
+        .args(["ps", "--format", "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if stdout.is_empty() {
+                "No running containers.".to_string()
+            } else {
+                stdout
+            }
+        }
+        Ok(o) => format!("docker ps failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Err(e) => format!("Cannot run docker: {e}. Is Docker installed and running?"),
+    }
+}
+
+fn run_docker_logs(container: &str) -> String {
+    let out = Command::new("docker")
+        .args(["logs", "--tail", "50", container])
+        .output();
+    match out {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let stderr_text = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let combined = [stdout.as_str(), stderr_text.as_str()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n");
+            if combined.is_empty() {
+                format!("No log output for container: {container}")
+            } else {
+                combined
+            }
+        }
+        Err(e) => format!("Cannot run docker logs: {e}"),
+    }
+}
+
+fn run_docker_compose_services() -> String {
+    let cwd = env::current_dir().unwrap_or_default();
+
+    let candidates = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"];
+    let compose_file = candidates
+        .iter()
+        .map(|name| cwd.join(name))
+        .find(|p| p.exists());
+
+    let Some(file) = compose_file else {
+        return "No docker-compose file found in the current directory.".to_string();
+    };
+
+    let file_str = file.to_str().unwrap_or("docker-compose.yml").to_string();
+
+    let out = Command::new("docker")
+        .args(["compose", "-f", &file_str, "config", "--services"])
+        .current_dir(&cwd)
+        .output()
+        .or_else(|_| {
+            Command::new("docker-compose")
+                .args(["-f", &file_str, "config", "--services"])
+                .current_dir(&cwd)
+                .output()
+        });
+
+    match out {
+        Ok(o) if o.status.success() => {
+            let services = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if services.is_empty() {
+                format!("No services defined in {}.", file.display())
+            } else {
+                format!("Services in {}:\n{}", file.display(), services)
+            }
+        }
+        Ok(o) => format!(
+            "compose config failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => format!("Cannot run docker compose: {e}"),
+    }
+}
+
+fn run_docker_build() -> String {
+    let cwd = env::current_dir().unwrap_or_default();
+    if !cwd.join("Dockerfile").exists() {
+        return "No Dockerfile found in the current directory.".to_string();
+    }
+
+    let out = Command::new("docker")
+        .args(["build", "."])
+        .current_dir(&cwd)
+        .output();
+
+    match out {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let stderr_text = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let log = truncate_for_prompt(
+                &[stdout.as_str(), stderr_text.as_str()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                4_000,
+            );
+            if o.status.success() {
+                format!("docker build succeeded.\n\n{log}")
+            } else {
+                format!("docker build failed (exit {}).\n\n{log}", o.status)
+            }
+        }
+        Err(e) => format!("Cannot run docker build: {e}"),
+    }
+}
+
+// ─── Feature 5 helpers ────────────────────────────────────────────────────────
+
+/// Detect the project type and run its test suite.
+fn run_test_suite(coverage: bool) -> String {
+    let cwd = env::current_dir().unwrap_or_default();
+
+    let (cmd, args): (&str, Vec<String>) = if cwd.join("Cargo.toml").exists() {
+        if coverage {
+            (
+                "cargo",
+                vec![
+                    "llvm-cov".to_string(),
+                    "--text".to_string(),
+                    "--ignore-filename-regex".to_string(),
+                    "tests/".to_string(),
+                ],
+            )
+        } else {
+            ("cargo", vec!["test".to_string()])
+        }
+    } else if cwd.join("package.json").exists() {
+        if coverage {
+            (
+                "npx",
+                vec![
+                    "vitest".to_string(),
+                    "run".to_string(),
+                    "--coverage".to_string(),
+                ],
+            )
+        } else {
+            (
+                "npm",
+                vec![
+                    "test".to_string(),
+                    "--".to_string(),
+                    "--passWithNoTests".to_string(),
+                ],
+            )
+        }
+    } else if cwd.join("pyproject.toml").exists() || cwd.join("setup.py").exists() {
+        if coverage {
+            (
+                "python",
+                vec![
+                    "-m".to_string(),
+                    "pytest".to_string(),
+                    "--cov".to_string(),
+                    "--cov-report=term-missing".to_string(),
+                ],
+            )
+        } else {
+            ("python", vec!["-m".to_string(), "pytest".to_string()])
+        }
+    } else if cwd.join("go.mod").exists() {
+        if coverage {
+            (
+                "go",
+                vec!["test".to_string(), "./...".to_string(), "-cover".to_string()],
+            )
+        } else {
+            ("go", vec!["test".to_string(), "./...".to_string()])
+        }
+    } else {
+        return "Could not detect project type (no Cargo.toml, package.json, pyproject.toml, or go.mod found).".to_string();
+    };
+
+    let out = Command::new(cmd).args(&args).current_dir(&cwd).output();
+
+    match out {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let stderr_text = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let log = truncate_for_prompt(
+                &[stdout.as_str(), stderr_text.as_str()]
+                    .iter()
+                    .filter(|s| !s.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                6_000,
+            );
+            if o.status.success() {
+                format!("Tests passed.\n\n{log}")
+            } else {
+                format!("Tests failed (exit {}).\n\n{log}", o.status)
+            }
+        }
+        Err(e) => format!("Cannot run {cmd}: {e}"),
+    }
+}
+
+// ─── Feature 6 helpers ────────────────────────────────────────────────────────
+
+fn run_git_stash_list() -> String {
+    match git_output(&["stash", "list"]) {
+        Ok(s) if s.is_empty() => "Stash is empty.".to_string(),
+        Ok(s) => s,
+        Err(e) => format!("git stash list failed: {e}"),
+    }
+}
+
+fn run_git_stash_op(args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(env::current_dir().unwrap_or_default())
+        .output();
+    match out {
+        Ok(o) => {
+            let out_text = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let err_text = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            if o.status.success() {
+                if out_text.is_empty() {
+                    err_text
+                } else {
+                    out_text
+                }
+            } else {
+                let msg = if err_text.is_empty() { out_text } else { err_text };
+                format!("git {} failed: {msg}", args.join(" "))
+            }
+        }
+        Err(e) => format!("git {} failed: {e}", args.join(" ")),
+    }
+}
+
+// ─── Feature 7 helpers ────────────────────────────────────────────────────────
+
+/// Parse a line range like "10-25" or "10" into (start, end).  end=0 means open-ended.
+fn parse_line_range(s: &str) -> (usize, usize) {
+    let s = s.trim();
+    if let Some((a, b)) = s.split_once('-') {
+        let start = a.trim().parse().unwrap_or(1);
+        let end = b.trim().parse().unwrap_or(0);
+        (start, end)
+    } else {
+        let n = s.parse().unwrap_or(1);
+        (n, n)
+    }
+}
+
 
 fn sanitize_generated_message(value: &str) -> String {
     value.trim().trim_matches('`').trim().replace("\r\n", "\n")
