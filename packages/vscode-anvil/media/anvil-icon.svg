@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Anvil body -->
+  <rect x="15" y="52" width="70" height="22" rx="4" fill="#c0c8d8"/>
+  <!-- Anvil horn (left taper) -->
+  <polygon points="15,52 15,74 2,74 8,52" fill="#a8b4c8"/>
+  <!-- Anvil top face -->
+  <rect x="22" y="36" width="56" height="18" rx="3" fill="#d8e0ec"/>
+  <!-- Anvil top highlight -->
+  <rect x="22" y="36" width="56" height="5" rx="3" fill="#eaf0f8" opacity="0.7"/>
+  <!-- Base feet -->
+  <rect x="24" y="74" width="14" height="8" rx="2" fill="#8a96a8"/>
+  <rect x="62" y="74" width="14" height="8" rx="2" fill="#8a96a8"/>
+  <!-- Hammer handle -->
+  <rect x="62" y="10" width="8" height="36" rx="3" fill="#8b6347" transform="rotate(-30,66,28)"/>
+  <!-- Hammer head -->
+  <rect x="52" y="6" width="28" height="16" rx="4" fill="#5a6070" transform="rotate(-30,66,14)"/>
+  <!-- Hammer head face highlight -->
+  <rect x="54" y="8" width="24" height="5" rx="2" fill="#7a8090" opacity="0.6" transform="rotate(-30,66,10.5)"/>
+</svg>

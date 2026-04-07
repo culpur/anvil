@@ -1,0 +1,81 @@
+{
+  "name": "anvil-vscode",
+  "displayName": "Anvil — AI Coding Assistant",
+  "description": "Anvil AI coding assistant by Culpur Defense — multi-provider AI with 70+ commands",
+  "version": "1.0.2",
+  "publisher": "culpur",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Machine Learning", "Other"],
+  "keywords": ["ai", "coding assistant", "anvil", "culpur", "anthropic", "openai", "ollama"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "anvil.chat", "title": "Anvil: Open Chat" },
+      { "command": "anvil.explain", "title": "Anvil: Explain Selection" },
+      { "command": "anvil.refactor", "title": "Anvil: Refactor Selection" },
+      { "command": "anvil.test", "title": "Anvil: Generate Tests" },
+      { "command": "anvil.fix", "title": "Anvil: Fix Selection" },
+      { "command": "anvil.docs", "title": "Anvil: Generate Docs" },
+      { "command": "anvil.terminal", "title": "Anvil: Open Terminal" },
+      { "command": "anvil.hub", "title": "Anvil: Browse Hub" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "anvil-sidebar",
+          "title": "Anvil"
+        }
+      ]
+    },
+    "views": {
+      "anvil-sidebar": [
+        { "id": "anvil.chatView", "name": "Chat", "type": "webview" },
+        { "id": "anvil.hubView", "name": "Hub" }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        { "command": "anvil.explain", "group": "anvil@1", "when": "editorHasSelection" },
+        { "command": "anvil.refactor", "group": "anvil@2", "when": "editorHasSelection" },
+        { "command": "anvil.test", "group": "anvil@3", "when": "editorHasSelection" },
+        { "command": "anvil.fix", "group": "anvil@4", "when": "editorHasSelection" }
+      ]
+    },
+    "configuration": {
+      "title": "Anvil",
+      "properties": {
+        "anvil.path": {
+          "type": "string",
+          "default": "anvil",
+          "description": "Path to the Anvil CLI binary"
+        },
+        "anvil.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-6",
+          "description": "Default AI model"
+        },
+        "anvil.provider": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "ollama", "xai"],
+          "default": "anthropic",
+          "description": "AI provider"
+        }
+      }
+    },
+    "keybindings": [
+      { "command": "anvil.chat", "key": "ctrl+shift+a", "mac": "cmd+shift+a" }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
