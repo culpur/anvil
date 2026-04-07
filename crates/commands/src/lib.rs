@@ -1092,6 +1092,8 @@ pub enum SlashCommand {
     },
     /// `/sleep` — activate the furnace screensaver immediately
     Sleep,
+    /// `/think` — toggle thinking/reasoning mode (for models that support it)
+    Think,
     Unknown(String),
 }
 
@@ -1366,6 +1368,7 @@ impl SlashCommand {
             },
             // Screensaver
             "sleep" | "screensaver" | "furnace" => Self::Sleep,
+            "think" | "thinking" | "nothink" => Self::Think,
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -2814,6 +2817,7 @@ pub fn handle_slash_command(
         | SlashCommand::Webhook { .. }
         | SlashCommand::PluginSdk { .. }
         | SlashCommand::Sleep
+        | SlashCommand::Think
         | SlashCommand::Unknown(_) => None,
     }
 }

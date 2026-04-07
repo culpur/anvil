@@ -2868,30 +2868,13 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
                 CompletionItem { insert: "o3".into(), hint: "OpenAI o3 (reasoning)".into() },
                 CompletionItem { insert: "grok".into(), hint: "xAI Grok".into() },
             ];
-            // Dynamically query Ollama for locally available models
-            let ollama_url = std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            if let Ok(output) = std::process::Command::new("curl")
-                .args(["-s", "--max-time", "2", &format!("{ollama_url}/api/tags")])
-                .output()
-            {
-                if output.status.success() {
-                    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                        if let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
-                            for m in arr {
-                                if let Some(name) = m.get("name").and_then(|n| n.as_str()) {
-                                    let size = m.get("size").and_then(|s| s.as_f64()).unwrap_or(0.0);
-                                    let gb = size / 1_000_000_000.0;
-                                    models.push(CompletionItem {
-                                        insert: name.to_string(),
-                                        hint: format!("Ollama local ({gb:.1}GB)"),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Add cached Ollama models (populated at startup, not on every tab press)
+            models.extend(cached_ollama_models()
+                .into_iter()
+                .map(|(name, size)| CompletionItem {
+                    insert: name,
+                    hint: format!("Ollama local ({size})"),
+                }));
             models
         },
         "/image" | "/generate-image" => vec![
@@ -4280,4 +4263,38 @@ impl AnvilTui {
         }
         Ok(ReadResult::Continue)
     }
+}
+
+/// Cache Ollama models at startup to avoid blocking the TUI on every tab press.
+/// Called once during TUI init, results stored in a static.
+static OLLAMA_MODEL_CACHE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+
+pub fn init_ollama_model_cache() {
+    let _ = OLLAMA_MODEL_CACHE.get_or_init(|| {
+        let ollama_url = std::env::var("OLLAMA_HOST")
+            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let output = std::process::Command::new("curl")
+            .args(["-s", "--max-time", "2", &format!("{ollama_url}/api/tags")])
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    if let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
+                        return arr.iter().filter_map(|m| {
+                            let name = m.get("name").and_then(|n| n.as_str())?;
+                            let size = m.get("size").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                            let gb = size / 1_000_000_000.0;
+                            Some((name.to_string(), format!("{gb:.1}GB")))
+                        }).collect();
+                    }
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    });
+}
+
+fn cached_ollama_models() -> Vec<(String, String)> {
+    OLLAMA_MODEL_CACHE.get().cloned().unwrap_or_default()
 }

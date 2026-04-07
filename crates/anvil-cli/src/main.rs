@@ -2120,6 +2120,7 @@ fn run_resume_command(
         | SlashCommand::Webhook { .. }
         | SlashCommand::PluginSdk { .. }
         | SlashCommand::Sleep
+        | SlashCommand::Think
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2242,6 +2243,9 @@ fn run_repl(
 
 /// Full-screen TUI REPL loop.
 fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
+    // Cache Ollama models once at startup (non-blocking for tab completions)
+    tui::init_ollama_model_cache();
+
     let (mut tui, sender) =
         AnvilTui::new(cli.model.clone(), cli.session_id(), cli.permission_mode.as_str())?;
 
@@ -2729,6 +2733,7 @@ struct LiveCli {
     chat_mode: bool,
     /// Whether vim keybindings are requested; propagated to the LineEditor.
     vim_mode: bool,
+    thinking_enabled: bool,
 }
 
 impl LiveCli {
@@ -2769,6 +2774,7 @@ impl LiveCli {
             context_files: Vec::new(),
             chat_mode: false,
             vim_mode: false,
+            thinking_enabled: false,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -4828,8 +4834,15 @@ impl LiveCli {
                 false
             }
             SlashCommand::Sleep => {
-                // Screensaver/ambient mode — not yet implemented.
                 println!("Sleep mode is not yet supported in this build.");
+                false
+            }
+            SlashCommand::Think => {
+                self.thinking_enabled = !self.thinking_enabled;
+                println!(
+                    "Thinking mode: {}",
+                    if self.thinking_enabled { "ON — model will show reasoning" } else { "OFF — standard responses" }
+                );
                 false
             }
             SlashCommand::Unknown(name) => {
