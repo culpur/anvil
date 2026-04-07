@@ -7655,77 +7655,311 @@ impl LiveCli {
         }
     }
 
-    // ─── Feature G — Dependency graph (stub) ─────────────────────────────────
-    #[allow(clippy::unused_self)]
+    // ─── Feature 7: Dependency Graph ─────────────────────────────────────────
+
     fn run_deps_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("tree").trim();
-        if sub == "tree" {
-            match std::process::Command::new("cargo").arg("tree").output() {
-                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-                Err(_) => "Deps\n  Note             Run `cargo tree` or `npm list --depth=1` for a dependency tree.".to_string(),
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /deps tree           Show dependency tree",
+                "  /deps outdated       Show outdated dependencies",
+                "  /deps audit          Security audit of dependencies",
+                "  /deps why <pkg>      Explain why a dependency is included",
+            ].join("\n");
+        }
+        let pm = detect_package_manager();
+        match args {
+            "tree" => {
+                let out = match pm {
+                    PackageManager::Cargo   => Command::new("cargo").args(["tree"]).output(),
+                    PackageManager::Npm     => Command::new("npm").args(["ls", "--depth=2"]).output(),
+                    PackageManager::Pnpm    => Command::new("pnpm").args(["list", "--depth=2"]).output(),
+                    PackageManager::Yarn    => Command::new("yarn").args(["list", "--depth=2"]).output(),
+                    PackageManager::Pip     => Command::new("pip").args(["show", "--verbose"]).output(),
+                    PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                };
+                shell_output_or_err(out, "deps tree")
             }
-        } else {
-            format!("Deps\n  Requested        {sub}\n  Note             Use `cargo audit` for CVE scanning or `cargo outdated` for version drift.")
+            "outdated" => {
+                let out = match pm {
+                    PackageManager::Cargo   => Command::new("cargo").args(["outdated"]).output(),
+                    PackageManager::Npm     => Command::new("npm").args(["outdated"]).output(),
+                    PackageManager::Pnpm    => Command::new("pnpm").args(["outdated"]).output(),
+                    PackageManager::Yarn    => Command::new("yarn").args(["outdated"]).output(),
+                    PackageManager::Pip     => Command::new("pip").args(["list", "--outdated"]).output(),
+                    PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                };
+                shell_output_or_err(out, "deps outdated")
+            }
+            "audit" => {
+                let out = match pm {
+                    PackageManager::Cargo   => Command::new("cargo").args(["audit"]).output(),
+                    PackageManager::Npm     => Command::new("npm").args(["audit"]).output(),
+                    PackageManager::Pnpm    => Command::new("pnpm").args(["audit"]).output(),
+                    PackageManager::Yarn    => Command::new("yarn").args(["audit"]).output(),
+                    PackageManager::Pip     => Command::new("pip-audit").output(),
+                    PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                };
+                shell_output_or_err(out, "deps audit")
+            }
+            s if s.starts_with("why ") => {
+                let pkg = s["why ".len()..].trim();
+                if pkg.is_empty() { return "Usage: /deps why <pkg>".to_string(); }
+                let out = match pm {
+                    PackageManager::Cargo => Command::new("cargo").args(["tree", "--invert", pkg]).output(),
+                    PackageManager::Npm   => Command::new("npm").args(["why", pkg]).output(),
+                    PackageManager::Pnpm  => Command::new("pnpm").args(["why", pkg]).output(),
+                    PackageManager::Yarn  => Command::new("yarn").args(["why", pkg]).output(),
+                    _ => return "/deps why is not supported for this package manager.".to_string(),
+                };
+                shell_output_or_err(out, &format!("deps why {pkg}"))
+            }
+            other => format!("Unknown /deps sub-command: {other}\nRun `/deps help` for usage."),
         }
     }
 
-    // ─── Feature H — Monorepo (stub) ─────────────────────────────────────────
-    #[allow(clippy::unused_self)]
+    // ─── Feature 8: Monorepo Awareness ───────────────────────────────────────
+
     fn run_mono_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("list").trim();
-        if sub == "list" {
-            match std::process::Command::new("cargo")
-                .args(["metadata", "--no-deps", "--format-version=1"])
-                .output()
-            {
-                Ok(out) => {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    let count = text.matches("\"name\"").count();
-                    format!("Monorepo\n  Workspace        cargo\n  Packages         {count} detected (use `cargo metadata` for full list)")
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /mono list                     List workspace packages",
+                "  /mono graph                    Show package dependency graph",
+                "  /mono changed                  List packages changed since last git tag",
+                "  /mono run <cmd> [--filter <p>] Run command in workspace packages",
+            ].join("\n");
+        }
+        let workspace_kind = detect_workspace_kind();
+        if matches!(workspace_kind, WorkspaceKind::None) {
+            return "No monorepo workspace config detected.\n\
+                    Expected: Cargo.toml [workspace], package.json workspaces, or pnpm-workspace.yaml".to_string();
+        }
+        match args {
+            "list" => match workspace_kind {
+                WorkspaceKind::Cargo => Command::new("cargo")
+                    .args(["metadata", "--no-deps", "--format-version=1"]).output()
+                    .map(|o| parse_cargo_workspace_members(&String::from_utf8_lossy(&o.stdout)))
+                    .unwrap_or_else(|e| format!("cargo metadata failed: {e}")),
+                WorkspaceKind::Pnpm => shell_output_or_err(
+                    Command::new("pnpm").args(["ls", "--depth=0"]).output(), "pnpm ls"),
+                WorkspaceKind::Npm  => shell_output_or_err(
+                    Command::new("npm").args(["ls", "--depth=0"]).output(), "npm ls"),
+                WorkspaceKind::None => unreachable!(),
+            },
+            "graph" => match workspace_kind {
+                WorkspaceKind::Cargo => shell_output_or_err(
+                    Command::new("cargo").args(["tree", "--workspace"]).output(),
+                    "cargo tree --workspace"),
+                WorkspaceKind::Pnpm => shell_output_or_err(
+                    Command::new("pnpm").args(["ls", "--depth=3"]).output(), "pnpm ls --depth=3"),
+                _ => shell_output_or_err(
+                    Command::new("npm").args(["ls", "--depth=3"]).output(), "npm ls --depth=3"),
+            },
+            "changed" => {
+                let last_tag = Command::new("git")
+                    .args(["describe", "--tags", "--abbrev=0"]).output().ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "HEAD~10".to_string());
+                let changed = Command::new("git")
+                    .args(["diff", "--name-only", &last_tag, "HEAD"]).output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                    .unwrap_or_default();
+                if changed.trim().is_empty() {
+                    return format!("No files changed since {last_tag}.");
                 }
-                Err(_) => "Mono\n  Note             Could not enumerate workspace packages.".to_string(),
+                let mut pkgs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                for line in changed.lines() {
+                    if let Some(p) = line.split('/').next() { pkgs.insert(p.to_string()); }
+                }
+                format!("Packages changed since {last_tag}:\n{}",
+                    pkgs.iter().map(|p| format!("  {p}")).collect::<Vec<_>>().join("\n"))
             }
-        } else {
-            format!("Mono\n  Requested        {sub}\n  Note             Use `cargo metadata` or your package manager workspace tooling.")
+            s if s.starts_with("run ") => {
+                let rest = s["run ".len()..].trim();
+                let (filter, cmd_str) = if let Some(idx) = rest.find("--filter ") {
+                    let fp = rest[idx + "--filter ".len()..].split_whitespace()
+                        .next().unwrap_or("").to_string();
+                    (Some(fp), rest[..idx].trim().to_string())
+                } else {
+                    (None, rest.to_string())
+                };
+                if cmd_str.is_empty() { return "Usage: /mono run <cmd> [--filter <pkg>]".to_string(); }
+                match workspace_kind {
+                    WorkspaceKind::Pnpm => {
+                        let mut a = vec!["run".to_string()];
+                        if let Some(f) = &filter { a.push("--filter".into()); a.push(f.clone()); }
+                        a.push(cmd_str.clone());
+                        shell_output_or_err(Command::new("pnpm").args(&a).output(),
+                            &format!("pnpm run {cmd_str}"))
+                    }
+                    WorkspaceKind::Npm => shell_output_or_err(
+                        Command::new("npm").args(["run", &cmd_str, "--workspaces"]).output(),
+                        &format!("npm run {cmd_str}")),
+                    WorkspaceKind::Cargo => {
+                        let mut a = vec!["run".to_string()];
+                        if let Some(f) = &filter { a.push("-p".into()); a.push(f.clone()); }
+                        shell_output_or_err(Command::new("cargo").args(&a).output(), "cargo run")
+                    }
+                    WorkspaceKind::None => unreachable!(),
+                }
+            }
+            other => format!("Unknown /mono sub-command: {other}\nRun `/mono help` for usage."),
         }
     }
 
-    // ─── Feature I — Browser automation (stub) ───────────────────────────────
-    #[allow(clippy::unused_self)]
+    // ─── Feature 9: Browser Automation ───────────────────────────────────────
+
     fn run_browser_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        if sub.is_empty() {
-            return "Browser\n  Usage            /browser [open <url>|screenshot <url>|test <url>]\n  Requires         Playwright or Puppeteer installed".to_string();
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /browser open <url>         Open URL in default browser",
+                "  /browser screenshot <url>   Capture a screenshot (requires playwright)",
+                "  /browser test <url>         Run accessibility/performance test",
+            ].join("\n");
         }
-        format!("Browser\n  Requested        {sub}\n  Note             Browser automation requires Playwright — run `npm install -g playwright`.")
+        if let Some(url) = args.strip_prefix("open ") {
+            let url = url.trim();
+            if url.is_empty() { return "Usage: /browser open <url>".to_string(); }
+            let open_cmd = if cfg!(target_os = "macos") { "open" }
+                           else if cfg!(target_os = "windows") { "start" }
+                           else { "xdg-open" };
+            let out = Command::new(open_cmd).arg(url).output();
+            return match out {
+                Ok(o) if o.status.success() => format!("Opened {url} in default browser."),
+                Ok(o) => format!("open failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+                Err(e) => format!("Failed to open browser: {e}"),
+            };
+        }
+        if let Some(url) = args.strip_prefix("screenshot ") {
+            let url = url.trim();
+            if url.is_empty() { return "Usage: /browser screenshot <url>".to_string(); }
+            if command_exists("npx") {
+                let out = Command::new("npx")
+                    .args(["playwright", "screenshot", url, "screenshot.png"]).output();
+                return match out {
+                    Ok(o) if o.status.success() =>
+                        format!("Screenshot saved to screenshot.png for {url}"),
+                    Ok(o) => format!("playwright screenshot failed:\n{}",
+                        String::from_utf8_lossy(&o.stderr).trim()),
+                    Err(e) => format!("Failed to run playwright: {e}"),
+                };
+            }
+            return format!(
+                "playwright not available. Install with: npm install -g playwright\n\
+                 Alternatively, open {url} manually and take a screenshot."
+            );
+        }
+        if let Some(url) = args.strip_prefix("test ") {
+            let url = url.trim();
+            if url.is_empty() { return "Usage: /browser test <url>".to_string(); }
+            if command_exists("lighthouse") {
+                let out = Command::new("lighthouse")
+                    .args([url, "--output=text", "--quiet", "--chrome-flags=--headless"]).output();
+                return shell_output_or_err(out, &format!("lighthouse {url}"));
+            }
+            if command_exists("axe") {
+                return shell_output_or_err(
+                    Command::new("axe").arg(url).output(), &format!("axe {url}"));
+            }
+            return format!(
+                "No testing tool found.\n\
+                 Install Lighthouse: npm install -g lighthouse\n\
+                 Install axe-cli:    npm install -g axe-cli\n\
+                 Target URL: {url}"
+            );
+        }
+        format!("Unknown /browser sub-command: {args}\nRun `/browser help` for usage.")
     }
 
-    // ─── Feature J — Notifications (stub) ────────────────────────────────────
-    #[allow(clippy::unused_self)]
+    // ─── Feature 10: Notifications ───────────────────────────────────────────
+
     fn run_notify_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        if sub.is_empty() {
-            return "Notify\n  Usage            /notify [send <msg>|webhook <url> <msg>|matrix <room> <msg>]".to_string();
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() || args == "help" {
+            return [
+                "Usage:",
+                "  /notify send <message>               Send a desktop notification",
+                "  /notify webhook <url> <message>      POST message to a webhook URL",
+                "  /notify matrix <room> <message>      Send a message to a Matrix room",
+            ].join("\n");
         }
-        let mut parts = sub.splitn(3, ' ');
-        let kind = parts.next().unwrap_or("");
-        match kind {
-            "send" => {
-                let msg = parts.next().unwrap_or("(empty)");
-                let title = "Anvil";
-                let _ = std::process::Command::new("osascript")
-                    .args([
-                        "-e",
-                        &format!("display notification \"{msg}\" with title \"{title}\""),
-                    ])
-                    .status();
-                let _ = std::process::Command::new("notify-send")
-                    .args([title, msg])
-                    .status();
-                format!("Notify\n  Sent             {msg}")
+        if let Some(message) = args.strip_prefix("send ") {
+            let message = message.trim();
+            if message.is_empty() { return "Usage: /notify send <message>".to_string(); }
+            return send_desktop_notification("Anvil", message);
+        }
+        if let Some(rest) = args.strip_prefix("webhook ") {
+            let rest = rest.trim();
+            let (url, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify webhook <url> <message>".to_string(),
+            };
+            if url.is_empty() || message.is_empty() {
+                return "Usage: /notify webhook <url> <message>".to_string();
             }
-            _ => format!("Notify\n  Requested        {sub}\n  Note             Webhook and Matrix integrations require API keys in ~/.anvil/config.json."),
+            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST", "-H", "Content-Type: application/json",
+                       "-d", &payload, url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code.starts_with('2') { format!("Webhook delivered to {url} (HTTP {code}).")
+                    } else { format!("Webhook returned HTTP {code} for {url}.") }
+                }
+                Err(e) => format!("curl failed: {e}. Ensure curl is installed."),
+            };
         }
+        if let Some(rest) = args.strip_prefix("matrix ") {
+            let rest = rest.trim();
+            let (room, message) = match rest.find(' ') {
+                Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
+                None => return "Usage: /notify matrix <room> <message>".to_string(),
+            };
+            if room.is_empty() || message.is_empty() {
+                return "Usage: /notify matrix <room> <message>".to_string();
+            }
+            let token = match env::var("MATRIX_TOKEN") {
+                Ok(t) => t,
+                Err(_) => return "MATRIX_TOKEN environment variable not set.\n\
+                                  Set it to your Matrix access token.".to_string(),
+            };
+            let homeserver = env::var("MATRIX_HOMESERVER")
+                .unwrap_or_else(|_| "https://matrix.org".to_string());
+            let room_encoded = room.replace('#', "%23").replace(':', "%3A");
+            let url = format!(
+                "{homeserver}/_matrix/client/r0/rooms/{room_encoded}/send/m.room.message"
+            );
+            let payload = format!(
+                r#"{{"msgtype":"m.text","body":"{msg}"}}"#,
+                msg = message.replace('"', "\\\"")
+            );
+            let out = Command::new("curl")
+                .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                       "-X", "POST",
+                       "-H", &format!("Authorization: Bearer {token}"),
+                       "-H", "Content-Type: application/json",
+                       "-d", &payload, &url])
+                .output();
+            return match out {
+                Ok(o) => {
+                    let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if code.starts_with('2') { format!("Matrix message sent to {room} (HTTP {code}).")
+                    } else { format!("Matrix send returned HTTP {code} for room {room}.") }
+                }
+                Err(e) => format!("curl failed: {e}"),
+            };
+        }
+        format!("Unknown /notify sub-command: {args}\nRun `/notify help` for usage.")
     }
 
     // ─── Feature 21 — Credential Vault ───────────────────────────────────────
@@ -7736,81 +7970,561 @@ impl LiveCli {
 
     // Feature stubs for pre-existing commands K-P that were dispatched but never implemented.
 
-    #[allow(clippy::unused_self)]
+    // ─── Feature 11 — Codebase migration ─────────────────────────────────────
+
     fn run_migrate_command(&self, args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Migrate\n  Requested        {sub}\n  Note             Framework and language migration helpers are available via AI conversation.")
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(4, ' ');
+        match parts.next().unwrap_or("") {
+            "framework" => {
+                let from = parts.next().unwrap_or("<from>");
+                let to = parts.next().unwrap_or("<to>");
+                let cwd = env::current_dir().unwrap_or_default();
+                let mut files: Vec<String> = Vec::new();
+                for ext in &["ts", "tsx", "js", "jsx", "vue", "svelte"] {
+                    if let Ok(rd) = fs::read_dir(&cwd) {
+                        for e in rd.flatten() {
+                            let p = e.path();
+                            if p.extension().and_then(|x| x.to_str()) == Some(ext) {
+                                if let Some(n) = p.file_name() { files.push(n.to_string_lossy().to_string()); }
+                            }
+                        }
+                    }
+                }
+                let file_list = if files.is_empty() { "(no source files detected)".to_string() } else { files[..files.len().min(20)].join("\n") };
+                let prompt = format!(
+                    "I need to migrate a {from} project to {to}.\nSource files found:\n{file_list}\n\nProvide a step-by-step migration plan covering: dependency changes, config updates, breaking API differences, and code patterns to refactor. Be specific and actionable."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(plan) => format!("Migrate\n  From             {from}\n  To               {to}\n\n{plan}"),
+                    Err(e) => format!("migrate framework failed: {e}"),
+                }
+            }
+            "language" => {
+                let from = parts.next().unwrap_or("<from>");
+                let to = parts.next().unwrap_or("<to>");
+                let prompt = format!(
+                    "Explain how to migrate a codebase from {from} to {to}. Cover: type system differences, standard library equivalents, build toolchain changes, testing approach, and common gotchas. Be concise and practical."
+                );
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(plan) => format!("Migrate language\n  From             {from}\n  To               {to}\n\n{plan}"),
+                    Err(e) => format!("migrate language failed: {e}"),
+                }
+            }
+            "deps" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                if !cwd.join("package.json").exists() {
+                    return "Migrate deps\n  Error            no package.json found in current directory".to_string();
+                }
+                let from = if cwd.join("yarn.lock").exists() { "yarn" } else if cwd.join("pnpm-lock.yaml").exists() { "pnpm" } else { "npm" };
+                format!(
+                    "Migrate deps\n  Detected         {from}\n\n  npm  → pnpm      npm install -g pnpm && pnpm import\n  npm  → yarn      npm install -g yarn && yarn import\n  yarn → pnpm      pnpm import\n  Note             Remove old lock files and node_modules after switching."
+                )
+            }
+            _ => "Usage: /migrate [framework <from> <to>|language <from> <to>|deps]".to_string(),
+        }
     }
 
-    #[allow(clippy::unused_self)]
+    // ─── Feature 12 — Regex builder / tester ─────────────────────────────────
+
     fn run_regex_command(&self, args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        if sub.is_empty() {
-            return "Regex\n  Usage            /regex [build <description>|test <pattern> <input>|explain <pattern>]".to_string();
+        let args = args.unwrap_or("").trim();
+        let (sub, rest) = args.split_once(' ').map_or((args, ""), |(a, b)| (a, b));
+        match sub {
+            "build" => {
+                let desc = rest.trim();
+                if desc.is_empty() { return "Usage: /regex build <natural language description>".to_string(); }
+                let prompt = format!("Generate a regex pattern for: {desc}\nRespond with ONLY the pattern on line 1, then a '#' comment explaining each part on line 2.");
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(out) => format!("Regex build\n  Description      {desc}\n\n{out}"),
+                    Err(e) => format!("regex build failed: {e}"),
+                }
+            }
+            "test" => {
+                let mut p = rest.splitn(2, ' ');
+                let pattern = p.next().unwrap_or("").trim();
+                let input = p.next().unwrap_or("").trim();
+                if pattern.is_empty() || input.is_empty() {
+                    return "Usage: /regex test <pattern> <input>".to_string();
+                }
+                let out = Command::new("grep").args(["-Po", pattern]).stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn();
+                match out {
+                    Ok(mut child) => {
+                        if let Some(mut s) = child.stdin.take() {
+                            use std::io::Write;
+                            let _ = s.write_all(input.as_bytes());
+                        }
+                        let result = child.wait_with_output();
+                        let matched = result.map(|r| String::from_utf8_lossy(&r.stdout).trim().to_string()).unwrap_or_default();
+                        if matched.is_empty() {
+                            format!("Regex test\n  Pattern          {pattern}\n  Input            {input}\n  Result           no match")
+                        } else {
+                            format!("Regex test\n  Pattern          {pattern}\n  Input            {input}\n  Match            {matched}")
+                        }
+                    }
+                    Err(_) => format!("Regex test\n  Pattern          {pattern}\n  Input            {input}\n  Note             Test manually: echo '{input}' | grep -Po '{pattern}'"),
+                }
+            }
+            "explain" => {
+                let pattern = rest.trim();
+                if pattern.is_empty() { return "Usage: /regex explain <pattern>".to_string(); }
+                let prompt = format!("Explain this regex pattern in plain English, component by component:\n\n{pattern}\n\nBe concise. List each token and what it matches.");
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(out) => format!("Regex explain\n  Pattern          {pattern}\n\n{out}"),
+                    Err(e) => format!("regex explain failed: {e}"),
+                }
+            }
+            _ => "Usage: /regex [build <description>|test <pattern> <input>|explain <pattern>]".to_string(),
         }
-        format!("Regex\n  Requested        {sub}\n  Tip              Ask the AI: \"build a regex that matches...\" for interactive regex construction.")
     }
+
+    // ─── Feature 13 — SSH session manager ────────────────────────────────────
 
     #[allow(clippy::unused_self)]
     fn run_ssh_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("list").trim();
-        if sub == "list" {
-            match std::process::Command::new("ssh-add").arg("-l").output() {
-                Ok(out) => format!("SSH Keys:\n{}", String::from_utf8_lossy(&out.stdout).trim()),
-                Err(_) => "SSH\n  Usage            /ssh [list|connect <host>|tunnel <host> <local:remote>|keys]".to_string(),
+        let mut parts = args.unwrap_or("list").trim().splitn(4, ' ');
+        let sub = parts.next().unwrap_or("list");
+        match sub {
+            "list" => {
+                let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+                let config_path = home.join(".ssh").join("config");
+                match fs::read_to_string(&config_path) {
+                    Ok(cfg) => {
+                        let hosts: Vec<String> = cfg.lines()
+                            .filter(|l| l.trim_start().starts_with("Host ") && !l.contains('*'))
+                            .map(|l| l.trim().trim_start_matches("Host ").trim().to_string())
+                            .collect();
+                        if hosts.is_empty() {
+                            "SSH list\n  Result           no named hosts in ~/.ssh/config".to_string()
+                        } else {
+                            let list = hosts.iter().enumerate().map(|(i, h)| format!("  {}. {h}", i + 1)).collect::<Vec<_>>().join("\n");
+                            format!("SSH hosts\n  Config           ~/.ssh/config\n\n{list}")
+                        }
+                    }
+                    Err(_) => "SSH list\n  Note             ~/.ssh/config not found or not readable".to_string(),
+                }
             }
-        } else {
-            format!("SSH\n  Requested        {sub}\n  Note             Use your terminal for interactive SSH sessions.")
+            "connect" => {
+                let host = parts.next().unwrap_or("<host>");
+                format!("SSH connect\n  Host             {host}\n  Command          ssh {host}\n  Note             Run this in your terminal — Anvil cannot capture interactive SSH sessions.")
+            }
+            "tunnel" => {
+                let host = parts.next().unwrap_or("<host>");
+                let ports = parts.next().unwrap_or("8080:8080");
+                let (local, remote) = ports.split_once(':').unwrap_or((ports, ports));
+                format!("SSH tunnel\n  Host             {host}\n  Local port       {local}\n  Remote port      {remote}\n  Command          ssh -L {local}:localhost:{remote} {host} -N -f")
+            }
+            "keys" => {
+                let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+                let ssh_dir = home.join(".ssh");
+                match fs::read_dir(&ssh_dir) {
+                    Ok(entries) => {
+                        let keys: Vec<String> = entries.flatten()
+                            .filter_map(|e| {
+                                let p = e.path();
+                                let name = p.file_name()?.to_str()?.to_string();
+                                if !name.ends_with(".pub") && (name.starts_with("id_") || name.contains("_key")) {
+                                    Some(format!("  {name}"))
+                                } else { None }
+                            })
+                            .collect();
+                        if keys.is_empty() { "SSH keys\n  Result           no key files found in ~/.ssh/".to_string() }
+                        else { format!("SSH keys (~/.ssh/)\n\n{}", keys.join("\n")) }
+                    }
+                    Err(e) => format!("SSH keys\n  Error            {e}"),
+                }
+            }
+            _ => "Usage: /ssh [list|connect <host>|tunnel <host> <local:remote>|keys]".to_string(),
         }
     }
 
-    #[allow(clippy::unused_self)]
+    // ─── Feature 14 — Log analysis ───────────────────────────────────────────
+
     fn run_logs_command(&self, args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        if sub.is_empty() {
-            return "Logs\n  Usage            /logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]".to_string();
+        let args = args.unwrap_or("").trim();
+        if args.is_empty() {
+            return "Usage: /logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]".to_string();
         }
-        let mut parts = sub.splitn(3, ' ');
-        let cmd = parts.next().unwrap_or("").trim();
-        let file = parts.next().unwrap_or("").trim();
-        if cmd == "tail" && !file.is_empty() {
-            match std::process::Command::new("tail").args(["-n", "50", file]).output() {
-                Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
-                Err(e) => format!("Logs tail error: {e}"),
+        let mut parts = args.splitn(4, ' ');
+        let sub = parts.next().unwrap_or("");
+        match sub {
+            "tail" => {
+                let file = parts.next().unwrap_or("<file>");
+                match Command::new("tail").args(["-n", "50", file]).output() {
+                    Ok(o) => format!("Logs tail  {file}\n\n{}", truncate_for_prompt(&String::from_utf8_lossy(&o.stdout), 4_000)),
+                    Err(e) => format!("logs tail failed: {e}"),
+                }
             }
-        } else {
-            format!("Logs\n  Requested        {sub}\n  Tip              Use `tail -f <file>` in your terminal for live log streaming.")
+            "search" => {
+                let file = parts.next().unwrap_or("<file>");
+                let pattern = parts.next().unwrap_or("<pattern>");
+                match Command::new("grep").args(["-n", "-C", "2", pattern, file]).output() {
+                    Ok(o) => {
+                        let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                        if text.is_empty() {
+                            format!("Logs search\n  File             {file}\n  Pattern          {pattern}\n  Result           no matches found")
+                        } else {
+                            format!("Logs search  {file}  pattern={pattern}\n\n{}", truncate_for_prompt(&text, 4_000))
+                        }
+                    }
+                    Err(e) => format!("logs search failed: {e}"),
+                }
+            }
+            "analyze" => {
+                let file = parts.next().unwrap_or("<file>");
+                let content = match fs::read_to_string(file) {
+                    Ok(c) => c,
+                    Err(e) => return format!("logs analyze\n  Error            {e}"),
+                };
+                let sample = truncate_for_prompt(&content, 10_000);
+                let prompt = format!("Analyze these log entries:\n1. Identify errors and root causes\n2. Recurring patterns\n3. Performance anomalies\n4. Recommended fixes\n\nLog:\n{sample}");
+                match self.run_internal_prompt_text(&prompt, false) {
+                    Ok(a) => format!("Logs analyze\n  File             {file}\n\n{a}"),
+                    Err(e) => format!("logs analyze failed: {e}"),
+                }
+            }
+            "stats" => {
+                let file = parts.next().unwrap_or("<file>");
+                match fs::read_to_string(file) {
+                    Ok(content) => {
+                        let total = content.lines().count();
+                        let errors = content.lines().filter(|l| { let u = l.to_uppercase(); u.contains("ERROR") || u.contains("FATAL") }).count();
+                        let warns = content.lines().filter(|l| l.to_uppercase().contains("WARN")).count();
+                        let info = content.lines().filter(|l| l.to_uppercase().contains("INFO")).count();
+                        format!("Logs stats\n  File             {file}\n  Total lines      {total}\n  ERROR/FATAL      {errors}\n  WARN             {warns}\n  INFO             {info}")
+                    }
+                    Err(e) => format!("logs stats\n  Error            {e}"),
+                }
+            }
+            _ => "Usage: /logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]".to_string(),
         }
     }
+
+    // ─── Feature 15 — Markdown preview ───────────────────────────────────────
 
     #[allow(clippy::unused_self)]
     fn run_markdown_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Markdown\n  Requested        {sub}\n  Note             Markdown preview/lint requires a renderer — try `glow` or VS Code preview.")
+        let mut parts = args.unwrap_or("").trim().splitn(3, ' ');
+        let sub = parts.next().unwrap_or("");
+        let file = parts.next().unwrap_or("<file>");
+        match sub {
+            "preview" => {
+                match fs::read_to_string(file) {
+                    Ok(src) => {
+                        // Strip markdown syntax for TUI plain-text preview
+                        let preview: String = src.lines().map(|l| {
+                            let l = l.trim_start_matches('#').trim();
+                            l.trim_start_matches("**").trim_end_matches("**")
+                                .trim_start_matches('*').trim_end_matches('*')
+                                .to_string()
+                        }).collect::<Vec<_>>().join("\n");
+                        format!("Markdown preview  {file}\n\n{}", truncate_for_prompt(&preview, 5_000))
+                    }
+                    Err(e) => format!("Markdown preview\n  Error            {e}"),
+                }
+            }
+            "toc" => {
+                match fs::read_to_string(file) {
+                    Ok(src) => {
+                        let headings: Vec<String> = src.lines()
+                            .filter(|l| l.starts_with('#'))
+                            .map(|l| {
+                                let level = l.chars().take_while(|c| *c == '#').count();
+                                let title = l.trim_start_matches('#').trim();
+                                let indent = "  ".repeat(level.saturating_sub(1));
+                                let anchor = title.to_lowercase().replace(' ', "-")
+                                    .chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>();
+                                format!("{indent}- [{title}](#{anchor})")
+                            })
+                            .collect();
+                        if headings.is_empty() {
+                            format!("Markdown TOC\n  File             {file}\n  Result           no headings found")
+                        } else {
+                            format!("Markdown TOC\n  File             {file}\n\n{}", headings.join("\n"))
+                        }
+                    }
+                    Err(e) => format!("Markdown TOC\n  Error            {e}"),
+                }
+            }
+            "lint" => {
+                match fs::read_to_string(file) {
+                    Ok(src) => {
+                        let mut issues: Vec<String> = Vec::new();
+                        let mut in_code = false;
+                        for (i, line) in src.lines().enumerate() {
+                            if line.starts_with("```") { in_code = !in_code; }
+                            if in_code { continue; }
+                            if line.ends_with(' ') || line.ends_with('\t') {
+                                issues.push(format!("  Line {:>4}  trailing whitespace", i + 1));
+                            }
+                            if line.len() > 120 {
+                                issues.push(format!("  Line {:>4}  line exceeds 120 chars ({})", i + 1, line.len()));
+                            }
+                        }
+                        if issues.is_empty() {
+                            format!("Markdown lint\n  File             {file}\n  Result           no issues found")
+                        } else {
+                            format!("Markdown lint\n  File             {file}\n  Issues           {}\n\n{}", issues.len(), issues.join("\n"))
+                        }
+                    }
+                    Err(e) => format!("Markdown lint\n  Error            {e}"),
+                }
+            }
+            _ => "Usage: /markdown [preview <file>|toc <file>|lint <file>]".to_string(),
+        }
     }
+
+    // ─── Feature 16 — Snippet library ────────────────────────────────────────
 
     #[allow(clippy::unused_self)]
     fn run_snippets_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Snippets\n  Requested        {sub}\n  Note             Snippet management is available via /vault store for secrets or ANVIL.md for prompts.")
+        let snippets_dir = anvil_home_dir().join("snippets");
+        let args = args.unwrap_or("list").trim();
+        let mut parts = args.splitn(3, ' ');
+        let sub = parts.next().unwrap_or("list");
+        match sub {
+            "save" => {
+                let name = parts.next().unwrap_or("snippet");
+                let content = parts.collect::<Vec<_>>().join(" ");
+                if content.is_empty() {
+                    return format!("Snippets save\n  Usage            /snippets save <name> <code>");
+                }
+                let _ = fs::create_dir_all(&snippets_dir);
+                let path = snippets_dir.join(format!("{name}.snippet"));
+                match fs::write(&path, &content) {
+                    Ok(_) => format!("Snippets\n  Action           save\n  Name             {name}\n  Path             {}", path.display()),
+                    Err(e) => format!("Snippets save\n  Error            {e}"),
+                }
+            }
+            "list" => {
+                match fs::read_dir(&snippets_dir) {
+                    Ok(entries) => {
+                        let names: Vec<String> = entries.flatten().filter_map(|e| {
+                            let p = e.path();
+                            if p.extension().map_or(false, |x| x == "snippet") {
+                                p.file_stem().map(|s| format!("  {}", s.to_string_lossy()))
+                            } else { None }
+                        }).collect();
+                        if names.is_empty() {
+                            format!("Snippets\n  Directory        {}\n  Result           no snippets yet — use /snippets save <name> <code>", snippets_dir.display())
+                        } else {
+                            format!("Snippets  ({})\n\n{}", names.len(), names.join("\n"))
+                        }
+                    }
+                    Err(_) => format!("Snippets\n  Directory        {}\n  Result           no snippets directory yet", snippets_dir.display()),
+                }
+            }
+            "get" => {
+                let name = parts.next().unwrap_or("<name>");
+                let path = snippets_dir.join(format!("{name}.snippet"));
+                match fs::read_to_string(&path) {
+                    Ok(content) => format!("Snippet: {name}\n\n{content}"),
+                    Err(_) => format!("Snippets get\n  Name             {name}\n  Error            not found — run /snippets list"),
+                }
+            }
+            "search" => {
+                let query = parts.collect::<Vec<_>>().join(" ");
+                let query = query.trim();
+                if query.is_empty() { return "Usage: /snippets search <query>".to_string(); }
+                match fs::read_dir(&snippets_dir) {
+                    Ok(entries) => {
+                        let matches: Vec<String> = entries.flatten().filter_map(|e| {
+                            let p = e.path();
+                            if p.extension().map_or(false, |x| x == "snippet") {
+                                let name = p.file_stem()?.to_string_lossy().to_string();
+                                let content = fs::read_to_string(&p).unwrap_or_default();
+                                if name.contains(query) || content.contains(query) { Some(format!("  {name}")) } else { None }
+                            } else { None }
+                        }).collect();
+                        if matches.is_empty() {
+                            format!("Snippets search\n  Query            {query}\n  Result           no matches")
+                        } else {
+                            format!("Snippets search\n  Query            {query}\n  Matches          {}\n\n{}", matches.len(), matches.join("\n"))
+                        }
+                    }
+                    Err(_) => "Snippets search\n  Result           no snippets directory yet".to_string(),
+                }
+            }
+            _ => "Usage: /snippets [save <name>|list|get <name>|search <query>]".to_string(),
+        }
     }
 
-    #[allow(clippy::unused_self)]
+    // ─── Feature 17 — AI fine-tuning assistant ────────────────────────────────
+
     fn run_finetune_command(&self, args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Finetune\n  Requested        {sub}\n  Note             Fine-tuning dataset preparation requires an OpenAI API key and the fine-tuning endpoint.")
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(3, ' ');
+        match parts.next().unwrap_or("") {
+            "prepare" => {
+                let file = parts.next().unwrap_or("<file>");
+                match fs::read_to_string(file) {
+                    Ok(src) => {
+                        let lines = src.lines().count();
+                        let json_lines = src.lines().filter(|l| l.trim_start().starts_with('{')).count();
+                        let prompt = format!(
+                            "Review this fine-tuning training data file:\nFile: {file}\nLines: {lines}\nJSON-like: {json_lines}\nSample:\n{}\n\nCheck: JSONL correctness, role pairs, data diversity, biases, sample count. Provide quality assessment.",
+                            truncate_for_prompt(&src, 2_000)
+                        );
+                        match self.run_internal_prompt_text(&prompt, false) {
+                            Ok(a) => format!("Finetune prepare\n  File             {file}\n  Lines            {lines}\n\n{a}"),
+                            Err(e) => format!("finetune prepare failed: {e}"),
+                        }
+                    }
+                    Err(e) => format!("Finetune prepare\n  Error            {e}"),
+                }
+            }
+            "validate" => {
+                let file = parts.next().unwrap_or("<file>");
+                match fs::read_to_string(file) {
+                    Ok(src) => {
+                        let mut errors: Vec<String> = Vec::new();
+                        for (i, line) in src.lines().enumerate() {
+                            let l = line.trim();
+                            if l.is_empty() { continue; }
+                            if serde_json::from_str::<serde_json::Value>(l).is_err() {
+                                errors.push(format!("  Line {:>4}  invalid JSON: {}", i + 1, &l[..l.len().min(60)]));
+                            }
+                        }
+                        if errors.is_empty() {
+                            let count = src.lines().filter(|l| !l.trim().is_empty()).count();
+                            format!("Finetune validate\n  File             {file}\n  Examples         {count}\n  Result           valid JSONL")
+                        } else {
+                            format!("Finetune validate\n  File             {file}\n  Errors           {}\n\n{}", errors.len(), errors.join("\n"))
+                        }
+                    }
+                    Err(e) => format!("Finetune validate\n  Error            {e}"),
+                }
+            }
+            "start" => "Finetune start\n  Steps\n    1. Validate data     /finetune validate <file>\n    2. Upload file        openai api files.create -f <file> -p fine-tune\n    3. Start job          openai api fine_tuning.jobs.create -m gpt-4o-mini -t <file-id>\n  Docs                 https://platform.openai.com/docs/guides/fine-tuning".to_string(),
+            "status" => {
+                match Command::new("openai").args(["api", "fine_tuning.jobs.list"]).output() {
+                    Ok(o) if o.status.success() => format!("Finetune jobs\n\n{}", truncate_for_prompt(&String::from_utf8_lossy(&o.stdout), 3_000)),
+                    _ => "Finetune status\n  Note             Install OpenAI CLI: pip install openai\n  Then:            openai api fine_tuning.jobs.list".to_string(),
+                }
+            }
+            _ => "Usage: /finetune [prepare <file>|validate <file>|start|status]".to_string(),
+        }
     }
+
+    // ─── Feature 18 — Webhook manager ────────────────────────────────────────
 
     #[allow(clippy::unused_self)]
     fn run_webhook_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Webhook\n  Requested        {sub}\n  Note             Configure webhook endpoints in ~/.anvil/config.json under the 'webhooks' key.")
+        let webhooks_file = anvil_home_dir().join("webhooks.json");
+        let load_wh = || -> serde_json::Map<String, serde_json::Value> {
+            fs::read_to_string(&webhooks_file).ok()
+                .and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        };
+
+        let args = args.unwrap_or("list").trim();
+        let mut parts = args.splitn(4, ' ');
+        let sub = parts.next().unwrap_or("list");
+        match sub {
+            "list" => {
+                let wh = load_wh();
+                if wh.is_empty() {
+                    format!("Webhooks\n  Config           {}\n  Result           no webhooks — use /webhook add <name> <url>", webhooks_file.display())
+                } else {
+                    let list = wh.iter().enumerate()
+                        .map(|(i, (n, u))| format!("  {}. {n:<20} {}", i + 1, u.as_str().unwrap_or("<invalid>")))
+                        .collect::<Vec<_>>().join("\n");
+                    format!("Webhooks  ({})\n\n{list}", wh.len())
+                }
+            }
+            "add" => {
+                let name = parts.next().unwrap_or("<name>").to_string();
+                let url = parts.next().unwrap_or("<url>").to_string();
+                let mut wh = load_wh();
+                wh.insert(name.clone(), serde_json::Value::String(url.clone()));
+                let _ = fs::create_dir_all(anvil_home_dir());
+                let _ = fs::write(&webhooks_file, serde_json::to_string_pretty(&wh).unwrap_or_default());
+                format!("Webhooks\n  Action           add\n  Name             {name}\n  URL              {url}\n  Result           saved")
+            }
+            "test" => {
+                let name = parts.next().unwrap_or("<name>");
+                let wh = load_wh();
+                let url = match wh.get(name).and_then(|v| v.as_str()) {
+                    Some(u) => u.to_string(),
+                    None => return format!("Webhook test\n  Name             {name}\n  Error            not found — run /webhook list"),
+                };
+                let payload = r#"{"text":"Anvil webhook test","source":"anvil-cli"}"#;
+                match Command::new("curl").args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                    "-X", "POST", "-H", "Content-Type: application/json", "-d", payload, &url]).output() {
+                    Ok(o) => format!("Webhook test\n  Name             {name}\n  URL              {url}\n  HTTP status      {}", String::from_utf8_lossy(&o.stdout).trim()),
+                    Err(e) => format!("webhook test failed: {e}"),
+                }
+            }
+            "remove" => {
+                let name = parts.next().unwrap_or("<name>");
+                let mut wh = load_wh();
+                if wh.remove(name).is_some() {
+                    let _ = fs::write(&webhooks_file, serde_json::to_string_pretty(&wh).unwrap_or_default());
+                    format!("Webhooks\n  Action           remove\n  Name             {name}\n  Result           removed")
+                } else {
+                    format!("Webhooks remove\n  Name             {name}\n  Error            not found")
+                }
+            }
+            _ => "Usage: /webhook [list|add <name> <url>|test <name>|remove <name>]".to_string(),
+        }
     }
+
+    // ─── Feature 20 — Plugin SDK ──────────────────────────────────────────────
 
     #[allow(clippy::unused_self)]
     fn run_plugin_sdk_command(args: Option<&str>) -> String {
-        let sub = args.unwrap_or("").trim();
-        format!("Plugin SDK\n  Requested        {sub}\n  Note             Plugin development docs at https://github.com/anvilco/anvil-plugin-sdk.")
+        let mut parts = args.unwrap_or("").trim().splitn(3, ' ');
+        let sub = parts.next().unwrap_or("");
+        match sub {
+            "init" => {
+                let name = parts.next().unwrap_or("my-plugin");
+                let plugin_dir = env::current_dir().unwrap_or_default().join(name);
+                if plugin_dir.exists() {
+                    return format!("Plugin SDK init\n  Error            directory already exists: {}", plugin_dir.display());
+                }
+                let _ = fs::create_dir_all(plugin_dir.join("src"));
+                let manifest = format!(r#"{{
+  "name": "{name}",
+  "version": "0.1.0",
+  "description": "An Anvil plugin",
+  "main": "src/index.ts",
+  "hooks": ["on_message", "on_tool_result"],
+  "permissions": ["read_files"]
+}}"#);
+                let index_ts = "// Anvil Plugin SDK entry point\n// Implement hooks: on_message, on_tool_result\n\nexport default {\n  name: 'plugin',\n\n  async on_message(_ctx, message) {\n    return null; // pass-through\n  },\n\n  async on_tool_result(_ctx, _tool, result) {\n    return result;\n  },\n};\n";
+                let _ = fs::write(plugin_dir.join("plugin.json"), &manifest);
+                let _ = fs::write(plugin_dir.join("src").join("index.ts"), index_ts);
+                let _ = fs::write(plugin_dir.join("README.md"), format!("# {name}\n\nAnvil plugin.\n"));
+                format!("Plugin SDK init\n  Name             {name}\n  Directory        {}\n  Created          plugin.json, src/index.ts, README.md\n  Next             cd {name} && /plugin-sdk build", plugin_dir.display())
+            }
+            "build" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                if !cwd.join("plugin.json").exists() {
+                    return "Plugin SDK build\n  Error            plugin.json not found — run /plugin-sdk init <name> first".to_string();
+                }
+                match Command::new("npx").args(["tsc", "--noEmit"]).current_dir(&cwd).output() {
+                    Ok(o) if o.status.success() => "Plugin SDK build\n  Result           TypeScript checks passed".to_string(),
+                    Ok(o) => format!("Plugin SDK build\n  Errors\n{}", String::from_utf8_lossy(&o.stderr).trim()),
+                    Err(_) => "Plugin SDK build\n  Note             Install TypeScript: npm install -g typescript".to_string(),
+                }
+            }
+            "test" => {
+                let cwd = env::current_dir().unwrap_or_default();
+                match Command::new("npm").args(["test"]).current_dir(&cwd).output() {
+                    Ok(o) => {
+                        let text = if o.status.success() {
+                            String::from_utf8_lossy(&o.stdout).trim().to_string()
+                        } else {
+                            String::from_utf8_lossy(&o.stderr).trim().to_string()
+                        };
+                        format!("Plugin SDK test\n  Result           {}\n\n{}", if o.status.success() { "passed" } else { "failed" }, truncate_for_prompt(&text, 2_000))
+                    }
+                    Err(_) => "Plugin SDK test\n  Note             Run npm test in your plugin directory".to_string(),
+                }
+            }
+            "publish" => "Plugin SDK publish\n  Status           AnvilHub publishing is not yet live.\n  Coming soon      /plugin-sdk publish will submit to AnvilHub.\n  Meanwhile        Share via GitHub and install with /plugin install <path>".to_string(),
+            _ => "Usage: /plugin-sdk [init <name>|build|test|publish]".to_string(),
+        }
     }
 
     /// Read a string value from `~/.anvil/config.json` with a fallback default.
@@ -8193,6 +8907,139 @@ fn shell_output_or_err(result: Result<std::process::Output, std::io::Error>, con
             }
         }
         Err(e) => format!("{context}: {e}"),
+    }
+}
+
+// ─── Package manager detection ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageManager {
+    Cargo,
+    Npm,
+    Pnpm,
+    Yarn,
+    Pip,
+    Unknown,
+}
+
+fn detect_package_manager() -> PackageManager {
+    if Path::new("Cargo.toml").exists() { return PackageManager::Cargo; }
+    if Path::new("pnpm-lock.yaml").exists() || Path::new("pnpm-workspace.yaml").exists() {
+        return PackageManager::Pnpm;
+    }
+    if Path::new("yarn.lock").exists() { return PackageManager::Yarn; }
+    if Path::new("package.json").exists() { return PackageManager::Npm; }
+    if Path::new("pyproject.toml").exists() || Path::new("setup.py").exists()
+        || Path::new("requirements.txt").exists() {
+        return PackageManager::Pip;
+    }
+    PackageManager::Unknown
+}
+
+// ─── Workspace (monorepo) detection ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkspaceKind {
+    Cargo,
+    Npm,
+    Pnpm,
+    None,
+}
+
+fn detect_workspace_kind() -> WorkspaceKind {
+    // Cargo workspace: Cargo.toml must contain [workspace]
+    if Path::new("Cargo.toml").exists() {
+        if let Ok(content) = fs::read_to_string("Cargo.toml") {
+            if content.contains("[workspace]") {
+                return WorkspaceKind::Cargo;
+            }
+        }
+    }
+    if Path::new("pnpm-workspace.yaml").exists() {
+        return WorkspaceKind::Pnpm;
+    }
+    // npm workspaces: package.json must have a "workspaces" key
+    if Path::new("package.json").exists() {
+        if let Ok(content) = fs::read_to_string("package.json") {
+            if content.contains("\"workspaces\"") {
+                return WorkspaceKind::Npm;
+            }
+        }
+    }
+    WorkspaceKind::None
+}
+
+/// Parse the output of `cargo metadata --no-deps --format-version=1` and list package names.
+fn parse_cargo_workspace_members(json_text: &str) -> String {
+    // Quick heuristic: extract "name":"…" pairs from metadata JSON.
+    let mut names: Vec<String> = Vec::new();
+    let mut rest = json_text;
+    while let Some(idx) = rest.find("\"name\":\"") {
+        rest = &rest[idx + 8..];
+        if let Some(end) = rest.find('"') {
+            names.push(rest[..end].to_string());
+            rest = &rest[end..];
+        }
+    }
+    names.dedup();
+    if names.is_empty() {
+        return "No workspace packages found.".to_string();
+    }
+    format!("Workspace packages ({}):\n{}", names.len(),
+        names.iter().map(|n| format!("  {n}")).collect::<Vec<_>>().join("\n"))
+}
+
+// ─── CI/CD project-type detection ────────────────────────────────────────────
+
+fn detect_project_type_for_pipeline() -> &'static str {
+    if Path::new("Cargo.toml").exists() { return "Rust (Cargo)"; }
+    if Path::new("go.mod").exists() { return "Go"; }
+    if Path::new("pyproject.toml").exists() || Path::new("setup.py").exists() { return "Python"; }
+    if Path::new("pom.xml").exists() { return "Java (Maven)"; }
+    if Path::new("build.gradle").exists() || Path::new("build.gradle.kts").exists() {
+        return "Java/Kotlin (Gradle)";
+    }
+    if Path::new("package.json").exists() {
+        // Check if it's a Next.js project
+        if let Ok(c) = fs::read_to_string("package.json") {
+            if c.contains("\"next\"") { return "Next.js"; }
+            if c.contains("\"react\"") { return "React"; }
+        }
+        return "Node.js";
+    }
+    if Path::new("Dockerfile").exists() { return "Docker"; }
+    "generic"
+}
+
+// ─── Desktop notification helper ─────────────────────────────────────────────
+
+fn send_desktop_notification(title: &str, message: &str) -> String {
+    // macOS
+    if cfg!(target_os = "macos") {
+        let script = format!(
+            r#"display notification "{msg}" with title "{title}""#,
+            msg = message.replace('"', "\\\""),
+            title = title.replace('"', "\\\""),
+        );
+        let out = Command::new("osascript").args(["-e", &script]).output();
+        return match out {
+            Ok(o) if o.status.success() => format!("Notification sent: {message}"),
+            Ok(o) => format!("osascript failed: {}", String::from_utf8_lossy(&o.stderr).trim()),
+            Err(e) => format!("osascript not available: {e}"),
+        };
+    }
+    // Linux (notify-send)
+    let out = Command::new("notify-send").args([title, message]).output();
+    match out {
+        Ok(o) if o.status.success() => format!("Notification sent: {message}"),
+        Ok(_) => {
+            // Fall back to wall/echo
+            format!("Desktop notification: [{title}] {message}")
+        }
+        Err(_) => format!(
+            "notify-send not available. Install libnotify-bin (Linux) or use macOS.\n\
+             Message: [{title}] {message}"
+        ),
     }
 }
 

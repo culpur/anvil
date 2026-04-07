@@ -2360,6 +2360,44 @@ fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/env".into(), hint: "Manage session environment variables".into() },
         // Feature 21 — Credential Vault
         CompletionItem { insert: "/vault".into(), hint: "Encrypted credential vault and TOTP manager".into() },
+        // Feature A — LSP autocomplete
+        CompletionItem { insert: "/lsp".into(), hint: "LSP: start server, list symbols, find references".into() },
+        // Feature B — Jupyter notebook support
+        CompletionItem { insert: "/notebook".into(), hint: "Jupyter notebook: run, cell, export".into() },
+        // Feature C — Kubernetes management
+        CompletionItem { insert: "/k8s".into(), hint: "Kubernetes: pods, logs, apply, describe".into() },
+        // Feature D — Terraform/IaC
+        CompletionItem { insert: "/iac".into(), hint: "IaC: plan, apply, validate, drift (terraform/tofu)".into() },
+        // Feature E — CI/CD pipeline builder
+        CompletionItem { insert: "/pipeline".into(), hint: "CI/CD: generate, lint, or run pipeline".into() },
+        // Feature F — Code review
+        CompletionItem { insert: "/review".into(), hint: "Code review: file, staged changes, or PR diff".into() },
+        // Feature G — Dependency graph
+        CompletionItem { insert: "/deps".into(), hint: "Dependencies: tree, outdated, audit, why".into() },
+        // Feature H — Monorepo awareness
+        CompletionItem { insert: "/mono".into(), hint: "Monorepo: list, graph, changed, run".into() },
+        // Feature I — Browser automation
+        CompletionItem { insert: "/browser".into(), hint: "Browser: open URL, screenshot, test".into() },
+        // Feature J — Desktop & webhook notifications
+        CompletionItem { insert: "/notify".into(), hint: "Notifications: desktop, webhook, Matrix".into() },
+        // Feature 11 — codebase migration
+        CompletionItem { insert: "/migrate".into(), hint: "Migrate framework, language, or dependency manager".into() },
+        // Feature 12 — regex builder / tester
+        CompletionItem { insert: "/regex".into(), hint: "Regex: build, test, or explain a pattern".into() },
+        // Feature 13 — SSH session manager
+        CompletionItem { insert: "/ssh".into(), hint: "SSH: list hosts, connect, tunnel, or list keys".into() },
+        // Feature 14 — log analysis
+        CompletionItem { insert: "/logs".into(), hint: "Logs: tail, search, analyze, or stats".into() },
+        // Feature 15 — markdown preview
+        CompletionItem { insert: "/markdown".into(), hint: "Markdown: preview, table of contents, or lint".into() },
+        // Feature 16 — snippet library
+        CompletionItem { insert: "/snippets".into(), hint: "Snippets: save, list, get, or search".into() },
+        // Feature 17 — AI fine-tuning assistant
+        CompletionItem { insert: "/finetune".into(), hint: "Fine-tuning: prepare data, validate, start job, status".into() },
+        // Feature 18 — webhook manager
+        CompletionItem { insert: "/webhook".into(), hint: "Webhooks: list, add, test, or remove endpoints".into() },
+        // Feature 20 — plugin SDK
+        CompletionItem { insert: "/plugin-sdk".into(), hint: "Plugin SDK: init, build, test, or publish".into() },
     ]
 }
 
@@ -2607,6 +2645,129 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "delete".into(), hint: "Delete a credential".into() },
             CompletionItem { insert: "totp".into(), hint: "TOTP sub-commands (add/generate/list/delete)".into() },
         ],
+        // Feature A — LSP autocomplete
+        "/lsp" => vec![
+            CompletionItem { insert: "start".into(), hint: "Start language server for a language".into() },
+            CompletionItem { insert: "symbols".into(), hint: "List symbols in a file via LSP".into() },
+            CompletionItem { insert: "references".into(), hint: "Find all references to a symbol".into() },
+        ],
+        // Feature B — Jupyter notebook support
+        "/notebook" => vec![
+            CompletionItem { insert: "run".into(), hint: "Execute all cells in a .ipynb notebook".into() },
+            CompletionItem { insert: "cell".into(), hint: "Run specific cell by index".into() },
+            CompletionItem { insert: "export".into(), hint: "Export notebook to html/py/pdf".into() },
+        ],
+        // Feature C — Kubernetes management
+        "/k8s" | "/kubectl" => vec![
+            CompletionItem { insert: "pods".into(), hint: "List pods in current namespace".into() },
+            CompletionItem { insert: "logs".into(), hint: "Tail last 50 lines of pod logs".into() },
+            CompletionItem { insert: "apply".into(), hint: "Apply a manifest file".into() },
+            CompletionItem { insert: "describe".into(), hint: "Describe a resource".into() },
+        ],
+        // Feature D — Terraform/IaC
+        "/iac" | "/terraform" => vec![
+            CompletionItem { insert: "plan".into(), hint: "Run terraform/tofu plan".into() },
+            CompletionItem { insert: "apply".into(), hint: "Run terraform/tofu apply".into() },
+            CompletionItem { insert: "validate".into(), hint: "Validate configuration files".into() },
+            CompletionItem { insert: "drift".into(), hint: "Detect infrastructure drift".into() },
+        ],
+        // Feature E — CI/CD pipeline builder
+        "/pipeline" => vec![
+            CompletionItem { insert: "generate".into(), hint: "Generate CI config from project type".into() },
+            CompletionItem { insert: "lint".into(), hint: "Validate existing CI pipeline config".into() },
+            CompletionItem { insert: "run".into(), hint: "Trigger local pipeline run via act".into() },
+        ],
+        // Feature F — Code review
+        "/review" => vec![
+            CompletionItem { insert: "staged".into(), hint: "Review all staged git changes".into() },
+            CompletionItem { insert: "pr".into(), hint: "Review current PR diff".into() },
+        ],
+        // Feature G — Dependency graph
+        "/deps" => vec![
+            CompletionItem { insert: "tree".into(), hint: "Show dependency tree".into() },
+            CompletionItem { insert: "outdated".into(), hint: "Show outdated dependencies".into() },
+            CompletionItem { insert: "audit".into(), hint: "Security audit of dependencies".into() },
+            CompletionItem { insert: "why".into(), hint: "Explain why a dependency is included".into() },
+        ],
+        // Feature H — Monorepo awareness
+        "/mono" => vec![
+            CompletionItem { insert: "list".into(), hint: "List workspace packages".into() },
+            CompletionItem { insert: "graph".into(), hint: "Show package dependency graph".into() },
+            CompletionItem { insert: "changed".into(), hint: "Packages changed since last release".into() },
+            CompletionItem { insert: "run".into(), hint: "Run command in workspace packages".into() },
+        ],
+        // Feature I — Browser automation
+        "/browser" => vec![
+            CompletionItem { insert: "open".into(), hint: "Open URL in default browser".into() },
+            CompletionItem { insert: "screenshot".into(), hint: "Capture screenshot (playwright)".into() },
+            CompletionItem { insert: "test".into(), hint: "Run accessibility/performance test".into() },
+        ],
+        // Feature J — Desktop & webhook notifications
+        "/notify" => vec![
+            CompletionItem { insert: "send".into(), hint: "Send a desktop notification".into() },
+            CompletionItem { insert: "webhook".into(), hint: "POST message to a webhook URL".into() },
+            CompletionItem { insert: "matrix".into(), hint: "Send message to a Matrix room".into() },
+        ],
+        // Feature 11 — codebase migration
+        "/migrate" => vec![
+            CompletionItem { insert: "framework".into(), hint: "Migrate between frameworks (e.g. react → vue)".into() },
+            CompletionItem { insert: "language".into(), hint: "Convert codebase to another language".into() },
+            CompletionItem { insert: "deps".into(), hint: "Migrate package manager (npm/yarn/pnpm)".into() },
+        ],
+        // Feature 12 — regex builder / tester
+        "/regex" => vec![
+            CompletionItem { insert: "build".into(), hint: "Generate regex from a natural language description".into() },
+            CompletionItem { insert: "test".into(), hint: "Test a pattern against an input string".into() },
+            CompletionItem { insert: "explain".into(), hint: "Explain a regex pattern in plain English".into() },
+        ],
+        // Feature 13 — SSH session manager
+        "/ssh" => vec![
+            CompletionItem { insert: "list".into(), hint: "List hosts from ~/.ssh/config".into() },
+            CompletionItem { insert: "connect".into(), hint: "Show command to connect to a host".into() },
+            CompletionItem { insert: "tunnel".into(), hint: "Set up an SSH port tunnel".into() },
+            CompletionItem { insert: "keys".into(), hint: "List SSH keys in ~/.ssh/".into() },
+        ],
+        // Feature 14 — log analysis
+        "/logs" => vec![
+            CompletionItem { insert: "tail".into(), hint: "Show last 50 lines of a log file".into() },
+            CompletionItem { insert: "search".into(), hint: "Search log file with context lines".into() },
+            CompletionItem { insert: "analyze".into(), hint: "AI-powered log analysis for errors/patterns".into() },
+            CompletionItem { insert: "stats".into(), hint: "Show error/warn/info counts".into() },
+        ],
+        // Feature 15 — markdown preview
+        "/markdown" | "/md" => vec![
+            CompletionItem { insert: "preview".into(), hint: "Render markdown in TUI (stripped)".into() },
+            CompletionItem { insert: "toc".into(), hint: "Generate table of contents from headings".into() },
+            CompletionItem { insert: "lint".into(), hint: "Check for trailing whitespace and long lines".into() },
+        ],
+        // Feature 16 — snippet library
+        "/snippets" => vec![
+            CompletionItem { insert: "save".into(), hint: "Save code as a named snippet".into() },
+            CompletionItem { insert: "list".into(), hint: "List all saved snippets".into() },
+            CompletionItem { insert: "get".into(), hint: "Retrieve a snippet by name".into() },
+            CompletionItem { insert: "search".into(), hint: "Search snippets by name or content".into() },
+        ],
+        // Feature 17 — AI fine-tuning assistant
+        "/finetune" => vec![
+            CompletionItem { insert: "prepare".into(), hint: "Review training data file quality".into() },
+            CompletionItem { insert: "validate".into(), hint: "Validate JSONL format line by line".into() },
+            CompletionItem { insert: "start".into(), hint: "Show steps to submit fine-tuning job".into() },
+            CompletionItem { insert: "status".into(), hint: "Check fine-tuning job status via CLI".into() },
+        ],
+        // Feature 18 — webhook manager
+        "/webhook" => vec![
+            CompletionItem { insert: "list".into(), hint: "List configured webhook endpoints".into() },
+            CompletionItem { insert: "add".into(), hint: "Add a new webhook endpoint".into() },
+            CompletionItem { insert: "test".into(), hint: "Send test payload to a webhook".into() },
+            CompletionItem { insert: "remove".into(), hint: "Remove a webhook endpoint".into() },
+        ],
+        // Feature 20 — plugin SDK
+        "/plugin-sdk" => vec![
+            CompletionItem { insert: "init".into(), hint: "Scaffold a new plugin project".into() },
+            CompletionItem { insert: "build".into(), hint: "Build and type-check the plugin".into() },
+            CompletionItem { insert: "test".into(), hint: "Run plugin test suite".into() },
+            CompletionItem { insert: "publish".into(), hint: "Publish plugin to AnvilHub".into() },
+        ],
         _ => vec![],
     }
 }
@@ -2715,6 +2876,27 @@ fn third_level_completions(command: &str, subcommand: &str) -> Vec<CompletionIte
             CompletionItem { insert: "add".into(), hint: "Add a TOTP entry (Base32 secret)".into() },
             CompletionItem { insert: "list".into(), hint: "List TOTP labels".into() },
             CompletionItem { insert: "delete".into(), hint: "Delete a TOTP entry".into() },
+        ],
+        // Feature A — LSP start: suggest languages
+        ("/lsp", "start") => vec![
+            CompletionItem { insert: "rust".into(), hint: "rust-analyzer".into() },
+            CompletionItem { insert: "typescript".into(), hint: "typescript-language-server".into() },
+            CompletionItem { insert: "python".into(), hint: "pylsp".into() },
+            CompletionItem { insert: "go".into(), hint: "gopls".into() },
+            CompletionItem { insert: "java".into(), hint: "jdtls".into() },
+        ],
+        // Feature B — notebook export: suggest formats
+        ("/notebook", "export") => vec![
+            CompletionItem { insert: "html".into(), hint: "Export as HTML".into() },
+            CompletionItem { insert: "py".into(), hint: "Export as Python script".into() },
+            CompletionItem { insert: "pdf".into(), hint: "Export as PDF (requires LaTeX)".into() },
+        ],
+        // Feature H — mono run: common commands
+        ("/mono", "run") => vec![
+            CompletionItem { insert: "build".into(), hint: "Build all packages".into() },
+            CompletionItem { insert: "test".into(), hint: "Test all packages".into() },
+            CompletionItem { insert: "lint".into(), hint: "Lint all packages".into() },
+            CompletionItem { insert: "clean".into(), hint: "Clean build artifacts".into() },
         ],
         _ => vec![],
     }
