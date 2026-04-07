@@ -1139,6 +1139,23 @@ fn run_first_run_wizard() {
         }
     };
 
+    // Thinking mode toggle
+    println!();
+    println!("  \x1b[1;33mEnable Thinking Mode?\x1b[0m");
+    println!("  Some models (Qwen3, Claude, o3) support extended thinking/reasoning.");
+    println!("  When enabled, the model shows its reasoning process before answering.");
+    println!();
+    println!("    [1] Yes — enable thinking mode (recommended for coding)");
+    println!("    [2] No  — standard responses only");
+    println!();
+    let think_choice = wizard_read_line("  Choice: ");
+    let thinking_enabled = think_choice.trim() == "1" || think_choice.trim().to_lowercase() == "yes";
+    if thinking_enabled {
+        println!("  \x1b[32m✓\x1b[0m Thinking mode enabled. Toggle anytime with /think");
+    } else {
+        println!("  Thinking mode off. Toggle anytime with /think");
+    }
+
     let default_provider = provider_priority
         .first()
         .cloned()
@@ -1203,6 +1220,10 @@ fn run_first_run_wizard() {
     config.insert(
         "setup_completed".to_string(),
         serde_json::Value::Bool(true),
+    );
+    config.insert(
+        "thinking_enabled".to_string(),
+        serde_json::Value::Bool(thinking_enabled),
     );
 
     let config_path = match wizard_save_config(&config) {
@@ -2785,7 +2806,13 @@ impl LiveCli {
             context_files: Vec::new(),
             chat_mode: false,
             vim_mode: false,
-            thinking_enabled: false,
+            thinking_enabled: {
+                let cfg = anvil_home_dir().join("config.json");
+                std::fs::read_to_string(&cfg).ok()
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+                    .and_then(|v| v.get("thinking_enabled").and_then(|b| b.as_bool()))
+                    .unwrap_or(false)
+            },
         };
         cli.persist_session()?;
         Ok(cli)
