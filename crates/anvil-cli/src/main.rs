@@ -3480,6 +3480,13 @@ impl LiveCli {
             SlashCommand::PluginSdk { action } => {
                 (Self::run_plugin_sdk_command(action.as_deref()), false)
             }
+            SlashCommand::Think => {
+                self.thinking_enabled = !self.thinking_enabled;
+                (format!(
+                    "Thinking mode: {}",
+                    if self.thinking_enabled { "ON — model will show reasoning" } else { "OFF — standard responses" }
+                ), false)
+            }
             _ => {
                 ("Command not available in TUI mode.".to_string(), false)
             }
