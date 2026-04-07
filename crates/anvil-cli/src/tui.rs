@@ -1756,6 +1756,15 @@ impl AnvilTui {
                     4 => ConfigureState::Permissions { selected: 0 },
                     5 => ConfigureState::Display { selected: 0 },
                     6 => ConfigureState::Integrations { selected: 0 },
+                    7 => ConfigureState::LanguageTheme { selected: 0 },
+                    8 => ConfigureState::Vault { selected: 0 },
+                    9 => ConfigureState::Notifications { selected: 0 },
+                    10 => ConfigureState::Failover { selected: 0 },
+                    11 => ConfigureState::Ssh { selected: 0 },
+                    12 => ConfigureState::DockerK8s { selected: 0 },
+                    13 => ConfigureState::Database { selected: 0 },
+                    14 => ConfigureState::MemoryArchive { selected: 0 },
+                    15 => ConfigureState::PluginsCron { selected: 0 },
                     _ => ConfigureState::MainMenu { selected },
                 };
             }
@@ -1912,6 +1921,247 @@ impl AnvilTui {
             ConfigureState::Integrations { .. } => {
                 // No writable integrations from the TUI yet.
             }
+            ConfigureState::LanguageTheme { selected } => {
+                match selected {
+                    0 => {
+                        // Cycle language forward through the list.
+                        let langs = ["en", "de", "es", "fr", "ja", "zh-CN", "ru"];
+                        let current = &self.configure_data.language;
+                        let idx = langs.iter().position(|l| *l == current.as_str()).unwrap_or(0);
+                        let next = langs[(idx + 1) % langs.len()];
+                        self.configure_data.language = next.to_string();
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::SetLanguage {
+                            lang: next.to_string(),
+                        }));
+                    }
+                    1 => {
+                        // Cycle theme forward.
+                        let themes = [
+                            "culpur-defense", "cyberpunk", "nord", "solarized-dark",
+                            "dracula", "monokai", "gruvbox", "catppuccin",
+                        ];
+                        let current = &self.configure_data.active_theme;
+                        let idx = themes.iter().position(|t| *t == current.as_str()).unwrap_or(0);
+                        let next = themes[(idx + 1) % themes.len()];
+                        self.configure_data.active_theme = next.to_string();
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::SetTheme {
+                            theme: next.to_string(),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Vault { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.vault_session_ttl.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Vault".to_string(),
+                            key: "vault_session_ttl".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    1 => {
+                        // Toggle auto-lock.
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleVaultAutoLock));
+                    }
+                    2 => {
+                        // Status row — no action, just display.
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Notifications { selected } => {
+                let key = match selected {
+                    0 => {
+                        // Cycle platform.
+                        let platforms = [
+                            "desktop", "discord", "slack", "telegram",
+                            "whatsapp", "signal", "matrix", "webhook",
+                        ];
+                        let current = &self.configure_data.notify_platform;
+                        let idx = platforms.iter().position(|p| *p == current.as_str()).unwrap_or(0);
+                        let next = platforms[(idx + 1) % platforms.len()];
+                        self.configure_data.notify_platform = next.to_string();
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::SetNotifyPlatform {
+                            platform: next.to_string(),
+                        }));
+                    }
+                    1 => "notify_discord_webhook",
+                    2 => "notify_slack_webhook",
+                    3 => "notify_telegram_token",
+                    4 => "notify_whatsapp_url",
+                    5 => "notify_whatsapp_token",
+                    6 => "notify_matrix_homeserver",
+                    7 => "notify_matrix_token",
+                    8 => "notify_signal_sender",
+                    9 => "notify_signal_cli_path",
+                    _ => return Ok(ReadResult::Continue),
+                };
+                let current_val = configure_data_notify_value(&self.configure_data, key);
+                let cur_len = current_val.len();
+                self.configure_state = ConfigureState::EditingValue {
+                    section: "Notifications".to_string(),
+                    key: key.to_string(),
+                    value: current_val,
+                    cursor: cur_len,
+                };
+            }
+            ConfigureState::Failover { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.failover_cooldown.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Failover".to_string(),
+                            key: "failover_cooldown".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    1 => {
+                        let current = self.configure_data.failover_budget.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Failover".to_string(),
+                            key: "failover_budget".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    2 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleFailoverAutoRecovery));
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::Ssh { selected } => {
+                let (key, cur_val) = match selected {
+                    0 => ("ssh_key_path", self.configure_data.ssh_key_path.clone()),
+                    1 => ("ssh_bastion_host", self.configure_data.ssh_bastion_host.clone()),
+                    2 => ("ssh_config_path", self.configure_data.ssh_config_path.clone()),
+                    _ => return Ok(ReadResult::Continue),
+                };
+                let cur_len = cur_val.len();
+                self.configure_state = ConfigureState::EditingValue {
+                    section: "SSH".to_string(),
+                    key: key.to_string(),
+                    value: cur_val,
+                    cursor: cur_len,
+                };
+            }
+            ConfigureState::DockerK8s { selected } => {
+                let (key, cur_val) = match selected {
+                    0 => ("docker_compose_file", self.configure_data.docker_compose_file.clone()),
+                    1 => ("docker_registry", self.configure_data.docker_registry.clone()),
+                    2 => ("k8s_context", self.configure_data.k8s_context.clone()),
+                    3 => ("k8s_namespace", self.configure_data.k8s_namespace.clone()),
+                    _ => return Ok(ReadResult::Continue),
+                };
+                let cur_len = cur_val.len();
+                self.configure_state = ConfigureState::EditingValue {
+                    section: "DockerK8s".to_string(),
+                    key: key.to_string(),
+                    value: cur_val,
+                    cursor: cur_len,
+                };
+            }
+            ConfigureState::Database { selected } => {
+                match selected {
+                    0 => {
+                        // DB URL: show masked, edit from blank for security.
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "Database".to_string(),
+                            key: "db_url".to_string(),
+                            value: String::new(),
+                            cursor: 0,
+                        };
+                    }
+                    1 => {
+                        // Cycle schema tool.
+                        let tools = ["prisma", "knex", "typeorm"];
+                        let current = &self.configure_data.db_schema_tool;
+                        let idx = tools.iter().position(|t| *t == current.as_str()).unwrap_or(0);
+                        let next = tools[(idx + 1) % tools.len()];
+                        self.configure_data.db_schema_tool = next.to_string();
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::SetDbSchemaTool {
+                            tool: next.to_string(),
+                        }));
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::MemoryArchive { selected } => {
+                match selected {
+                    0 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleAutoSaveMemory));
+                    }
+                    1 => {
+                        let current = self.configure_data.archive_frequency.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "MemoryArchive".to_string(),
+                            key: "archive_frequency".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    2 => {
+                        let current = self.configure_data.archive_retention_days.to_string();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "MemoryArchive".to_string(),
+                            key: "archive_retention_days".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    3 => {
+                        let current = self.configure_data.memory_dir.clone();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "MemoryArchive".to_string(),
+                            key: "memory_dir".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            ConfigureState::PluginsCron { selected } => {
+                match selected {
+                    0 => {
+                        let current = self.configure_data.plugin_search_paths.clone();
+                        let cur_len = current.len();
+                        self.configure_state = ConfigureState::EditingValue {
+                            section: "PluginsCron".to_string(),
+                            key: "plugin_search_paths".to_string(),
+                            value: current,
+                            cursor: cur_len,
+                        };
+                    }
+                    1 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleAutoEnablePlugins));
+                    }
+                    2 => {
+                        self.configure_state = ConfigureState::Inactive;
+                        return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleCronEnabled));
+                    }
+                    // 3+ are cron job display rows — read-only.
+                    _ => {}
+                }
+            }
             _ => {}
         }
         Ok(ReadResult::Continue)
@@ -1927,7 +2177,16 @@ impl AnvilTui {
             | ConfigureState::Search { .. }
             | ConfigureState::Permissions { .. }
             | ConfigureState::Display { .. }
-            | ConfigureState::Integrations { .. } => ConfigureState::MainMenu { selected: 0 },
+            | ConfigureState::Integrations { .. }
+            | ConfigureState::LanguageTheme { .. }
+            | ConfigureState::Vault { .. }
+            | ConfigureState::Notifications { .. }
+            | ConfigureState::Failover { .. }
+            | ConfigureState::Ssh { .. }
+            | ConfigureState::DockerK8s { .. }
+            | ConfigureState::Database { .. }
+            | ConfigureState::MemoryArchive { .. }
+            | ConfigureState::PluginsCron { .. } => ConfigureState::MainMenu { selected: 0 },
             ConfigureState::ProviderDetail { .. } => ConfigureState::Providers { selected: 0 },
             ConfigureState::EditingValue { section, .. } => {
                 section_state_from_name(section, 0)
@@ -1997,6 +2256,65 @@ pub enum ConfigureAction {
     SetPermissionMode { mode: String },
     /// Set Ollama host URL.
     SetOllamaHost { url: String },
+    // ── Section 7: Language & Theme ──────────────────────────────────────────
+    /// Set display language.
+    SetLanguage { lang: String },
+    /// Set active theme.
+    SetTheme { theme: String },
+    // ── Section 8: Vault ─────────────────────────────────────────────────────
+    /// Set vault session TTL in seconds.
+    SetVaultSessionTtl { secs: u64 },
+    /// Toggle vault auto-lock on idle.
+    ToggleVaultAutoLock,
+    // ── Section 9: Notifications ─────────────────────────────────────────────
+    /// Set the default notification platform.
+    SetNotifyPlatform { platform: String },
+    /// Set a notification endpoint value (webhook URL, token, etc.).
+    SetNotifyValue { key: String, value: String },
+    // ── Section 10: Failover ─────────────────────────────────────────────────
+    /// Set failover cooldown in seconds.
+    SetFailoverCooldown { secs: u64 },
+    /// Set per-provider usage budget.
+    SetFailoverBudget { budget: u64 },
+    /// Toggle auto-recovery.
+    ToggleFailoverAutoRecovery,
+    // ── Section 11: SSH ──────────────────────────────────────────────────────
+    /// Set default SSH key path.
+    SetSshKeyPath { path: String },
+    /// Set default bastion host.
+    SetSshBastionHost { host: String },
+    /// Set SSH config file path.
+    SetSshConfigPath { path: String },
+    // ── Section 12: Docker & K8s ─────────────────────────────────────────────
+    /// Set default Docker Compose file.
+    SetDockerComposeFile { path: String },
+    /// Set default container registry URL.
+    SetDockerRegistry { url: String },
+    /// Set default Kubernetes context.
+    SetK8sContext { ctx: String },
+    /// Set default Kubernetes namespace.
+    SetK8sNamespace { ns: String },
+    // ── Section 13: Database ─────────────────────────────────────────────────
+    /// Set default database connection URL.
+    SetDbUrl { url: String },
+    /// Set default schema tool.
+    SetDbSchemaTool { tool: String },
+    // ── Section 14: Memory & Archive ─────────────────────────────────────────
+    /// Toggle auto-save memory.
+    ToggleAutoSaveMemory,
+    /// Set archive frequency (compactions between archives).
+    SetArchiveFrequency { n: u64 },
+    /// Set archive retention in days.
+    SetArchiveRetention { days: u64 },
+    /// Set memory directory path.
+    SetMemoryDir { path: String },
+    // ── Section 15: Plugins & Cron ───────────────────────────────────────────
+    /// Toggle auto-enable new plugins.
+    ToggleAutoEnablePlugins,
+    /// Toggle cron scheduler.
+    ToggleCronEnabled,
+    /// Set plugin search paths (colon-separated).
+    SetPluginSearchPaths { paths: String },
 }
 
 /// Snapshot of live configuration values read from `LiveCli` and environment
@@ -2032,6 +2350,50 @@ pub struct ConfigureData {
     pub anvilhub_url: String,
     pub wp_configured: bool,
     pub github_configured: bool,
+    // Section 7: Language & Theme
+    pub language: String,
+    pub active_theme: String,
+    // Section 8: Vault
+    pub vault_session_ttl: u64,
+    pub vault_auto_lock: bool,
+    pub vault_status: String,         // e.g. "locked | 5 creds, 2 TOTP"
+    // Section 9: Notifications
+    pub notify_platform: String,
+    pub notify_discord_webhook: String,
+    pub notify_slack_webhook: String,
+    pub notify_telegram_token: String,
+    pub notify_whatsapp_url: String,
+    pub notify_whatsapp_token: String,
+    pub notify_matrix_homeserver: String,
+    pub notify_matrix_token: String,
+    pub notify_signal_sender: String,
+    pub notify_signal_cli_path: String,
+    // Section 10: Failover
+    pub failover_cooldown: u64,
+    pub failover_budget: u64,
+    pub failover_auto_recovery: bool,
+    // Section 11: SSH
+    pub ssh_key_path: String,
+    pub ssh_bastion_host: String,
+    pub ssh_config_path: String,
+    // Section 12: Docker & K8s
+    pub docker_compose_file: String,
+    pub docker_registry: String,
+    pub k8s_context: String,
+    pub k8s_namespace: String,
+    // Section 13: Database
+    pub db_url: String,
+    pub db_schema_tool: String,
+    // Section 14: Memory & Archive
+    pub auto_save_memory: bool,
+    pub archive_frequency: u64,
+    pub archive_retention_days: u64,
+    pub memory_dir: String,
+    // Section 15: Plugins & Cron
+    pub plugin_search_paths: String,
+    pub auto_enable_plugins: bool,
+    pub cron_enabled: bool,
+    pub active_cron_jobs: Vec<String>,
 }
 
 /// Which screen the configure mode is showing.
@@ -2047,6 +2409,16 @@ enum ConfigureState {
     Permissions { selected: usize },
     Display { selected: usize },
     Integrations { selected: usize },
+    // ── Sections 7-15 ────────────────────────────────────────────────────────
+    LanguageTheme { selected: usize },
+    Vault { selected: usize },
+    Notifications { selected: usize },
+    Failover { selected: usize },
+    Ssh { selected: usize },
+    DockerK8s { selected: usize },
+    Database { selected: usize },
+    MemoryArchive { selected: usize },
+    PluginsCron { selected: usize },
     /// Inline text input for editing a single value.
     EditingValue {
         /// E.g. "Models" — shown in the breadcrumb.
@@ -3065,6 +3437,15 @@ fn configure_breadcrumb(state: &ConfigureState) -> String {
         ConfigureState::Permissions { .. } => "Configure > Permissions".to_string(),
         ConfigureState::Display { .. } => "Configure > Display".to_string(),
         ConfigureState::Integrations { .. } => "Configure > Integrations".to_string(),
+        ConfigureState::LanguageTheme { .. } => "Configure > Language & Theme".to_string(),
+        ConfigureState::Vault { .. } => "Configure > Vault".to_string(),
+        ConfigureState::Notifications { .. } => "Configure > Notifications".to_string(),
+        ConfigureState::Failover { .. } => "Configure > Failover".to_string(),
+        ConfigureState::Ssh { .. } => "Configure > SSH".to_string(),
+        ConfigureState::DockerK8s { .. } => "Configure > Docker & K8s".to_string(),
+        ConfigureState::Database { .. } => "Configure > Database".to_string(),
+        ConfigureState::MemoryArchive { .. } => "Configure > Memory & Archive".to_string(),
+        ConfigureState::PluginsCron { .. } => "Configure > Plugins & Cron".to_string(),
         ConfigureState::EditingValue { section, key, .. } => {
             format!("Configure > {section} > edit:{key}")
         }
@@ -3081,7 +3462,16 @@ fn configure_selected(state: &ConfigureState) -> usize {
         | ConfigureState::Search { selected }
         | ConfigureState::Permissions { selected }
         | ConfigureState::Display { selected }
-        | ConfigureState::Integrations { selected } => *selected,
+        | ConfigureState::Integrations { selected }
+        | ConfigureState::LanguageTheme { selected }
+        | ConfigureState::Vault { selected }
+        | ConfigureState::Notifications { selected }
+        | ConfigureState::Failover { selected }
+        | ConfigureState::Ssh { selected }
+        | ConfigureState::DockerK8s { selected }
+        | ConfigureState::Database { selected }
+        | ConfigureState::MemoryArchive { selected }
+        | ConfigureState::PluginsCron { selected } => *selected,
         ConfigureState::ProviderDetail { selected, .. } => *selected,
         _ => 0,
     }
@@ -3097,7 +3487,16 @@ fn configure_set_selected(state: &mut ConfigureState, new: usize) {
         | ConfigureState::Search { selected }
         | ConfigureState::Permissions { selected }
         | ConfigureState::Display { selected }
-        | ConfigureState::Integrations { selected } => *selected = new,
+        | ConfigureState::Integrations { selected }
+        | ConfigureState::LanguageTheme { selected }
+        | ConfigureState::Vault { selected }
+        | ConfigureState::Notifications { selected }
+        | ConfigureState::Failover { selected }
+        | ConfigureState::Ssh { selected }
+        | ConfigureState::DockerK8s { selected }
+        | ConfigureState::Database { selected }
+        | ConfigureState::MemoryArchive { selected }
+        | ConfigureState::PluginsCron { selected } => *selected = new,
         ConfigureState::ProviderDetail { selected, .. } => *selected = new,
         _ => {}
     }
@@ -3106,7 +3505,7 @@ fn configure_set_selected(state: &mut ConfigureState, new: usize) {
 /// Return the number of navigable items for a given configure state.
 fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
     match state {
-        ConfigureState::MainMenu { .. } => 7, // providers, models, context, search, permissions, display, integrations
+        ConfigureState::MainMenu { .. } => 16, // 0-15 inclusive
         ConfigureState::Providers { .. } => 4, // anthropic, openai, ollama, xai
         ConfigureState::ProviderDetail { provider, .. } => match provider.as_str() {
             "anthropic" => 2, // refresh oauth, set api key
@@ -3121,6 +3520,15 @@ fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
         ConfigureState::Permissions { .. } => 3, // read-only, workspace-write, full-access
         ConfigureState::Display { .. } => 2, // vim, chat
         ConfigureState::Integrations { .. } => 3, // anvilhub, wordpress, github
+        ConfigureState::LanguageTheme { .. } => 2,  // language, theme
+        ConfigureState::Vault { .. } => 3,          // ttl, auto-lock, status
+        ConfigureState::Notifications { .. } => 10, // platform + 9 endpoint fields
+        ConfigureState::Failover { .. } => 3,       // cooldown, budget, auto-recovery
+        ConfigureState::Ssh { .. } => 3,            // key, bastion, config
+        ConfigureState::DockerK8s { .. } => 4,      // compose, registry, context, namespace
+        ConfigureState::Database { .. } => 2,       // url, schema tool
+        ConfigureState::MemoryArchive { .. } => 4,  // auto-save, frequency, retention, dir
+        ConfigureState::PluginsCron { .. } => 3 + data.active_cron_jobs.len(), // paths, auto-enable, cron + jobs
         _ => 0,
     }
 }
@@ -3135,8 +3543,44 @@ fn section_state_from_name(section: &str, selected: usize) -> ConfigureState {
         "Permissions" => ConfigureState::Permissions { selected },
         "Display" => ConfigureState::Display { selected },
         "Integrations" => ConfigureState::Integrations { selected },
+        "LanguageTheme" | "Language & Theme" => ConfigureState::LanguageTheme { selected },
+        "Vault" => ConfigureState::Vault { selected },
+        "Notifications" => ConfigureState::Notifications { selected },
+        "Failover" => ConfigureState::Failover { selected },
+        "SSH" => ConfigureState::Ssh { selected },
+        "DockerK8s" | "Docker & K8s" => ConfigureState::DockerK8s { selected },
+        "Database" => ConfigureState::Database { selected },
+        "MemoryArchive" | "Memory & Archive" => ConfigureState::MemoryArchive { selected },
+        "PluginsCron" | "Plugins & Cron" => ConfigureState::PluginsCron { selected },
         _ => ConfigureState::MainMenu { selected },
     }
+}
+
+/// Look up a notification field value from ConfigureData by config key name.
+fn configure_data_notify_value(data: &ConfigureData, key: &str) -> String {
+    match key {
+        "notify_discord_webhook" => data.notify_discord_webhook.clone(),
+        "notify_slack_webhook" => data.notify_slack_webhook.clone(),
+        "notify_telegram_token" => data.notify_telegram_token.clone(),
+        "notify_whatsapp_url" => data.notify_whatsapp_url.clone(),
+        "notify_whatsapp_token" => data.notify_whatsapp_token.clone(),
+        "notify_matrix_homeserver" => data.notify_matrix_homeserver.clone(),
+        "notify_matrix_token" => data.notify_matrix_token.clone(),
+        "notify_signal_sender" => data.notify_signal_sender.clone(),
+        "notify_signal_cli_path" => data.notify_signal_cli_path.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Mask a sensitive string for display: show first 6 and last 4 characters.
+fn mask_sensitive(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 10 {
+        return "•".repeat(chars.len());
+    }
+    let head: String = chars[..6].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}...{tail}")
 }
 
 /// Map a (section, key, value) triple from the inline editor to a ConfigureAction.
@@ -3171,6 +3615,47 @@ fn configure_action_for(section: &str, key: &str, value: &str) -> Option<Configu
             let provider = key.trim_end_matches("_key").to_string();
             Some(ConfigureAction::SetSearchKey { provider, key: v })
         }
+        // Section 8: Vault
+        ("Vault", "vault_session_ttl") => {
+            let n = v.parse::<u64>().ok()?;
+            Some(ConfigureAction::SetVaultSessionTtl { secs: n })
+        }
+        // Section 9: Notifications
+        ("Notifications", key) if key.starts_with("notify_") => {
+            Some(ConfigureAction::SetNotifyValue { key: key.to_string(), value: v })
+        }
+        // Section 10: Failover
+        ("Failover", "failover_cooldown") => {
+            let n = v.parse::<u64>().ok()?;
+            Some(ConfigureAction::SetFailoverCooldown { secs: n })
+        }
+        ("Failover", "failover_budget") => {
+            let n = v.parse::<u64>().ok()?;
+            Some(ConfigureAction::SetFailoverBudget { budget: n })
+        }
+        // Section 11: SSH
+        ("SSH", "ssh_key_path") => Some(ConfigureAction::SetSshKeyPath { path: v }),
+        ("SSH", "ssh_bastion_host") => Some(ConfigureAction::SetSshBastionHost { host: v }),
+        ("SSH", "ssh_config_path") => Some(ConfigureAction::SetSshConfigPath { path: v }),
+        // Section 12: Docker & K8s
+        ("DockerK8s", "docker_compose_file") => Some(ConfigureAction::SetDockerComposeFile { path: v }),
+        ("DockerK8s", "docker_registry") => Some(ConfigureAction::SetDockerRegistry { url: v }),
+        ("DockerK8s", "k8s_context") => Some(ConfigureAction::SetK8sContext { ctx: v }),
+        ("DockerK8s", "k8s_namespace") => Some(ConfigureAction::SetK8sNamespace { ns: v }),
+        // Section 13: Database
+        ("Database", "db_url") => Some(ConfigureAction::SetDbUrl { url: v }),
+        // Section 14: Memory & Archive
+        ("MemoryArchive", "archive_frequency") => {
+            let n = v.parse::<u64>().ok()?;
+            Some(ConfigureAction::SetArchiveFrequency { n })
+        }
+        ("MemoryArchive", "archive_retention_days") => {
+            let n = v.parse::<u64>().ok()?;
+            Some(ConfigureAction::SetArchiveRetention { days: n })
+        }
+        ("MemoryArchive", "memory_dir") => Some(ConfigureAction::SetMemoryDir { path: v }),
+        // Section 15: Plugins & Cron
+        ("PluginsCron", "plugin_search_paths") => Some(ConfigureAction::SetPluginSearchPaths { paths: v }),
         _ => None,
     }
 }
@@ -3237,7 +3722,7 @@ fn render_configure_menu(
         ConfigureState::Inactive => {}
 
         ConfigureState::MainMenu { .. } => {
-            let items = [
+            let items: &[(&str, String)] = &[
                 ("Providers & Authentication", format!("[{}]", {
                     let mut n = 0;
                     if !data.anthropic_status.contains('✗') { n += 1; }
@@ -3247,14 +3732,41 @@ fn render_configure_menu(
                     format!("{n} configured")
                 })),
                 ("Models & Defaults", format!("[{}]", data.current_model)),
-                ("Context & Memory", format!("[{}]", {
-                    let kb = data.context_size / 1000;
-                    format!("{kb}K")
-                })),
+                ("Context & Memory", format!("[{}K]", data.context_size / 1000)),
                 ("Search Providers", format!("[{}]", data.default_search)),
                 ("Permissions", format!("[{}]", data.permission_mode)),
                 ("Display & Interface", format!("[vim:{}]", if data.vim_mode { "on" } else { "off" })),
                 ("Integrations", format!("[AnvilHub {}]", if data.anvilhub_url.is_empty() { "✗" } else { "✓" })),
+                ("Language & Theme", format!("[{} / {}]", data.language, data.active_theme)),
+                ("Vault", {
+                    let ttl = data.vault_session_ttl;
+                    format!("[TTL {}s, auto-lock:{}]", ttl, if data.vault_auto_lock { "on" } else { "off" })
+                }),
+                ("Notifications", format!("[{}]", data.notify_platform)),
+                ("Failover", format!("[cooldown {}s, auto-recovery:{}]", data.failover_cooldown, if data.failover_auto_recovery { "on" } else { "off" })),
+                ("SSH", {
+                    if data.ssh_bastion_host.is_empty() {
+                        "[not configured]".to_string()
+                    } else {
+                        format!("[bastion: {}]", data.ssh_bastion_host)
+                    }
+                }),
+                ("Docker & K8s", {
+                    if data.k8s_context.is_empty() {
+                        "[not configured]".to_string()
+                    } else {
+                        format!("[ctx: {}]", data.k8s_context)
+                    }
+                }),
+                ("Database", {
+                    if data.db_url.is_empty() {
+                        "[not configured]".to_string()
+                    } else {
+                        format!("[{} / {}]", data.db_schema_tool, mask_sensitive(&data.db_url))
+                    }
+                }),
+                ("Memory & Archive", format!("[auto-save:{}, retention:{}d]", if data.auto_save_memory { "on" } else { "off" }, data.archive_retention_days)),
+                ("Plugins & Cron", format!("[cron:{}, {} active jobs]", if data.cron_enabled { "on" } else { "off" }, data.active_cron_jobs.len())),
             ];
             for (i, (label, value)) in items.iter().enumerate() {
                 lines.push(make_row(label, value, i == sel));
@@ -3427,6 +3939,192 @@ fn render_configure_menu(
                 if data.github_configured { "✓ configured" } else { "✗ not configured" },
                 sel == 2,
             ));
+        }
+
+        // ── Section 7: Language & Theme ──────────────────────────────────────
+        ConfigureState::LanguageTheme { .. } => {
+            lines.push(make_row(
+                "Display language",
+                &format!("[{}]  — Enter to cycle", data.language),
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Active theme",
+                &format!("[{}]  — Enter to cycle", data.active_theme),
+                sel == 1,
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "    Languages: en  de  es  fr  ja  zh-CN  ru",
+                Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
+            )));
+            lines.push(Line::from(Span::styled(
+                "    Themes: culpur-defense  cyberpunk  nord  solarized-dark  dracula  monokai  gruvbox  catppuccin",
+                Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
+            )));
+        }
+
+        // ── Section 8: Vault ─────────────────────────────────────────────────
+        ConfigureState::Vault { .. } => {
+            lines.push(make_row(
+                "Session TTL (seconds)",
+                &data.vault_session_ttl.to_string(),
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Auto-lock on idle",
+                if data.vault_auto_lock { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 1,
+            ));
+            lines.push(make_row(
+                "Vault status",
+                &data.vault_status,
+                sel == 2,
+            ));
+        }
+
+        // ── Section 9: Notifications ─────────────────────────────────────────
+        ConfigureState::Notifications { .. } => {
+            lines.push(make_row(
+                "Default platform",
+                &format!("[{}]  — Enter to cycle", data.notify_platform),
+                sel == 0,
+            ));
+            let masked_or_empty = |s: &str| {
+                if s.is_empty() { "[not set]".to_string() } else { mask_sensitive(s) }
+            };
+            lines.push(make_row("Discord webhook URL",     &masked_or_empty(&data.notify_discord_webhook),   sel == 1));
+            lines.push(make_row("Slack webhook URL",       &masked_or_empty(&data.notify_slack_webhook),     sel == 2));
+            lines.push(make_row("Telegram bot token",      &masked_or_empty(&data.notify_telegram_token),    sel == 3));
+            lines.push(make_row("WhatsApp API URL",        &masked_or_empty(&data.notify_whatsapp_url),      sel == 4));
+            lines.push(make_row("WhatsApp token",          &masked_or_empty(&data.notify_whatsapp_token),    sel == 5));
+            lines.push(make_row("Matrix homeserver URL",   &masked_or_empty(&data.notify_matrix_homeserver), sel == 6));
+            lines.push(make_row("Matrix token",            &masked_or_empty(&data.notify_matrix_token),      sel == 7));
+            lines.push(make_row("Signal sender number",    &masked_or_empty(&data.notify_signal_sender),     sel == 8));
+            lines.push(make_row("Signal CLI path",         &masked_or_empty(&data.notify_signal_cli_path),   sel == 9));
+        }
+
+        // ── Section 10: Failover ─────────────────────────────────────────────
+        ConfigureState::Failover { .. } => {
+            lines.push(make_row(
+                "Cooldown period (seconds)",
+                &data.failover_cooldown.to_string(),
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Usage budget per provider",
+                &data.failover_budget.to_string(),
+                sel == 1,
+            ));
+            lines.push(make_row(
+                "Auto-recovery",
+                if data.failover_auto_recovery { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 2,
+            ));
+            if !data.failover_chain.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Provider priority chain:",
+                    Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
+                )));
+                for (i, m) in data.failover_chain.iter().enumerate() {
+                    lines.push(Line::from(Span::styled(
+                        format!("      {}. {m}", i + 1),
+                        Style::default().fg(Color::Rgb(0x66, 0x88, 0x66)),
+                    )));
+                }
+            }
+        }
+
+        // ── Section 11: SSH ──────────────────────────────────────────────────
+        ConfigureState::Ssh { .. } => {
+            let fmt = |s: &str| if s.is_empty() { "[not set]".to_string() } else { s.to_string() };
+            lines.push(make_row("Default SSH key path",    &fmt(&data.ssh_key_path),     sel == 0));
+            lines.push(make_row("Default bastion host",    &fmt(&data.ssh_bastion_host), sel == 1));
+            lines.push(make_row("SSH config file path",    &fmt(&data.ssh_config_path),  sel == 2));
+        }
+
+        // ── Section 12: Docker & K8s ─────────────────────────────────────────
+        ConfigureState::DockerK8s { .. } => {
+            let fmt = |s: &str| if s.is_empty() { "[not set]".to_string() } else { s.to_string() };
+            lines.push(make_row("Default compose file",    &fmt(&data.docker_compose_file), sel == 0));
+            lines.push(make_row("Default registry URL",    &fmt(&data.docker_registry),     sel == 1));
+            lines.push(make_row("Default K8s context",     &fmt(&data.k8s_context),         sel == 2));
+            lines.push(make_row("Default K8s namespace",   &fmt(&data.k8s_namespace),       sel == 3));
+        }
+
+        // ── Section 13: Database ─────────────────────────────────────────────
+        ConfigureState::Database { .. } => {
+            let url_display = if data.db_url.is_empty() {
+                "[not set]".to_string()
+            } else {
+                mask_sensitive(&data.db_url)
+            };
+            lines.push(make_row("Default connection URL (masked)", &url_display, sel == 0));
+            lines.push(make_row(
+                "Default schema tool",
+                &format!("[{}]  — Enter to cycle (prisma/knex/typeorm)", data.db_schema_tool),
+                sel == 1,
+            ));
+        }
+
+        // ── Section 14: Memory & Archive ─────────────────────────────────────
+        ConfigureState::MemoryArchive { .. } => {
+            lines.push(make_row(
+                "Auto-save memory",
+                if data.auto_save_memory { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Archive frequency (compactions)",
+                &data.archive_frequency.to_string(),
+                sel == 1,
+            ));
+            lines.push(make_row(
+                "Archive retention (days)",
+                &data.archive_retention_days.to_string(),
+                sel == 2,
+            ));
+            lines.push(make_row(
+                "Memory directory",
+                &(if data.memory_dir.is_empty() { "[default]".to_string() } else { data.memory_dir.clone() }),
+                sel == 3,
+            ));
+        }
+
+        // ── Section 15: Plugins & Cron ───────────────────────────────────────
+        ConfigureState::PluginsCron { .. } => {
+            lines.push(make_row(
+                "Plugin search paths",
+                &(if data.plugin_search_paths.is_empty() { "[default]".to_string() } else { data.plugin_search_paths.clone() }),
+                sel == 0,
+            ));
+            lines.push(make_row(
+                "Auto-enable new plugins",
+                if data.auto_enable_plugins { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 1,
+            ));
+            lines.push(make_row(
+                "Cron scheduler",
+                if data.cron_enabled { "[on]  — Enter to toggle" } else { "[off] — Enter to toggle" },
+                sel == 2,
+            ));
+            if data.active_cron_jobs.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    No active cron jobs.",
+                    Style::default().fg(Color::Rgb(0x55, 0x55, 0x66)),
+                )));
+            } else {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Active cron jobs:",
+                    Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
+                )));
+                for (i, job) in data.active_cron_jobs.iter().enumerate() {
+                    lines.push(make_row(job, "", sel == 3 + i));
+                }
+            }
         }
 
         ConfigureState::EditingValue { key, value, cursor, .. } => {

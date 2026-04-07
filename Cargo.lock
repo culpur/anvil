@@ -60,7 +60,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anvil-cli"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "api",
  "base64",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "api"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "reqwest",
  "runtime",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "commands"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "plugins",
  "runtime",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "compat-harness"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "commands",
  "runtime",
@@ -1188,7 +1188,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "lsp-types",
  "serde",
@@ -1393,7 +1393,7 @@ dependencies = [
 
 [[package]]
 name = "plugins"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "async-stream",
  "axum",
@@ -2390,7 +2390,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tools"
-version = "1.0.3"
+version = "1.0.3-2"
 dependencies = [
  "api",
  "plugins",

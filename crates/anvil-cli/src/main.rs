@@ -5353,6 +5353,69 @@ impl LiveCli {
         let wp_configured = cfg.get("wp_url").is_some() || std::env::var("WP_URL").ok().filter(|s| !s.is_empty()).is_some();
         let github_configured = std::env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()).is_some() || cfg.get("github_token").is_some();
 
+        // Section 7: Language & Theme
+        let language = cfg_str("language", "en");
+        let active_theme = cfg_str("theme", "culpur-defense");
+
+        // Section 8: Vault
+        let vault_session_ttl = cfg_u64("vault_session_ttl", 1800);
+        let vault_auto_lock = cfg_bool("vault_auto_lock", false);
+        let vault_status = cfg_str("vault_status_display", "locked | 0 creds, 0 TOTP");
+
+        // Section 9: Notifications
+        let notify_platform = cfg_str("notify_platform", "desktop");
+        let env_or_cfg = |env_key: &str, cfg_key: &str| -> String {
+            std::env::var(env_key).ok().filter(|s| !s.is_empty())
+                .unwrap_or_else(|| cfg_str(cfg_key, ""))
+        };
+        let notify_discord_webhook  = env_or_cfg("DISCORD_WEBHOOK_URL",   "notify_discord_webhook");
+        let notify_slack_webhook    = env_or_cfg("SLACK_WEBHOOK_URL",      "notify_slack_webhook");
+        let notify_telegram_token   = env_or_cfg("TELEGRAM_BOT_TOKEN",     "notify_telegram_token");
+        let notify_whatsapp_url     = env_or_cfg("WHATSAPP_API_URL",       "notify_whatsapp_url");
+        let notify_whatsapp_token   = env_or_cfg("WHATSAPP_TOKEN",         "notify_whatsapp_token");
+        let notify_matrix_homeserver = env_or_cfg("MATRIX_HOMESERVER",     "notify_matrix_homeserver");
+        let notify_matrix_token     = env_or_cfg("MATRIX_TOKEN",           "notify_matrix_token");
+        let notify_signal_sender    = env_or_cfg("SIGNAL_SENDER",          "notify_signal_sender");
+        let notify_signal_cli_path  = env_or_cfg("SIGNAL_CLI_PATH",        "notify_signal_cli_path");
+
+        // Section 10: Failover
+        let failover_cooldown = cfg_u64("failover_cooldown", 60);
+        let failover_budget   = cfg_u64("failover_budget", 0);
+        let failover_auto_recovery = cfg_bool("failover_auto_recovery", true);
+
+        // Section 11: SSH
+        let ssh_key_path     = env_or_cfg("ANVIL_SSH_KEY",     "ssh_key_path");
+        let ssh_bastion_host = env_or_cfg("ANVIL_BASTION_HOST","ssh_bastion_host");
+        let ssh_config_path  = cfg_str("ssh_config_path", "~/.ssh/config");
+
+        // Section 12: Docker & K8s
+        let docker_compose_file = env_or_cfg("COMPOSE_FILE",       "docker_compose_file");
+        let docker_registry     = env_or_cfg("DOCKER_REGISTRY",    "docker_registry");
+        let k8s_context         = env_or_cfg("KUBE_CONTEXT",       "k8s_context");
+        let k8s_namespace       = env_or_cfg("KUBE_NAMESPACE",     "k8s_namespace");
+
+        // Section 13: Database
+        let db_url         = env_or_cfg("DATABASE_URL", "db_url");
+        let db_schema_tool = cfg_str("db_schema_tool", "prisma");
+
+        // Section 14: Memory & Archive
+        let auto_save_memory        = cfg_bool("auto_save_memory", true);
+        let archive_frequency       = cfg_u64("archive_frequency", 5);
+        let archive_retention_days  = cfg_u64("archive_retention_days", 30);
+        let memory_dir              = cfg_str("memory_dir", "");
+
+        // Section 15: Plugins & Cron
+        let plugin_search_paths  = cfg_str("plugin_search_paths", "");
+        let auto_enable_plugins  = cfg_bool("auto_enable_plugins", false);
+        let cron_enabled         = cfg_bool("cron_enabled", false);
+        // Active cron jobs from config array (best-effort, empty if not present).
+        let active_cron_jobs: Vec<String> = cfg.get("cron_jobs")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                .collect())
+            .unwrap_or_default();
+
         ConfigureData {
             anthropic_status,
             openai_status,
@@ -5376,6 +5439,50 @@ impl LiveCli {
             anvilhub_url,
             wp_configured,
             github_configured,
+            // Section 7
+            language,
+            active_theme,
+            // Section 8
+            vault_session_ttl,
+            vault_auto_lock,
+            vault_status,
+            // Section 9
+            notify_platform,
+            notify_discord_webhook,
+            notify_slack_webhook,
+            notify_telegram_token,
+            notify_whatsapp_url,
+            notify_whatsapp_token,
+            notify_matrix_homeserver,
+            notify_matrix_token,
+            notify_signal_sender,
+            notify_signal_cli_path,
+            // Section 10
+            failover_cooldown,
+            failover_budget,
+            failover_auto_recovery,
+            // Section 11
+            ssh_key_path,
+            ssh_bastion_host,
+            ssh_config_path,
+            // Section 12
+            docker_compose_file,
+            docker_registry,
+            k8s_context,
+            k8s_namespace,
+            // Section 13
+            db_url,
+            db_schema_tool,
+            // Section 14
+            auto_save_memory,
+            archive_frequency,
+            archive_retention_days,
+            memory_dir,
+            // Section 15
+            plugin_search_paths,
+            auto_enable_plugins,
+            cron_enabled,
+            active_cron_jobs,
         }
     }
 
@@ -5442,6 +5549,100 @@ impl LiveCli {
                     Ok(_) => format!("Permissions set to: {}", self.permission_mode.as_str()),
                     Err(e) => format!("permissions error: {e}"),
                 }
+            }
+            // ── Section 7: Language & Theme ───────────────────────────────
+            ConfigureAction::SetLanguage { lang } => {
+                Self::save_anvil_ui_config_key("language", serde_json::Value::String(lang.clone()))
+            }
+            ConfigureAction::SetTheme { theme } => {
+                Self::save_anvil_ui_config_key("theme", serde_json::Value::String(theme.clone()))
+            }
+            // ── Section 8: Vault ─────────────────────────────────────────
+            ConfigureAction::SetVaultSessionTtl { secs } => {
+                Self::save_anvil_ui_config_key("vault_session_ttl", serde_json::Value::Number(secs.into()))
+            }
+            ConfigureAction::ToggleVaultAutoLock => {
+                let cfg = Self::load_anvil_ui_config();
+                let current = cfg.get("vault_auto_lock").and_then(|v| v.as_bool()).unwrap_or(false);
+                Self::save_anvil_ui_config_key("vault_auto_lock", serde_json::Value::Bool(!current))
+            }
+            // ── Section 9: Notifications ─────────────────────────────────
+            ConfigureAction::SetNotifyPlatform { platform } => {
+                Self::save_anvil_ui_config_key("notify_platform", serde_json::Value::String(platform))
+            }
+            ConfigureAction::SetNotifyValue { key, value } => {
+                Self::save_anvil_ui_config_key(&key, serde_json::Value::String(value))
+            }
+            // ── Section 10: Failover ─────────────────────────────────────
+            ConfigureAction::SetFailoverCooldown { secs } => {
+                Self::save_anvil_ui_config_key("failover_cooldown", serde_json::Value::Number(secs.into()))
+            }
+            ConfigureAction::SetFailoverBudget { budget } => {
+                Self::save_anvil_ui_config_key("failover_budget", serde_json::Value::Number(budget.into()))
+            }
+            ConfigureAction::ToggleFailoverAutoRecovery => {
+                let cfg = Self::load_anvil_ui_config();
+                let current = cfg.get("failover_auto_recovery").and_then(|v| v.as_bool()).unwrap_or(true);
+                Self::save_anvil_ui_config_key("failover_auto_recovery", serde_json::Value::Bool(!current))
+            }
+            // ── Section 11: SSH ──────────────────────────────────────────
+            ConfigureAction::SetSshKeyPath { path } => {
+                Self::save_anvil_ui_config_key("ssh_key_path", serde_json::Value::String(path))
+            }
+            ConfigureAction::SetSshBastionHost { host } => {
+                Self::save_anvil_ui_config_key("ssh_bastion_host", serde_json::Value::String(host))
+            }
+            ConfigureAction::SetSshConfigPath { path } => {
+                Self::save_anvil_ui_config_key("ssh_config_path", serde_json::Value::String(path))
+            }
+            // ── Section 12: Docker & K8s ─────────────────────────────────
+            ConfigureAction::SetDockerComposeFile { path } => {
+                Self::save_anvil_ui_config_key("docker_compose_file", serde_json::Value::String(path))
+            }
+            ConfigureAction::SetDockerRegistry { url } => {
+                Self::save_anvil_ui_config_key("docker_registry", serde_json::Value::String(url))
+            }
+            ConfigureAction::SetK8sContext { ctx } => {
+                Self::save_anvil_ui_config_key("k8s_context", serde_json::Value::String(ctx))
+            }
+            ConfigureAction::SetK8sNamespace { ns } => {
+                Self::save_anvil_ui_config_key("k8s_namespace", serde_json::Value::String(ns))
+            }
+            // ── Section 13: Database ─────────────────────────────────────
+            ConfigureAction::SetDbUrl { url } => {
+                Self::save_anvil_ui_config_key("db_url", serde_json::Value::String(url))
+            }
+            ConfigureAction::SetDbSchemaTool { tool } => {
+                Self::save_anvil_ui_config_key("db_schema_tool", serde_json::Value::String(tool))
+            }
+            // ── Section 14: Memory & Archive ─────────────────────────────
+            ConfigureAction::ToggleAutoSaveMemory => {
+                let cfg = Self::load_anvil_ui_config();
+                let current = cfg.get("auto_save_memory").and_then(|v| v.as_bool()).unwrap_or(true);
+                Self::save_anvil_ui_config_key("auto_save_memory", serde_json::Value::Bool(!current))
+            }
+            ConfigureAction::SetArchiveFrequency { n } => {
+                Self::save_anvil_ui_config_key("archive_frequency", serde_json::Value::Number(n.into()))
+            }
+            ConfigureAction::SetArchiveRetention { days } => {
+                Self::save_anvil_ui_config_key("archive_retention_days", serde_json::Value::Number(days.into()))
+            }
+            ConfigureAction::SetMemoryDir { path } => {
+                Self::save_anvil_ui_config_key("memory_dir", serde_json::Value::String(path))
+            }
+            // ── Section 15: Plugins & Cron ───────────────────────────────
+            ConfigureAction::SetPluginSearchPaths { paths } => {
+                Self::save_anvil_ui_config_key("plugin_search_paths", serde_json::Value::String(paths))
+            }
+            ConfigureAction::ToggleAutoEnablePlugins => {
+                let cfg = Self::load_anvil_ui_config();
+                let current = cfg.get("auto_enable_plugins").and_then(|v| v.as_bool()).unwrap_or(false);
+                Self::save_anvil_ui_config_key("auto_enable_plugins", serde_json::Value::Bool(!current))
+            }
+            ConfigureAction::ToggleCronEnabled => {
+                let cfg = Self::load_anvil_ui_config();
+                let current = cfg.get("cron_enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                Self::save_anvil_ui_config_key("cron_enabled", serde_json::Value::Bool(!current))
             }
         }
     }
