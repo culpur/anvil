@@ -362,11 +362,24 @@ impl AuthSource {
         }
         match load_saved_oauth_token() {
             Ok(Some(token_set)) if oauth_token_is_expired(&token_set) => {
+                // Auto-refresh expired tokens if we have a refresh token
                 if token_set.refresh_token.is_some() {
-                    Err(ApiError::Auth(
-                        "saved OAuth token is expired; load runtime OAuth config to refresh it"
-                            .to_string(),
-                    ))
+                    let config = OAuthConfig {
+                        client_id: String::from("9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
+                        authorize_url: String::from("https://claude.ai/oauth/authorize"),
+                        token_url: String::from("https://platform.claude.com/v1/oauth/token"),
+                        callback_port: None,
+                        manual_redirect_url: Some(String::from("https://platform.claude.com/oauth/code/callback")),
+                        scopes: vec![
+                            String::from("user:profile"),
+                            String::from("user:inference"),
+                            String::from("user:sessions:claude_code"),
+                        ],
+                    };
+                    match resolve_saved_oauth_token_set(&config, token_set) {
+                        Ok(refreshed) => Ok(Self::BearerToken(refreshed.access_token)),
+                        Err(_) => Err(ApiError::ExpiredOAuthToken),
+                    }
                 } else {
                     Err(ApiError::ExpiredOAuthToken)
                 }
