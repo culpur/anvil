@@ -921,6 +921,11 @@ fn chat_completions_endpoint(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     if trimmed.ends_with("/chat/completions") {
         trimmed.to_string()
+    } else if trimmed.ends_with("/v1") {
+        format!("{trimmed}/chat/completions")
+    } else if trimmed.contains("localhost") || trimmed.contains("127.0.0.1") || trimmed.contains("11434") {
+        // Ollama — needs /v1/ prefix for OpenAI-compatible endpoint
+        format!("{trimmed}/v1/chat/completions")
     } else {
         format!("{trimmed}/chat/completions")
     }
