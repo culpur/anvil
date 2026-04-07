@@ -2210,9 +2210,25 @@ fn run_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Auto-detect first run: if ~/.anvil/config.json does not exist yet,
     // guide the user through the setup wizard before entering the REPL.
-    if io::stdout().is_terminal() && !anvil_config_json_exists() {
+    let model = if io::stdout().is_terminal() && !anvil_config_json_exists() {
         run_first_run_wizard();
-    }
+        // Re-read the config to pick up the user's chosen default model
+        let config_path = anvil_home_dir().join("config.json");
+        if let Ok(data) = fs::read_to_string(&config_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                val.get("default_model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&model)
+                    .to_string()
+            } else {
+                model
+            }
+        } else {
+            model
+        }
+    } else {
+        model
+    };
 
     let cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
 
