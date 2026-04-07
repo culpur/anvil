@@ -1202,20 +1202,6 @@ impl StatusLine {
         out.flush()
     }
 
-    /// Erase the status line (call before program exit so cursor is clean).
-    pub fn clear(&self, out: &mut impl Write) -> io::Result<()> {
-        let Ok((_, term_height)) = crossterm::terminal::size() else {
-            return Ok(());
-        };
-        execute!(
-            out,
-            SavePosition,
-            MoveToRow(term_height.saturating_sub(1)),
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine),
-            RestorePosition,
-        )
-    }
 }
 
 #[cfg(test)]

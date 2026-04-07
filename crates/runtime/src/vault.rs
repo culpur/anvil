@@ -1,31 +1,33 @@
-/// Credential Vault — AES-256-GCM envelope encryption with Argon2id key derivation.
-///
-/// Storage layout: `~/.anvil/vault/`
-///   - `vault.meta`         — salt + KDF params (JSON, plaintext)
-///   - `cred_<label>.enc`   — encrypted credential (JSON, base64 ciphertext)
-///   - `totp_<label>.enc`   — encrypted TOTP entry (JSON, base64 ciphertext)
-///
-/// Encryption model:
-///   Master password → Argon2id → KEK (32 bytes)
-///   Per-credential random DEK (32 bytes) → AES-256-GCM encrypt(plaintext)
-///   DEK itself is AES-256-GCM encrypted with the KEK and stored alongside the ciphertext.
-///
-/// TOTP: HMAC-SHA1, Base32 secret, 6-digit code, 30-second window (RFC 6238).
+//! Credential Vault — AES-256-GCM envelope encryption with Argon2id key derivation.
+//!
+//! Storage layout: `~/.anvil/vault/`
+//!   - `vault.meta`         — salt + KDF params (JSON, plaintext)
+//!   - `cred_<label>.enc`   — encrypted credential (JSON, base64 ciphertext)
+//!   - `totp_<label>.enc`   — encrypted TOTP entry (JSON, base64 ciphertext)
+//!
+//! Encryption model:
+//!   Master password → Argon2id → KEK (32 bytes)
+//!   Per-credential random DEK (32 bytes) → AES-256-GCM encrypt(plaintext)
+//!   DEK itself is AES-256-GCM encrypted with the KEK and stored alongside the ciphertext.
+//!
+//! TOTP: HMAC-SHA1, Base32 secret, 6-digit code, 30-second window (RFC 6238).
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
+    password_hash::SaltString,
     Argon2, Params,
 };
 use base32::Alphabet;
 use hmac::Hmac;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 
@@ -184,7 +186,7 @@ impl VaultManager {
         // Generate Argon2id salt.
         let salt = SaltString::generate(&mut OsRng);
 
-        let params = Params::new(65536, 3, 1, Some(32))
+        let params = Params::new(65536, 3, 4, Some(32))
             .map_err(|e| VaultError::Crypto(e.to_string()))?;
         let kek = derive_key(master_password, salt.as_str(), &params)?;
 
@@ -196,14 +198,14 @@ impl VaultManager {
             salt: salt.to_string(),
             m_cost: 65536,
             t_cost: 3,
-            p_cost: 1,
+            p_cost: 4,
             verify_nonce: base64_encode(&verify_nonce),
             verify_ciphertext: base64_encode(&verify_ciphertext),
         };
         let meta_path = self.vault_dir.join("vault.meta");
         let meta_json = serde_json::to_string_pretty(&meta)
             .map_err(|e| VaultError::Serialization(e.to_string()))?;
-        fs::write(&meta_path, meta_json)?;
+        write_secret_file(&meta_path, meta_json.as_bytes())?;
 
         self.kek = Some(kek);
         Ok(())
@@ -425,7 +427,7 @@ fn aes_encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>), V
     let cipher_key = Key::<Aes256Gcm>::from_slice(key);
     let cipher = Aes256Gcm::new(cipher_key);
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
@@ -450,7 +452,7 @@ fn aes_decrypt(key: &[u8; 32], nonce_bytes: &[u8], ciphertext: &[u8]) -> Result<
 fn build_envelope(kek: &[u8; 32], label: &str, plaintext: &[u8]) -> Result<EncryptedEnvelope, VaultError> {
     // Generate DEK.
     let mut dek = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut dek);
+    OsRng.fill_bytes(&mut dek);
 
     // Encrypt data with DEK.
     let (data_nonce, data_ct) = aes_encrypt(&dek, plaintext)?;
@@ -459,8 +461,7 @@ fn build_envelope(kek: &[u8; 32], label: &str, plaintext: &[u8]) -> Result<Encry
     let (dek_nonce, dek_ct) = aes_encrypt(kek, &dek)?;
 
     // Zero DEK from stack.
-    let mut dek_clear = dek;
-    dek_clear.iter_mut().for_each(|b| *b = 0);
+    dek.iter_mut().for_each(|b| *b = 0);
 
     Ok(EncryptedEnvelope {
         label: label.to_string(),
@@ -499,7 +500,27 @@ fn open_envelope(kek: &[u8; 32], path: &Path) -> Result<Vec<u8>, VaultError> {
 fn write_envelope(path: &Path, envelope: &EncryptedEnvelope) -> Result<(), VaultError> {
     let json = serde_json::to_string_pretty(envelope)
         .map_err(|e| VaultError::Serialization(e.to_string()))?;
-    fs::write(path, json)?;
+    write_secret_file(path, json.as_bytes())
+}
+
+/// Write `data` to `path` with mode 0o600 (owner read/write only).
+/// Creates or truncates the file.
+fn write_secret_file(path: &Path, data: &[u8]) -> Result<(), VaultError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(data)?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, data)?;
+    }
     Ok(())
 }
 
@@ -581,119 +602,41 @@ fn parse_otpauth_uri(label: &str, uri: &str) -> Result<TotpEntry, VaultError> {
 }
 
 /// Minimal percent-decoding for URI path/query segments.
+///
+/// Collects decoded bytes into a Vec<u8> first, then converts to String so that
+/// multi-byte UTF-8 sequences (e.g. %C3%A9 → é) are reassembled correctly rather
+/// than being cast byte-by-byte through `char`, which would produce garbage.
 fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '%' {
-            let h1 = chars.next().unwrap_or('0');
-            let h2 = chars.next().unwrap_or('0');
-            if let Ok(byte) = u8::from_str_radix(&format!("{h1}{h2}"), 16) {
-                out.push(byte as char);
-            } else {
-                out.push('%');
-                out.push(h1);
-                out.push(h2);
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                bytes.push(byte);
             }
         } else if c == '+' {
-            out.push(' ');
+            bytes.push(b' ');
         } else {
-            out.push(c);
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
     }
-    out
+    String::from_utf8(bytes).unwrap_or_else(|_| s.to_string())
 }
 
 // ─── Misc helpers ─────────────────────────────────────────────────────────────
 
 fn base64_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    // Manual base64 to avoid adding a new direct dep (sha2 already in scope).
-    // We use the standard alphabet. The standard base64 alphabet.
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    let mut i = 0;
-    while i + 2 < bytes.len() {
-        let b0 = bytes[i] as u32;
-        let b1 = bytes[i + 1] as u32;
-        let b2 = bytes[i + 2] as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        let _ = write!(
-            out,
-            "{}{}{}{}",
-            CHARS[((n >> 18) & 63) as usize] as char,
-            CHARS[((n >> 12) & 63) as usize] as char,
-            CHARS[((n >> 6) & 63) as usize] as char,
-            CHARS[(n & 63) as usize] as char,
-        );
-        i += 3;
-    }
-    let rem = bytes.len() - i;
-    if rem == 1 {
-        let b0 = bytes[i] as u32;
-        let n = b0 << 16;
-        let _ = write!(
-            out,
-            "{}{}==",
-            CHARS[((n >> 18) & 63) as usize] as char,
-            CHARS[((n >> 12) & 63) as usize] as char,
-        );
-    } else if rem == 2 {
-        let b0 = bytes[i] as u32;
-        let b1 = bytes[i + 1] as u32;
-        let n = (b0 << 16) | (b1 << 8);
-        let _ = write!(
-            out,
-            "{}{}{}=",
-            CHARS[((n >> 18) & 63) as usize] as char,
-            CHARS[((n >> 12) & 63) as usize] as char,
-            CHARS[((n >> 6) & 63) as usize] as char,
-        );
-    }
-    out
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    STANDARD.encode(bytes)
 }
 
 fn base64_decode(s: &str) -> Result<Vec<u8>, VaultError> {
-    fn val(c: u8) -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let s = s.trim_end_matches('=');
-    let bytes: Vec<u8> = s.bytes().collect();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 1);
-    let mut i = 0;
-    while i + 3 < bytes.len() {
-        let v0 = val(bytes[i]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v1 = val(bytes[i + 1]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v2 = val(bytes[i + 2]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v3 = val(bytes[i + 3]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let n = ((v0 as u32) << 18) | ((v1 as u32) << 12) | ((v2 as u32) << 6) | (v3 as u32);
-        out.push((n >> 16) as u8);
-        out.push((n >> 8) as u8);
-        out.push(n as u8);
-        i += 4;
-    }
-    let rem = bytes.len() - i;
-    if rem == 2 {
-        let v0 = val(bytes[i]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v1 = val(bytes[i + 1]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let n = ((v0 as u32) << 18) | ((v1 as u32) << 12);
-        out.push((n >> 16) as u8);
-    } else if rem == 3 {
-        let v0 = val(bytes[i]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v1 = val(bytes[i + 1]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let v2 = val(bytes[i + 2]).ok_or_else(|| VaultError::Crypto("Invalid base64".into()))?;
-        let n = ((v0 as u32) << 18) | ((v1 as u32) << 12) | ((v2 as u32) << 6);
-        out.push((n >> 16) as u8);
-        out.push((n >> 8) as u8);
-    }
-    Ok(out)
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    STANDARD
+        .decode(s.trim())
+        .map_err(|e| VaultError::Crypto(format!("base64 decode: {e}")))
 }
 
 /// Strip characters that are unsafe in filenames.
@@ -725,7 +668,6 @@ fn list_entries(dir: &Path, prefix: &str, suffix: &str) -> Result<Vec<String>, V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_vault() -> (VaultManager, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("temp dir");

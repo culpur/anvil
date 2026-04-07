@@ -773,6 +773,19 @@ impl McpStdioProcess {
         let content_length = content_length.ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length header")
         })?;
+
+        // Guard against unbounded heap allocation from a malicious or
+        // misbehaving MCP server sending a huge Content-Length value.
+        const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
+        if content_length > MAX_CONTENT_LENGTH {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "MCP Content-Length {content_length} exceeds maximum {MAX_CONTENT_LENGTH}"
+                ),
+            ));
+        }
+
         let mut payload = vec![0_u8; content_length];
         self.stdout.read_exact(&mut payload).await?;
         Ok(payload)

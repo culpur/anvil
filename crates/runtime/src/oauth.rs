@@ -361,7 +361,26 @@ fn write_credentials_root(path: &PathBuf, root: &Map<String, Value>) -> io::Resu
     let rendered = serde_json::to_string_pretty(&Value::Object(root.clone()))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temp_path = path.with_extension("json.tmp");
-    fs::write(&temp_path, format!("{rendered}\n"))?;
+
+    // Write the temp file with mode 0o600 (owner read/write only) so that
+    // credentials are never world-readable even transiently.
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp_path)?;
+        write!(f, "{rendered}\n")?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&temp_path, format!("{rendered}\n"))?;
+    }
+
     fs::rename(temp_path, path)
 }
 

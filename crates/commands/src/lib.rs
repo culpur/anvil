@@ -805,6 +805,15 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: false,
         category: SlashCommandCategory::Automation,
     },
+    // Screensaver / burn-in protection
+    SlashCommandSpec {
+        name: "sleep",
+        aliases: &["screensaver", "furnace"],
+        summary: "Activate the furnace screensaver (also triggers after 15 min idle)",
+        argument_hint: None,
+        resume_supported: true,
+        category: SlashCommandCategory::Core,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1081,6 +1090,8 @@ pub enum SlashCommand {
     PluginSdk {
         action: Option<String>,
     },
+    /// `/sleep` — activate the furnace screensaver immediately
+    Sleep,
     Unknown(String),
 }
 
@@ -1353,6 +1364,8 @@ impl SlashCommand {
             "plugin-sdk" => Self::PluginSdk {
                 action: remainder_after_command(trimmed, command),
             },
+            // Screensaver
+            "sleep" | "screensaver" | "furnace" => Self::Sleep,
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -2800,6 +2813,7 @@ pub fn handle_slash_command(
         | SlashCommand::Finetune { .. }
         | SlashCommand::Webhook { .. }
         | SlashCommand::PluginSdk { .. }
+        | SlashCommand::Sleep
         | SlashCommand::Unknown(_) => None,
     }
 }

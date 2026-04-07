@@ -720,10 +720,16 @@ mod tests {
     #[test]
     fn read_api_key_requires_presence() {
         let _guard = env_lock();
+        // Point ANVIL_CONFIG_HOME at an empty temp dir so no saved OAuth credentials
+        // are found even if the real user config contains them, preventing a real
+        // key from leaking into a panic message.
+        let config_home = temp_config_home();
+        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
         std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
         std::env::remove_var("ANTHROPIC_API_KEY");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
         let error = super::read_api_key().expect_err("missing key should error");
+        std::env::remove_var("ANVIL_CONFIG_HOME");
+        cleanup_temp_config_home(&config_home);
         assert!(matches!(
             error,
             crate::error::ApiError::MissingCredentials { .. }
@@ -733,14 +739,20 @@ mod tests {
     #[test]
     fn read_api_key_requires_non_empty_value() {
         let _guard = env_lock();
+        // Point ANVIL_CONFIG_HOME at an empty temp dir so no saved OAuth credentials
+        // are found, preventing a real key from leaking into a panic message.
+        let config_home = temp_config_home();
+        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
         std::env::set_var("ANTHROPIC_AUTH_TOKEN", "");
         std::env::remove_var("ANTHROPIC_API_KEY");
         let error = super::read_api_key().expect_err("empty key should error");
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("ANVIL_CONFIG_HOME");
+        cleanup_temp_config_home(&config_home);
         assert!(matches!(
             error,
             crate::error::ApiError::MissingCredentials { .. }
         ));
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
     }
 
     #[test]

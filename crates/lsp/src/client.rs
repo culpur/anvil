@@ -424,6 +424,16 @@ where
     }
 
     let content_length = content_length.ok_or(LspError::MissingContentLength)?;
+
+    // Guard against unbounded heap allocation from a malicious or misbehaving
+    // language server sending an extremely large Content-Length value.
+    const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
+    if content_length > MAX_CONTENT_LENGTH {
+        return Err(LspError::InvalidContentLength(format!(
+            "Content-Length {content_length} exceeds maximum allowed {MAX_CONTENT_LENGTH}"
+        )));
+    }
+
     let mut body = vec![0_u8; content_length];
     reader.read_exact(&mut body).await?;
     Ok(Some(serde_json::from_slice(&body)?))

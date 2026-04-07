@@ -2,6 +2,7 @@ mod file_drop;
 mod init;
 mod input;
 mod render;
+mod screensaver;
 mod tui;
 
 rust_i18n::i18n!("../../locales", fallback = "en");
@@ -764,13 +765,25 @@ fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
     io::stdout().flush()?;
 
     let mut curl_args = vec!["-s".to_string(), "--connect-timeout".to_string(), "5".to_string()];
-    if !api_key.is_empty() {
-        curl_args.push("-H".to_string());
-        curl_args.push(format!("Authorization: Bearer {api_key}"));
-    }
+    // Write the auth header to a temp file so the token is not visible in the
+    // process argument list.  Clean up after the curl call completes.
+    let auth_header_path_opt: Option<PathBuf> = if !api_key.is_empty() {
+        match write_curl_auth_header(&api_key) {
+            Ok(p) => {
+                curl_args.push("-H".to_string());
+                curl_args.push(format!("@{}", p.display()));
+                Some(p)
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     curl_args.push(format!("{host}/api/tags"));
 
-    match std::process::Command::new("curl").args(&curl_args).output() {
+    let curl_result = std::process::Command::new("curl").args(&curl_args).output();
+    if let Some(ref p) = auth_header_path_opt { let _ = fs::remove_file(p); }
+    match curl_result {
         Ok(out) if out.status.success() => {
             println!("✓ Connected\n");
 
@@ -1473,6 +1486,7 @@ fn run_resume_command(
         | SlashCommand::Finetune { .. }
         | SlashCommand::Webhook { .. }
         | SlashCommand::PluginSdk { .. }
+        | SlashCommand::Sleep
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -1628,6 +1642,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut task_check_instant = Instant::now();
+    // ── Screensaver state ──────────────────────────────────────────────────────
+    let mut screensaver_state: Option<screensaver::FurnaceScreensaver> = None;
+    let mut last_input_time = Instant::now();
 
     'outer: loop {
         // Check for background task completions.
@@ -1637,6 +1654,31 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut slot) = update_check.try_lock() {
             if let Some(msg) = slot.take() {
                 tui.set_update_available(msg);
+            }
+        }
+
+        // ── Screensaver: auto-activate on 15-min idle ──────────────────────
+        if screensaver_state.is_none()
+            && last_input_time.elapsed() >= screensaver::IDLE_TIMEOUT
+        {
+            let lines = tui.capture_screen_text();
+            screensaver_state = Some(screensaver::FurnaceScreensaver::new(lines));
+        }
+
+        // ── Screensaver: run animation tick and handle input ───────────────
+        if let Some(ref mut ss) = screensaver_state {
+            let result = tui.read_input_screensaver(ss)?;
+            let still_active = ss.is_active();
+            if !still_active {
+                screensaver_state = None;
+                last_input_time = Instant::now();
+            }
+            match result {
+                tui::ReadResult::Exit => {
+                    cli.persist_session()?;
+                    break 'outer;
+                }
+                _ => continue,
             }
         }
 
@@ -1676,6 +1718,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 ));
             }
             ReadResult::Submit(input) => {
+                last_input_time = Instant::now();
                 let trimmed = input.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -1683,6 +1726,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if matches!(trimmed, "/exit" | "/quit") {
                     cli.persist_session()?;
                     break 'outer;
+                }
+
+                // /sleep — activate the furnace screensaver immediately.
+                if matches!(trimmed, "/sleep" | "/screensaver" | "/furnace") {
+                    let lines = tui.capture_screen_text();
+                    screensaver_state = Some(screensaver::FurnaceScreensaver::new(lines));
+                    continue;
                 }
 
                 // /tab is TUI-only — handle before SlashCommand dispatch.
@@ -3092,16 +3142,22 @@ impl LiveCli {
         println!("Generating image… (this may take 10-30 seconds)");
         let _ = io::stdout().flush();
 
-        // Call the API.
+        // Call the API.  Write the auth header to a temp file (mode 0o600) so the
+        // token is never visible in the process argument list.
+        let auth_header_path = match write_curl_auth_header(&api_key) {
+            Ok(p) => p,
+            Err(e) => return format!("Failed to prepare auth header: {e}"),
+        };
         let output = std::process::Command::new("curl")
             .args([
                 "-s", "-X", "POST",
                 "https://api.openai.com/v1/images/generations",
-                "-H", &format!("Authorization: Bearer {api_key}"),
+                "-H", &format!("@{}", auth_header_path.display()),
                 "-H", "Content-Type: application/json",
                 "-d", &body.to_string(),
             ])
             .output();
+        let _ = fs::remove_file(&auth_header_path);
 
         let raw = match output {
             Ok(o) => match String::from_utf8(o.stdout) {
@@ -4111,6 +4167,11 @@ impl LiveCli {
             // Feature 20 — plugin SDK
             SlashCommand::PluginSdk { action } => {
                 println!("{}", Self::run_plugin_sdk_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Sleep => {
+                // Screensaver/ambient mode — not yet implemented.
+                println!("Sleep mode is not yet supported in this build.");
                 false
             }
             SlashCommand::Unknown(name) => {
@@ -5436,6 +5497,8 @@ impl LiveCli {
             vim_mode,
             chat_mode,
             permission_mode,
+            screensaver_timeout_mins: cfg_u64("screensaver_timeout_mins", 15),
+            screensaver_enabled: cfg_bool("screensaver_enabled", true),
             anvilhub_url,
             wp_configured,
             github_configured,
@@ -6925,6 +6988,19 @@ impl LiveCli {
                 if rest.is_empty() {
                     return "Usage: /perf profile <command>".to_string();
                 }
+                // Warn about shell injection risk and reject the most
+                // obviously dangerous patterns before passing to sh -c.
+                let dangerous_patterns = ["$(", "`", "&&", "||", ";", "|", ">", "<", ">>"];
+                for pattern in &dangerous_patterns {
+                    if rest.contains(pattern) {
+                        return format!(
+                            "Warning: /perf profile rejected command containing \
+                             potentially dangerous shell operator '{pattern}'.\n\
+                             Use simple commands without shell metacharacters."
+                        );
+                    }
+                }
+                eprintln!("[anvil] /perf profile: executing via sh -c: {rest}");
                 let start = std::time::Instant::now();
                 let output = Command::new("sh")
                     .arg("-c")
@@ -7712,9 +7788,19 @@ impl LiveCli {
             return "Neither 'tofu' nor 'terraform' found in PATH.\n\
                     Install OpenTofu: https://opentofu.org/docs/intro/install/".to_string();
         };
+        if args == "apply" {
+            // Require explicit confirmation before modifying infrastructure.
+            eprint!("This will apply changes to your infrastructure. Continue? (y/N) ");
+            let mut answer = String::new();
+            if std::io::stdin().read_line(&mut answer).is_err()
+                || answer.trim().to_lowercase() != "y"
+            {
+                return "Apply cancelled.".to_string();
+            }
+        }
         let tf_args: &[&str] = match args {
             "plan"     => &["plan", "-no-color"],
-            "apply"    => &["apply", "-no-color", "-auto-approve"],
+            "apply"    => &["apply", "-no-color"],
             "validate" => &["validate", "-no-color"],
             "drift"    => &["plan", "-refresh-only", "-no-color"],
             other => return format!("Unknown /iac sub-command: {other}\nRun `/iac help` for usage."),
@@ -7737,7 +7823,7 @@ impl LiveCli {
         }
         match args {
             "generate" => {
-                let project_type = if std::path::Path::new("Cargo.toml").exists() { "rust" } else if std::path::Path::new("package.json").exists() { "node" } else { "unknown" };
+                let project_type = detect_project_type_for_pipeline();
                 let prompt = format!(
                     "Generate a production-quality CI/CD pipeline configuration for a {project_type} project.\n\
                      - If the project uses GitHub Actions, output a .github/workflows/ci.yml file.\n\
@@ -8110,7 +8196,7 @@ impl LiveCli {
             if url.is_empty() || message.is_empty() {
                 return "Usage: /notify webhook <url> <message>".to_string();
             }
-            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = json_escape(message));
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
                        "-X", "POST", "-H", "Content-Type: application/json",
@@ -8147,15 +8233,22 @@ impl LiveCli {
             );
             let payload = format!(
                 r#"{{"msgtype":"m.text","body":"{msg}"}}"#,
-                msg = message.replace('"', "\\\"")
+                msg = json_escape(message)
             );
+            // Write the auth token to a temp file (mode 0o600) so it is not
+            // visible in the process argument list.
+            let auth_hdr = match write_curl_auth_header(&token) {
+                Ok(p) => p,
+                Err(e) => return format!("Failed to prepare Matrix auth header: {e}"),
+            };
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
                        "-X", "POST",
-                       "-H", &format!("Authorization: Bearer {token}"),
+                       "-H", &format!("@{}", auth_hdr.display()),
                        "-H", "Content-Type: application/json",
                        "-d", &payload, &url])
                 .output();
+            let _ = fs::remove_file(&auth_hdr);
             return match out {
                 Ok(o) => {
                     let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -8172,10 +8265,25 @@ impl LiveCli {
                 Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
                 None => return "Usage: /notify discord <webhook_url> <message>".to_string(),
             };
-            if !url.contains("discord.com/api/webhooks") {
-                return "Discord webhook URL should contain discord.com/api/webhooks".to_string();
+            // Validate the host is actually discord.com or discordapp.com to
+            // prevent sending payloads to arbitrary servers.  Extract the
+            // host from the URL without pulling in an extra dependency.
+            let discord_host_valid = {
+                // Strip scheme: look for "://" and take the part after it.
+                let after_scheme = url.find("://")
+                    .map(|i| &url[i + 3..])
+                    .unwrap_or(url);
+                // Host ends at the first '/', '?', '#', or ':'.
+                let host = after_scheme.split(|c| c == '/' || c == '?' || c == '#' || c == ':')
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                host == "discord.com" || host == "discordapp.com"
+            };
+            if !discord_host_valid {
+                return "Discord webhook URL must have host discord.com or discordapp.com".to_string();
             }
-            let payload = format!(r#"{{"content":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let payload = format!(r#"{{"content":"{msg}"}}"#, msg = json_escape(message));
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
                        "-X", "POST", "-H", "Content-Type: application/json",
@@ -8199,7 +8307,7 @@ impl LiveCli {
                 Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
                 None => return "Usage: /notify slack <webhook_url> <message>".to_string(),
             };
-            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = message.replace('"', "\\\""));
+            let payload = format!(r#"{{"text":"{msg}"}}"#, msg = json_escape(message));
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
                        "-X", "POST", "-H", "Content-Type: application/json",
@@ -8233,7 +8341,7 @@ impl LiveCli {
             );
             let payload = format!(
                 r#"{{"chat_id":"{chat_id}","text":"{msg}","parse_mode":"Markdown"}}"#,
-                msg = message.replace('"', "\\\"")
+                msg = json_escape(message)
             );
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
@@ -8270,15 +8378,22 @@ impl LiveCli {
             };
             let payload = format!(
                 r#"{{"messaging_product":"whatsapp","to":"{number}","type":"text","text":{{"body":"{msg}"}}}}"#,
-                msg = message.replace('"', "\\\"")
+                msg = json_escape(message)
             );
+            // Write the auth token to a temp file (mode 0o600) so it is not
+            // visible in the process argument list.
+            let auth_hdr = match write_curl_auth_header(&token) {
+                Ok(p) => p,
+                Err(e) => return format!("Failed to prepare WhatsApp auth header: {e}"),
+            };
             let out = Command::new("curl")
                 .args(["-s", "-o", "/dev/null", "-w", "%{http_code}",
                        "-X", "POST",
-                       "-H", &format!("Authorization: Bearer {token}"),
+                       "-H", &format!("@{}", auth_hdr.display()),
                        "-H", "Content-Type: application/json",
                        "-d", &payload, &api_url])
                 .output();
+            let _ = fs::remove_file(&auth_hdr);
             return match out {
                 Ok(o) => {
                     let code = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -9253,6 +9368,29 @@ fn extract_notebook_cell(raw: &str, cell_n: usize) -> Result<String, String> {
     Ok(source)
 }
 
+/// Escape a string for safe embedding inside a JSON string value.
+///
+/// Handles `\`, `"`, newlines, carriage returns, tabs, and all ASCII
+/// control characters that would produce malformed JSON if left unescaped.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"'  => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                // Remaining ASCII control characters encoded as \uXXXX.
+                out.push_str(&format!("\\u{:04X}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Convert a `Command::output()` result into a human-readable string.
 fn shell_output_or_err(result: Result<std::process::Output, std::io::Error>, context: &str) -> String {
     match result {
@@ -9379,8 +9517,8 @@ fn send_desktop_notification(title: &str, message: &str) -> String {
     if cfg!(target_os = "macos") {
         let script = format!(
             r#"display notification "{msg}" with title "{title}""#,
-            msg = message.replace('"', "\\\""),
-            title = title.replace('"', "\\\""),
+            msg = json_escape(message),
+            title = json_escape(title),
         );
         let out = Command::new("osascript").args(["-e", &script]).output();
         return match out {
@@ -9404,19 +9542,71 @@ fn send_desktop_notification(title: &str, message: &str) -> String {
     }
 }
 
-/// Stateless vault command runner.  The vault manager is constructed on each
-/// call because `LiveCli` does not hold persistent inter-call state for the vault.
-/// For interactive secret prompts in REPL mode `rpassword`-style no-echo reads are
-/// not available without adding a dependency; we fall back to a visible-input note.
+/// Write a `Bearer` authorization header to a uniquely-named temp file and return
+/// its path.  The caller must delete the file after the curl invocation completes.
+///
+/// Using a file instead of passing the token directly in curl's `-H` argument
+/// prevents the token from appearing in the system process list (`ps aux`).
+/// The file is created with mode 0o600 on Unix to restrict read access.
+fn write_curl_auth_header(token: &str) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!(
+        "anvil-curl-auth-{}-{}.hdr",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("Failed to create auth header temp file: {e}"))?;
+        write!(f, "Authorization: Bearer {token}")
+            .map_err(|e| format!("Failed to write auth header: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(&path, format!("Authorization: Bearer {token}"))
+            .map_err(|e| format!("Failed to write auth header temp file: {e}"))?;
+    }
+    Ok(path)
+}
+
+/// Read a password from the terminal with no echo.
+/// Prints `prompt` to stderr so it is visible even when stdout is piped.
+fn read_password_prompt(prompt: &str) -> Result<String, String> {
+    eprint!("{prompt}");
+    rpassword::read_password().map_err(|e| format!("Failed to read password: {e}"))
+}
+
+/// Mask a secret for display: show first 4 and last 4 characters separated by "…".
+/// Secrets shorter than 9 characters are fully masked with "****".
+fn mask_secret(s: &str) -> String {
+    if s.len() < 9 {
+        return "****".to_string();
+    }
+    format!("{}…{}", &s[..4], &s[s.len() - 4..])
+}
+
 fn run_vault_command_impl(args: Option<&str>) -> String {
     use runtime::{Credential, TotpEntry, VaultManager};
+    use std::io::Write as _;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    // Only the subcommand name and the label (if present) come from the command
+    // line.  All passwords and secrets are read via no-echo terminal prompts so
+    // they never appear in the REPL input history or process argument lists.
     let sub = args.unwrap_or("").trim();
-    let mut parts = sub.splitn(3, ' ');
+    let mut parts = sub.splitn(2, ' ');
     let cmd = parts.next().unwrap_or("").trim();
     let arg1 = parts.next().unwrap_or("").trim();
-    let arg2 = parts.next().unwrap_or("").trim();
 
     let mut vm = VaultManager::with_default_dir();
 
@@ -9432,15 +9622,27 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         }
 
         // ── Setup ────────────────────────────────────────────────────────────
+        // Usage: /vault setup
+        // Prompts for master password (no echo) then asks to confirm.
         "setup" => {
             if vm.is_initialized() {
                 return "Vault\n  Error            Vault already initialized. Delete ~/.anvil/vault/ to reset.".to_string();
             }
-            let password = arg1;
+            let password = match read_password_prompt("Enter master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
             if password.is_empty() {
-                return "Vault\n  Usage            /vault setup <master-password>\n  Note             Master password is not stored — you must remember it.".to_string();
+                return "Vault\n  Error            Password must not be empty.".to_string();
             }
-            match vm.setup(password) {
+            let confirm = match read_password_prompt("Confirm master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            if password != confirm {
+                return "Vault\n  Error            Passwords do not match — setup cancelled.".to_string();
+            }
+            match vm.setup(&password) {
                 Ok(()) => format!(
                     "Vault\n  Result           Initialized\n  Storage          {}\n  Algorithm        Argon2id + AES-256-GCM\n  Note             Master password not stored — keep it safe.",
                     VaultManager::default_vault_dir().display()
@@ -9450,16 +9652,21 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         }
 
         // ── Unlock ───────────────────────────────────────────────────────────
+        // Usage: /vault unlock
+        // TODO: VaultManager should be stored in LiveCli for persistent sessions.
+        // For now, each vault operation re-prompts, which is secure even if not
+        // ideal UX.
         "unlock" => {
-            // Note: VaultManager is transient per call — unlock persists only for
-            // this invocation.  A persistent vault session requires storing the
-            // manager in LiveCli state (future work).
-            let password = arg1;
-            if password.is_empty() {
-                return "Vault\n  Usage            /vault unlock <master-password>".to_string();
-            }
-            match vm.unlock(password) {
-                Ok(()) => "Vault\n  Result           Unlocked\n  Note             Vault is unlocked for this command only. Pass password with each command for now.".to_string(),
+            let password = match read_password_prompt("Master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            match vm.unlock(&password) {
+                // TODO: implement a persistent vault session so users only need
+                // to enter their master password once per CLI invocation.
+                // Currently VaultManager is recreated for each /vault call, so
+                // the unlock state does not persist between commands.
+                Ok(()) => "Vault\n  Result           Unlocked\n  Note             Known limitation: vault session is not persistent across commands. Each vault operation prompts for the master password.".to_string(),
                 Err(e) => format!("Vault unlock error: {e}"),
             }
         }
@@ -9468,24 +9675,25 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         "lock" => "Vault\n  Result           Locked (vault memory cleared)".to_string(),
 
         // ── Store ─────────────────────────────────────────────────────────────
-        // Usage: /vault store <label> <master-password>
-        // The secret value is prompted interactively in a real terminal; here we
-        // require it as the third word because no-echo stdin is not available.
+        // Usage: /vault store <label>
+        // Prompts for master password (no echo), then for the secret (no echo).
         "store" => {
             let label = arg1;
-            let password = arg2;
-            if label.is_empty() || password.is_empty() {
-                return "Vault\n  Usage            /vault store <label> <master-password>\n  Note             Run in terminal for interactive no-echo secret prompt.".to_string();
+            if label.is_empty() {
+                return "Vault\n  Usage            /vault store <label>".to_string();
             }
-            match vm.unlock(password) {
+            let password = match read_password_prompt("Master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            match vm.unlock(&password) {
                 Err(e) => return format!("Vault unlock error: {e}"),
                 Ok(()) => {}
             }
-            // Prompt for the secret value via stdin (best-effort; no TTY hiding).
-            println!("Vault  Enter secret for '{label}': ");
-            let mut secret = String::new();
-            let _ = std::io::stdin().read_line(&mut secret);
-            let secret = secret.trim().to_string();
+            let secret = match read_password_prompt(&format!("Enter secret for '{label}': ")) {
+                Ok(s) => s,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
             if secret.is_empty() {
                 return "Vault\n  Error            Empty secret — store cancelled.".to_string();
             }
@@ -9504,14 +9712,19 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         }
 
         // ── Get ───────────────────────────────────────────────────────────────
-        // Usage: /vault get <label> <master-password>
+        // Usage: /vault get <label>
+        // Prompts for master password (no echo).
+        // Attempts to copy the secret to the clipboard; falls back to masked display.
         "get" => {
             let label = arg1;
-            let password = arg2;
-            if label.is_empty() || password.is_empty() {
-                return "Vault\n  Usage            /vault get <label> <master-password>".to_string();
+            if label.is_empty() {
+                return "Vault\n  Usage            /vault get <label>".to_string();
             }
-            match vm.unlock(password) {
+            let password = match read_password_prompt("Master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            match vm.unlock(&password) {
                 Err(e) => return format!("Vault unlock error: {e}"),
                 Ok(()) => {}
             }
@@ -9519,9 +9732,24 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
                 Ok(cred) => {
                     let username = cred.username.as_deref().unwrap_or("(none)");
                     let notes = cred.notes.as_deref().unwrap_or("(none)");
+                    // Try clipboard first (macOS pbcopy, Linux xclip).
+                    let copied = std::process::Command::new("pbcopy")
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                        .and_then(|mut child| {
+                            child.stdin.take().unwrap().write_all(cred.secret.as_bytes())?;
+                            child.wait()
+                        })
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    let secret_display = if copied {
+                        "(copied to clipboard)".to_string()
+                    } else {
+                        format!("{} (masked — use pbcopy/xclip to retrieve)", mask_secret(&cred.secret))
+                    };
                     format!(
-                        "Vault\n  Label            {}\n  Username         {username}\n  Secret           {}\n  Notes            {notes}",
-                        cred.label, cred.secret
+                        "Vault\n  Label            {}\n  Username         {username}\n  Secret           {secret_display}\n  Notes            {notes}",
+                        cred.label
                     )
                 }
                 Err(e) => format!("Vault get error: {e}"),
@@ -9529,13 +9757,14 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         }
 
         // ── List ──────────────────────────────────────────────────────────────
-        // Usage: /vault list <master-password>
+        // Usage: /vault list
+        // Prompts for master password (no echo).
         "list" => {
-            let password = arg1;
-            if password.is_empty() {
-                return "Vault\n  Usage            /vault list <master-password>".to_string();
-            }
-            match vm.unlock(password) {
+            let password = match read_password_prompt("Master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            match vm.unlock(&password) {
                 Err(e) => return format!("Vault unlock error: {e}"),
                 Ok(()) => {}
             }
@@ -9553,14 +9782,18 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
         }
 
         // ── Delete ────────────────────────────────────────────────────────────
-        // Usage: /vault delete <label> <master-password>
+        // Usage: /vault delete <label>
+        // Prompts for master password (no echo).
         "delete" => {
             let label = arg1;
-            let password = arg2;
-            if label.is_empty() || password.is_empty() {
-                return "Vault\n  Usage            /vault delete <label> <master-password>".to_string();
+            if label.is_empty() {
+                return "Vault\n  Usage            /vault delete <label>".to_string();
             }
-            match vm.unlock(password) {
+            let password = match read_password_prompt("Master password: ") {
+                Ok(p) => p,
+                Err(e) => return format!("Vault\n  Error            {e}"),
+            };
+            match vm.unlock(&password) {
                 Err(e) => return format!("Vault unlock error: {e}"),
                 Ok(()) => {}
             }
@@ -9572,15 +9805,19 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
 
         // ── TOTP sub-commands ─────────────────────────────────────────────────
         "totp" => {
-            // arg1 = totp sub-command, arg2 = label (or password)
-            match arg1 {
-                // /vault totp list <master-password>
+            // arg1 now holds the totp sub-command (and possibly a label after it).
+            let mut totp_parts = arg1.splitn(2, ' ');
+            let totp_sub = totp_parts.next().unwrap_or("").trim();
+            let totp_arg = totp_parts.next().unwrap_or("").trim();
+
+            match totp_sub {
+                // /vault totp list
                 "list" => {
-                    let password = arg2;
-                    if password.is_empty() {
-                        return "Vault\n  Usage            /vault totp list <master-password>".to_string();
-                    }
-                    match vm.unlock(password) {
+                    let password = match read_password_prompt("Master password: ") {
+                        Ok(p) => p,
+                        Err(e) => return format!("Vault\n  Error            {e}"),
+                    };
+                    match vm.unlock(&password) {
                         Err(e) => return format!("Vault unlock error: {e}"),
                         Ok(()) => {}
                     }
@@ -9597,22 +9834,25 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
                     }
                 }
 
-                // /vault totp add <label> — prompts for secret interactively
+                // /vault totp add <label>
+                // Prompts for master password (no echo), then TOTP secret (no echo).
                 "add" => {
-                    // arg2 is treated as "<label> <master-password>" from the remaining text.
-                    let mut rest = arg2.splitn(2, ' ');
-                    let label = rest.next().unwrap_or("").trim();
-                    let password = rest.next().unwrap_or("").trim();
-                    if label.is_empty() || password.is_empty() {
-                        return "Vault\n  Usage            /vault totp add <label> <master-password>\n  Note             You will be prompted for the Base32 TOTP secret.".to_string();
+                    let label = totp_arg;
+                    if label.is_empty() {
+                        return "Vault\n  Usage            /vault totp add <label>".to_string();
                     }
-                    match vm.unlock(password) {
+                    let password = match read_password_prompt("Master password: ") {
+                        Ok(p) => p,
+                        Err(e) => return format!("Vault\n  Error            {e}"),
+                    };
+                    match vm.unlock(&password) {
                         Err(e) => return format!("Vault unlock error: {e}"),
                         Ok(()) => {}
                     }
-                    println!("Vault  Enter TOTP Base32 secret for '{label}': ");
-                    let mut secret_input = String::new();
-                    let _ = std::io::stdin().read_line(&mut secret_input);
+                    let secret_input = match read_password_prompt(&format!("TOTP secret/URI for '{label}': ")) {
+                        Ok(s) => s,
+                        Err(e) => return format!("Vault\n  Error            {e}"),
+                    };
                     let secret = secret_input.trim().to_ascii_uppercase();
                     if secret.is_empty() {
                         return "Vault\n  Error            Empty secret — TOTP add cancelled.".to_string();
@@ -9631,15 +9871,17 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
                     }
                 }
 
-                // /vault totp delete <label> <master-password>
+                // /vault totp delete <label>
                 "delete" => {
-                    let mut rest = arg2.splitn(2, ' ');
-                    let label = rest.next().unwrap_or("").trim();
-                    let password = rest.next().unwrap_or("").trim();
-                    if label.is_empty() || password.is_empty() {
-                        return "Vault\n  Usage            /vault totp delete <label> <master-password>".to_string();
+                    let label = totp_arg;
+                    if label.is_empty() {
+                        return "Vault\n  Usage            /vault totp delete <label>".to_string();
                     }
-                    match vm.unlock(password) {
+                    let password = match read_password_prompt("Master password: ") {
+                        Ok(p) => p,
+                        Err(e) => return format!("Vault\n  Error            {e}"),
+                    };
+                    match vm.unlock(&password) {
                         Err(e) => return format!("Vault unlock error: {e}"),
                         Ok(()) => {}
                     }
@@ -9649,13 +9891,13 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
                     }
                 }
 
-                // /vault totp <label> <master-password> — generate current code
+                // /vault totp <label> — generate current TOTP code
                 label if !label.is_empty() => {
-                    let password = arg2;
-                    if password.is_empty() {
-                        return format!("Vault\n  Usage            /vault totp {label} <master-password>");
-                    }
-                    match vm.unlock(password) {
+                    let password = match read_password_prompt("Master password: ") {
+                        Ok(p) => p,
+                        Err(e) => return format!("Vault\n  Error            {e}"),
+                    };
+                    match vm.unlock(&password) {
                         Err(e) => return format!("Vault unlock error: {e}"),
                         Ok(()) => {}
                     }
@@ -9668,7 +9910,7 @@ fn run_vault_command_impl(args: Option<&str>) -> String {
                     }
                 }
 
-                _ => "Vault\n  Usage            /vault totp [add <label>|<label>|list|delete <label>] <master-password>".to_string(),
+                _ => "Vault\n  Usage            /vault totp [add <label> | <label> | list | delete <label>]".to_string(),
             }
         }
 
@@ -12039,6 +12281,7 @@ fn tool_call_detail(name: &str, input: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_tool_call_start(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
@@ -12092,6 +12335,7 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
     let icon = if is_error {
         "\x1b[1;31m✗\x1b[0m"
@@ -12120,11 +12364,16 @@ fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
     }
 }
 
+#[cfg(test)]
 const DISPLAY_TRUNCATION_NOTICE: &str =
     "\x1b[2m… output truncated for display; full result preserved in session.\x1b[0m";
+#[cfg(test)]
 const READ_DISPLAY_MAX_LINES: usize = 80;
+#[cfg(test)]
 const READ_DISPLAY_MAX_CHARS: usize = 6_000;
+#[cfg(test)]
 const TOOL_OUTPUT_DISPLAY_MAX_LINES: usize = 60;
+#[cfg(test)]
 const TOOL_OUTPUT_DISPLAY_MAX_CHARS: usize = 4_000;
 
 fn extract_tool_path(parsed: &serde_json::Value) -> String {
@@ -12137,6 +12386,7 @@ fn extract_tool_path(parsed: &serde_json::Value) -> String {
         .to_string()
 }
 
+#[cfg(test)]
 fn format_search_start(label: &str, parsed: &serde_json::Value) -> String {
     let pattern = parsed
         .get("pattern")
@@ -12149,6 +12399,7 @@ fn format_search_start(label: &str, parsed: &serde_json::Value) -> String {
     format!("{label} {pattern}\n\x1b[2min {scope}\x1b[0m")
 }
 
+#[cfg(test)]
 fn format_patch_preview(old_value: &str, new_value: &str) -> Option<String> {
     if old_value.is_empty() && new_value.is_empty() {
         return None;
@@ -12160,6 +12411,7 @@ fn format_patch_preview(old_value: &str, new_value: &str) -> Option<String> {
     ))
 }
 
+#[cfg(test)]
 fn format_bash_call(parsed: &serde_json::Value) -> String {
     let command = parsed
         .get("command")
@@ -12181,6 +12433,7 @@ fn first_visible_line(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+#[cfg(test)]
 fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     let mut lines = vec![format!("{icon} \x1b[38;5;245mbash\x1b[0m")];
     if let Some(task_id) = parsed
@@ -12221,6 +12474,7 @@ fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> String {
     lines.join("\n\n")
 }
 
+#[cfg(test)]
 fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
     let file = parsed.get("file").unwrap_or(parsed);
     let path = extract_tool_path(file);
@@ -12251,6 +12505,7 @@ fn format_read_result(icon: &str, parsed: &serde_json::Value) -> String {
     )
 }
 
+#[cfg(test)]
 fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
     let path = extract_tool_path(parsed);
     let kind = parsed
@@ -12267,6 +12522,7 @@ fn format_write_result(icon: &str, parsed: &serde_json::Value) -> String {
     )
 }
 
+#[cfg(test)]
 fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String> {
     let hunks = parsed.get("structuredPatch")?.as_array()?;
     let mut preview = Vec::new();
@@ -12287,6 +12543,7 @@ fn format_structured_patch_preview(parsed: &serde_json::Value) -> Option<String>
     }
 }
 
+#[cfg(test)]
 fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
     let path = extract_tool_path(parsed);
     let suffix = if parsed
@@ -12316,6 +12573,7 @@ fn format_edit_result(icon: &str, parsed: &serde_json::Value) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_glob_result(icon: &str, parsed: &serde_json::Value) -> String {
     let num_files = parsed
         .get("numFiles")
@@ -12340,6 +12598,7 @@ fn format_glob_result(icon: &str, parsed: &serde_json::Value) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
     let num_matches = parsed
         .get("numMatches")
@@ -12384,6 +12643,7 @@ fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
     }
 }
 
+#[cfg(test)]
 fn format_generic_tool_result(icon: &str, name: &str, parsed: &serde_json::Value) -> String {
     let rendered_output = match parsed {
         serde_json::Value::String(text) => text.clone(),
@@ -12426,6 +12686,7 @@ fn truncate_for_summary(value: &str, limit: usize) -> String {
     }
 }
 
+#[cfg(test)]
 fn truncate_output_for_display(content: &str, max_lines: usize, max_chars: usize) -> String {
     let original = content.trim_end_matches('\n');
     if original.is_empty() {
@@ -12531,7 +12792,6 @@ fn response_to_events(
 }
 
 struct CliToolExecutor {
-    renderer: TerminalRenderer,
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
@@ -12553,7 +12813,6 @@ impl CliToolExecutor {
         tui_slot: TuiSenderSlot,
     ) -> Self {
         Self {
-            renderer: TerminalRenderer::new(),
             emit_output,
             allowed_tools,
             tool_registry,
@@ -12894,12 +13153,12 @@ impl CliToolExecutor {
                     .get("line")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| "LSPTool: `line` is required for the definition action".to_string())?
-                    as u32;
+                    .min(u32::MAX as u64) as u32;
                 let character = value
                     .get("character")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| "LSPTool: `character` is required for the definition action".to_string())?
-                    as u32;
+                    .min(u32::MAX as u64) as u32;
                 let position = lsp_types::Position::new(line, character);
                 let locations = self
                     .tokio_rt
@@ -12919,12 +13178,12 @@ impl CliToolExecutor {
                     .get("line")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| "LSPTool: `line` is required for the references action".to_string())?
-                    as u32;
+                    .min(u32::MAX as u64) as u32;
                 let character = value
                     .get("character")
                     .and_then(|v| v.as_u64())
                     .ok_or_else(|| "LSPTool: `character` is required for the references action".to_string())?
-                    as u32;
+                    .min(u32::MAX as u64) as u32;
                 let position = lsp_types::Position::new(line, character);
                 let locations = self
                     .tokio_rt

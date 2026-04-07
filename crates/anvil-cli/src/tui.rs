@@ -449,11 +449,6 @@ impl AnvilTui {
         self.active_tab_mut().name = name.into();
     }
 
-    /// Return the number of open tabs.
-    pub fn tab_count(&self) -> usize {
-        self.tabs.len()
-    }
-
     /// Return a list of (index, id, name, has_unread) tuples.
     pub fn tab_list(&self) -> Vec<(usize, usize, &str, bool)> {
         self.tabs.iter().enumerate().map(|(i, t)| (i, t.id, t.name.as_str(), t.has_unread)).collect()
@@ -469,11 +464,6 @@ impl AnvilTui {
         let model_str = model.into();
         self.context_max_tokens = context_max_for_model(&model_str);
         self.active_tab_mut().model = model_str;
-    }
-
-    /// Update the session-id for the active tab.
-    pub fn set_session_id(&mut self, id: impl Into<String>) {
-        self.active_tab_mut().session_id = id.into();
     }
 
     /// Apply a new theme to the TUI immediately (live hot-swap).
@@ -1421,13 +1411,12 @@ impl AnvilTui {
         }
 
         // Accept the selected completion
-        let (insert, ends_with_space, first_part) = {
+        let (insert, first_part) = {
             let tab = &self.active_tab().completion;
             let selected = tab.matches[tab.selected].insert.clone();
             let input = self.active_tab().input.clone();
-            let ends_space = input.ends_with(' ');
             let first = input.splitn(2, ' ').next().unwrap_or("").to_string();
-            (selected, ends_space, first)
+            (selected, first)
         };
         let input_clone = self.active_tab().input.clone();
         let word_count = input_clone.split_whitespace().count();
@@ -1631,16 +1620,6 @@ impl AnvilTui {
     pub fn enter_configure_mode(&mut self, data: ConfigureData) {
         self.configure_data = data;
         self.configure_state = ConfigureState::MainMenu { selected: 0 };
-    }
-
-    /// Exit configure mode and return to the normal conversation view.
-    pub fn exit_configure_mode(&mut self) {
-        self.configure_state = ConfigureState::Inactive;
-    }
-
-    /// True when the configure menu is currently active.
-    pub fn is_configure_active(&self) -> bool {
-        self.configure_state != ConfigureState::Inactive
     }
 
     /// Key handler for configure mode.
@@ -2346,6 +2325,8 @@ pub struct ConfigureData {
     pub vim_mode: bool,
     pub chat_mode: bool,
     pub permission_mode: String,
+    pub screensaver_timeout_mins: u64,  // 0 = disabled, default 15
+    pub screensaver_enabled: bool,
     // Integrations
     pub anvilhub_url: String,
     pub wp_configured: bool,
@@ -2842,6 +2823,14 @@ fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "permissions".into(), hint: "Permission mode".into() },
             CompletionItem { insert: "display".into(), hint: "Vim, chat, theme".into() },
             CompletionItem { insert: "integrations".into(), hint: "AnvilHub, WordPress, GitHub".into() },
+            CompletionItem { insert: "vault".into(), hint: "Credential vault settings".into() },
+            CompletionItem { insert: "notifications".into(), hint: "Notification channels (Matrix, Discord…)".into() },
+            CompletionItem { insert: "failover".into(), hint: "Model failover chain & cooldowns".into() },
+            CompletionItem { insert: "ssh".into(), hint: "SSH key, bastion & config path".into() },
+            CompletionItem { insert: "dockerk8s".into(), hint: "Docker Compose & Kubernetes settings".into() },
+            CompletionItem { insert: "database".into(), hint: "Database connection settings".into() },
+            CompletionItem { insert: "memoryarchive".into(), hint: "Memory dir & archive settings".into() },
+            CompletionItem { insert: "pluginscron".into(), hint: "Plugin search paths & cron jobs".into() },
         ],
         "/theme" => vec![
             CompletionItem { insert: "list".into(), hint: "Show available themes".into() },
@@ -3556,6 +3545,23 @@ fn section_state_from_name(section: &str, selected: usize) -> ConfigureState {
     }
 }
 
+/// Parse a context-size string that may carry a 'k' (×1,000) or 'm' (×1,000,000) suffix.
+///
+/// Examples: "200k" → 200_000, "1m" → 1_000_000, "128000" → 128_000.
+/// The two-pass replace approach ("k"→"000", "m"→"000000") is broken because it
+/// treats every 'k' or 'm' inside the number as a multiplier and can turn "mk" into
+/// "000000000", so we use a proper suffix-strip instead.
+fn parse_context_size(v: &str) -> Option<u32> {
+    let v = v.trim().to_lowercase();
+    if let Some(num) = v.strip_suffix('k') {
+        num.parse::<u32>().ok().map(|n| n * 1_000)
+    } else if let Some(num) = v.strip_suffix('m') {
+        num.parse::<u32>().ok().map(|n| n * 1_000_000)
+    } else {
+        v.parse::<u32>().ok()
+    }
+}
+
 /// Look up a notification field value from ConfigureData by config key name.
 fn configure_data_notify_value(data: &ConfigureData, key: &str) -> String {
     match key {
@@ -3594,12 +3600,9 @@ fn configure_action_for(section: &str, key: &str, value: &str) -> Option<Configu
         ("Models", "default_model") => Some(ConfigureAction::SetDefaultModel { model: v }),
         ("Models", "image_model") => Some(ConfigureAction::SetImageModel { model: v }),
         ("Context", "context_size") => {
-            // Accept raw numbers or suffixes like 200K, 1M.
-            let n = v.to_lowercase()
-                .replace("k", "000")
-                .replace("m", "000000")
-                .parse::<u64>().ok()?;
-            Some(ConfigureAction::SetContextSize { size: n })
+            // Accept raw numbers or suffixes like 200k, 1m (case-insensitive).
+            let n = parse_context_size(&v)?;
+            Some(ConfigureAction::SetContextSize { size: n as u64 })
         }
         ("Context", "compact_threshold") => {
             let n = v.parse::<u8>().ok()?;
@@ -4167,4 +4170,88 @@ fn render_configure_menu(
 
     lines.push(Line::from(""));
     lines
+}
+
+// ─── Screensaver integration ──────────────────────────────────────────────────
+//
+// These methods are appended here to avoid conflicting with concurrent bug-fix
+// work elsewhere in this file.  They form the integration surface between the
+// `screensaver::FurnaceScreensaver` and the rest of the TUI.
+
+impl AnvilTui {
+    /// Capture a flat list of printable lines currently shown in the content
+    /// area.  Passed to `FurnaceScreensaver::new()` so the gathering phase can
+    /// animate those characters falling.
+    pub fn capture_screen_text(&self) -> Vec<String> {
+        let tab = &self.tabs[self.active_tab];
+        let mut out: Vec<String> = Vec::new();
+        for entry in &tab.log {
+            // Quick plain-text extraction — just grab the raw text fields.
+            match entry {
+                LogEntry::User(t) | LogEntry::Assistant(t) | LogEntry::System(t) => {
+                    for line in t.lines() {
+                        out.push(line.to_string());
+                    }
+                }
+                LogEntry::ToolCall { name, detail, .. } => {
+                    out.push(format!("  {name}: {}", detail.lines().next().unwrap_or("")));
+                }
+            }
+        }
+        // Include pending streaming text.
+        for line in tab.pending_text.lines() {
+            out.push(line.to_string());
+        }
+        out
+    }
+
+    /// Render one screensaver frame.  Calls `tick()` then draws onto the
+    /// terminal.  Returns `false` when the Resuming phase is complete (the
+    /// caller should drop the screensaver and return to normal TUI operation).
+    pub fn draw_screensaver(&mut self, ss: &mut crate::screensaver::FurnaceScreensaver) -> io::Result<bool> {
+        let (w, h) = {
+            let size = self.terminal.size()?;
+            (size.width, size.height)
+        };
+        let still_active = ss.tick(w, h);
+
+        self.terminal.draw(|frame| {
+            ss.render(frame, frame.area());
+        })?;
+
+        Ok(still_active)
+    }
+
+    /// Read a single input event in screensaver mode.
+    /// - On any key/mouse event: calls `ss.resume()` and returns `ReadResult::Continue`.
+    /// - When the Resuming animation finishes (`draw_screensaver` returns false): returns `ReadResult::Continue` (caller removes the screensaver).
+    /// - If the user presses Ctrl+C/D while the screensaver is active, returns `ReadResult::Exit`.
+    pub fn read_input_screensaver(&mut self, ss: &mut crate::screensaver::FurnaceScreensaver) -> io::Result<ReadResult> {
+        // Tick and redraw. Returns false when resume animation is done.
+        let still_active = self.draw_screensaver(ss)?;
+        if !still_active {
+            return Ok(ReadResult::Continue); // signal caller: screensaver is done
+        }
+
+        // Poll for input with a short timeout to maintain animation framerate.
+        if event::poll(crate::screensaver::FRAME_INTERVAL)? {
+            match event::read()? {
+                CtEvent::Key(key) if matches!(key.kind, KeyEventKind::Press) => {
+                    // Safety exit.
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Char('d') | KeyCode::Char('D'))
+                    {
+                        return Ok(ReadResult::Exit);
+                    }
+                    ss.resume();
+                }
+                CtEvent::Mouse(_) => {
+                    ss.resume();
+                }
+                CtEvent::Resize(_, _) => { /* redraw on next tick */ }
+                _ => {}
+            }
+        }
+        Ok(ReadResult::Continue)
+    }
 }

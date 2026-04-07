@@ -5,6 +5,32 @@
 
 use std::path::Path;
 
+// ---------------------------------------------------------------------------
+// Path-component sanitization
+// ---------------------------------------------------------------------------
+
+/// Reject path components that could enable path traversal attacks.
+///
+/// Returns `Err` when the component is empty, equals `".."`, or contains
+/// `/` or `\` characters that would escape the intended installation
+/// subdirectory.
+fn sanitize_path_component(value: &str, field: &str) -> Result<(), HubError> {
+    if value.is_empty() {
+        return Err(HubError::Install(format!("{field} must not be empty")));
+    }
+    if value == ".." {
+        return Err(HubError::Install(format!(
+            "{field} must not be \"..\" (path traversal)"
+        )));
+    }
+    if value.contains('/') || value.contains('\\') {
+        return Err(HubError::Install(format!(
+            "{field} must not contain path separators"
+        )));
+    }
+    Ok(())
+}
+
 use serde::{Deserialize, Serialize};
 
 /// A package record returned by the AnvilHub API.
@@ -66,7 +92,7 @@ impl HubClient {
     ) -> Result<Vec<HubPackage>, HubError> {
         let url = format!(
             "{}/v1/hub/packages?type={}&limit={}&sort=downloads",
-            self.base_url, pkg_type, limit
+            self.base_url, urlencoded(pkg_type), limit
         );
         let resp = self
             .http
@@ -173,6 +199,19 @@ impl HubClient {
                 .ok_or_else(|| HubError::Install("package has no download URL".to_string()))?
         };
 
+        // Validate that the download URL uses HTTPS to prevent SSRF via
+        // unvalidated redirect to an internal scheme or plaintext HTTP.
+        if !download_url.starts_with("https://") {
+            return Err(HubError::Install(format!(
+                "download URL must use https (got: {download_url})"
+            )));
+        }
+
+        // Sanitize path components before joining to prevent path traversal.
+        sanitize_path_component(&pkg.pkg_type, "pkg_type")?;
+        sanitize_path_component(&pkg.name, "name")?;
+        sanitize_path_component(&pkg.version, "version")?;
+
         // Destination: ~/.anvil/<type>s/<name>/
         let type_dir = format!("{}s", pkg.pkg_type);
         let dest = install_dir.join(&type_dir).join(&pkg.name);
@@ -191,7 +230,7 @@ impl HubClient {
             .map_err(|e| HubError::Http(e.to_string()))?;
 
         // Write the raw archive alongside the unpacked content.
-        let ext = if download_url.ends_with(".zip") {
+        let ext = if download_url.to_lowercase().ends_with(".zip") {
             "zip"
         } else {
             "tar.gz"
@@ -233,6 +272,9 @@ impl std::error::Error for HubError {}
 // ---------------------------------------------------------------------------
 
 /// Format a slice of packages as a human-readable table string.
+///
+/// Returns an empty-list notice when `packages` is empty.
+#[must_use]
 pub fn format_package_list(header: &str, packages: &[HubPackage]) -> String {
     if packages.is_empty() {
         return format!("{header}\n  (none)\n");
@@ -254,6 +296,9 @@ pub fn format_package_list(header: &str, packages: &[HubPackage]) -> String {
 }
 
 /// Format detailed info for a single package.
+///
+/// Returns a multi-line string suitable for terminal display.
+#[must_use]
 pub fn format_package_detail(pkg: &HubPackage) -> String {
     format!(
         "Name:        {}\nVersion:     {}\nType:        {}\nAuthor:      {}\nDownloads:   {}\nDescription: {}\n",
@@ -337,5 +382,45 @@ impl BlockingHubClient {
         install_dir: &Path,
     ) -> Result<std::path::PathBuf, HubError> {
         self.rt.block_on(self.inner.install(pkg, install_dir))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::urlencoded;
+
+    #[test]
+    fn urlencoded_leaves_unreserved_chars_unchanged() {
+        assert_eq!(urlencoded("hello"), "hello");
+        assert_eq!(urlencoded("ABC-123_test.~"), "ABC-123_test.~");
+    }
+
+    #[test]
+    fn urlencoded_encodes_spaces_as_plus() {
+        assert_eq!(urlencoded("hello world"), "hello+world");
+        assert_eq!(urlencoded("  "), "++");
+    }
+
+    #[test]
+    fn urlencoded_encodes_special_characters() {
+        assert_eq!(urlencoded("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencoded("100%"), "100%25");
+        assert_eq!(urlencoded("a+b"), "a%2Bb");
+    }
+
+    #[test]
+    fn urlencoded_encodes_multibyte_chars() {
+        // Each UTF-8 byte is percent-encoded individually.
+        let result = urlencoded("é");
+        assert_eq!(result, "%C3%A9");
+    }
+
+    #[test]
+    fn urlencoded_empty_string() {
+        assert_eq!(urlencoded(""), "");
     }
 }

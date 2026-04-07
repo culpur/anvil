@@ -1807,17 +1807,59 @@ fn build_http_client() -> Result<Client, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Returns `true` when the host string appears to be an RFC-1918 private
+/// address, link-local (169.254/16), or loopback range.
+///
+/// This is a best-effort string check; for SSRF prevention purposes it covers
+/// the most common internal address patterns that an attacker might exploit.
+fn is_private_host(host: &str) -> bool {
+    // Loopback
+    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+        return true;
+    }
+    // RFC-1918: 10.0.0.0/8
+    if host.starts_with("10.") {
+        return true;
+    }
+    // RFC-1918: 192.168.0.0/16
+    if host.starts_with("192.168.") {
+        return true;
+    }
+    // Link-local: 169.254.0.0/16
+    if host.starts_with("169.254.") {
+        return true;
+    }
+    // RFC-1918: 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
+    if let Some(rest) = host.strip_prefix("172.") {
+        if let Some(second_octet_str) = rest.split('.').next() {
+            if let Ok(second) = second_octet_str.parse::<u8>() {
+                if (16..=31).contains(&second) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn normalize_fetch_url(url: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
+    let host = parsed.host_str().unwrap_or_default();
+
+    // Block requests to RFC-1918, link-local, and loopback addresses to
+    // prevent SSRF against internal infrastructure.
+    if is_private_host(host) {
+        return Err(format!(
+            "WebFetch: requests to private/internal addresses are not allowed (host: {host})"
+        ));
+    }
+
     if parsed.scheme() == "http" {
-        let host = parsed.host_str().unwrap_or_default();
-        if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-            let mut upgraded = parsed;
-            upgraded
-                .set_scheme("https")
-                .map_err(|()| String::from("failed to upgrade URL to https"))?;
-            return Ok(upgraded.to_string());
-        }
+        let mut upgraded = parsed;
+        upgraded
+            .set_scheme("https")
+            .map_err(|()| String::from("failed to upgrade URL to https"))?;
+        return Ok(upgraded.to_string());
     }
     Ok(parsed.to_string())
 }
@@ -5681,6 +5723,15 @@ struct RemoteTriggerOutput {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
+    // Validate that the target URL uses HTTPS to prevent SSRF to internal
+    // endpoints or cleartext HTTP downgrade attacks.
+    if !input.url.starts_with("https://") {
+        return Err(format!(
+            "RemoteTrigger: URL must use https (got: {})",
+            input.url
+        ));
+    }
+
     let base = input.url.trim_end_matches('/');
 
     let client = Client::new();
