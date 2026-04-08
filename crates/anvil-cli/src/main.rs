@@ -74,7 +74,26 @@ const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 type AllowedToolSet = BTreeSet<String>;
 
 fn main() {
+    // Install panic hook to clean up terminal state (disable mouse capture, leave alt screen)
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            crossterm::terminal::LeaveAlternateScreen
+        );
+        default_hook(info);
+    }));
+
     if let Err(error) = run() {
+        // Ensure terminal is cleaned up on error exit too
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            crossterm::terminal::LeaveAlternateScreen
+        );
         eprintln!("{}", render_cli_error(&error.to_string()));
         std::process::exit(1);
     }

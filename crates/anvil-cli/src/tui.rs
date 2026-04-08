@@ -360,7 +360,12 @@ impl AnvilTui {
     ) -> io::Result<(Self, TuiSender)> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        crossterm::execute!(stdout, terminal::EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
+        crossterm::execute!(
+            stdout,
+            terminal::EnterAlternateScreen,
+            crossterm::event::EnableMouseCapture,
+            crossterm::event::EnableBracketedPaste
+        )?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
@@ -1416,6 +1421,16 @@ impl AnvilTui {
                 CtEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                     return self.handle_key(key);
                 }
+                CtEvent::Paste(text) => {
+                    // Bracketed paste — insert the entire pasted text as a block.
+                    // Replace literal newlines with spaces to keep it as a single prompt
+                    // unless the user explicitly wants multi-line (Shift+Enter creates \n).
+                    let cleaned = text.replace('\r', "");
+                    for ch in cleaned.chars() {
+                        self.insert_char(ch);
+                    }
+                    self.refresh_completion();
+                }
                 CtEvent::Mouse(mouse) => {
                     match mouse.kind {
                         crossterm::event::MouseEventKind::ScrollUp => {
@@ -2437,6 +2452,7 @@ impl Drop for AnvilTui {
         let _ = terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             io::stdout(),
+            crossterm::event::DisableBracketedPaste,
             crossterm::event::DisableMouseCapture,
             terminal::LeaveAlternateScreen
         );
