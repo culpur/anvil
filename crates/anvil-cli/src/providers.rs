@@ -166,7 +166,7 @@ impl InternalPromptProgressReporter {
                 .shared
                 .state
                 .lock()
-                .expect("internal prompt progress state poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.step += 1;
             state.phase = if state.step == 1 {
                 "analyzing request".to_string()
@@ -191,7 +191,7 @@ impl InternalPromptProgressReporter {
                 .shared
                 .state
                 .lock()
-                .expect("internal prompt progress state poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.step += 1;
             state.phase = format!("running {name}");
             state.detail = Some(detail);
@@ -216,7 +216,7 @@ impl InternalPromptProgressReporter {
                 .shared
                 .state
                 .lock()
-                .expect("internal prompt progress state poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.saw_final_text {
                 return;
             }
@@ -248,7 +248,7 @@ impl InternalPromptProgressReporter {
         self.shared
             .state
             .lock()
-            .expect("internal prompt progress state poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 

@@ -94,8 +94,10 @@ static BUILTIN_SECRET_PATTERNS: &[&str] = &[
     r"gho_[a-zA-Z0-9]{36}",
     // GitHub App/installation token
     r"ghs_[a-zA-Z0-9]{36}",
-    // OpenAI API key
+    // OpenAI API key (classic, project, and service account formats)
     r"sk-[a-zA-Z0-9]{48}",
+    r"sk-proj-[a-zA-Z0-9\-_]{40,}",
+    r"sk-svcacct-[a-zA-Z0-9\-_]{40,}",
     // Generic "sk-" style (shorter, e.g. Anthropic)
     r"sk-ant-[a-zA-Z0-9\-_]{40,}",
     // Slack bot/user token

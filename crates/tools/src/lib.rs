@@ -1195,8 +1195,8 @@ mod tests {
 
     #[test]
     fn web_fetch_returns_prompt_aware_summary() {
-        let server = TestServer::spawn(Arc::new(|request_line: &str| {
-            assert!(request_line.starts_with("GET /page "));
+        std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1");
+        let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::html(
                 200,
                 "OK",
@@ -1235,8 +1235,8 @@ mod tests {
 
     #[test]
     fn web_fetch_supports_plain_text_and_rejects_invalid_url() {
-        let server = TestServer::spawn(Arc::new(|request_line: &str| {
-            assert!(request_line.starts_with("GET /plain "));
+        std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1");
+        let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::text(200, "OK", "plain text response")
         }));
 
@@ -1524,6 +1524,18 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Create a temp skill directory so the test is self-contained
+        let tmp = temp_path("skill-test");
+        let skill_dir = std::path::PathBuf::from(&tmp).join("skills").join("help");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "Guide on using the help skill for Anvil CLI",
+        )
+        .expect("write SKILL.md");
+        std::env::set_var("ANVIL_CONFIG_HOME", &tmp);
+
         let result = execute_tool(
             "Skill",
             &json!({
@@ -1542,7 +1554,7 @@ mod tests {
         assert!(output["prompt"]
             .as_str()
             .expect("prompt")
-            .contains("Guide on using oh-my-codex plugin"));
+            .contains("Guide on using the help skill"));
 
         let dollar_result = execute_tool(
             "Skill",

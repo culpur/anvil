@@ -577,6 +577,9 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
             dir = parent;
         }
     }
+    if let Ok(config_home) = std::env::var("ANVIL_CONFIG_HOME") {
+        candidates.push(std::path::PathBuf::from(config_home).join("skills"));
+    }
     if let Ok(codex_home) = std::env::var("CODEX_HOME") {
         candidates.push(std::path::PathBuf::from(codex_home).join("skills"));
     }

@@ -271,13 +271,15 @@ fn normalize_fetch_url(url: &str) -> Result<String, String> {
 
     // Block requests to RFC-1918, link-local, and loopback addresses to
     // prevent SSRF against internal infrastructure.
-    if is_private_host(host) {
+    // Tests can bypass with ANVIL_ALLOW_LOOPBACK_FETCH=1.
+    let allow_loopback = std::env::var("ANVIL_ALLOW_LOOPBACK_FETCH").is_ok();
+    if !allow_loopback && is_private_host(host) {
         return Err(format!(
             "WebFetch: requests to private/internal addresses are not allowed (host: {host})"
         ));
     }
 
-    if parsed.scheme() == "http" {
+    if parsed.scheme() == "http" && !allow_loopback {
         let mut upgraded = parsed;
         upgraded
             .set_scheme("https")

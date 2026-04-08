@@ -176,7 +176,9 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
                         .stdin(std::process::Stdio::piped())
                         .spawn()
                         .and_then(|mut child| {
-                            child.stdin.take().unwrap().write_all(cred.secret.as_bytes())?;
+                            if let Some(mut stdin) = child.stdin.take() {
+                                stdin.write_all(cred.secret.as_bytes())?;
+                            }
                             child.wait()
                         })
                         .map(|s| s.success())
