@@ -8,6 +8,8 @@
 /// The `AgentManager` is owned by `LiveCli` and polled every TUI frame.
 /// Completed agent results are returned from `poll()` so the caller can inject
 /// them as system messages.
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -113,8 +115,12 @@ pub struct AgentHandle {
     pub output: Vec<String>,
     /// Wall-clock start time.
     pub started_at: Instant,
+    /// Path to the git worktree created for this agent (if isolation was requested).
+    pub worktree_path: Option<PathBuf>,
     /// Channel from which to receive incremental output / done signal.
     rx: Option<Receiver<AgentMsg>>,
+    /// Optional channel for sending messages into the running agent.
+    pub input_tx: Option<SyncSender<String>>,
     /// OS thread handle (take()n when the thread completes).
     _thread: Option<JoinHandle<()>>,
 }
@@ -180,6 +186,9 @@ impl AgentManager {
     /// `runner` is a closure that will be called inside the new thread; it
     /// receives a `SyncSender<AgentMsg>` to report progress.  The closure
     /// must return an `AgentResult`.
+    /// When `isolated` is true a detached git worktree is created for the
+    /// agent in `<tempdir>/anvil-agent-<id>`.  The worktree is automatically
+    /// removed via `git worktree remove` when the agent completes.
     pub fn spawn<F>(
         &mut self,
         name: impl Into<String>,
@@ -190,8 +199,51 @@ impl AgentManager {
     where
         F: FnOnce(AgentOutputSender) -> AgentResult + Send + 'static,
     {
+        self.spawn_with_options(name, agent_type, task, false, runner)
+    }
+
+    /// Like [`spawn`] but with an explicit `isolated` flag.
+    pub fn spawn_isolated<F>(
+        &mut self,
+        name: impl Into<String>,
+        agent_type: AgentType,
+        task: impl Into<String>,
+        runner: F,
+    ) -> usize
+    where
+        F: FnOnce(AgentOutputSender) -> AgentResult + Send + 'static,
+    {
+        self.spawn_with_options(name, agent_type, task, true, runner)
+    }
+
+    fn spawn_with_options<F>(
+        &mut self,
+        name: impl Into<String>,
+        agent_type: AgentType,
+        task: impl Into<String>,
+        isolated: bool,
+        runner: F,
+    ) -> usize
+    where
+        F: FnOnce(AgentOutputSender) -> AgentResult + Send + 'static,
+    {
         let id = self.next_id;
         self.next_id += 1;
+
+        // Create a git worktree when isolation is requested.
+        let worktree_path: Option<PathBuf> = if isolated {
+            let wt_path = std::env::temp_dir().join(format!("anvil-agent-{id}"));
+            let status = Command::new("git")
+                .args(["worktree", "add", "--detach", &wt_path.to_string_lossy()])
+                .status();
+            if status.map(|s| s.success()).unwrap_or(false) {
+                Some(wt_path)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let (tx, rx) = mpsc::sync_channel::<AgentMsg>(1024);
         let sender = AgentOutputSender(tx.clone());
@@ -213,7 +265,9 @@ impl AgentManager {
             task: task.into(),
             output: Vec::new(),
             started_at: Instant::now(),
+            worktree_path,
             rx: Some(rx),
+            input_tx: None,
             _thread: thread,
         });
 
@@ -232,11 +286,23 @@ impl AgentManager {
                 continue;
             }
             if let Some(result) = handle.poll() {
-                handle.status = if result.success {
+                let success = result.success;
+                handle.status = if success {
                     AgentStatus::Completed
                 } else {
                     AgentStatus::Failed(result.output.lines().last().unwrap_or("").to_string())
                 };
+
+                // Send desktop notification.
+                send_completion_notification(handle.id, &handle.name, success);
+
+                // Clean up the worktree if one was created for this agent.
+                if let Some(ref wt_path) = handle.worktree_path {
+                    let _ = Command::new("git")
+                        .args(["worktree", "remove", "--force", &wt_path.to_string_lossy()])
+                        .status();
+                }
+
                 completed.push((handle.id, result));
             }
         }
@@ -269,6 +335,30 @@ impl AgentManager {
     /// Find an agent by ID, returning a shared reference.
     pub fn get(&self, id: usize) -> Option<&AgentHandle> {
         self.agents.iter().find(|a| a.id == id)
+    }
+
+    /// Send a message string to a running agent via its `input_tx` channel.
+    ///
+    /// Returns `Ok(())` if the message was delivered to the channel buffer,
+    /// or an `Err` string if the agent does not have an input channel, is not
+    /// in a running state, or the channel is full / disconnected.
+    pub fn send_message(&mut self, id: usize, msg: String) -> Result<(), String> {
+        let handle = self
+            .agents
+            .iter_mut()
+            .find(|a| a.id == id)
+            .ok_or_else(|| format!("no agent with id {id}"))?;
+
+        if !matches!(handle.status, AgentStatus::Running) {
+            return Err(format!("agent #{id} is not running"));
+        }
+
+        match &handle.input_tx {
+            Some(tx) => tx
+                .try_send(msg)
+                .map_err(|e| format!("agent #{id} input channel error: {e}")),
+            None => Err(format!("agent #{id} has no input channel")),
+        }
     }
 
     /// Mark a running agent as failed (used by the `/agents stop` command).
@@ -383,6 +473,31 @@ impl AgentOutputSender {
     /// have been stopped via `/agents stop`).
     pub fn send_line(&self, line: impl Into<String>) {
         let _ = self.0.send(AgentMsg::Line(line.into()));
+    }
+}
+
+// ─── Desktop Notifications ────────────────────────────────────────────────────
+
+/// Send a desktop notification when an agent completes.
+///
+/// On macOS this uses `osascript`; on Linux it uses `notify-send`.
+/// Failures are silently ignored — notifications are best-effort.
+pub fn send_completion_notification(id: usize, name: &str, success: bool) {
+    let status = if success { "completed" } else { "failed" };
+    let body = format!("Agent #{id} ({name}) {status}");
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{body}\" with title \"Anvil\"",
+            body = body.replace('"', "\\\""),
+        );
+        let _ = Command::new("osascript").args(["-e", &script]).status();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = Command::new("notify-send").args(["Anvil", &body]).status();
     }
 }
 

@@ -22,7 +22,7 @@ use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
-use runtime::{Rgb, Theme};
+use runtime::{format_usd, pricing_for_model, Rgb, Theme};
 
 use crossterm::event::{
     self, Event as CtEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -919,12 +919,21 @@ impl AnvilTui {
             // Line 2: blank
             let line2 = Line::from("");
 
-            // Line 3: Model: {name} | Total: {n}M | ⌐{branch} | (+x,-y)    {total} tokens
+            // Line 3: Model: {name} | Total: {n}M | Cost: ${x} | ⌐{branch} | (+x,-y)    {total} tokens
             let total_tokens = input_tokens.saturating_add(output_tokens);
             let total_m = total_tokens as f64 / 1_000_000.0;
+            let cost_usd = {
+                let cost = pricing_for_model(&model)
+                    .map(|p| {
+                        (input_tokens as f64 / 1_000_000.0) * p.input_cost_per_million
+                            + (output_tokens as f64 / 1_000_000.0) * p.output_cost_per_million
+                    })
+                    .unwrap_or(0.0);
+                format_usd(cost)
+            };
             let right3 = format!("{total_tokens} tokens");
             let line3 = build_left_right_line(
-                build_status1_spans(&model, total_m, &git_branch, &git_diff_stats),
+                build_status1_spans(&model, total_m, &git_branch, &git_diff_stats, &cost_usd),
                 vec![Span::styled(
                     right3,
                     Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
@@ -1571,6 +1580,29 @@ impl AnvilTui {
             }
             KeyCode::Char('p') | KeyCode::Char('P') => self.history_up(),
             KeyCode::Char('n') | KeyCode::Char('N') => self.history_down(),
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                // Ctrl+V: check clipboard for an image first; if found, attach
+                // it as a [image:<base64>] placeholder in the input so the model
+                // can process it.  If no image is available, do nothing (the
+                // terminal may deliver a bracketed-paste event with text instead).
+                if let Some(png_bytes) = check_clipboard_for_image() {
+                    // Save to a temp file and insert a reference in the input.
+                    let tmp = std::env::temp_dir().join("anvil-paste.png");
+                    if std::fs::write(&tmp, &png_bytes).is_ok() {
+                        let path_str = tmp.to_string_lossy().to_string();
+                        // Insert an @-mention style reference into the input.
+                        let snippet = format!("@{path_str}");
+                        for ch in snippet.chars() {
+                            self.insert_char(ch);
+                        }
+                        self.push_system(format!(
+                            "Clipboard image ({} bytes) saved to {path_str} and referenced in input.",
+                            png_bytes.len()
+                        ));
+                    }
+                }
+                // Fall through — if no image, text paste comes via bracketed-paste events.
+            }
             _ => {}
         }
         Ok(ReadResult::Continue)
@@ -2803,6 +2835,7 @@ fn build_status1_spans(
     total_m: f64,
     git_branch: &str,
     git_diff: &str,
+    cost_usd: &str,
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = vec![
         Span::styled("Model: ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
@@ -2810,6 +2843,10 @@ fn build_status1_spans(
         Span::styled(
             format!(" | Total: {total_m:.1}M"),
             Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
+        ),
+        Span::styled(
+            format!(" | Cost: {cost_usd}"),
+            Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
         ),
     ];
     if !git_branch.is_empty() {
@@ -4506,4 +4543,64 @@ pub fn init_ollama_model_cache() {
 
 fn cached_ollama_models() -> Vec<(String, String)> {
     OLLAMA_MODEL_CACHE.get().cloned().unwrap_or_default()
+}
+
+// ─── Clipboard image paste ────────────────────────────────────────────────────
+
+/// Attempt to read a PNG image from the system clipboard.
+///
+/// On macOS this uses `osascript` to extract the clipboard contents as PNG.
+/// On Linux this uses `xclip` with the `image/png` MIME type.
+///
+/// Returns `Some(png_bytes)` when an image is present in the clipboard, or
+/// `None` if the clipboard holds text, is empty, or the required tool is not
+/// available.
+pub fn check_clipboard_for_image() -> Option<Vec<u8>> {
+    #[cfg(target_os = "macos")]
+    {
+        // The osascript call converts the clipboard to PNG and writes hex-encoded
+        // bytes to stdout.  An error exit means the clipboard is not an image.
+        let script = r#"
+try
+    set imgData to the clipboard as «class PNGf»
+    set hexStr to ""
+    repeat with b in imgData
+        set hexStr to hexStr & (do shell script "printf '%02x' " & (b as integer))
+    end repeat
+    return hexStr
+on error
+    return ""
+end try
+"#;
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let hex = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if hex.is_empty() {
+            return None;
+        }
+        // Decode hex string to bytes.
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+            .collect();
+        bytes.filter(|b| !b.is_empty())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Linux: try xclip first, then xsel.
+        let output = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output()
+            .ok()?;
+        if output.status.success() && !output.stdout.is_empty() {
+            return Some(output.stdout);
+        }
+        None
+    }
 }

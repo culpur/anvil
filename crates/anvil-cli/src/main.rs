@@ -31,8 +31,8 @@ use api::{
 
 use commands::{
     handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
-    render_slash_command_help, resume_supported_slash_commands, slash_command_specs,
-    suggest_slash_commands, SlashCommand,
+    render_command_detailed_help, render_slash_command_help, resume_supported_slash_commands,
+    slash_command_specs, suggest_slash_commands, SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use init::initialize_repo;
@@ -430,7 +430,7 @@ fn join_optional_args(args: &[String]) -> Option<String> {
 fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
     let raw = rest.join(" ");
     match SlashCommand::parse(&raw) {
-        Some(SlashCommand::Help) => Ok(CliAction::Help),
+        Some(SlashCommand::Help { .. }) => Ok(CliAction::Help),
         Some(SlashCommand::Agents { args }) => Ok(CliAction::Agents { args }),
         Some(SlashCommand::Skills { args }) => Ok(CliAction::Skills { args }),
         Some(command) => Err(format_direct_slash_command_error(
@@ -1970,9 +1970,14 @@ fn run_resume_command(
     command: &SlashCommand,
 ) -> Result<ResumeCommandOutcome, Box<dyn std::error::Error>> {
     match command {
-        SlashCommand::Help => Ok(ResumeCommandOutcome {
+        SlashCommand::Help { ref command } => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(render_repl_help()),
+            message: Some(if let Some(ref cmd) = command {
+                render_command_detailed_help(cmd)
+                    .unwrap_or_else(render_repl_help)
+            } else {
+                render_repl_help()
+            }),
         }),
         SlashCommand::Compact => {
             let result = runtime::compact_session(
@@ -2154,6 +2159,8 @@ fn run_resume_command(
         | SlashCommand::PluginSdk { .. }
         | SlashCommand::Sleep
         | SlashCommand::Think
+        | SlashCommand::Fast
+        | SlashCommand::ReviewPr { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2807,6 +2814,8 @@ struct LiveCli {
     /// Whether vim keybindings are requested; propagated to the LineEditor.
     vim_mode: bool,
     thinking_enabled: bool,
+    /// Fast mode: lower max_tokens and prepend a concise-response instruction.
+    fast_mode: bool,
     /// Sub-agent manager — tracks spawned agents and their status.
     /// Wrapped in Arc<Mutex<>> so it can be shared with CliToolExecutor.
     agent_manager: Arc<Mutex<agents::AgentManager>>,
@@ -2863,6 +2872,7 @@ impl LiveCli {
                     .and_then(|v| v.get("thinking_enabled").and_then(|b| b.as_bool()))
                     .unwrap_or(false)
             },
+            fast_mode: false,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -3271,7 +3281,14 @@ impl LiveCli {
         command: SlashCommand,
     ) -> Result<(String, bool), Box<dyn std::error::Error>> {
         Ok(match command {
-            SlashCommand::Help => (render_repl_help(), false),
+            SlashCommand::Help { ref command } => {
+                let text = if let Some(ref cmd) = command {
+                    render_command_detailed_help(cmd).unwrap_or_else(render_repl_help)
+                } else {
+                    render_repl_help()
+                };
+                (text, false)
+            }
             SlashCommand::Status => {
                 let cumulative = self.runtime.usage().cumulative_usage();
                 let latest = self.runtime.usage().current_turn_usage();
@@ -3594,6 +3611,16 @@ impl LiveCli {
                     if self.thinking_enabled { "ON — model will show reasoning" } else { "OFF — standard responses" }
                 ), false)
             }
+            SlashCommand::Fast => {
+                match self.toggle_fast_mode() {
+                    Ok(msg) => (msg, false),
+                    Err(e) => (format!("fast mode error: {e}"), false),
+                }
+            }
+            SlashCommand::ReviewPr { number } => {
+                let msg = self.run_review_pr_command(number.as_deref());
+                (msg, false)
+            }
             _ => {
                 ("Command not available in TUI mode.".to_string(), false)
             }
@@ -3836,6 +3863,116 @@ impl LiveCli {
             "Vim mode enabled.".to_string()
         } else {
             "Vim mode disabled.".to_string()
+        }
+    }
+
+    /// `/fast` — toggle fast mode.
+    ///
+    /// When fast mode is active the system prompt is prepended with a
+    /// "Be concise and direct." instruction and the runtime is rebuilt with the
+    /// modified system prompt.  Toggling again restores the original prompt.
+    fn toggle_fast_mode(&mut self) -> Result<String, Box<dyn std::error::Error>> {
+        const FAST_PREFIX: &str = "Be concise and direct.";
+        self.fast_mode = !self.fast_mode;
+
+        // Rebuild system_prompt: prepend or remove the fast-mode prefix.
+        if self.fast_mode {
+            // Only prepend if not already present (idempotent).
+            if !self.system_prompt.first().map(|s| s.as_str()).unwrap_or("").contains(FAST_PREFIX) {
+                self.system_prompt.insert(0, FAST_PREFIX.to_string());
+            }
+        } else {
+            self.system_prompt.retain(|s| s.as_str() != FAST_PREFIX);
+        }
+
+        // Rebuild the runtime so the new system prompt takes effect.
+        let session = self.runtime.session().clone();
+        self.runtime = build_runtime_with_tui_slot(
+            session,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            true,
+            self.allowed_tools.clone(),
+            self.permission_mode,
+            None,
+            self.tui_slot.clone(),
+            self.agent_manager.clone(),
+        )?;
+
+        let msg = if self.fast_mode {
+            "Fast mode ON — responses will be concise and max_tokens is reduced.".to_string()
+        } else {
+            "Fast mode OFF — responses restored to normal length.".to_string()
+        };
+        Ok(msg)
+    }
+
+    /// `/review-pr [<number>]` — fetch a GitHub PR diff and run an AI review.
+    fn run_review_pr_command(&self, number: Option<&str>) -> String {
+        // Build the `gh pr diff` args.
+        let mut diff_args = vec!["pr", "diff"];
+        let mut view_args = vec!["pr", "view", "--json", "title,body,author"];
+        let num_owned;
+        if let Some(n) = number {
+            num_owned = n.to_string();
+            diff_args.push(&num_owned);
+            view_args.push(&num_owned);
+        }
+
+        let diff = Command::new("gh")
+            .args(&diff_args)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        if diff.trim().is_empty() {
+            return "No PR diff found. Make sure gh is installed, authenticated, and a PR is open for the current branch.".to_string();
+        }
+
+        let meta = Command::new("gh")
+            .args(&view_args)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        // Parse metadata for a human-readable header.
+        let pr_label = if let Ok(v) = serde_json::from_str::<serde_json::Value>(&meta) {
+            let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("(no title)");
+            let author = v.get("author")
+                .and_then(|a| a.get("login"))
+                .and_then(|l| l.as_str())
+                .unwrap_or("unknown");
+            let body = v.get("body").and_then(|b| b.as_str()).unwrap_or("");
+            format!("PR: {title}\nAuthor: {author}\nDescription:\n{body}\n")
+        } else {
+            meta.clone()
+        };
+
+        let diff_truncated = if diff.len() > 40_000 {
+            format!("{}\n... (truncated)", &diff[..40_000])
+        } else {
+            diff.clone()
+        };
+
+        let prompt = format!(
+            "You are a senior code reviewer. Review the following GitHub pull request \
+             and provide a structured assessment covering:\n\
+             1. Summary of changes\n\
+             2. Critical bugs or logic errors\n\
+             3. Security vulnerabilities\n\
+             4. Performance concerns\n\
+             5. Code style and readability issues\n\
+             6. Suggested improvements\n\n\
+             {pr_label}\n\
+             ## Diff\n\
+             ```diff\n{diff_truncated}\n```\n\n\
+             Be thorough but concise.",
+        );
+
+        match self.run_internal_prompt_text(&prompt, false) {
+            Ok(review) => format!("PR Review:\n\n{review}"),
+            Err(e) => format!("review-pr: {e}"),
         }
     }
 
@@ -4565,8 +4702,13 @@ impl LiveCli {
         command: SlashCommand,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         Ok(match command {
-            SlashCommand::Help => {
-                println!("{}", render_repl_help());
+            SlashCommand::Help { ref command } => {
+                let text = if let Some(ref cmd) = command {
+                    render_command_detailed_help(cmd).unwrap_or_else(render_repl_help)
+                } else {
+                    render_repl_help()
+                };
+                println!("{text}");
                 false
             }
             SlashCommand::Status => {
@@ -4958,6 +5100,17 @@ impl LiveCli {
                     "Thinking mode: {}",
                     if self.thinking_enabled { "ON — model will show reasoning" } else { "OFF — standard responses" }
                 );
+                false
+            }
+            SlashCommand::Fast => {
+                match self.toggle_fast_mode() {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => eprintln!("fast mode error: {e}"),
+                }
+                false
+            }
+            SlashCommand::ReviewPr { number } => {
+                println!("{}", self.run_review_pr_command(number.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {

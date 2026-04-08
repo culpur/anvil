@@ -68,6 +68,9 @@ pub struct SlashCommandSpec {
     pub argument_hint: Option<&'static str>,
     pub resume_supported: bool,
     pub category: SlashCommandCategory,
+    /// Multi-line detailed help shown when the user types `/help <command>`.
+    /// An empty string means no detailed help is available for this command.
+    pub detailed_help: &'static str,
 }
 
 const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
@@ -78,6 +81,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "status",
@@ -86,6 +90,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "compact",
@@ -94,6 +99,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "model",
@@ -102,6 +108,22 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[model]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "\
+/model — Show or switch the active AI model
+
+Usage:
+  /model             Show the currently active model and conversation stats
+  /model <name>      Switch to a different model (takes effect immediately)
+
+Supported aliases:
+  opus, sonnet, haiku          → Anthropic Claude latest variants
+  gpt4, gpt4o, gpt4o-mini      → OpenAI GPT-4 variants
+  o1, o1-mini, o3-mini         → OpenAI reasoning models
+
+Examples:
+  /model
+  /model opus
+  /model claude-sonnet-4-5",
     },
     SlashCommandSpec {
         name: "permissions",
@@ -110,6 +132,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[read-only|workspace-write|danger-full-access]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "clear",
@@ -118,6 +141,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[--confirm]"),
         resume_supported: true,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "cost",
@@ -126,6 +150,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "provider",
@@ -134,6 +159,22 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[anthropic|openai|ollama|list|login]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "\
+/provider (alias: /providers) — Manage AI providers
+
+Usage:
+  /provider              Show the active provider and model
+  /provider list         List all configured providers and their available models
+  /provider anthropic    Switch to the Anthropic (Claude) provider
+  /provider openai       Switch to the OpenAI provider
+  /provider ollama       Switch to a local Ollama instance
+  /provider login        Authenticate the current provider
+
+Examples:
+  /provider
+  /provider list
+  /provider openai
+  /provider login",
     },
     SlashCommandSpec {
         name: "login",
@@ -142,6 +183,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[anthropic|openai|ollama]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "resume",
@@ -150,6 +192,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<session-path>"),
         resume_supported: false,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "config",
@@ -158,6 +201,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[env|hooks|model|plugins]"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "memory",
@@ -166,6 +210,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "init",
@@ -174,6 +219,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "diff",
@@ -182,6 +228,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "version",
@@ -190,6 +237,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "bughunter",
@@ -198,6 +246,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[scope]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "branch",
@@ -206,6 +255,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|create <name>|switch <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "worktree",
@@ -214,6 +264,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|add <path> [branch]|remove <path>|prune]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "commit",
@@ -222,6 +273,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "commit-push-pr",
@@ -230,6 +282,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[context]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "pr",
@@ -238,6 +291,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[context]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "issue",
@@ -246,6 +300,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[context]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "ultraplan",
@@ -254,6 +309,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[task]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "teleport",
@@ -262,6 +318,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<symbol-or-path>"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "debug-tool-call",
@@ -270,6 +327,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "export",
@@ -278,6 +336,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[file]"),
         resume_supported: true,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "session",
@@ -286,6 +345,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|switch <session-id>]"),
         resume_supported: false,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "plugin",
@@ -296,6 +356,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         ),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "agents",
@@ -304,6 +365,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "skills",
@@ -312,6 +374,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "qmd",
@@ -320,6 +383,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<query>"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "undo",
@@ -328,6 +392,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "history",
@@ -336,6 +401,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[all]"),
         resume_supported: true,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "context",
@@ -344,6 +410,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[path]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "pin",
@@ -352,6 +419,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[path]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "unpin",
@@ -360,6 +428,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<path>"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "chat",
@@ -368,6 +437,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "vim",
@@ -376,6 +446,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "web",
@@ -384,6 +455,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<query>"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "doctor",
@@ -392,6 +464,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "tokens",
@@ -400,6 +473,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "search",
@@ -408,6 +482,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[provider <name>] <query> | providers | config <key> <val>"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "failover",
@@ -416,6 +491,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[status | add <model> | remove <model> | reset]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "generate-image",
@@ -424,6 +500,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[--wp <post-id>] <prompt>"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "history-archive",
@@ -432,6 +509,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[search <query> | view <session-id>]"),
         resume_supported: true,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "configure",
@@ -440,6 +518,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[providers|models|context|search|permissions|display|integrations]"),
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     SlashCommandSpec {
         name: "theme",
@@ -448,6 +527,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list | set <name> | reset | create <name> | import <file> | export <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     // Feature 3 — semantic code search
     SlashCommandSpec {
@@ -457,6 +537,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("<query> [--lang <ext>] [--type fn|class|struct|import]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature 4 — Docker / container awareness
     SlashCommandSpec {
@@ -466,6 +547,20 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[ps|logs <container>|compose|build]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/docker — Docker container and compose service inspector
+
+Subcommands:
+  /docker ps               List running containers (equivalent to docker ps)
+  /docker logs <name>      Tail the last 50 lines of a container's logs
+  /docker compose          Show docker-compose.yml services and their status
+  /docker build            Build images defined in docker-compose.yml
+
+Examples:
+  /docker ps
+  /docker logs api-server
+  /docker compose
+  /docker build",
     },
     // Feature 5 — test generation
     SlashCommandSpec {
@@ -475,6 +570,18 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[generate <file>|run|coverage]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/test — Test generation and execution helpers
+
+Subcommands:
+  /test generate <file>   AI-generate unit tests for a source file
+  /test run               Run the project test suite (auto-detects cargo/npm/pytest/…)
+  /test coverage          Show test coverage report
+
+Examples:
+  /test generate src/api/routes.rs
+  /test run
+  /test coverage",
     },
     // Feature 6 — advanced git
     SlashCommandSpec {
@@ -484,6 +591,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[rebase|conflicts|cherry-pick <sha>|stash [list|pop|drop]]"),
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     // Feature 7 — refactoring tools
     SlashCommandSpec {
@@ -493,6 +601,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[rename <old> <new>|extract <file> <lines>|move <src> <dst>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 8 — screenshot / clipboard image input
     SlashCommandSpec {
@@ -502,6 +611,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature 9 — database tools
     SlashCommandSpec {
@@ -511,6 +621,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[connect <url>|schema|query <sql>|migrate]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 10 — security scanning
     SlashCommandSpec {
@@ -520,6 +631,20 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[scan|secrets|deps|report]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/security — AI-assisted security scanning
+
+Subcommands:
+  /security scan        Static analysis scan for common vulnerabilities (XSS, SQLi, path traversal, …)
+  /security secrets     Search for accidentally committed secrets and API keys
+  /security deps        Audit dependencies for known CVEs
+  /security report      Generate a full security report combining all scans
+
+Examples:
+  /security scan
+  /security secrets
+  /security deps
+  /security report",
     },
     // Feature 11 — API development helpers
     SlashCommandSpec {
@@ -529,6 +654,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[spec <file>|mock <spec>|test <endpoint>|docs]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 12 — documentation generation
     SlashCommandSpec {
@@ -538,6 +664,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[generate|readme|architecture|changelog]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 13 — project scaffolding
     SlashCommandSpec {
@@ -547,6 +674,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[new <template>|list]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature 14 — performance profiling
     SlashCommandSpec {
@@ -556,6 +684,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[profile <command>|benchmark <file>|flamegraph|analyze]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 15 — debugging integration
     SlashCommandSpec {
@@ -565,6 +694,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[start <file>|breakpoint <file:line>|watch <expr>|explain <error>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 16 — voice input (placeholder)
     SlashCommandSpec {
@@ -574,6 +704,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[start|stop]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     // Feature 17 — collaboration (placeholder)
     SlashCommandSpec {
@@ -583,6 +714,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[share|join <id>]"),
         resume_supported: false,
         category: SlashCommandCategory::Session,
+        detailed_help: "",
     },
     // Feature 18 — custom user themes (extends existing /theme)
     // Note: /theme create, /theme import, /theme export are new sub-commands handled inside run_theme_command.
@@ -595,6 +727,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: false,
         category: SlashCommandCategory::Git,
+        detailed_help: "",
     },
     // Feature 20 — environment manager
     SlashCommandSpec {
@@ -604,6 +737,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[show|set <key> <value>|load <file>|diff]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // AnvilHub marketplace
     SlashCommandSpec {
@@ -613,6 +747,23 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[search <q>|skills|plugins|agents|themes|install <name>|info <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/hub — AnvilHub marketplace for skills, plugins, agents and themes
+
+Subcommands:
+  /hub search <query>     Search the marketplace
+  /hub skills             Browse available skills
+  /hub plugins            Browse available plugins
+  /hub agents             Browse available agent definitions
+  /hub themes             Browse available TUI themes
+  /hub install <name>     Install a package by name
+  /hub info <name>        Show details and README for a package
+
+Examples:
+  /hub search rust-review
+  /hub skills
+  /hub install devops-expert
+  /hub info security-scanner",
     },
     // i18n language switcher
     SlashCommandSpec {
@@ -622,6 +773,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[en|de|es|fr|ja|zh-CN|ru]"),
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
     },
     // Feature A — LSP autocomplete
     SlashCommandSpec {
@@ -631,6 +783,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[start <lang>|symbols <file>|references <symbol>]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature B — Jupyter notebook support
     SlashCommandSpec {
@@ -640,6 +793,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[run <file>|cell <file> <n>|export <file> <format>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature C — Kubernetes management
     SlashCommandSpec {
@@ -649,6 +803,20 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[pods|logs <pod>|apply <file>|describe <resource>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/k8s (alias: /kubectl) — Kubernetes cluster helpers
+
+Subcommands:
+  /k8s pods                   List all pods in the current namespace
+  /k8s logs <pod>             Stream recent logs from a pod
+  /k8s apply <file>           Apply a manifest file (kubectl apply -f)
+  /k8s describe <resource>    Describe a resource (pod, svc, deployment, …)
+
+Examples:
+  /k8s pods
+  /k8s logs api-pod-7d9f8b-xyz
+  /k8s apply k8s/deployment.yaml
+  /k8s describe deployment/api",
     },
     // Feature D — Terraform/IaC
     SlashCommandSpec {
@@ -658,6 +826,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[plan|apply|validate|drift]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature E — CI/CD pipeline builder
     SlashCommandSpec {
@@ -667,6 +836,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[generate|lint|run]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature F — Code review
     SlashCommandSpec {
@@ -676,6 +846,21 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[<file>|staged|pr]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/review — AI-powered code review
+
+Subcommands:
+  /review <file>     Review a specific source file
+  /review staged     Review all currently staged git changes
+  /review pr         Review the diff between HEAD and origin/main
+
+The review covers: bugs, security vulnerabilities, performance issues,
+style concerns, and suggested improvements.
+
+Examples:
+  /review src/main.rs
+  /review staged
+  /review pr",
     },
     // Feature G — Dependency graph
     SlashCommandSpec {
@@ -685,6 +870,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[tree|outdated|audit|why <pkg>]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature H — Monorepo awareness
     SlashCommandSpec {
@@ -694,6 +880,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|graph|changed|run <cmd> [--filter <pkg>]]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature I — Browser automation
     SlashCommandSpec {
@@ -703,6 +890,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[open <url>|screenshot <url>|test <url>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature J — Desktop & webhook notifications
     SlashCommandSpec {
@@ -712,6 +900,18 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[send <msg>|webhook <url> <msg>|matrix <room> <msg>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/notify — Send notifications from Anvil
+
+Subcommands:
+  /notify send <msg>                 Send a desktop notification
+  /notify webhook <url> <msg>        POST a message to a webhook URL
+  /notify matrix <room-id> <msg>     Send a message to a Matrix room
+
+Examples:
+  /notify send \"Build complete\"
+  /notify webhook https://hooks.example.com/abc \"Deploy done\"
+  /notify matrix !room:server.org \"Agent finished\"",
     },
     // Feature 21 — Credential Vault
     SlashCommandSpec {
@@ -721,6 +921,29 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[setup|unlock|lock|store <label>|get <label>|list|delete <label>|totp add <label>|totp <label>|totp list|totp delete <label>]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "\
+/vault — Encrypted credential vault (AES-256-GCM + Argon2id key derivation)
+
+Subcommands:
+  /vault setup                  Initialise a new vault (prompts for master password)
+  /vault unlock                 Unlock the vault for this session
+  /vault lock                   Re-lock the vault immediately
+  /vault store <label>          Securely store a new credential under <label>
+  /vault get <label>            Retrieve a stored credential by label
+  /vault list                   List all stored credential labels
+  /vault delete <label>         Delete a credential permanently
+
+TOTP (one-time passwords):
+  /vault totp add <label>       Add a TOTP secret (prompts for base32 seed)
+  /vault totp <label>           Generate the current 6-digit TOTP code
+  /vault totp list              List all TOTP labels
+  /vault totp delete <label>    Remove a TOTP entry
+
+Examples:
+  /vault setup
+  /vault store github-token
+  /vault get github-token
+  /vault totp add aws-mfa",
     },
     // Feature 11 — codebase migration
     SlashCommandSpec {
@@ -730,6 +953,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[framework <from> <to>|language <from> <to>|deps]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 12 — regex builder / tester
     SlashCommandSpec {
@@ -739,6 +963,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[build <description>|test <pattern> <input>|explain <pattern>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 13 — SSH session manager
     SlashCommandSpec {
@@ -748,6 +973,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|connect <host>|tunnel <host> <local:remote>|keys]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 14 — log analysis
     SlashCommandSpec {
@@ -757,6 +983,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[tail <file>|search <file> <pattern>|analyze <file>|stats <file>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 15 — markdown preview
     SlashCommandSpec {
@@ -766,6 +993,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[preview <file>|toc <file>|lint <file>]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature 16 — snippet library
     SlashCommandSpec {
@@ -775,6 +1003,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[save <name>|list|get <name>|search <query>]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
+        detailed_help: "",
     },
     // Feature 17 — AI fine-tuning assistant
     SlashCommandSpec {
@@ -784,6 +1013,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[prepare <file>|validate <file>|start|status]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 18 — webhook manager
     SlashCommandSpec {
@@ -793,6 +1023,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[list|add <name> <url>|test <name>|remove <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Feature 19 — cost optimization (extends existing /cost)
     // Note: the existing /cost spec (show cumulative usage) is replaced/extended below.
@@ -804,6 +1035,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: Some("[init <name>|build|test|publish]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
+        detailed_help: "",
     },
     // Screensaver / burn-in protection
     SlashCommandSpec {
@@ -813,12 +1045,64 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Core,
+        detailed_help: "",
+    },
+    // Fast mode toggle
+    SlashCommandSpec {
+        name: "fast",
+        aliases: &[],
+        summary: "Toggle fast mode (lower max_tokens, concise system prompt prefix)",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/fast — Toggle fast mode
+
+When fast mode is ON:
+  - max_tokens is reduced to 1024 (shorter responses)
+  - \"Be concise and direct.\" is prepended to the system prompt
+
+Useful for quick questions and lookups where a brief answer is preferred.
+Toggle again to restore normal mode.",
+    },
+    // GitHub PR review
+    SlashCommandSpec {
+        name: "review-pr",
+        aliases: &[],
+        summary: "Fetch a GitHub PR diff and send to AI for a code review",
+        argument_hint: Some("[<pr-number>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Git,
+        detailed_help: "\
+/review-pr — AI-powered GitHub pull request review
+
+Usage:
+  /review-pr           Review the PR associated with the current branch
+  /review-pr <number>  Review a specific PR by number
+
+Fetches the diff via `gh pr diff` and the PR metadata via `gh pr view`,
+then sends both to the AI for a comprehensive code review covering:
+  - Bugs and logic errors
+  - Security vulnerabilities
+  - Performance concerns
+  - Style and readability
+  - Suggested improvements
+
+Requires the `gh` CLI to be installed and authenticated.
+
+Examples:
+  /review-pr
+  /review-pr 42",
     },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashCommand {
-    Help,
+    /// `/help` — show all commands; `/help <command>` — show detailed help for that command
+    Help {
+        /// Optional command name to show detailed help for (e.g. `Some("vault")`)
+        command: Option<String>,
+    },
     Status,
     Compact,
     Branch {
@@ -1094,6 +1378,13 @@ pub enum SlashCommand {
     Sleep,
     /// `/think` — toggle thinking/reasoning mode (for models that support it)
     Think,
+    /// `/fast` — toggle fast mode (lower max_tokens + concise system prompt prefix)
+    Fast,
+    /// `/review-pr [<number>]` — fetch a GitHub PR diff and send to AI for review
+    ReviewPr {
+        /// PR number; if absent, uses the current branch's open PR
+        number: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -1108,7 +1399,9 @@ impl SlashCommand {
         let mut parts = trimmed.trim_start_matches('/').split_whitespace();
         let command = parts.next().unwrap_or_default();
         Some(match command {
-            "help" => Self::Help,
+            "help" => Self::Help {
+                command: parts.next().map(ToOwned::to_owned),
+            },
             "status" => Self::Status,
             "compact" => Self::Compact,
             "branch" => Self::Branch {
@@ -1369,6 +1662,10 @@ impl SlashCommand {
             // Screensaver
             "sleep" | "screensaver" | "furnace" => Self::Sleep,
             "think" | "thinking" | "nothink" => Self::Think,
+            "fast" => Self::Fast,
+            "review-pr" => Self::ReviewPr {
+                number: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1454,6 +1751,21 @@ fn render_slash_command_name(spec: &SlashCommandSpec) -> String {
         Some(argument_hint) => format!("/{} {}", spec.name, argument_hint),
         None => format!("/{}", spec.name),
     }
+}
+
+/// Look up the detailed help for a named command.
+///
+/// Returns `Some(text)` when the command is found and has non-empty
+/// `detailed_help`, or `None` if the command is unknown or has no detailed
+/// help.
+#[must_use]
+pub fn render_command_detailed_help(command_name: &str) -> Option<String> {
+    let name = command_name.trim_start_matches('/');
+    slash_command_specs()
+        .iter()
+        .find(|spec| spec.name == name || spec.aliases.contains(&name))
+        .filter(|spec| !spec.detailed_help.is_empty())
+        .map(|spec| spec.detailed_help.to_string())
 }
 
 fn levenshtein_distance(left: &str, right: &str) -> usize {
@@ -2728,8 +3040,13 @@ pub fn handle_slash_command(
                 session: result.compacted_session,
             })
         }
-        SlashCommand::Help => Some(SlashCommandResult {
-            message: render_slash_command_help(),
+        SlashCommand::Help { ref command } => Some(SlashCommandResult {
+            message: if let Some(ref cmd) = command {
+                render_command_detailed_help(cmd)
+                    .unwrap_or_else(|| render_slash_command_help())
+            } else {
+                render_slash_command_help()
+            },
             session: session.clone(),
         }),
         SlashCommand::Status
@@ -2818,6 +3135,8 @@ pub fn handle_slash_command(
         | SlashCommand::PluginSdk { .. }
         | SlashCommand::Sleep
         | SlashCommand::Think
+        | SlashCommand::Fast
+        | SlashCommand::ReviewPr { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -2994,7 +3313,14 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[test]
     fn parses_supported_slash_commands() {
-        assert_eq!(SlashCommand::parse("/help"), Some(SlashCommand::Help));
+        assert_eq!(
+            SlashCommand::parse("/help"),
+            Some(SlashCommand::Help { command: None })
+        );
+        assert_eq!(
+            SlashCommand::parse("/help vault"),
+            Some(SlashCommand::Help { command: Some("vault".to_string()) })
+        );
         assert_eq!(SlashCommand::parse(" /status "), Some(SlashCommand::Status));
         assert_eq!(
             SlashCommand::parse("/bughunter runtime"),

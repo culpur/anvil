@@ -461,7 +461,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "isolation": {
+                        "type": "string",
+                        "description": "Optional isolation strategy for the agent. Set to \"worktree\" to run the agent in a detached git worktree so its file changes are sandboxed from the main working tree."
+                    }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -998,6 +1002,31 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::ReadOnly,
         },
+        // -------------------------------------------------------------------
+        // SendMessage — inter-agent messaging
+        // -------------------------------------------------------------------
+        ToolSpec {
+            name: "SendMessage",
+            description: "Send a text message to a running agent by its numeric ID. \
+                          The agent must have been spawned with an input channel.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Numeric ID of the target agent (as shown in /agents list)."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "The message text to deliver to the agent."
+                    }
+                },
+                "required": ["agent_id", "message"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
     ]
 }
 
@@ -1073,6 +1102,11 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         // Plan-mode tools
         "EnterPlanMode" => run_enter_plan_mode(),
         "ExitPlanMode" => run_exit_plan_mode(),
+        // SendMessage must be routed through CliToolExecutor so the AgentManager
+        // is accessible; calling it here is a programming error.
+        "SendMessage" => Err(
+            "SendMessage must be routed through CliToolExecutor, not execute_tool".to_string(),
+        ),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -1403,6 +1437,8 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    /// Optional isolation strategy. `"worktree"` creates a detached git worktree.
+    isolation: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1556,6 +1592,8 @@ struct AgentJob {
     prompt: String,
     system_prompt: Vec<String>,
     allowed_tools: BTreeSet<String>,
+    /// Worktree path to clean up after the agent finishes (isolation="worktree").
+    worktree_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2796,14 +2834,38 @@ where
     };
     write_agent_manifest(&manifest)?;
 
+    // Create a git worktree when isolation="worktree" is requested.
+    // The worktree is removed by the spawned thread once the agent finishes.
+    let worktree_dir: Option<std::path::PathBuf> =
+        if input.isolation.as_deref() == Some("worktree") {
+            let wt_path = std::env::temp_dir()
+                .join(format!("anvil-agent-{}", manifest.agent_id));
+            let ok = std::process::Command::new("git")
+                .args(["worktree", "add", "--detach", &wt_path.to_string_lossy()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok { Some(wt_path) } else { None }
+        } else {
+            None
+        };
+
     let manifest_for_spawn = manifest.clone();
     let job = AgentJob {
         manifest: manifest_for_spawn,
         prompt: input.prompt,
         system_prompt,
         allowed_tools,
+        worktree_path: worktree_dir.clone(),
     };
+    let wt_dir_for_spawn = worktree_dir.clone();
     if let Err(error) = spawn_fn(job) {
+        // Clean up worktree if spawn failed.
+        if let Some(ref wt) = wt_dir_for_spawn {
+            let _ = std::process::Command::new("git")
+                .args(["worktree", "remove", "--force", &wt.to_string_lossy()])
+                .status();
+        }
         let error = format!("failed to spawn sub-agent: {error}");
         persist_agent_terminal_state(&manifest, "failed", None, Some(error.clone()))?;
         return Err(error);
@@ -2833,6 +2895,12 @@ fn spawn_agent_job(job: AgentJob) -> Result<(), String> {
                         Some(String::from("sub-agent thread panicked")),
                     );
                 }
+            }
+            // Remove the worktree once the agent finishes (isolation="worktree").
+            if let Some(ref wt_path) = job.worktree_path {
+                let _ = std::process::Command::new("git")
+                    .args(["worktree", "remove", "--force", &wt_path.to_string_lossy()])
+                    .status();
             }
         })
         .map(|_| ())
