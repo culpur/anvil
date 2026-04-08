@@ -9,17 +9,17 @@ use serde::Deserialize;
 
 use crate::error::ApiError;
 
+use super::common::{
+    self, expect_success, read_env_non_empty, request_id_from_headers, DEFAULT_INITIAL_BACKOFF,
+    DEFAULT_MAX_BACKOFF, DEFAULT_MAX_RETRIES,
+};
 use super::{Provider, ProviderFuture};
 use crate::sse::SseParser;
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const REQUEST_ID_HEADER: &str = "request-id";
-const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
-const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
-const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(2);
-const DEFAULT_MAX_RETRIES: u32 = 2;
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthSource {
@@ -279,36 +279,13 @@ impl AnvilApiClient {
         &self,
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
-        let mut attempts = 0;
-        let mut last_error: Option<ApiError>;
-
-        loop {
-            attempts += 1;
-            match self.send_raw_request(request).await {
-                Ok(response) => match expect_success(response).await {
-                    Ok(response) => return Ok(response),
-                    Err(error) if error.is_retryable() && attempts <= self.max_retries + 1 => {
-                        last_error = Some(error);
-                    }
-                    Err(error) => return Err(error),
-                },
-                Err(error) if error.is_retryable() && attempts <= self.max_retries + 1 => {
-                    last_error = Some(error);
-                }
-                Err(error) => return Err(error),
-            }
-
-            if attempts > self.max_retries {
-                break;
-            }
-
-            tokio::time::sleep(self.backoff_for_attempt(attempts)?).await;
-        }
-
-        Err(ApiError::RetriesExhausted {
-            attempts,
-            last_error: Box::new(last_error.expect("retry loop must capture an error")),
-        })
+        common::send_with_retry(
+            self.max_retries,
+            self.initial_backoff,
+            self.max_backoff,
+            || self.send_raw_request(request),
+        )
+        .await
     }
 
     async fn send_raw_request(
@@ -332,18 +309,7 @@ impl AnvilApiClient {
         request_builder.send().await.map_err(ApiError::from)
     }
 
-    fn backoff_for_attempt(&self, attempt: u32) -> Result<Duration, ApiError> {
-        let Some(multiplier) = 1_u32.checked_shl(attempt.saturating_sub(1)) else {
-            return Err(ApiError::BackoffOverflow {
-                attempt,
-                base_delay: self.initial_backoff,
-            });
-        };
-        Ok(self
-            .initial_backoff
-            .checked_mul(multiplier)
-            .map_or(self.max_backoff, |delay| delay.min(self.max_backoff)))
-    }
+
 }
 
 impl AuthSource {
@@ -518,13 +484,6 @@ fn now_unix_timestamp() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
-fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
-    match std::env::var(key) {
-        Ok(value) if !value.is_empty() => Ok(Some(value)),
-        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(ApiError::from(error)),
-    }
-}
 
 #[cfg(test)]
 fn read_api_key() -> Result<String, ApiError> {
@@ -550,13 +509,6 @@ pub fn read_base_url() -> String {
     std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string())
 }
 
-fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    headers
-        .get(REQUEST_ID_HEADER)
-        .or_else(|| headers.get(ALT_REQUEST_ID_HEADER))
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned)
-}
 
 impl Provider for AnvilApiClient {
     type Stream = MessageStream;
@@ -618,44 +570,6 @@ impl MessageStream {
     }
 }
 
-async fn expect_success(response: reqwest::Response) -> Result<reqwest::Response, ApiError> {
-    let status = response.status();
-    if status.is_success() {
-        return Ok(response);
-    }
-
-    let body = response.text().await.unwrap_or_else(|_| String::new());
-    let parsed_error = serde_json::from_str::<ApiErrorEnvelope>(&body).ok();
-    let retryable = is_retryable_status(status);
-
-    Err(ApiError::Api {
-        status,
-        error_type: parsed_error
-            .as_ref()
-            .map(|error| error.error.error_type.clone()),
-        message: parsed_error
-            .as_ref()
-            .map(|error| error.error.message.clone()),
-        body,
-        retryable,
-    })
-}
-
-const fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 409 | 429 | 500 | 502 | 503 | 504)
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorEnvelope {
-    error: ApiErrorBody,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApiErrorBody {
-    #[serde(rename = "type")]
-    error_type: String,
-    message: String,
-}
 
 #[cfg(test)]
 mod tests {

@@ -58,6 +58,7 @@ pub struct TeamManager {
 
 impl TeamManager {
     /// Construct by loading (or creating) the persistent store.
+    #[must_use] 
     pub fn new(store_path: PathBuf) -> Self {
         let store = Self::load_store(&store_path);
         Self { store, store_path }
@@ -107,6 +108,7 @@ impl TeamManager {
     }
 
     /// Return a reference to a team by ID.
+    #[must_use] 
     pub fn get_team(&self, team_id: &str) -> Option<&Team> {
         self.store.teams.iter().find(|t| t.id == team_id)
     }
@@ -354,6 +356,7 @@ fn default_store_path() -> PathBuf {
     PathBuf::from(home).join(".anvil").join("teams.json")
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn make_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

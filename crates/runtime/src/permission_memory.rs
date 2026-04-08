@@ -133,7 +133,7 @@ impl PermissionMemory {
 
         let entry = PermissionMemoryEntry {
             tool_name: tool_name.to_string(),
-            input_pattern: pattern.map(|p| p.to_string()),
+            input_pattern: pattern.map(std::string::ToString::to_string),
             scope,
             granted_at,
         };

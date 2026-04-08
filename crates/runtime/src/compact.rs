@@ -323,7 +323,7 @@ fn collect_key_files(messages: &[ConversationMessage]) -> Vec<String> {
     let mut files = messages
         .iter()
         .flat_map(|message| message.blocks.iter())
-        .flat_map(|block| match block {
+        .filter_map(|block| match block {
             ContentBlock::Text { text } => Some(text.as_str()),
             ContentBlock::ToolUse { input, .. } => Some(input.as_str()),
             ContentBlock::ToolResult { output, .. } => Some(output.as_str()),

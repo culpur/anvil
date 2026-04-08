@@ -15,6 +15,7 @@ use tokio::sync::{oneshot, Mutex};
 use crate::error::LspError;
 use crate::types::{LspServerConfig, SymbolLocation};
 
+#[allow(clippy::type_complexity)]
 pub(crate) struct LspClient {
     config: LspServerConfig,
     writer: Mutex<BufWriter<ChildStdin>>,
@@ -59,7 +60,7 @@ impl LspClient {
 
         client.spawn_reader(stdout);
         if let Some(stderr) = stderr {
-            client.spawn_stderr_drain(stderr);
+            Self::spawn_stderr_drain(stderr);
         }
         client.initialize().await?;
         Ok(client)
@@ -281,9 +282,7 @@ impl LspClient {
 
             if let Err(error) = result {
                 let mut pending = pending_requests.lock().await;
-                let drained = pending
-                    .iter()
-                    .map(|(id, _)| *id)
+                let drained = pending.keys().copied()
                     .collect::<Vec<_>>();
                 for id in drained {
                     if let Some(sender) = pending.remove(&id) {
@@ -294,7 +293,7 @@ impl LspClient {
         });
     }
 
-    fn spawn_stderr_drain<R>(&self, stderr: R)
+    fn spawn_stderr_drain<R>(stderr: R)
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
@@ -391,6 +390,10 @@ impl LspClient {
     }
 }
 
+// Guard against unbounded heap allocation from a malicious or misbehaving
+// language server sending an extremely large Content-Length value.
+const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
+
 async fn read_message<R>(reader: &mut BufReader<R>) -> Result<Option<Value>, LspError>
 where
     R: AsyncRead + Unpin,
@@ -425,9 +428,6 @@ where
 
     let content_length = content_length.ok_or(LspError::MissingContentLength)?;
 
-    // Guard against unbounded heap allocation from a malicious or misbehaving
-    // language server sending an extremely large Content-Length value.
-    const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
     if content_length > MAX_CONTENT_LENGTH {
         return Err(LspError::InvalidContentLength(format!(
             "Content-Length {content_length} exceeds maximum allowed {MAX_CONTENT_LENGTH}"

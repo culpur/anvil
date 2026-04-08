@@ -301,7 +301,7 @@ fn strip_qmd_prefix(file: &str) -> String {
     // qmd://projects/some/path.md → some/path.md
     if let Some(after_scheme) = file.strip_prefix("qmd://") {
         // Drop the collection segment (first path component).
-        if let Some(after_collection) = after_scheme.splitn(2, '/').nth(1) {
+        if let Some(after_collection) = after_scheme.split_once('/').map(|x| x.1) {
             return after_collection.to_string();
         }
     }
@@ -312,7 +312,7 @@ fn strip_qmd_prefix(file: &str) -> String {
 fn clean_snippet(raw: &str) -> String {
     // Snippets look like: "@@ -24,4 @@ (23 before, 110 after)\n<content>"
     // Drop the leading `@@ ... @@` line if present.
-    let cleaned = if let Some(body) = raw.find("\n") {
+    let cleaned = if let Some(body) = raw.find('\n') {
         let first_line = raw[..body].trim();
         if first_line.starts_with("@@") {
             raw[body + 1..].trim()
@@ -323,8 +323,8 @@ fn clean_snippet(raw: &str) -> String {
         raw.trim()
     };
 
-    // Limit to a reasonable snippet length (~300 chars).
-    const MAX_SNIPPET: usize = 300;
+    #[allow(clippy::items_after_statements)]
+    const MAX_SNIPPET: usize = 300; // Limit to a reasonable snippet length (~300 chars).
     if cleaned.chars().count() > MAX_SNIPPET {
         let mut truncated: String = cleaned.chars().take(MAX_SNIPPET).collect();
         truncated.push_str("...");
@@ -334,7 +334,7 @@ fn clean_snippet(raw: &str) -> String {
     }
 }
 
-/// Scrape total_docs from plain-text `qmd status` output.
+/// Scrape `total_docs` from plain-text `qmd status` output.
 fn parse_status_plain(text: &str) -> Option<QmdStatus> {
     let mut total_docs: u32 = 0;
     let mut total_vectors: u32 = 0;

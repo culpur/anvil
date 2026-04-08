@@ -1,10 +1,20 @@
-use std::borrow::Cow;
+pub mod completion;
+pub mod history;
+pub mod line_editor;
+
 use std::io::{self, IsTerminal, Write};
 
-use crossterm::cursor::{MoveToColumn, MoveUp};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::queue;
-use crossterm::terminal::{self, Clear, ClearType};
+use crossterm::terminal;
+
+use completion::{complete_slash_command, CompletionState};
+use history::{history_down, history_up};
+use line_editor::{
+    current_line_delete_range, line_end, move_vertical, next_boundary, previous_boundary,
+    previous_command_boundary, remove_previous_char, EditSession, EditorMode, YankBuffer,
+};
+
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOutcome {
@@ -13,222 +23,7 @@ pub enum ReadOutcome {
     Exit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditorMode {
-    Plain,
-    Insert,
-    Normal,
-    Visual,
-    Command,
-}
-
-impl EditorMode {
-    fn indicator(self, vim_enabled: bool) -> Option<&'static str> {
-        if !vim_enabled {
-            return None;
-        }
-
-        Some(match self {
-            Self::Plain => "PLAIN",
-            Self::Insert => "INSERT",
-            Self::Normal => "NORMAL",
-            Self::Visual => "VISUAL",
-            Self::Command => "COMMAND",
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct YankBuffer {
-    text: String,
-    linewise: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EditSession {
-    text: String,
-    cursor: usize,
-    mode: EditorMode,
-    pending_operator: Option<char>,
-    visual_anchor: Option<usize>,
-    command_buffer: String,
-    command_cursor: usize,
-    history_index: Option<usize>,
-    history_backup: Option<String>,
-    rendered_cursor_row: usize,
-    rendered_lines: usize,
-}
-
-impl EditSession {
-    fn new(vim_enabled: bool) -> Self {
-        Self {
-            text: String::new(),
-            cursor: 0,
-            mode: if vim_enabled {
-                EditorMode::Insert
-            } else {
-                EditorMode::Plain
-            },
-            pending_operator: None,
-            visual_anchor: None,
-            command_buffer: String::new(),
-            command_cursor: 0,
-            history_index: None,
-            history_backup: None,
-            rendered_cursor_row: 0,
-            rendered_lines: 1,
-        }
-    }
-
-    fn active_text(&self) -> &str {
-        if self.mode == EditorMode::Command {
-            &self.command_buffer
-        } else {
-            &self.text
-        }
-    }
-
-    fn current_len(&self) -> usize {
-        self.active_text().len()
-    }
-
-    fn has_input(&self) -> bool {
-        !self.active_text().is_empty()
-    }
-
-    fn current_line(&self) -> String {
-        self.active_text().to_string()
-    }
-
-    fn set_text_from_history(&mut self, entry: String) {
-        self.text = entry;
-        self.cursor = self.text.len();
-        self.pending_operator = None;
-        self.visual_anchor = None;
-        if self.mode != EditorMode::Plain && self.mode != EditorMode::Insert {
-            self.mode = EditorMode::Normal;
-        }
-    }
-
-    fn enter_insert_mode(&mut self) {
-        self.mode = EditorMode::Insert;
-        self.pending_operator = None;
-        self.visual_anchor = None;
-    }
-
-    fn enter_normal_mode(&mut self) {
-        self.mode = EditorMode::Normal;
-        self.pending_operator = None;
-        self.visual_anchor = None;
-    }
-
-    fn enter_visual_mode(&mut self) {
-        self.mode = EditorMode::Visual;
-        self.pending_operator = None;
-        self.visual_anchor = Some(self.cursor);
-    }
-
-    fn enter_command_mode(&mut self) {
-        self.mode = EditorMode::Command;
-        self.pending_operator = None;
-        self.visual_anchor = None;
-        self.command_buffer.clear();
-        self.command_buffer.push(':');
-        self.command_cursor = self.command_buffer.len();
-    }
-
-    fn exit_command_mode(&mut self) {
-        self.command_buffer.clear();
-        self.command_cursor = 0;
-        self.enter_normal_mode();
-    }
-
-    fn visible_buffer(&self) -> Cow<'_, str> {
-        if self.mode != EditorMode::Visual {
-            return Cow::Borrowed(self.active_text());
-        }
-
-        let Some(anchor) = self.visual_anchor else {
-            return Cow::Borrowed(self.active_text());
-        };
-        let Some((start, end)) = selection_bounds(&self.text, anchor, self.cursor) else {
-            return Cow::Borrowed(self.active_text());
-        };
-
-        Cow::Owned(render_selected_text(&self.text, start, end))
-    }
-
-    fn prompt<'a>(&self, base_prompt: &'a str, vim_enabled: bool) -> Cow<'a, str> {
-        match self.mode.indicator(vim_enabled) {
-            Some(mode) => Cow::Owned(format!("[{mode}] {base_prompt}")),
-            None => Cow::Borrowed(base_prompt),
-        }
-    }
-
-    fn clear_render(&self, out: &mut impl Write) -> io::Result<()> {
-        if self.rendered_cursor_row > 0 {
-            queue!(out, MoveUp(to_u16(self.rendered_cursor_row)?))?;
-        }
-        queue!(out, MoveToColumn(0), Clear(ClearType::FromCursorDown))?;
-        out.flush()
-    }
-
-    fn render(
-        &mut self,
-        out: &mut impl Write,
-        base_prompt: &str,
-        vim_enabled: bool,
-    ) -> io::Result<()> {
-        self.clear_render(out)?;
-
-        let prompt = self.prompt(base_prompt, vim_enabled);
-        let buffer = self.visible_buffer();
-        write!(out, "{prompt}{buffer}")?;
-
-        let (cursor_row, cursor_col, total_lines) = self.cursor_layout(prompt.as_ref());
-        let rows_to_move_up = total_lines.saturating_sub(cursor_row + 1);
-        if rows_to_move_up > 0 {
-            queue!(out, MoveUp(to_u16(rows_to_move_up)?))?;
-        }
-        queue!(out, MoveToColumn(to_u16(cursor_col)?))?;
-        out.flush()?;
-
-        self.rendered_cursor_row = cursor_row;
-        self.rendered_lines = total_lines;
-        Ok(())
-    }
-
-    fn finalize_render(
-        &self,
-        out: &mut impl Write,
-        base_prompt: &str,
-        vim_enabled: bool,
-    ) -> io::Result<()> {
-        self.clear_render(out)?;
-        let prompt = self.prompt(base_prompt, vim_enabled);
-        let buffer = self.visible_buffer();
-        write!(out, "{prompt}{buffer}")?;
-        writeln!(out)
-    }
-
-    fn cursor_layout(&self, prompt: &str) -> (usize, usize, usize) {
-        let active_text = self.active_text();
-        let cursor = if self.mode == EditorMode::Command {
-            self.command_cursor
-        } else {
-            self.cursor
-        };
-
-        let cursor_prefix = &active_text[..cursor];
-        let cursor_row = cursor_prefix.bytes().filter(|byte| *byte == b'\n').count();
-        let cursor_col = match cursor_prefix.rsplit_once('\n') {
-            Some((_, suffix)) => suffix.chars().count(),
-            None => prompt.chars().count() + cursor_prefix.chars().count(),
-        };
-        let total_lines = active_text.bytes().filter(|byte| *byte == b'\n').count() + 1;
-        (cursor_row, cursor_col, total_lines)
-    }
-}
+// ─── Internal types ───────────────────────────────────────────────────────────
 
 enum KeyAction {
     Continue,
@@ -238,6 +33,14 @@ enum KeyAction {
     ToggleVim,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Submission {
+    Submit,
+    ToggleVim,
+}
+
+// ─── LineEditor ───────────────────────────────────────────────────────────────
+
 pub struct LineEditor {
     prompt: String,
     completions: Vec<String>,
@@ -245,13 +48,6 @@ pub struct LineEditor {
     yank_buffer: YankBuffer,
     vim_enabled: bool,
     completion_state: Option<CompletionState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CompletionState {
-    prefix: String,
-    matches: Vec<String>,
-    next_index: usize,
 }
 
 impl LineEditor {
@@ -384,20 +180,20 @@ impl LineEditor {
 
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('c') | KeyCode::Char('C') => {
+                KeyCode::Char('c' | 'C') => {
                     return if session.has_input() {
                         KeyAction::Cancel
                     } else {
                         KeyAction::Exit
                     };
                 }
-                KeyCode::Char('j') | KeyCode::Char('J') => {
+                KeyCode::Char('j' | 'J') => {
                     if session.mode != EditorMode::Normal && session.mode != EditorMode::Visual {
                         self.insert_active_text(session, "\n");
                     }
                     return KeyAction::Continue;
                 }
-                KeyCode::Char('d') | KeyCode::Char('D') => {
+                KeyCode::Char('d' | 'D') => {
                     if session.current_len() == 0 {
                         return KeyAction::Exit;
                     }
@@ -434,11 +230,11 @@ impl LineEditor {
                 KeyAction::Continue
             }
             KeyCode::Up => {
-                self.history_up(session);
+                history_up(&self.history, self.vim_enabled, session);
                 KeyAction::Continue
             }
             KeyCode::Down => {
-                self.history_down(session);
+                history_down(&self.history, self.vim_enabled, session);
                 KeyAction::Continue
             }
             KeyCode::Home => {
@@ -450,7 +246,7 @@ impl LineEditor {
                 KeyAction::Continue
             }
             KeyCode::Tab => {
-                self.complete_slash_command(session);
+                complete_slash_command(&self.completions, &mut self.completion_state, session);
                 KeyAction::Continue
             }
             KeyCode::Char(ch) => {
@@ -463,11 +259,11 @@ impl LineEditor {
 
     fn handle_char(&mut self, session: &mut EditSession, ch: char) {
         match session.mode {
-            EditorMode::Plain => self.insert_active_char(session, ch),
-            EditorMode::Insert => self.insert_active_char(session, ch),
+            EditorMode::Plain | EditorMode::Insert | EditorMode::Command => {
+                self.insert_active_char(session, ch);
+            }
             EditorMode::Normal => self.handle_normal_char(session, ch),
             EditorMode::Visual => self.handle_visual_char(session, ch),
-            EditorMode::Command => self.insert_active_char(session, ch),
         }
     }
 
@@ -513,7 +309,7 @@ impl LineEditor {
 
     fn handle_escape(&mut self, session: &mut EditSession) -> KeyAction {
         match session.mode {
-            EditorMode::Plain => KeyAction::Continue,
+            EditorMode::Plain | EditorMode::Normal => KeyAction::Continue,
             EditorMode::Insert => {
                 if session.cursor > 0 {
                     session.cursor = previous_boundary(&session.text, session.cursor);
@@ -521,7 +317,6 @@ impl LineEditor {
                 session.enter_normal_mode();
                 KeyAction::Continue
             }
-            EditorMode::Normal => KeyAction::Continue,
             EditorMode::Visual => {
                 session.enter_normal_mode();
                 KeyAction::Continue
@@ -593,7 +388,8 @@ impl LineEditor {
 
     fn move_right(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
-            session.command_cursor = next_boundary(&session.command_buffer, session.command_cursor);
+            session.command_cursor =
+                next_boundary(&session.command_buffer, session.command_cursor);
         } else {
             session.cursor = next_boundary(&session.text, session.cursor);
         }
@@ -603,7 +399,7 @@ impl LineEditor {
         if session.mode == EditorMode::Command {
             session.command_cursor = 1;
         } else {
-            session.cursor = line_start(&session.text, session.cursor);
+            session.cursor = line_editor::line_start(&session.text, session.cursor);
         }
     }
 
@@ -698,114 +494,16 @@ impl LineEditor {
         session.cursor = insert_at + self.yank_buffer.text.len();
     }
 
-    fn complete_slash_command(&mut self, session: &mut EditSession) {
-        if session.mode == EditorMode::Command {
-            self.completion_state = None;
-            return;
-        }
-        if let Some(state) = self
-            .completion_state
-            .as_mut()
-            .filter(|_| session.cursor == session.text.len())
-            .filter(|state| {
-                state
-                    .matches
-                    .iter()
-                    .any(|candidate| candidate == &session.text)
-            })
-        {
-            let candidate = state.matches[state.next_index % state.matches.len()].clone();
-            state.next_index += 1;
-            session.text.replace_range(..session.cursor, &candidate);
-            session.cursor = candidate.len();
-            return;
-        }
-        let Some(prefix) = slash_command_prefix(&session.text, session.cursor) else {
-            self.completion_state = None;
-            return;
-        };
-        let matches = self
-            .completions
-            .iter()
-            .filter(|candidate| candidate.starts_with(prefix) && candidate.as_str() != prefix)
-            .cloned()
-            .collect::<Vec<_>>();
-        if matches.is_empty() {
-            self.completion_state = None;
-            return;
-        }
-
-        let candidate = if let Some(state) = self
-            .completion_state
-            .as_mut()
-            .filter(|state| state.prefix == prefix && state.matches == matches)
-        {
-            let index = state.next_index % state.matches.len();
-            state.next_index += 1;
-            state.matches[index].clone()
-        } else {
-            let candidate = matches[0].clone();
-            self.completion_state = Some(CompletionState {
-                prefix: prefix.to_string(),
-                matches,
-                next_index: 1,
-            });
-            candidate
-        };
-
-        session.text.replace_range(..session.cursor, &candidate);
-        session.cursor = candidate.len();
-    }
-
     fn history_up(&self, session: &mut EditSession) {
-        if session.mode == EditorMode::Command || self.history.is_empty() {
-            return;
-        }
-
-        let next_index = match session.history_index {
-            Some(index) => index.saturating_sub(1),
-            None => {
-                session.history_backup = Some(session.text.clone());
-                self.history.len() - 1
-            }
-        };
-
-        session.history_index = Some(next_index);
-        session.set_text_from_history(self.history[next_index].clone());
+        history_up(&self.history, self.vim_enabled, session);
     }
 
     fn history_down(&self, session: &mut EditSession) {
-        if session.mode == EditorMode::Command {
-            return;
-        }
-
-        let Some(index) = session.history_index else {
-            return;
-        };
-
-        if index + 1 < self.history.len() {
-            let next_index = index + 1;
-            session.history_index = Some(next_index);
-            session.set_text_from_history(self.history[next_index].clone());
-            return;
-        }
-
-        session.history_index = None;
-        let restored = session.history_backup.take().unwrap_or_default();
-        session.set_text_from_history(restored);
-        if self.vim_enabled {
-            session.enter_insert_mode();
-        } else {
-            session.mode = EditorMode::Plain;
-        }
+        history_down(&self.history, self.vim_enabled, session);
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Submission {
-    Submit,
-    ToggleVim,
-}
+// ─── Raw mode guard ───────────────────────────────────────────────────────────
 
 struct RawModeGuard;
 
@@ -822,173 +520,13 @@ impl Drop for RawModeGuard {
     }
 }
 
-fn previous_boundary(text: &str, cursor: usize) -> usize {
-    if cursor == 0 {
-        return 0;
-    }
-
-    text[..cursor]
-        .char_indices()
-        .next_back()
-        .map_or(0, |(index, _)| index)
-}
-
-fn previous_command_boundary(text: &str, cursor: usize) -> usize {
-    previous_boundary(text, cursor).max(1)
-}
-
-fn next_boundary(text: &str, cursor: usize) -> usize {
-    if cursor >= text.len() {
-        return text.len();
-    }
-
-    text[cursor..]
-        .chars()
-        .next()
-        .map_or(text.len(), |ch| cursor + ch.len_utf8())
-}
-
-fn remove_previous_char(text: &mut String, cursor: &mut usize) {
-    if *cursor == 0 {
-        return;
-    }
-
-    let start = previous_boundary(text, *cursor);
-    text.drain(start..*cursor);
-    *cursor = start;
-}
-
-fn line_start(text: &str, cursor: usize) -> usize {
-    text[..cursor].rfind('\n').map_or(0, |index| index + 1)
-}
-
-fn line_end(text: &str, cursor: usize) -> usize {
-    text[cursor..]
-        .find('\n')
-        .map_or(text.len(), |index| cursor + index)
-}
-
-fn move_vertical(text: &str, cursor: usize, delta: isize) -> usize {
-    let starts = line_starts(text);
-    let current_row = text[..cursor].bytes().filter(|byte| *byte == b'\n').count();
-    let current_start = starts[current_row];
-    let current_col = text[current_start..cursor].chars().count();
-
-    let max_row = starts.len().saturating_sub(1) as isize;
-    let target_row = (current_row as isize + delta).clamp(0, max_row) as usize;
-    if target_row == current_row {
-        return cursor;
-    }
-
-    let target_start = starts[target_row];
-    let target_end = if target_row + 1 < starts.len() {
-        starts[target_row + 1] - 1
-    } else {
-        text.len()
-    };
-    byte_index_for_char_column(&text[target_start..target_end], current_col) + target_start
-}
-
-fn line_starts(text: &str) -> Vec<usize> {
-    let mut starts = vec![0];
-    for (index, ch) in text.char_indices() {
-        if ch == '\n' {
-            starts.push(index + 1);
-        }
-    }
-    starts
-}
-
-fn byte_index_for_char_column(text: &str, column: usize) -> usize {
-    let mut current = 0;
-    for (index, _) in text.char_indices() {
-        if current == column {
-            return index;
-        }
-        current += 1;
-    }
-    text.len()
-}
-
-fn current_line_delete_range(text: &str, cursor: usize) -> (usize, usize, usize) {
-    let line_start_idx = line_start(text, cursor);
-    let line_end_core = line_end(text, cursor);
-    let line_end_idx = if line_end_core < text.len() {
-        line_end_core + 1
-    } else {
-        line_end_core
-    };
-    let delete_start_idx = if line_end_idx == text.len() && line_start_idx > 0 {
-        line_start_idx - 1
-    } else {
-        line_start_idx
-    };
-    (line_start_idx, line_end_idx, delete_start_idx)
-}
-
-fn selection_bounds(text: &str, anchor: usize, cursor: usize) -> Option<(usize, usize)> {
-    if text.is_empty() {
-        return None;
-    }
-
-    if cursor >= anchor {
-        let end = next_boundary(text, cursor);
-        Some((anchor.min(text.len()), end.min(text.len())))
-    } else {
-        let end = next_boundary(text, anchor);
-        Some((cursor.min(text.len()), end.min(text.len())))
-    }
-}
-
-fn render_selected_text(text: &str, start: usize, end: usize) -> String {
-    let mut rendered = String::new();
-    let mut in_selection = false;
-
-    for (index, ch) in text.char_indices() {
-        if !in_selection && index == start {
-            rendered.push_str("\x1b[7m");
-            in_selection = true;
-        }
-        if in_selection && index == end {
-            rendered.push_str("\x1b[0m");
-            in_selection = false;
-        }
-        rendered.push(ch);
-    }
-
-    if in_selection {
-        rendered.push_str("\x1b[0m");
-    }
-
-    rendered
-}
-
-fn slash_command_prefix(line: &str, pos: usize) -> Option<&str> {
-    if pos != line.len() {
-        return None;
-    }
-
-    let prefix = &line[..pos];
-    if prefix.contains(char::is_whitespace) || !prefix.starts_with('/') {
-        return None;
-    }
-
-    Some(prefix)
-}
-
-fn to_u16(value: usize) -> io::Result<u16> {
-    u16::try_from(value).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "terminal position overflowed u16",
-        )
-    })
-}
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::{
-        selection_bounds, slash_command_prefix, EditSession, EditorMode, KeyAction, LineEditor,
+        completion::slash_command_prefix, line_editor::{selection_bounds, EditSession, EditorMode},
+        KeyAction, LineEditor,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -1157,7 +695,7 @@ mod tests {
         session.cursor = session.text.len();
 
         // when
-        editor.complete_slash_command(&mut session);
+        super::complete_slash_command(&editor.completions, &mut editor.completion_state, &mut session);
 
         // then
         assert_eq!(session.text, "/help");
@@ -1176,10 +714,10 @@ mod tests {
         session.cursor = session.text.len();
 
         // when
-        editor.complete_slash_command(&mut session);
+        super::complete_slash_command(&editor.completions, &mut editor.completion_state, &mut session);
         let first = session.text.clone();
         session.cursor = session.text.len();
-        editor.complete_slash_command(&mut session);
+        super::complete_slash_command(&editor.completions, &mut editor.completion_state, &mut session);
         let second = session.text.clone();
 
         // then

@@ -115,15 +115,13 @@ impl ContentFilter {
     #[must_use]
     pub fn new(config: &ContentFilterConfig) -> Self {
         let injection_patterns = BUILTIN_INJECTION_PATTERNS
-            .iter()
-            .map(|p| *p)
+            .iter().copied()
             .chain(config.extra_injection_patterns.iter().map(String::as_str))
             .filter_map(|p| Regex::new(p).ok())
             .collect();
 
         let secret_patterns = BUILTIN_SECRET_PATTERNS
-            .iter()
-            .map(|p| *p)
+            .iter().copied()
             .chain(config.extra_secret_patterns.iter().map(String::as_str))
             .filter_map(|p| Regex::new(p).ok())
             .collect();

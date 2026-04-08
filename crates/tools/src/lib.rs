@@ -2596,11 +2596,11 @@ fn find_user_agent_def(name: &str) -> Option<UserAgentDef> {
 
 /// Parse key = "value" pairs from a minimal TOML agent file.
 fn parse_agent_toml(contents: &str) -> UserAgentDef {
-    let mut def = UserAgentDef::default();
-    def.model = parse_toml_str_value(contents, "model");
-    def.system_prompt = parse_toml_str_value(contents, "system_prompt");
-    def.allowed_tools = parse_toml_str_array(contents, "allowed_tools");
-    def
+    UserAgentDef {
+        model: parse_toml_str_value(contents, "model"),
+        system_prompt: parse_toml_str_value(contents, "system_prompt"),
+        allowed_tools: parse_toml_str_array(contents, "allowed_tools"),
+    }
 }
 
 /// Extract a simple `key = "value"` string from TOML content.
@@ -2660,7 +2660,7 @@ fn parse_toml_str_array(contents: &str, key: &str) -> Option<Vec<String>> {
 /// Parse a Markdown file with optional YAML frontmatter into an agent definition.
 ///
 /// Frontmatter fields: `name`, `model`, `tools` (array).
-/// The body (after the closing `---`) becomes the system_prompt.
+/// The body (after the closing `---`) becomes the `system_prompt`.
 fn parse_agent_md(contents: &str) -> UserAgentDef {
     let mut def = UserAgentDef::default();
     let mut lines = contents.lines();
@@ -2750,10 +2750,10 @@ where
     let normalized_subagent_type = normalize_subagent_type(input.subagent_type.as_deref());
 
     // Resolve user-defined agent when the type is not a built-in
-    let user_def = if !is_builtin_subagent_type(&normalized_subagent_type) {
-        find_user_agent_def(&normalized_subagent_type)
-    } else {
+    let user_def = if is_builtin_subagent_type(&normalized_subagent_type) {
         None
+    } else {
+        find_user_agent_def(&normalized_subagent_type)
     };
 
     // Model: explicit input > user-defined agent file > default
@@ -2761,9 +2761,7 @@ where
         resolve_agent_model(input.model.as_deref())
     } else if let Some(ref def) = user_def {
         def.model
-            .as_deref()
-            .map(|m| resolve_agent_model(Some(m)))
-            .unwrap_or_else(|| resolve_agent_model(None))
+            .as_deref().map_or_else(|| resolve_agent_model(None), |m| resolve_agent_model(Some(m)))
     } else {
         resolve_agent_model(input.model.as_deref())
     };
@@ -2789,10 +2787,10 @@ where
     // Allowed tools: user-defined agent file overrides built-in set
     let allowed_tools = if let Some(ref def) = user_def {
         if let Some(ref tools) = def.allowed_tools {
-            if !tools.is_empty() {
-                tools.iter().map(String::clone).collect::<BTreeSet<String>>()
-            } else {
+            if tools.is_empty() {
                 allowed_tools_for_subagent(&normalized_subagent_type)
+            } else {
+                tools.iter().map(String::clone).collect::<BTreeSet<String>>()
             }
         } else {
             allowed_tools_for_subagent(&normalized_subagent_type)
@@ -3102,8 +3100,9 @@ struct ProviderRuntimeClient {
 }
 
 impl ProviderRuntimeClient {
+    #[allow(clippy::needless_pass_by_value)]
     fn new(model: String, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
-        let model = resolve_model_alias(&model).to_string();
+        let model = resolve_model_alias(&model).clone();
         let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,
@@ -5831,8 +5830,7 @@ fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, String> {
             .map_err(|e| format!("RemoteTrigger: invalid JSON from /sessions: {e}"))?;
         if status != 201 {
             return Err(format!(
-                "RemoteTrigger: /sessions returned HTTP {status}: {}",
-                body
+                "RemoteTrigger: /sessions returned HTTP {status}: {body}"
             ));
         }
         body.get("session_id")
@@ -6044,7 +6042,7 @@ pub fn project_memory_dir(project_dir: &Path) -> PathBuf {
 // Plan mode
 // =============================================================================
 
-/// Process-global plan-mode flag.  When `true`, only ReadOnly tools are
+/// Process-global plan-mode flag.  When `true`, only `ReadOnly` tools are
 /// permitted inside `execute_tool`.
 static PLAN_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -6090,7 +6088,7 @@ struct WorktreeState {
     worktree_path: PathBuf,
     /// Branch name created for this worktree.
     branch: String,
-    /// The working directory that was active before EnterWorktree was called.
+    /// The working directory that was active before `EnterWorktree` was called.
     original_dir: PathBuf,
 }
 
@@ -6235,7 +6233,14 @@ fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, String> {
             Err(_) => true, // conservative: assume dirty when we cannot tell
         };
 
-        if !has_changes {
+        if has_changes {
+            cleanup_message = format!(
+                "Worktree at {} has uncommitted changes and was NOT removed. \
+                 Branch `{}` is still available.",
+                ws.worktree_path.display(),
+                ws.branch
+            );
+        } else {
             let remove_output = Command::new("git")
                 .args([
                     "worktree",
@@ -6269,13 +6274,6 @@ fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, String> {
                     cleanup_message = format!("could not run git worktree remove: {e}");
                 }
             }
-        } else {
-            cleanup_message = format!(
-                "Worktree at {} has uncommitted changes and was NOT removed. \
-                 Branch `{}` is still available.",
-                ws.worktree_path.display(),
-                ws.branch
-            );
         }
     } else {
         cleanup_message = format!(

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -85,7 +86,7 @@ impl HistoryArchiver {
         };
 
         let mut entries: Vec<ArchiveEntry> = read_dir
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 entry
                     .path()
@@ -107,7 +108,7 @@ impl HistoryArchiver {
         std::env::var(COMPACT_THRESHOLD_ENV)
             .ok()
             .and_then(|v| v.parse::<u8>().ok())
-            .filter(|&pct| pct >= 1 && pct <= 99)
+            .filter(|&pct| (1..=99).contains(&pct))
             .unwrap_or(DEFAULT_COMPACT_THRESHOLD_PCT)
     }
 }
@@ -133,13 +134,13 @@ fn build_archive_markdown(
 
     // YAML front-matter so QMD can index metadata without parsing the body.
     out.push_str("---\n");
-    out.push_str(&format!("session_id: {session_id}\n"));
-    out.push_str(&format!("archived_at: {timestamp}\n"));
-    out.push_str(&format!("model: {model}\n"));
-    out.push_str(&format!("message_count: {}\n", session.messages.len()));
+    let _ = writeln!(out, "session_id: {session_id}");
+    let _ = writeln!(out, "archived_at: {timestamp}");
+    let _ = writeln!(out, "model: {model}");
+    let _ = writeln!(out, "message_count: {}", session.messages.len());
     out.push_str("---\n\n");
 
-    out.push_str(&format!("# Session Archive: {session_id}\n\n"));
+    let _ = writeln!(out, "# Session Archive: {session_id}\n");
 
     if !summary.is_empty() {
         out.push_str("## Summary\n\n");
@@ -156,7 +157,7 @@ fn build_archive_markdown(
             MessageRole::Assistant => "Assistant",
             MessageRole::Tool => "Tool",
         };
-        out.push_str(&format!("### [{i}] {role_label}\n\n"));
+        let _ = write!(out, "### [{i}] {role_label}\n\n");
 
         for block in &msg.blocks {
             match block {
@@ -165,21 +166,21 @@ fn build_archive_markdown(
                     out.push_str("\n\n");
                 }
                 ContentBlock::ToolUse { name, input, .. } => {
-                    out.push_str(&format!("**Tool:** `{name}`\n\n"));
+                    let _ = write!(out, "**Tool:** `{name}`\n\n");
                     // Truncate large tool inputs for archive readability.
                     let truncated = truncate_chars(input, 500);
-                    out.push_str(&format!("```json\n{truncated}\n```\n\n"));
+                    let _ = write!(out, "```json\n{truncated}\n```\n\n");
                 }
                 ContentBlock::ToolResult {
                     tool_name, output, is_error, ..
                 } => {
                     let label = if *is_error { "Error result" } else { "Result" };
-                    out.push_str(&format!("**{label} ({tool_name}):** "));
+                    let _ = write!(out, "**{label} ({tool_name}):** ");
                     out.push_str(&truncate_chars(output, 500));
                     out.push_str("\n\n");
                 }
                 ContentBlock::Image { media_type, .. } => {
-                    out.push_str(&format!("*[image: {media_type}]*\n\n"));
+                    let _ = write!(out, "*[image: {media_type}]*\n\n");
                 }
             }
         }

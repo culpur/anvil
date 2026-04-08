@@ -102,6 +102,7 @@ impl HookRunner {
         )
     }
 
+    #[allow(clippy::unused_self)]
     fn run_commands(
         &self,
         event: HookEvent,

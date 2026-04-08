@@ -291,6 +291,7 @@ fn process_text(path: &Path, filename: &str, display: &str, size: usize) -> File
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::match_same_arms)]
 fn image_media_type(path: &Path) -> String {
     let ext = path
         .extension()

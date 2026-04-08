@@ -8,6 +8,7 @@
 /// The `AgentManager` is owned by `LiveCli` and polled every TUI frame.
 /// Completed agent results are returned from `poll()` so the caller can inject
 /// them as system messages.
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -120,6 +121,7 @@ pub struct AgentHandle {
     /// Channel from which to receive incremental output / done signal.
     rx: Option<Receiver<AgentMsg>>,
     /// Optional channel for sending messages into the running agent.
+    #[allow(dead_code)]
     pub input_tx: Option<SyncSender<String>>,
     /// OS thread handle (take()n when the thread completes).
     _thread: Option<JoinHandle<()>>,
@@ -149,6 +151,7 @@ impl AgentHandle {
     }
 
     /// Elapsed time since the agent started.
+    #[allow(dead_code)]
     pub fn elapsed(&self) -> Duration {
         self.started_at.elapsed()
     }
@@ -172,6 +175,7 @@ pub struct AgentManager {
     next_id: usize,
 }
 
+#[allow(dead_code)]
 impl AgentManager {
     pub fn new() -> Self {
         Self {
@@ -394,14 +398,15 @@ impl AgentManager {
                 AgentStatus::Failed(msg) => format!("failed: {msg}"),
                 AgentStatus::Waiting => "waiting".to_string(),
             };
-            out.push_str(&format!(
-                "  {icon} #{:02}  {:<12}  {:<40}  {}  ({})\n",
+            let _ = writeln!(
+                out,
+                "  {icon} #{:02}  {:<12}  {:<40}  {}  ({})",
                 a.id,
                 a.agent_type.label(),
                 truncate(&a.task, 40),
                 elapsed,
                 status_str,
-            ));
+            );
         }
         out
     }

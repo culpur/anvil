@@ -91,19 +91,16 @@ impl MemoryManager {
     /// frontmatter are silently skipped.
     #[must_use]
     pub fn discover(&self) -> Vec<MemoryFile> {
-        let entries = match fs::read_dir(&self.memory_dir) {
-            Ok(e) => e,
-            Err(_) => return Vec::new(),
-        };
+        let Ok(entries) = fs::read_dir(&self.memory_dir) else { return Vec::new() };
 
         let mut files: Vec<MemoryFile> = entries
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 entry
                     .path()
                     .extension()
-                    .map_or(false, |ext| ext == "md")
-                    && entry.path().file_name().map_or(true, |n| n != "MEMORY.md")
+                    .is_some_and(|ext| ext == "md")
+                    && entry.path().file_name().is_none_or(|n| n != "MEMORY.md")
             })
             .filter_map(|entry| {
                 let path = entry.path();
@@ -292,7 +289,12 @@ pub fn memory_dir_for_project(project_dir: &Path) -> PathBuf {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 fn sanitize_filename(name: &str) -> String {

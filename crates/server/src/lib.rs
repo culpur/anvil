@@ -136,7 +136,7 @@ pub struct SendMessageRequest {
     pub message: String,
 }
 
-#[must_use]
+#[must_use = "the router must be bound to a listener"]
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/sessions", post(create_session).get(list_sessions))
@@ -250,7 +250,7 @@ async fn stream_session_events(
                         yield Ok::<Event, Infallible>(sse_event);
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => {}  // skip lagged events, continue loop
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -259,6 +259,7 @@ async fn stream_session_events(
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn unix_timestamp_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

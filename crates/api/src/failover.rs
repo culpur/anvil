@@ -265,7 +265,7 @@ impl FailoverChain {
             let cooldown_str = if let Some(&cooldown_until) = self.rate_limit_cooldowns.get(&idx) {
                 if cooldown_until > now {
                     let remaining = (cooldown_until - now).as_secs();
-                    format!("  rate-limited ({}s remaining)", remaining)
+                    format!("  rate-limited ({remaining}s remaining)")
                 } else {
                     String::new()
                 }
@@ -356,12 +356,7 @@ impl FailoverChain {
     }
 
     fn next_available_after(&mut self, current: usize) -> Option<usize> {
-        for idx in (current + 1)..self.entries.len() {
-            if self.entry_is_available(idx) {
-                return Some(idx);
-            }
-        }
-        None
+        ((current + 1)..self.entries.len()).find(|&idx| self.entry_is_available(idx))
     }
 
     fn maybe_recover_primary(&mut self) {
@@ -396,8 +391,7 @@ pub fn format_failover_event(event: &FailoverEvent) -> String {
             let to = event
                 .to_model
                 .as_deref()
-                .map(|m| format!(" Failing over to {m}."))
-                .unwrap_or_else(|| " No fallback available.".to_string());
+                .map_or_else(|| " No fallback available.".to_string(), |m| format!(" Failing over to {m}."));
             format!(
                 "Warning: Rate limited on {}{retry}.{to}",
                 event.from_model
@@ -407,8 +401,7 @@ pub fn format_failover_event(event: &FailoverEvent) -> String {
             let to = event
                 .to_model
                 .as_deref()
-                .map(|m| format!(" Using {m}."))
-                .unwrap_or_else(|| " No fallback available.".to_string());
+                .map_or_else(|| " No fallback available.".to_string(), |m| format!(" Using {m}."));
             format!(
                 "Warning: Daily budget reached for {}.{to}",
                 event.from_model
@@ -430,9 +423,9 @@ fn load_failover_config() -> Option<FailoverConfig> {
     let text = std::fs::read_to_string(path).ok()?;
     let val: serde_json::Value = serde_json::from_str(&text).ok()?;
 
-    let auto_failover = val.get("auto_failover").and_then(|v| v.as_bool()).unwrap_or(true);
-    let cooldown_seconds = val.get("cooldown_seconds").and_then(|v| v.as_u64()).unwrap_or(60);
-    let notify_on_failover = val.get("notify_on_failover").and_then(|v| v.as_bool()).unwrap_or(true);
+    let auto_failover = val.get("auto_failover").and_then(serde_json::Value::as_bool).unwrap_or(true);
+    let cooldown_seconds = val.get("cooldown_seconds").and_then(serde_json::Value::as_u64).unwrap_or(60);
+    let notify_on_failover = val.get("notify_on_failover").and_then(serde_json::Value::as_bool).unwrap_or(true);
 
     let chain = val
         .get("chain")
@@ -442,16 +435,17 @@ fn load_failover_config() -> Option<FailoverConfig> {
                 .enumerate()
                 .filter_map(|(i, item)| {
                     let model = item.get("model")?.as_str()?.to_string();
+                    #[allow(clippy::cast_possible_truncation)]
                     let priority = item
                         .get("priority")
-                        .and_then(|v| v.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(i as u64 + 1) as u32;
                     let max_daily_tokens = item
                         .get("max_daily_tokens")
-                        .and_then(|v| v.as_u64());
+                        .and_then(serde_json::Value::as_u64);
                     let max_daily_cost_usd = item
                         .get("max_daily_cost_usd")
-                        .and_then(|v| v.as_f64());
+                        .and_then(serde_json::Value::as_f64);
                     let provider_kind =
                         crate::providers::detect_provider_kind(&model);
                     Some(FailoverEntry {

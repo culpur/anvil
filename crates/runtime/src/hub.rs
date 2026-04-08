@@ -1,8 +1,9 @@
-//! AnvilHub marketplace client.
+//! `AnvilHub` marketplace client.
 //!
-//! Connects to the AnvilHub API (default: https://anvilhub.culpur.net) to list,
+//! Connects to the `AnvilHub` API (default: <https://anvilhub.culpur.net>) to list,
 //! search, and install packages (skills, plugins, agents, themes).
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -33,7 +34,7 @@ fn sanitize_path_component(value: &str, field: &str) -> Result<(), HubError> {
 
 use serde::{Deserialize, Serialize};
 
-/// A package record returned by the AnvilHub API.
+/// A package record returned by the `AnvilHub` API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubPackage {
     pub id: String,
@@ -54,7 +55,7 @@ struct PackageListResponse {
     data: Vec<HubPackage>,
 }
 
-/// HTTP client for the AnvilHub Passage API.
+/// HTTP client for the `AnvilHub` Passage API.
 pub struct HubClient {
     base_url: String,
     http: reqwest::Client,
@@ -76,7 +77,7 @@ impl HubClient {
         }
     }
 
-    /// Create a client using the default AnvilHub URL.
+    /// Create a client using the default `AnvilHub` URL.
     #[must_use]
     pub fn default_client() -> Self {
         Self::new("https://anvilhub.culpur.net")
@@ -126,7 +127,7 @@ impl HubClient {
             urlencoded(query)
         );
         if let Some(t) = pkg_type {
-            url.push_str(&format!("&type={t}"));
+            let _ = write!(url, "&type={t}");
         }
 
         let resp = self
@@ -167,6 +168,7 @@ impl HubClient {
             return Err(HubError::Api(format!("HTTP {status}")));
         }
 
+        #[allow(clippy::items_after_statements)]
         #[derive(Deserialize)]
         struct DetailResponse {
             data: HubPackage,
@@ -243,7 +245,7 @@ impl HubClient {
     }
 }
 
-/// Error type for AnvilHub operations.
+/// Error type for `AnvilHub` operations.
 #[derive(Debug)]
 pub enum HubError {
     Http(String),
@@ -281,16 +283,14 @@ pub fn format_package_list(header: &str, packages: &[HubPackage]) -> String {
     }
     let mut out = format!("{header}\n");
     for pkg in packages {
-        out.push_str(&format!(
-            "  {:<30} v{:<10} {:>8} dl  {}\n",
+        let _ = writeln!(
+            out,
+            "  {:<30} v{:<10} {:>8} dl  {}",
             pkg.name,
             pkg.version,
             fmt_downloads(pkg.downloads),
-            pkg.description
-                .chars()
-                .take(60)
-                .collect::<String>(),
-        ));
+            pkg.description.chars().take(60).collect::<String>(),
+        );
     }
     out
 }
@@ -311,6 +311,7 @@ pub fn format_package_detail(pkg: &HubPackage) -> String {
     )
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn fmt_downloads(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
@@ -331,7 +332,7 @@ fn urlencoded(s: &str) -> String {
             ' ' => out.push('+'),
             c => {
                 for byte in c.to_string().as_bytes() {
-                    out.push_str(&format!("%{byte:02X}"));
+                    let _ = write!(out, "%{byte:02X}");
                 }
             }
         }

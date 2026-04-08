@@ -5,6 +5,7 @@ use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anvil_provider;
+pub mod common;
 pub mod ollama;
 pub mod openai_compat;
 

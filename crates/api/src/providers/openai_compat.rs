@@ -12,16 +12,15 @@ use crate::types::{
     ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };
 
+use super::common::{
+    self, extract_sse_data, next_sse_frame, read_env_non_empty,
+    request_id_from_headers, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF, DEFAULT_MAX_RETRIES,
+};
 use super::{Provider, ProviderFuture};
 
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
-const REQUEST_ID_HEADER: &str = "request-id";
-const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
-const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
-const DEFAULT_MAX_BACKOFF: Duration = Duration::from_secs(2);
-const DEFAULT_MAX_RETRIES: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAiCompatConfig {
@@ -189,31 +188,13 @@ impl OpenAiCompatClient {
         &self,
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
-        let mut attempts = 0;
-
-        let last_error = loop {
-            attempts += 1;
-            let retryable_error = match self.send_raw_request(request).await {
-                Ok(response) => match expect_success(response).await {
-                    Ok(response) => return Ok(response),
-                    Err(error) if error.is_retryable() && attempts <= self.max_retries + 1 => error,
-                    Err(error) => return Err(error),
-                },
-                Err(error) if error.is_retryable() && attempts <= self.max_retries + 1 => error,
-                Err(error) => return Err(error),
-            };
-
-            if attempts > self.max_retries {
-                break retryable_error;
-            }
-
-            tokio::time::sleep(self.backoff_for_attempt(attempts)?).await;
-        };
-
-        Err(ApiError::RetriesExhausted {
-            attempts,
-            last_error: Box::new(last_error),
-        })
+        common::send_with_retry(
+            self.max_retries,
+            self.initial_backoff,
+            self.max_backoff,
+            || self.send_raw_request(request),
+        )
+        .await
     }
 
     async fn send_raw_request(
@@ -231,18 +212,7 @@ impl OpenAiCompatClient {
             .map_err(ApiError::from)
     }
 
-    fn backoff_for_attempt(&self, attempt: u32) -> Result<Duration, ApiError> {
-        let Some(multiplier) = 1_u32.checked_shl(attempt.saturating_sub(1)) else {
-            return Err(ApiError::BackoffOverflow {
-                attempt,
-                base_delay: self.initial_backoff,
-            });
-        };
-        Ok(self
-            .initial_backoff
-            .checked_mul(multiplier)
-            .map_or(self.max_backoff, |delay| delay.min(self.max_backoff)))
-    }
+
 }
 
 impl Provider for OpenAiCompatClient {
@@ -322,7 +292,9 @@ impl OpenAiSseParser {
         let mut events = Vec::new();
 
         while let Some(frame) = next_sse_frame(&mut self.buffer) {
-            if let Some(event) = parse_sse_frame(&frame)? {
+            if let Some(payload) = extract_sse_data(&frame) {
+                let event: ChatCompletionChunk =
+                    serde_json::from_str(&payload).map_err(ApiError::from)?;
                 events.push(event);
             }
         }
@@ -332,6 +304,7 @@ impl OpenAiSseParser {
 }
 
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct StreamState {
     model: String,
     message_started: bool,
@@ -532,6 +505,7 @@ impl ToolCallState {
         self.openai_index + 1
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn start_event(&self) -> Result<Option<ContentBlockStartEvent>, ApiError> {
         let Some(name) = self.name.clone() else {
             return Ok(None);
@@ -654,18 +628,6 @@ struct DeltaFunction {
     arguments: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ErrorEnvelope {
-    error: ErrorBody,
-}
-
-#[derive(Debug, Deserialize)]
-struct ErrorBody {
-    #[serde(rename = "type")]
-    error_type: Option<String>,
-    message: Option<String>,
-}
-
 fn build_chat_completion_request(request: &MessageRequest) -> Value {
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
@@ -718,9 +680,8 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             for block in &message.content {
                 match block {
                     InputContentBlock::Text { text: value } => text.push_str(value),
-                    InputContentBlock::Image { .. } => {
-                        // Images are not expected in assistant turns; skip silently.
-                    }
+                    // Images are not expected in assistant turns; skip silently.
+                    InputContentBlock::Image { .. } | InputContentBlock::ToolResult { .. } => {}
                     InputContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
                         "id": id,
                         "type": "function",
@@ -728,8 +689,7 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                             "name": name,
                             "arguments": input.to_string(),
                         }
-                    })),
-                    InputContentBlock::ToolResult { .. } => {}
+                    }))
                 }
             }
             if text.is_empty() && tool_calls.is_empty() {
@@ -865,58 +825,8 @@ fn parse_tool_arguments(arguments: &str) -> Value {
     serde_json::from_str(arguments).unwrap_or_else(|_| json!({ "raw": arguments }))
 }
 
-fn next_sse_frame(buffer: &mut Vec<u8>) -> Option<String> {
-    let separator = buffer
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|position| (position, 2))
-        .or_else(|| {
-            buffer
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .map(|position| (position, 4))
-        })?;
 
-    let (position, separator_len) = separator;
-    let frame = buffer.drain(..position + separator_len).collect::<Vec<_>>();
-    let frame_len = frame.len().saturating_sub(separator_len);
-    Some(String::from_utf8_lossy(&frame[..frame_len]).into_owned())
-}
 
-fn parse_sse_frame(frame: &str) -> Result<Option<ChatCompletionChunk>, ApiError> {
-    let trimmed = frame.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    let mut data_lines = Vec::new();
-    for line in trimmed.lines() {
-        if line.starts_with(':') {
-            continue;
-        }
-        if let Some(data) = line.strip_prefix("data:") {
-            data_lines.push(data.trim_start());
-        }
-    }
-    if data_lines.is_empty() {
-        return Ok(None);
-    }
-    let payload = data_lines.join("\n");
-    if payload == "[DONE]" {
-        return Ok(None);
-    }
-    serde_json::from_str(&payload)
-        .map(Some)
-        .map_err(ApiError::from)
-}
-
-fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
-    match std::env::var(key) {
-        Ok(value) if !value.is_empty() => Ok(Some(value)),
-        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error) => Err(ApiError::from(error)),
-    }
-}
 
 #[must_use]
 pub fn has_api_key(key: &str) -> bool {
@@ -945,40 +855,7 @@ fn chat_completions_endpoint(base_url: &str) -> String {
     }
 }
 
-fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    headers
-        .get(REQUEST_ID_HEADER)
-        .or_else(|| headers.get(ALT_REQUEST_ID_HEADER))
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned)
-}
 
-async fn expect_success(response: reqwest::Response) -> Result<reqwest::Response, ApiError> {
-    let status = response.status();
-    if status.is_success() {
-        return Ok(response);
-    }
-
-    let body = response.text().await.unwrap_or_default();
-    let parsed_error = serde_json::from_str::<ErrorEnvelope>(&body).ok();
-    let retryable = is_retryable_status(status);
-
-    Err(ApiError::Api {
-        status,
-        error_type: parsed_error
-            .as_ref()
-            .and_then(|error| error.error.error_type.clone()),
-        message: parsed_error
-            .as_ref()
-            .and_then(|error| error.error.message.clone()),
-        body,
-        retryable,
-    })
-}
-
-const fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 409 | 429 | 500 | 502 | 503 | 504)
-}
 
 fn normalize_finish_reason(value: &str) -> String {
     match value {

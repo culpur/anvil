@@ -374,7 +374,7 @@ fn write_credentials_root(path: &PathBuf, root: &Map<String, Value>) -> io::Resu
             .truncate(true)
             .mode(0o600)
             .open(&temp_path)?;
-        write!(f, "{rendered}\n")?;
+        writeln!(f, "{rendered}")?;
     }
     #[cfg(not(unix))]
     {

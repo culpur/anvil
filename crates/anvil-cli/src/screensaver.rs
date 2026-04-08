@@ -1,3 +1,17 @@
+//! Anvil TUI Furnace Screensaver — screen burn-in protection with branded ASCII animation.
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless,
+    clippy::unreadable_literal,
+    clippy::items_after_statements,
+    clippy::too_many_lines,
+    clippy::unused_self,
+    clippy::empty_line_after_doc_comments
+)]
+
 /// Anvil TUI Furnace Screensaver — screen burn-in protection with branded ASCII animation.
 ///
 /// Activation:
@@ -27,6 +41,7 @@ use ratatui::Frame;
 const GATHERING_SECS: f64 = 3.0;
 const CRUCIBLE_SECS:  f64 = 3.0;
 const FURNACE_SECS:   f64 = 2.0;
+#[allow(dead_code)]
 const RESUME_SECS:    f64 = 0.5;
 /// How long the user must be idle before the screensaver activates automatically.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -42,9 +57,13 @@ const COL_ORANGE:    Color = Color::Rgb(255,165,   0);  // molten — mid
 const COL_GOLD:      Color = Color::Rgb(255,215,   0);  // molten — cool
 const COL_EMBER:     Color = Color::Rgb(255,200,  50);  // floating embers
 const COL_HEAT_WAVE: Color = Color::Rgb(255,100,  50);  // heat shimmer
+#[allow(dead_code)]
 const COL_BLUE:      Color = Color::Rgb(  0,133, 255);  // Culpur/Anvil brand
+#[allow(dead_code)]
 const COL_DIM_BLUE:  Color = Color::Rgb(  0, 60, 140);  // dim brand
+#[allow(dead_code)]
 const COL_FALLING:   Color = Color::Rgb(160,160, 180);  // falling characters
+#[allow(dead_code)]
 const COL_SPARK:     Color = Color::Rgb(255,220,  80);  // sparks in crucible
 const COL_STATUS:    Color = Color::DarkGray;
 
@@ -220,8 +239,8 @@ impl FurnaceScreensaver {
         self.melt_frame = self.melt_frame.wrapping_add(1);
 
         let elapsed = self.activated_at.elapsed().as_secs_f64();
-        let cx = terminal_width  as f64 / 2.0;
-        let cy = terminal_height as f64 * 0.75;
+        let cx = f64::from(terminal_width) / 2.0;
+        let cy = f64::from(terminal_height) * 0.75;
 
         // Update target positions for falling chars.
         for fc in &mut self.falling {
@@ -263,7 +282,7 @@ impl FurnaceScreensaver {
                 // Tick embers.
                 self.tick_embers(dt);
                 // Spawn more sparks periodically.
-                if self.frame % 5 == 0 {
+                if self.frame.is_multiple_of(5) {
                     self.spawn_sparks(terminal_width, terminal_height, 3);
                 }
                 if phase_t >= CRUCIBLE_SECS {
@@ -284,7 +303,7 @@ impl FurnaceScreensaver {
             FurnacePhase::Melting => {
                 self.tick_embers(dt);
                 // Keep a steady trickle of new embers.
-                if self.frame % 8 == 0 && self.embers.len() < 40 {
+                if self.frame.is_multiple_of(8) && self.embers.len() < 40 {
                     self.spawn_sparks(terminal_width, terminal_height, 2);
                 }
                 // If resume was requested, transition.
@@ -325,8 +344,8 @@ impl FurnaceScreensaver {
     // ─── Particle helpers ─────────────────────────────────────────────────────
 
     fn spawn_sparks(&mut self, w: u16, h: u16, count: usize) {
-        let cx = w as f64 / 2.0;
-        let cy = h as f64 * 0.65;
+        let cx = f64::from(w) / 2.0;
+        let cy = f64::from(h) * 0.65;
         let spark_chars = ['*', '·', '˙', '°', '✦', '✧', '⁺'];
         for _ in 0..count {
             let ch = spark_chars[self.rng.range(spark_chars.len())];
@@ -465,7 +484,7 @@ impl FurnaceScreensaver {
                 height: 1,
             };
             // Alternate molten colours.
-            let col = if (self.melt_frame / 3 + i) % 3 == 0 {
+            let col = if (self.melt_frame / 3 + i).is_multiple_of(3) {
                 COL_RED_ORANGE
             } else if (self.melt_frame / 3 + i) % 3 == 1 {
                 COL_ORANGE
@@ -655,8 +674,8 @@ impl FurnaceScreensaver {
             let col_cycle = [COL_RED_ORANGE, COL_ORANGE, COL_GOLD, COL_ORANGE, COL_RED_ORANGE];
 
             for row in 0..inner_height.saturating_sub(2) {
-                let pat_idx  = ((self.melt_frame / 2 + row as usize) % melt_patterns.len()) as usize;
-                let col_idx  = ((self.melt_frame / 4 + row as usize) % col_cycle.len())     as usize;
+                let pat_idx  = (self.melt_frame / 2 + row as usize) % melt_patterns.len();
+                let col_idx  = (self.melt_frame / 4 + row as usize) % col_cycle.len();
                 let pattern  = melt_patterns[pat_idx];
                 // Truncate or pad to fit inner_width - 2.
                 let display_w = inner_width.saturating_sub(2) as usize;
@@ -717,7 +736,7 @@ impl FurnaceScreensaver {
         ];
         // Gently pulse the logo brightness.
         let pulse  = ((self.melt_frame as f64 * 0.08).sin() * 30.0 + 200.0) as u8;
-        let col    = Color::Rgb(0, pulse.min(133), 255.min(pulse as u16 + 100) as u8);
+        let col    = Color::Rgb(0, pulse.min(133), 255.min(u16::from(pulse) + 100) as u8);
         let logo_h = logo_lines.len() as u16;
         let logo_w = logo_lines[0].len() as u16;
         let lx     = cx.saturating_sub(logo_w as usize / 2) as u16;
@@ -732,9 +751,9 @@ impl FurnaceScreensaver {
                 col
             } else {
                 Color::Rgb(
-                    COL_IRON.as_rgb().map(|(r,_,_)| r).unwrap_or(139),
-                    COL_IRON.as_rgb().map(|(_,g,_)| g).unwrap_or(69),
-                    COL_IRON.as_rgb().map(|(_,_,b)| b).unwrap_or(19),
+                    COL_IRON.as_rgb().map_or(139, |(r,_,_)| r),
+                    COL_IRON.as_rgb().map_or(69, |(_,g,_)| g),
+                    COL_IRON.as_rgb().map_or(19, |(_,_,b)| b),
                 )
             };
             frame.render_widget(

@@ -45,6 +45,7 @@ impl Default for ColorTheme {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Spinner {
     frame_index: usize,

@@ -114,6 +114,7 @@ impl TaskManager {
 
     /// Create a task and immediately spawn its command in a background thread.
     /// Returns the task ID on success.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn create(&mut self, description: String, command: String) -> Result<String, String> {
         let id = make_task_id();
         let now = unix_secs();
@@ -307,6 +308,7 @@ impl Default for TaskManager {
 // Background reaper
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::needless_pass_by_value)]
 fn reap_task(
     task_id: String,
     child_arc: Arc<Mutex<Child>>,
@@ -353,7 +355,7 @@ fn reap_task(
 
         if let Some(ref mut err) = stderr_pipe {
             match err.read(&mut tmp) {
-                Ok(0) => {
+                Ok(0) | Err(_) => {
                     stderr_pipe = None;
                 }
                 Ok(n) => {
@@ -361,9 +363,6 @@ fn reap_task(
                         output_buf.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     buf.extend_from_slice(&tmp[..n]);
                     any_data = true;
-                }
-                Err(_) => {
-                    stderr_pipe = None;
                 }
             }
         }
@@ -405,6 +404,7 @@ fn reap_task(
 // Helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::cast_possible_truncation)]
 fn make_task_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

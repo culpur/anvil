@@ -1,3 +1,7 @@
+pub mod permission_gate;
+pub mod turn_executor;
+pub mod usage_tracking;
+
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
@@ -5,10 +9,12 @@ use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
 use crate::config::RuntimeFeatureConfig;
-use crate::hooks::{HookRunResult, HookRunner};
-use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
+use crate::hooks::HookRunner;
+use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
+
+use turn_executor::run_turn_inner;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRequest {
@@ -158,7 +164,7 @@ where
         self.session
             .messages
             .push(ConversationMessage::user_text(user_input.into()));
-        self.run_turn_inner(&mut prompter)
+        self.run_turn_inner_dispatch(&mut prompter)
     }
 
     /// Run a model turn without prepending a new user message.  The caller is
@@ -168,115 +174,24 @@ where
         &mut self,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
-        self.run_turn_inner(&mut prompter)
+        self.run_turn_inner_dispatch(&mut prompter)
     }
 
-    fn run_turn_inner(
+    fn run_turn_inner_dispatch(
         &mut self,
         prompter: &mut Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
-
-        let mut assistant_messages = Vec::new();
-        let mut tool_results = Vec::new();
-        let mut iterations = 0;
-
-        loop {
-            iterations += 1;
-            if iterations > self.max_iterations {
-                return Err(RuntimeError::new(
-                    "conversation loop exceeded the maximum number of iterations",
-                ));
-            }
-
-            let request = ApiRequest {
-                system_prompt: self.system_prompt.clone(),
-                messages: self.session.messages.clone(),
-            };
-            let events = self.api_client.stream(request)?;
-            let (assistant_message, usage) = build_assistant_message(events)?;
-            if let Some(usage) = usage {
-                self.usage_tracker.record(usage);
-            }
-            let pending_tool_uses = assistant_message
-                .blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::ToolUse { id, name, input } => {
-                        Some((id.clone(), name.clone(), input.clone()))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-
-            self.session.messages.push(assistant_message.clone());
-            assistant_messages.push(assistant_message);
-
-            if pending_tool_uses.is_empty() {
-                break;
-            }
-
-            for (tool_use_id, tool_name, input) in pending_tool_uses {
-                let permission_outcome = if let Some(prompt) = prompter.as_mut() {
-                    self.permission_policy
-                        .authorize(&tool_name, &input, Some(*prompt))
-                } else {
-                    self.permission_policy.authorize(&tool_name, &input, None)
-                };
-
-                let result_message = match permission_outcome {
-                    PermissionOutcome::Allow => {
-                        let pre_hook_result = self.hook_runner.run_pre_tool_use(&tool_name, &input);
-                        if pre_hook_result.is_denied() {
-                            let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
-                            ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                format_hook_message(&pre_hook_result, &deny_message),
-                                true,
-                            )
-                        } else {
-                            let (mut output, mut is_error) =
-                                match self.tool_executor.execute(&tool_name, &input) {
-                                    Ok(output) => (output, false),
-                                    Err(error) => (error.to_string(), true),
-                                };
-                            output = merge_hook_feedback(pre_hook_result.messages(), output, false);
-
-                            let post_hook_result = self
-                                .hook_runner
-                                .run_post_tool_use(&tool_name, &input, &output, is_error);
-                            if post_hook_result.is_denied() {
-                                is_error = true;
-                            }
-                            output = merge_hook_feedback(
-                                post_hook_result.messages(),
-                                output,
-                                post_hook_result.is_denied(),
-                            );
-
-                            ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                output,
-                                is_error,
-                            )
-                        }
-                    }
-                    PermissionOutcome::Deny { reason } => {
-                        ConversationMessage::tool_result(tool_use_id, tool_name, reason, true)
-                    }
-                };
-                self.session.messages.push(result_message.clone());
-                tool_results.push(result_message);
-            }
-        }
-
-        Ok(TurnSummary {
-            assistant_messages,
-            tool_results,
-            iterations,
-            usage: self.usage_tracker.cumulative_usage(),
-        })
+        run_turn_inner(
+            &mut self.session,
+            &mut self.api_client,
+            &mut self.tool_executor,
+            &self.permission_policy,
+            &self.system_prompt,
+            self.max_iterations,
+            &mut self.usage_tracker,
+            &self.hook_runner,
+            prompter,
+        )
     }
 
     #[must_use]
@@ -321,79 +236,6 @@ where
             .messages
             .push(ConversationMessage::user_with_blocks(blocks));
     }
-}
-
-fn build_assistant_message(
-    events: Vec<AssistantEvent>,
-) -> Result<(ConversationMessage, Option<TokenUsage>), RuntimeError> {
-    let mut text = String::new();
-    let mut blocks = Vec::new();
-    let mut finished = false;
-    let mut usage = None;
-
-    for event in events {
-        match event {
-            AssistantEvent::TextDelta(delta) => text.push_str(&delta),
-            AssistantEvent::ToolUse { id, name, input } => {
-                flush_text_block(&mut text, &mut blocks);
-                blocks.push(ContentBlock::ToolUse { id, name, input });
-            }
-            AssistantEvent::Usage(value) => usage = Some(value),
-            AssistantEvent::MessageStop => {
-                finished = true;
-            }
-        }
-    }
-
-    flush_text_block(&mut text, &mut blocks);
-
-    if !finished {
-        return Err(RuntimeError::new(
-            "assistant stream ended without a message stop event",
-        ));
-    }
-    if blocks.is_empty() {
-        return Err(RuntimeError::new("assistant stream produced no content"));
-    }
-
-    Ok((
-        ConversationMessage::assistant_with_usage(blocks, usage),
-        usage,
-    ))
-}
-
-fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
-    if !text.is_empty() {
-        blocks.push(ContentBlock::Text {
-            text: std::mem::take(text),
-        });
-    }
-}
-
-fn format_hook_message(result: &HookRunResult, fallback: &str) -> String {
-    if result.messages().is_empty() {
-        fallback.to_string()
-    } else {
-        result.messages().join("\n")
-    }
-}
-
-fn merge_hook_feedback(messages: &[String], output: String, denied: bool) -> String {
-    if messages.is_empty() {
-        return output;
-    }
-
-    let mut sections = Vec::new();
-    if !output.trim().is_empty() {
-        sections.push(output);
-    }
-    let label = if denied {
-        "Hook feedback (denied)"
-    } else {
-        "Hook feedback"
-    };
-    sections.push(format!("{label}:\n{}", messages.join("\n")));
-    sections.join("\n\n")
 }
 
 type ToolHandler = Box<dyn FnMut(&str) -> Result<String, ToolError>>;

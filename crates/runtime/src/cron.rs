@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +42,7 @@ pub struct CronManager {
 
 impl CronManager {
     /// Construct by loading (or creating) the persistent store.
+    #[must_use] 
     pub fn new(store_path: PathBuf) -> Self {
         let store = Self::load_store(&store_path);
         Self { store, store_path }
@@ -154,7 +156,7 @@ impl CronManager {
         let now = unix_secs();
         let mut due: Vec<CronEntry> = Vec::new();
 
-        for entry in self.store.entries.iter_mut() {
+        for entry in &mut self.store.entries {
             if !entry.enabled {
                 continue;
             }
@@ -252,7 +254,7 @@ impl CronField {
         match self {
             Self::Any => true,
             Self::Exact(n) => value == *n,
-            Self::Step(n) => value % n == 0,
+            Self::Step(n) => value.is_multiple_of(*n),
             Self::Range(lo, hi) => value >= *lo && value <= *hi,
         }
     }
@@ -274,6 +276,7 @@ fn parse_cron(expr: &str) -> Option<CronFields> {
 
 /// Compute the next fire time (Unix seconds) after `after`.
 /// Scans forward by one-minute increments, up to one year ahead.
+#[must_use] 
 pub fn next_run_time(expr: &str, after: u64) -> Option<u64> {
     let fields = parse_cron(expr)?;
 
@@ -311,6 +314,7 @@ struct DateTimeParts {
 
 /// Very lightweight Unix-timestamp → (year, month, day, hour, minute, weekday)
 /// decomposition.  Good for ~year 2000–2100.
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 fn unix_to_parts(ts: u64) -> DateTimeParts {
     let secs_per_day: u64 = 86_400;
     let days_since_epoch = ts / secs_per_day;
@@ -334,7 +338,7 @@ fn unix_to_parts(ts: u64) -> DateTimeParts {
     let mp = (5 * doy + 2) / 153;                  // [0, 11]
     let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
-    let _year = y + if month <= 2 { 1 } else { 0 };
+    let _year = y + i64::from(month <= 2);
 
     DateTimeParts { minute, hour, day, month, weekday }
 }
@@ -348,6 +352,7 @@ fn default_store_path() -> PathBuf {
     PathBuf::from(home).join(".anvil").join("cron.json")
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn make_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -396,6 +401,7 @@ impl CronDaemon {
     /// The thread polls [`CronManager::global`] every 30 seconds, fires any
     /// due entries, and then goes back to sleep.  Use [`CronDaemon::stop`] to
     /// request a clean shutdown.
+    #[must_use] 
     pub fn start() -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_flag_clone = Arc::clone(&stop_flag);
@@ -438,6 +444,7 @@ fn cron_daemon_loop(stop_flag: &AtomicBool) {
     // Break the 30-second sleep into short slices so we can react quickly to
     // stop requests without a full 30-second delay on shutdown.
     const TICK: Duration = Duration::from_millis(500);
+    #[allow(clippy::cast_possible_truncation)]
     let ticks_per_poll = (CRON_POLL_INTERVAL.as_millis() / TICK.as_millis()) as u32;
     let mut ticks_elapsed: u32 = ticks_per_poll; // fire immediately on first wakeup
 
@@ -474,7 +481,7 @@ fn fire_due_entries() {
             }
         },
         Err(poisoned) => {
-            eprintln!("[cron] CronManager lock poisoned: {}", poisoned);
+            eprintln!("[cron] CronManager lock poisoned: {poisoned}");
             return;
         }
     };
@@ -522,7 +529,7 @@ fn fire_local(entry: &CronEntry) {
             }
         },
         Err(poisoned) => {
-            eprintln!("[cron] TaskManager lock poisoned: {}", poisoned);
+            eprintln!("[cron] TaskManager lock poisoned: {poisoned}");
         }
     }
 }
@@ -602,7 +609,7 @@ fn json_string_escape(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
+                let _ = write!(out, "\\u{:04x}", c as u32);
             }
             c => out.push(c),
         }
