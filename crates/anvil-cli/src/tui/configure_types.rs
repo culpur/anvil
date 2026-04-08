@@ -1,5 +1,5 @@
-/// Configure mode types: ConfigureState, ConfigureAction, ConfigureData,
-/// and helper functions for state navigation.
+//! Configure mode types: `ConfigureState`, `ConfigureAction`, `ConfigureData`,
+//! and helper functions for state navigation.
 use super::helpers::{next_char_boundary, prev_char_boundary};
 
 // ─── ConfigureState ───────────────────────────────────────────────────────────

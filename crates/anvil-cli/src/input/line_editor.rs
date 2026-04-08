@@ -278,6 +278,7 @@ pub(super) fn line_end(text: &str, cursor: usize) -> usize {
         .map_or(text.len(), |index| cursor + index)
 }
 
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 pub(super) fn move_vertical(text: &str, cursor: usize, delta: isize) -> usize {
     let starts = line_starts(text);
     let current_row = text[..cursor].bytes().filter(|byte| *byte == b'\n').count();

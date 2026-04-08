@@ -90,6 +90,9 @@ impl McpStdioProcess {
     }
 
     pub async fn read_frame(&mut self) -> io::Result<Vec<u8>> {
+        // Guard against unbounded heap allocation from a malicious or
+        // misbehaving MCP server sending a huge Content-Length value.
+        const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
         let mut content_length = None;
         loop {
             let mut line = String::new();
@@ -116,9 +119,6 @@ impl McpStdioProcess {
             io::Error::new(io::ErrorKind::InvalidData, "missing Content-Length header")
         })?;
 
-        // Guard against unbounded heap allocation from a malicious or
-        // misbehaving MCP server sending a huge Content-Length value.
-        const MAX_CONTENT_LENGTH: usize = 128 * 1024 * 1024; // 128 MiB
         if content_length > MAX_CONTENT_LENGTH {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

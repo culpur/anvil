@@ -959,6 +959,7 @@ pub(crate) fn format_number(n: u64) -> String {
 }
 
 /// Parse a human token count like "200K", "1M", "2M", "500000" into a `u64`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn parse_token_count(s: &str) -> Option<u64> {
     let s = s.trim();
     if let Some(rest) = s.strip_suffix('M').or_else(|| s.strip_suffix('m')) {

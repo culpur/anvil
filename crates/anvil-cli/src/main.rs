@@ -20,7 +20,7 @@ mod wizard;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
-pub(crate) use utils::*;
+pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report};
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
@@ -912,6 +912,7 @@ fn extract_summary_from_archive(content: &str) -> Option<String> {
 }
 
 /// Convert a Unix timestamp (seconds) to a human-readable date string.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
 fn format_unix_timestamp(secs: u64) -> String {
     // Simple manual formatting: days-since-epoch → year/month/day.
     // Using the proleptic Gregorian calendar algorithm.
@@ -921,8 +922,8 @@ fn format_unix_timestamp(secs: u64) -> String {
     let m = (time_of_day % 3600) / 60;
 
     // Algorithm from https://en.wikipedia.org/wiki/Julian_day#Julian_date_calculation
-    let z = days + 2440588; // Unix epoch = JDN 2440588
-    let a = (z as f64 - 1867216.25) / 36524.25;
+    let z = days + 2_440_588; // Unix epoch = JDN 2440588
+    let a = (z as f64 - 1_867_216.25) / 36524.25;
     let a = a.floor() as u64;
     let b = z + 1 + a - a / 4;
     let c = b + 1524;
@@ -1266,6 +1267,7 @@ fn print_sessions_standalone() -> Result<(), Box<dyn std::error::Error>> {
 /// After unlocking the vault, any credentials stored there are injected into
 /// process environment variables so the rest of the code finds them via the
 /// standard `std::env::var` paths without further changes.
+#[allow(clippy::single_match_else)]
 fn startup_vault_init() {
     if !io::stdout().is_terminal() {
         // Non-interactive mode — skip interactive prompts.
@@ -3265,6 +3267,7 @@ impl LiveCli {
 
         // Context window for the current model.
         let ctx_window: usize = 200_000;
+        #[allow(clippy::cast_precision_loss)]
         let ctx_pct = if ctx_window > 0 {
             (est as f64 / ctx_window as f64 * 100.0).min(100.0)
         } else {

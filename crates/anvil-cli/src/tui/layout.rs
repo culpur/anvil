@@ -43,7 +43,7 @@ pub(super) fn compute_input_lines(input: &str, width: usize) -> usize {
         let _ = (idx, n_logical);
     }
 
-    total_rows.max(1).min(5)
+    total_rows.clamp(1, 5)
 }
 
 // ─── Cursor position ──────────────────────────────────────────────────────────

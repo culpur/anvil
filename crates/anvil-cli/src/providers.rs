@@ -1,14 +1,14 @@
 //! Provider client setup, runtime construction, and tool execution infrastructure.
 //!
-//! Extracted from main.rs. Contains:
+//! Extracted from `main.rs`. Contains:
 //!   - Plugin manager setup
 //!   - Runtime builder functions
-//!   - DefaultRuntimeClient (ApiClient impl, streaming)
-//!   - CliToolExecutor (ToolExecutor impl, MCP/LSP/Agent routing)
-//!   - InternalPromptProgress types
-//!   - Utility functions: final_assistant_text, collect_tool_uses/results
-//!     slash_command_completion_candidates, suggest_repl_commands, edit_distance,
-//!     describe_tool_progress, permission_policy, convert_messages
+//!   - `DefaultRuntimeClient` (`ApiClient` impl, streaming)
+//!   - `CliToolExecutor` (`ToolExecutor` impl, `MCP`/`LSP`/Agent routing)
+//!   - `InternalPromptProgress` types
+//!   - Utility functions: `final_assistant_text`, `collect_tool_uses`/results
+//!     `slash_command_completion_candidates`, `suggest_repl_commands`, `edit_distance`,
+//!     `describe_tool_progress`, `permission_policy`, `convert_messages`
 
 #[allow(unused_imports)]
 use std::collections::BTreeSet;
@@ -1318,6 +1318,7 @@ impl CliToolExecutor {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     fn execute_lsp_tool(&mut self, value: &serde_json::Value) -> Result<String, String> {
         let action = value
             .get("action")

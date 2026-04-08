@@ -56,6 +56,7 @@ pub fn init_session_vault(password: &str) -> Result<bool, VaultError> {
 }
 
 /// Returns `true` if the vault is initialized on disk.
+#[must_use] 
 pub fn vault_is_initialized() -> bool {
     VaultManager::with_default_dir().is_initialized()
 }
@@ -65,7 +66,7 @@ pub fn vault_is_session_unlocked() -> bool {
     SESSION_VAULT
         .get()
         .and_then(|m| m.lock().ok())
-        .map_or(false, |g| g.is_unlocked())
+        .is_some_and(|g| g.is_unlocked())
 }
 
 /// Execute `f` with a reference to the unlocked `VaultManager`.
@@ -116,6 +117,7 @@ pub fn vault_session_upsert(label: &str, secret: &str) -> Result<(), VaultError>
 
 /// Convenience: retrieve a credential secret from the session vault.
 /// Returns `None` if vault is locked or the label does not exist.
+#[must_use] 
 pub fn vault_session_get(label: &str) -> Option<String> {
     with_session_vault(|vm| vm.get_credential(label))
         .ok()

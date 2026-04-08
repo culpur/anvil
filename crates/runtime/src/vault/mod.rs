@@ -207,7 +207,7 @@ impl VaultManager {
     /// Lock the vault — zeroes and drops the in-memory KEK.
     pub fn lock(&mut self) {
         if let Some(mut kek) = self.kek.take() {
-            for b in kek.iter_mut() { *b = 0; }
+            kek.fill(0);
         }
     }
 

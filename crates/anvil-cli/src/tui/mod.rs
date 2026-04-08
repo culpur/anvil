@@ -1,12 +1,12 @@
-/// Full-screen TUI for Anvil — ratatui-based alternate-screen layout.
-///
-/// This is the module root.  Submodules:
-///   state            — TuiEvent, TuiSender, LogEntry, Tab, CompletionPopup, THINK_FRAMES
-///   helpers          — strip_ansi, truncate_str, char-boundary helpers, permission_mode_display
-///   layout           — compute_input_lines, cursor_visual_position, status-line span builders
-///   widgets          — slash-command completion data, Ollama model cache, clipboard helpers
-///   configure_types  — ConfigureState, ConfigureAction, ConfigureData, configure menu helpers
-///   input_handler    — AnvilTui input loop (read_input, handle_key, editing, history, completion)
+//! Full-screen TUI for Anvil — ratatui-based alternate-screen layout.
+//!
+//! This is the module root.  Submodules:
+//!   state            — `TuiEvent`, `TuiSender`, `LogEntry`, `Tab`, `CompletionPopup`, `THINK_FRAMES`
+//!   helpers          — `strip_ansi`, `truncate_str`, char-boundary helpers, `permission_mode_display`
+//!   layout           — `compute_input_lines`, `cursor_visual_position`, status-line span builders
+//!   widgets          — slash-command completion data, Ollama model cache, clipboard helpers
+//!   `configure_types`  — `ConfigureState`, `ConfigureAction`, `ConfigureData`, configure menu helpers
+//!   `input_handler`    — `AnvilTui` input loop (`read_input`, `handle_key`, editing, history, completion)
 pub mod configure_types;
 pub(super) mod helpers;
 pub(super) mod layout;
@@ -267,6 +267,7 @@ impl AnvilTui {
     // ─── Draw ────────────────────────────────────────────────────────────────
 
     /// Draw the current state.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
     pub(super) fn draw(&mut self) -> io::Result<()> {
         // Snapshot per-tab data from the active tab.
         let tab = self.active_tab();
@@ -618,27 +619,7 @@ impl AnvilTui {
 
             // Lines 1..N: input area
             let input_lines_rendered: Vec<Line<'static>> =
-                if configure_state != ConfigureState::Inactive {
-                    let breadcrumb = configure_breadcrumb(&configure_state);
-                    vec![Line::from(vec![
-                        Span::styled(
-                            "⚒ ",
-                            Style::default()
-                                .fg(rgb(theme.accent))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            breadcrumb,
-                            Style::default()
-                                .fg(rgb(theme.accent))
-                                .add_modifier(Modifier::DIM),
-                        ),
-                        Span::styled(
-                            "   ↑↓ Navigate  Enter Select  Esc Back",
-                            Style::default().fg(rgb(theme.border)),
-                        ),
-                    ])]
-                } else {
+                if configure_state == ConfigureState::Inactive {
                     // Render multi-line input with inline block cursor.
                     let prompt_style = Style::default()
                         .fg(rgb(theme.accent))
@@ -738,6 +719,26 @@ impl AnvilTui {
                         lines.push(Line::from(spans));
                     }
                     lines
+                } else {
+                    let breadcrumb = configure_breadcrumb(&configure_state);
+                    vec![Line::from(vec![
+                        Span::styled(
+                            "⚒ ",
+                            Style::default()
+                                .fg(rgb(theme.accent))
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            breadcrumb,
+                            Style::default()
+                                .fg(rgb(theme.accent))
+                                .add_modifier(Modifier::DIM),
+                        ),
+                        Span::styled(
+                            "   ↑↓ Navigate  Enter Select  Esc Back",
+                            Style::default().fg(rgb(theme.border)),
+                        ),
+                    ])]
                 };
 
             // Blank line after input.
@@ -1279,6 +1280,7 @@ impl AnvilTui {
     }
 
     /// Move the selected item index by `delta` (-1 = up, +1 = down).
+    #[allow(clippy::cast_sign_loss)]
     fn configure_move(&mut self, delta: i32) {
         let count = configure_item_count(&self.configure_state, &self.configure_data);
         if count == 0 {
@@ -2350,9 +2352,7 @@ fn context_max_for_model(model: &str) -> u32 {
     }
 
     let m = model.to_lowercase();
-    if m.contains("opus") {
-        1_000_000
-    } else if m.contains("sonnet") {
+    if m.contains("opus") || m.contains("sonnet") {
         1_000_000
     } else if m.contains("haiku") {
         200_000
@@ -2383,7 +2383,7 @@ fn query_ollama_context_size(model: &str) -> Option<u32> {
     val.pointer("/model_info/context_length")
         .or_else(|| val.pointer("/model_info/num_ctx"))
         .and_then(serde_json::Value::as_u64)
-        .map(|n| n as u32)
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
         .or_else(|| {
             val.get("parameters")
                 .and_then(|p| p.as_str())

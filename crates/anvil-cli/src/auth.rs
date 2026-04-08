@@ -176,8 +176,8 @@ pub(crate) fn run_openai_apikey_setup(
     Ok(())
 }
 
-/// Query the Anthropic /v1/models API for the live model list.
-/// Returns Vec<(model_id, display_name)>. Returns empty on failure.
+/// Query the Anthropic `/v1/models` API for the live model list.
+/// Returns `Vec<(model_id, display_name)>`. Returns empty on failure.
 pub(crate) fn query_anthropic_models() -> Vec<(String, String)> {
     let token = load_oauth_credentials()
         .ok()
@@ -333,10 +333,10 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
         // Prefer vault when unlocked for this session.
         let vault_ok = if runtime::vault_is_session_unlocked() {
             let h = runtime::vault_session_upsert("ollama_host", &host).is_ok();
-            let k = if !api_key.is_empty() {
-                runtime::vault_session_upsert("ollama_api_key", &api_key).is_ok()
-            } else {
+            let k = if api_key.is_empty() {
                 true
+            } else {
+                runtime::vault_session_upsert("ollama_api_key", &api_key).is_ok()
             };
             h && k
         } else {

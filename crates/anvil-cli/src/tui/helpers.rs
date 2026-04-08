@@ -64,7 +64,7 @@ pub(super) fn permission_mode_display(mode: &str) -> String {
         "danger-full-access" => "bypass permissions on".to_string(),
         "prompt" => "prompt mode on".to_string(),
         "allow" => "allow mode on".to_string(),
-        other if other.is_empty() => "bypass permissions on".to_string(),
+        "" => "bypass permissions on".to_string(),
         other => format!("{other} mode on"),
     }
 }

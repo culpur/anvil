@@ -7,7 +7,14 @@ pub struct SearchResultCache {
     entries: HashMap<String, (Instant, Vec<SearchResult>)>,
 }
 
+impl Default for SearchResultCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SearchResultCache {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
@@ -15,6 +22,7 @@ impl SearchResultCache {
     }
 
     /// Returns cached results if they exist and are within the TTL.
+    #[must_use] 
     pub fn get(&self, key: &str, ttl: Duration) -> Option<Vec<SearchResult>> {
         self.entries.get(key).and_then(|(ts, results)| {
             if ts.elapsed() < ttl {

@@ -2,7 +2,7 @@
 //!
 //! Runs entirely in plain terminal mode before the TUI starts.  Walks the user
 //! through setting up the encrypted vault, then connecting to each AI provider
-//! (Ollama, Anthropic, OpenAI, xAI), then sets provider priority and the
+//! (Ollama, Anthropic, `OpenAI`, xAI), then sets provider priority and the
 //! default model, writing the results to `~/.anvil/config.json`.
 //!
 //! API keys and credentials are stored exclusively in the encrypted vault
@@ -162,7 +162,7 @@ pub(crate) fn wizard_save_config(
 
 /// Interactive first-run setup wizard.  Runs entirely in the plain terminal
 /// before the TUI is started.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::single_match_else)]
 pub(crate) fn run_first_run_wizard() {
     println!();
     wizard_box_top();

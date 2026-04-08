@@ -761,6 +761,7 @@ impl LiveCli {
 
         // Context.
         let context_size = cfg_u64("context_size", 1_000_000);
+        #[allow(clippy::cast_possible_truncation)]
         let compact_threshold = cfg_u64("compact_threshold", 85) as u8;
         let qmd_enabled = cfg_bool("qmd_enabled", true);
         let qmd_status = if !self.qmd.is_enabled() {

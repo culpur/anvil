@@ -175,6 +175,7 @@ pub fn process_file(path: &Path) -> FileDropResult {
             };
         }
     };
+    #[allow(clippy::cast_possible_truncation)]
     let size = metadata.len() as usize;
 
     match classify(path) {
@@ -305,6 +306,7 @@ fn image_media_type(path: &Path) -> String {
     .to_string()
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn human_size(bytes: usize) -> String {
     if bytes >= 1024 * 1024 {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))

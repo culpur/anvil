@@ -8,7 +8,7 @@ use super::ToolExecutor;
 
 /// Decide whether to allow a tool call and execute it if permitted.
 ///
-/// Returns the `ConversationMessage` (tool_result) that should be appended to
+/// Returns the `ConversationMessage` (`tool_result`) that should be appended to
 /// the session, regardless of whether the tool was allowed or denied.
 pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     tool_use_id: String,

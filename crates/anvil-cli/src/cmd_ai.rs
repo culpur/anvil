@@ -716,11 +716,6 @@ impl LiveCli {
     }
 
     pub(crate) fn run_scaffold_command(&self, args: Option<&str>) -> String {
-        let args = args.unwrap_or("").trim();
-        let mut parts = args.splitn(2, ' ');
-        let sub = parts.next().unwrap_or("").trim();
-        let rest = parts.next().unwrap_or("").trim();
-
         const TEMPLATES: &[(&str, &str)] = &[
             ("rust",   "Rust binary — Cargo.toml, src/main.rs, .gitignore"),
             ("node",   "Node.js — package.json, src/index.js, .gitignore"),
@@ -730,6 +725,10 @@ impl LiveCli {
             ("go",     "Go module — go.mod, cmd/main.go, .gitignore"),
             ("docker", "Docker service — Dockerfile, docker-compose.yml, .env.example"),
         ];
+        let args = args.unwrap_or("").trim();
+        let mut parts = args.splitn(2, ' ');
+        let sub = parts.next().unwrap_or("").trim();
+        let rest = parts.next().unwrap_or("").trim();
 
         match sub {
             "" | "help" => {

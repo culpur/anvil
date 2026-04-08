@@ -246,6 +246,7 @@ fn load_search_config_file() -> Option<SearchConfig> {
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(300);
 
+    #[allow(clippy::cast_possible_truncation)]
     let max_results = value
         .get("max_results")
         .and_then(serde_json::Value::as_u64)
