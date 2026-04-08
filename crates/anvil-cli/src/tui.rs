@@ -313,6 +313,10 @@ pub struct AnvilTui {
     pub theme: Theme,
     /// Update notification message (empty = no update available).
     update_available: String,
+    /// Scroll offset for content area (0 = at bottom, >0 = scrolled up)
+    content_scroll_offset: usize,
+    /// Whether auto-scroll is active (disabled when user scrolls up)
+    content_auto_scroll: bool,
     /// Whether the agent panel is visible (toggled with Ctrl+A).
     pub agent_panel_visible: bool,
     /// Agent panel rows snapshot — refreshed by the caller each frame.
@@ -356,7 +360,7 @@ impl AnvilTui {
     ) -> io::Result<(Self, TuiSender)> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        crossterm::execute!(stdout, terminal::EnterAlternateScreen)?;
+        crossterm::execute!(stdout, terminal::EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
@@ -387,6 +391,8 @@ impl AnvilTui {
                 configure_data: ConfigureData::default(),
                 theme: Theme::load(),
                 update_available: String::new(),
+                content_scroll_offset: 0,
+                content_auto_scroll: true,
                 agent_panel_visible: true,
                 agent_rows: Vec::new(),
             },
@@ -923,13 +929,19 @@ impl AnvilTui {
             let total_tokens = input_tokens.saturating_add(output_tokens);
             let total_m = total_tokens as f64 / 1_000_000.0;
             let cost_usd = {
-                let cost = pricing_for_model(&model)
-                    .map(|p| {
-                        (input_tokens as f64 / 1_000_000.0) * p.input_cost_per_million
-                            + (output_tokens as f64 / 1_000_000.0) * p.output_cost_per_million
-                    })
-                    .unwrap_or(0.0);
-                format_usd(cost)
+                if model.contains(':') && !model.contains(":cloud") {
+                    // Local Ollama model — no cost
+                    "local".to_string()
+                } else if let Some(p) = pricing_for_model(&model) {
+                    let cost = (input_tokens as f64 / 1_000_000.0) * p.input_cost_per_million
+                        + (output_tokens as f64 / 1_000_000.0) * p.output_cost_per_million;
+                    format_usd(cost)
+                } else if model.contains(':') {
+                    // Ollama cloud model — pricing unknown
+                    "cloud".to_string()
+                } else {
+                    format_usd(0.0)
+                }
             };
             let right3 = format!("{total_tokens} tokens");
             let line3 = build_left_right_line(
@@ -1400,12 +1412,25 @@ impl AnvilTui {
 
         // Use a short poll timeout so we can process model events and animate the spinner.
         if event::poll(Duration::from_millis(80))? {
-            if let CtEvent::Key(key) = event::read()? {
-                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            match event::read()? {
+                CtEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
                     return self.handle_key(key);
                 }
-            } else if let CtEvent::Resize(_, _) = event::read().unwrap_or(CtEvent::FocusLost) {
-                // Terminal resized; redraw on next tick.
+                CtEvent::Mouse(mouse) => {
+                    match mouse.kind {
+                        crossterm::event::MouseEventKind::ScrollUp => {
+                            self.scroll_up(3);
+                        }
+                        crossterm::event::MouseEventKind::ScrollDown => {
+                            self.scroll_down(3);
+                        }
+                        _ => {}
+                    }
+                }
+                CtEvent::Resize(_, _) => {
+                    // Terminal resized; redraw on next tick.
+                }
+                _ => {}
             }
         }
 
@@ -2412,6 +2437,7 @@ impl Drop for AnvilTui {
         let _ = terminal::disable_raw_mode();
         let _ = crossterm::execute!(
             io::stdout(),
+            crossterm::event::DisableMouseCapture,
             terminal::LeaveAlternateScreen
         );
     }
@@ -2793,9 +2819,46 @@ fn context_max_for_model(model: &str) -> u32 {
         128_000
     } else if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
         200_000
+    } else if m.contains(':') {
+        // Ollama model — query actual context size, or use sensible default
+        query_ollama_context_size(model).unwrap_or(32_768)
     } else {
-        1_000_000 // default to 1M
+        1_000_000 // default to 1M for cloud models
     }
+}
+
+/// Query Ollama's /api/show endpoint for the model's actual context window size.
+fn query_ollama_context_size(model: &str) -> Option<u32> {
+    let ollama_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let output = std::process::Command::new("curl")
+        .args(["-s", "--max-time", "2", "-X", "POST",
+               "-H", "Content-Type: application/json",
+               "-d", &format!("{{\"name\":\"{model}\"}}"),
+               &format!("{}/api/show", ollama_url.trim_end_matches('/'))])
+        .output()
+        .ok()?;
+    if !output.status.success() { return None; }
+    let val: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    // Check model_info for context_length or num_ctx
+    val.pointer("/model_info/context_length")
+        .or_else(|| val.pointer("/model_info/num_ctx"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32)
+        .or_else(|| {
+            // Fallback: check parameters string for num_ctx
+            val.get("parameters")
+                .and_then(|p| p.as_str())
+                .and_then(|params| {
+                    for line in params.lines() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() == 2 && parts[0] == "num_ctx" {
+                            return parts[1].parse::<u32>().ok();
+                        }
+                    }
+                    None
+                })
+        })
 }
 
 /// Convert the internal permission mode string to a human-readable display string.
