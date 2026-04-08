@@ -742,7 +742,7 @@ fn run_first_run_wizard() {
     println!();
     wizard_box_top();
     wizard_box_line("");
-    wizard_box_line("\u{2692}  Welcome to Anvil v1.0.3");
+    wizard_box_line(&format!("\u{2692}  Welcome to Anvil v{}", env!("CARGO_PKG_VERSION")));
     wizard_box_line("   AI-Powered Coding Assistant by Culpur Defense");
     wizard_box_line("");
     wizard_box_line("   Let's get you set up.");

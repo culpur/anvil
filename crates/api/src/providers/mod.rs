@@ -211,6 +211,10 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
         return metadata.provider;
     }
+    // Ollama models typically contain ':' (e.g., qwen3:8b, llama3.2:latest, glm-5:cloud)
+    if model.contains(':') {
+        return ProviderKind::Ollama;
+    }
     // Unknown model — fall back by checking available credentials.
     if anvil_provider::has_auth_from_env_or_saved().unwrap_or(false) {
         return ProviderKind::AnvilApi;
