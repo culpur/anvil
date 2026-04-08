@@ -1,0 +1,14 @@
+{
+  "agentId": "agent-1775621076654158000",
+  "name": "verify-the-branch",
+  "description": "Verify the branch",
+  "subagentType": "Explore",
+  "model": "claude-opus-4-6",
+  "status": "failed",
+  "outputFile": "/Volumes/ext/anvil-dev/.anvil-agents/agent-1775621076654158000.md",
+  "manifestFile": "/Volumes/ext/anvil-dev/.anvil-agents/agent-1775621076654158000.json",
+  "createdAt": "1775621076",
+  "startedAt": "1775621076",
+  "completedAt": "1775621076",
+  "error": "missing Anvil credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY before calling the Anvil API"
+}

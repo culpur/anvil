@@ -2344,21 +2344,29 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
         // ── Agent manager: poll for completed agents ───────────────────────
         // Drain completed agents and inject their results as system messages.
-        let completed_agents = cli.agent_manager.poll();
-        for (id, result) in completed_agents {
-            let status = if result.success { "completed" } else { "failed" };
-            let summary: String = result.output.lines().take(3).collect::<Vec<_>>().join(" | ");
-            tui.push_system(format!(
-                "Agent #{id} {status} in {:.1}s{}",
-                result.duration.as_secs_f64(),
-                if summary.is_empty() { String::new() } else { format!(": {summary}") },
-            ));
+        {
+            let completed_agents = cli
+                .agent_manager
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .poll();
+            for (id, result) in completed_agents {
+                let status = if result.success { "completed" } else { "failed" };
+                let summary: String = result.output.lines().take(3).collect::<Vec<_>>().join(" | ");
+                tui.push_system(format!(
+                    "Agent #{id} {status} in {:.1}s{}",
+                    result.duration.as_secs_f64(),
+                    if summary.is_empty() { String::new() } else { format!(": {summary}") },
+                ));
+            }
         }
 
         // Refresh the TUI agent panel rows from the current manager state.
         {
             let rows: Vec<(usize, String, String, String, &'static str)> = cli
                 .agent_manager
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .agents()
                 .iter()
                 .map(|a| {
@@ -2800,7 +2808,8 @@ struct LiveCli {
     vim_mode: bool,
     thinking_enabled: bool,
     /// Sub-agent manager — tracks spawned agents and their status.
-    agent_manager: agents::AgentManager,
+    /// Wrapped in Arc<Mutex<>> so it can be shared with CliToolExecutor.
+    agent_manager: Arc<Mutex<agents::AgentManager>>,
 }
 
 impl LiveCli {
@@ -2813,6 +2822,10 @@ impl LiveCli {
         let system_prompt = build_system_prompt()?;
         let session = create_managed_session_handle()?;
         let tui_slot: TuiSenderSlot = Arc::new(Mutex::new(None));
+        // Shared agent manager — owned here for TUI polling, shared with
+        // CliToolExecutor so tool calls can register real agent threads.
+        let agent_manager: Arc<Mutex<agents::AgentManager>> =
+            Arc::new(Mutex::new(agents::AgentManager::new()));
         let runtime = build_runtime_with_tui_slot(
             Session::new(),
             model.clone(),
@@ -2823,6 +2836,7 @@ impl LiveCli {
             permission_mode,
             None,
             tui_slot.clone(),
+            agent_manager.clone(),
         )?;
         let qmd = QmdClient::new();
         let history_archiver = HistoryArchiver::new();
@@ -2841,7 +2855,7 @@ impl LiveCli {
             context_files: Vec::new(),
             chat_mode: false,
             vim_mode: false,
-            agent_manager: agents::AgentManager::new(),
+            agent_manager,
             thinking_enabled: {
                 let cfg = anvil_home_dir().join("config.json");
                 std::fs::read_to_string(&cfg).ok()
@@ -3322,7 +3336,11 @@ impl LiveCli {
                     || arg_str.starts_with("stop")
                     || arg_str.starts_with("clear");
                 if is_manager_cmd {
-                    let msg = self.agent_manager.handle_command(Some(arg_str));
+                    let msg = self
+                        .agent_manager
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .handle_command(Some(arg_str));
                     (msg, false)
                 } else {
                     let cwd = env::current_dir().unwrap_or_default();
@@ -3801,6 +3819,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         let status = if self.chat_mode {
             "Chat mode ON — tools disabled"
@@ -5013,6 +5032,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         self.model.clone_from(&model);
         println!(
@@ -5058,6 +5078,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         println!(
             "{}",
@@ -5085,6 +5106,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         println!(
             "Session cleared\n  Mode             fresh session\n  Preserved model  {}\n  Permission mode  {}\n  Session          {}",
@@ -5122,6 +5144,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         self.session = handle;
         println!(
@@ -5153,6 +5176,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         self.session = SessionHandle { id, path };
         Ok(())
@@ -5231,6 +5255,7 @@ impl LiveCli {
                     self.permission_mode,
                     None,
                     self.tui_slot.clone(),
+                    self.agent_manager.clone(),
                 )?;
                 self.session = handle;
                 println!(
@@ -5276,6 +5301,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         self.persist_session()
     }
@@ -5303,6 +5329,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )?;
         self.persist_session()?;
 
@@ -5351,6 +5378,7 @@ impl LiveCli {
             self.permission_mode,
             None,
             self.tui_slot.clone(),
+            self.agent_manager.clone(),
         )
         .map(|new_runtime| {
             self.runtime = new_runtime;
@@ -12453,9 +12481,12 @@ fn build_runtime(
     // A blank slot: no TUI by default.  Callers that want TUI output call
     // build_runtime_with_tui_slot() instead.
     let slot: TuiSenderSlot = Arc::new(Mutex::new(None));
+    // Standalone agent manager for non-TUI callers.
+    let agent_manager: Arc<Mutex<agents::AgentManager>> =
+        Arc::new(Mutex::new(agents::AgentManager::new()));
     build_runtime_with_tui_slot(
         session, model, system_prompt, enable_tools, emit_output,
-        allowed_tools, permission_mode, progress_reporter, slot,
+        allowed_tools, permission_mode, progress_reporter, slot, agent_manager,
     )
 }
 
@@ -12471,6 +12502,7 @@ fn build_runtime_with_tui_slot(
     permission_mode: PermissionMode,
     progress_reporter: Option<InternalPromptProgressReporter>,
     tui_slot: TuiSenderSlot,
+    agent_manager: Arc<Mutex<agents::AgentManager>>,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, mut tool_registry, runtime_config) = build_runtime_plugin_state()?;
@@ -12528,7 +12560,7 @@ fn build_runtime_with_tui_slot(
     Ok(ConversationRuntime::new_with_features(
         session,
         DefaultRuntimeClient::new(
-            model,
+            model.clone(),
             enable_tools,
             emit_output,
             allowed_tools.clone(),
@@ -12543,6 +12575,8 @@ fn build_runtime_with_tui_slot(
             mcp_manager,
             lsp_manager,
             tui_slot,
+            agent_manager,
+            model,
         ),
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
@@ -13568,6 +13602,11 @@ struct CliToolExecutor {
     /// Shared slot — when the inner value is `Some`, tool output goes to the
     /// TUI instead of stdout.
     tui_slot: TuiSenderSlot,
+    /// Shared agent manager — used to register real agent threads spawned by
+    /// the `Agent` and `TeamDelegate` tool calls, keeping the TUI panel in sync.
+    agent_manager: Arc<Mutex<agents::AgentManager>>,
+    /// Model name used to build provider clients inside agent threads.
+    model: String,
 }
 
 impl CliToolExecutor {
@@ -13578,6 +13617,8 @@ impl CliToolExecutor {
         mcp_manager: Arc<Mutex<McpServerManager>>,
         lsp_manager: Arc<Mutex<Option<LspManager>>>,
         tui_slot: TuiSenderSlot,
+        agent_manager: Arc<Mutex<agents::AgentManager>>,
+        model: String,
     ) -> Self {
         Self {
             emit_output,
@@ -13588,6 +13629,8 @@ impl CliToolExecutor {
             tokio_rt: tokio::runtime::Runtime::new()
                 .expect("failed to create tokio runtime for CliToolExecutor"),
             tui_slot,
+            agent_manager,
+            model,
         }
     }
 }
@@ -13685,6 +13728,30 @@ impl ToolExecutor for CliToolExecutor {
         // Route LSP tool calls
         if tool_name == "LSPTool" {
             let result = self.execute_lsp_tool(&value);
+            return self.emit_and_return(tool_name, result);
+        }
+
+        // ── Agent tool — intercept to wire TUI panel ───────────────────────
+        // The builtin execute_agent already spawns a real thread that runs a
+        // full sub-agent LLM conversation (via ProviderRuntimeClient).  We
+        // additionally register a mirror AgentHandle in the AgentManager so
+        // the TUI panel shows the agent as Running and updates when it finishes.
+        if tool_name == "Agent" {
+            let result = self.tool_registry.execute(tool_name, &value);
+            if let Ok(ref json_str) = result {
+                self.register_agent_in_manager(json_str, &value);
+            }
+            return self.emit_and_return(tool_name, result);
+        }
+
+        // ── TeamDelegate — spawn a real LLM worker via AgentManager ─────────
+        // The builtin delegate_task records a shell-task stub.  We additionally
+        // spawn a proper LLM thread so the team member actually generates output.
+        if tool_name == "TeamDelegate" {
+            let result = self.tool_registry.execute(tool_name, &value);
+            if result.is_ok() {
+                self.spawn_team_delegate_agent(&value);
+            }
             return self.emit_and_return(tool_name, result);
         }
 
@@ -13983,6 +14050,285 @@ impl CliToolExecutor {
             }
             other => Err(format!("LSPTool: unknown action `{other}`. Valid actions: diagnostics, definition, references, open, close")),
         }
+    }
+
+    // ── Agent / Team helpers ───────────────────────────────────────────────
+
+    /// Parse the JSON manifest returned by `execute_agent` and register a
+    /// mirror `AgentHandle` in the `AgentManager` so the TUI panel stays in
+    /// sync with the background thread already spawned by `spawn_agent_job`.
+    ///
+    /// The actual LLM work happens in the thread spawned by the tools crate;
+    /// this method only creates a TUI-visible tracking entry.
+    fn register_agent_in_manager(
+        &mut self,
+        manifest_json: &str,
+        input: &serde_json::Value,
+    ) {
+        // Parse enough fields from the manifest to populate the handle.
+        let parsed: serde_json::Value =
+            match serde_json::from_str(manifest_json) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+
+        let agent_name = parsed
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent")
+            .to_string();
+
+        let subagent_type_str = parsed
+            .get("subagentType")
+            .and_then(|v| v.as_str())
+            .or_else(|| input.get("subagent_type").and_then(|v| v.as_str()))
+            .unwrap_or("General");
+
+        let description = parsed
+            .get("description")
+            .and_then(|v| v.as_str())
+            .or_else(|| input.get("description").and_then(|v| v.as_str()))
+            .unwrap_or("sub-agent task")
+            .to_string();
+
+        let agent_type = agents::AgentType::parse(subagent_type_str);
+
+        // The tools crate already spawned the worker thread; here we just
+        // register a handle that polls the output file / manifest to detect
+        // completion.  We use a lightweight sentinel runner that waits until
+        // the manifest's status changes from "running".
+        let output_file = parsed
+            .get("outputFile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let manifest_file = parsed
+            .get("manifestFile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let tui_tx: Option<tui::TuiSender> = self
+            .tui_slot
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+
+        let mut mgr = self
+            .agent_manager
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        mgr.spawn(
+            agent_name.clone(),
+            agent_type,
+            description,
+            move |sender| {
+                use std::time::{Duration, Instant};
+
+                let start = Instant::now();
+                sender.send_line(format!("Agent `{agent_name}` started."));
+
+                // Poll the manifest file until the status changes away from
+                // "running", or until a 5-minute timeout.
+                let timeout = Duration::from_secs(300);
+                loop {
+                    std::thread::sleep(Duration::from_millis(500));
+                    if start.elapsed() > timeout {
+                        sender.send_line("Agent timed out waiting for completion.");
+                        return agents::AgentResult {
+                            output: "timed out".to_string(),
+                            success: false,
+                            duration: start.elapsed(),
+                        };
+                    }
+                    let status = std::fs::read_to_string(&manifest_file)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(String::from))
+                        .unwrap_or_else(|| "running".to_string());
+
+                    if status == "completed" || status == "failed" {
+                        let output = std::fs::read_to_string(&output_file)
+                            .unwrap_or_default();
+                        let success = status == "completed";
+                        // Forward a few lines of the output to the TUI.
+                        for line in output.lines().take(10) {
+                            sender.send_line(line);
+                        }
+                        // Also push a system message to the TUI if active.
+                        if let Some(ref tx) = tui_tx {
+                            let preview: String = output
+                                .lines()
+                                .take(3)
+                                .collect::<Vec<_>>()
+                                .join(" | ");
+                            tx.send(tui::TuiEvent::System(format!(
+                                "Agent `{agent_name}` {status}: {preview}"
+                            )));
+                        }
+                        return agents::AgentResult {
+                            output,
+                            success,
+                            duration: start.elapsed(),
+                        };
+                    }
+                }
+            },
+        );
+    }
+
+    /// Spawn a real LLM worker thread for a `TeamDelegate` call, in addition
+    /// to the shell-task stub already created by `run_team_delegate`.
+    ///
+    /// Reads `team_id`, `member_name`, and `prompt` from the tool input JSON.
+    /// Spawns a thread that builds its own `ProviderClient` for the member's
+    /// configured model (or the session default) and runs a single-turn
+    /// conversation with the delegated prompt.
+    fn spawn_team_delegate_agent(&mut self, input: &serde_json::Value) {
+        let member_name = input
+            .get("member_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("member")
+            .to_string();
+        let team_id = input
+            .get("team_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let prompt = input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if prompt.is_empty() {
+            return;
+        }
+
+        // Look up the member's configured model from the TeamManager.
+        let member_model: Option<String> = {
+            use runtime::TeamManager;
+            TeamManager::global()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_team(&team_id)
+                .and_then(|t| t.members.iter().find(|m| m.name == member_name))
+                .and_then(|m| m.model.clone())
+        };
+
+        let model = member_model.unwrap_or_else(|| self.model.clone());
+        let task_desc = format!("TeamDelegate → {member_name} in team {team_id}");
+
+        let tui_tx: Option<tui::TuiSender> = self
+            .tui_slot
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+
+        let mut mgr = self
+            .agent_manager
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        mgr.spawn(
+            member_name.clone(),
+            agents::AgentType::Custom(format!("team/{team_id}")),
+            task_desc,
+            move |sender| {
+                use std::time::Instant;
+
+                let start = Instant::now();
+                sender.send_line(format!(
+                    "TeamDelegate: {member_name} starting with model {model}"
+                ));
+
+                // Build a fresh provider client for this member's model.
+                let client = match build_provider_client(&model) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let msg = format!("failed to build provider client: {e}");
+                        sender.send_line(&msg);
+                        return agents::AgentResult {
+                            output: msg,
+                            success: false,
+                            duration: start.elapsed(),
+                        };
+                    }
+                };
+
+                // Run a single blocking request.
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let msg = format!("failed to create tokio runtime: {e}");
+                        sender.send_line(&msg);
+                        return agents::AgentResult {
+                            output: msg,
+                            success: false,
+                            duration: start.elapsed(),
+                        };
+                    }
+                };
+
+                let messages = vec![InputMessage {
+                    role: "user".to_string(),
+                    content: vec![InputContentBlock::Text { text: prompt.clone() }],
+                }];
+                let request = MessageRequest {
+                    model: model.clone(),
+                    max_tokens: 4096,
+                    messages,
+                    system: None,
+                    tools: None,
+                    tool_choice: None,
+                    stream: false,
+                };
+
+                let response_text = match rt.block_on(client.send_message(&request)) {
+                    Ok(resp) => {
+                        // Extract text from the response content blocks.
+                        resp.content
+                            .iter()
+                            .filter_map(|block| match block {
+                                OutputContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("")
+                    }
+                    Err(e) => {
+                        let msg = format!("TeamDelegate LLM error: {e}");
+                        sender.send_line(&msg);
+                        return agents::AgentResult {
+                            output: msg,
+                            success: false,
+                            duration: start.elapsed(),
+                        };
+                    }
+                };
+
+                for line in response_text.lines().take(20) {
+                    sender.send_line(line);
+                }
+                if let Some(ref tx) = tui_tx {
+                    let preview: String = response_text
+                        .lines()
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    tx.send(tui::TuiEvent::System(format!(
+                        "Team member `{member_name}` completed: {preview}"
+                    )));
+                }
+
+                agents::AgentResult {
+                    output: response_text,
+                    success: true,
+                    duration: start.elapsed(),
+                }
+            },
+        );
     }
 }
 

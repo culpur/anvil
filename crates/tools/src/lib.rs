@@ -421,12 +421,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                             "properties": {
                                 "content": { "type": "string" },
                                 "activeForm": { "type": "string" },
+                                "id": { "type": "string" },
                                 "status": {
                                     "type": "string",
                                     "enum": ["pending", "in_progress", "completed"]
                                 }
                             },
-                            "required": ["content", "activeForm", "status"],
+                            "required": ["content", "status"],
                             "additionalProperties": false
                         }
                     }
@@ -1370,8 +1371,14 @@ struct TodoWriteInput {
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 struct TodoItem {
     content: String,
-    #[serde(rename = "activeForm")]
+    /// Ollama and some other models omit `activeForm` or send `id` instead.
+    /// Accept either spelling; fall back to an empty string so deserialisation
+    /// never fails due to a missing field.
+    #[serde(rename = "activeForm", default)]
     active_form: String,
+    /// Allow models that send `id` instead of `activeForm`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     status: TodoStatus,
 }
 
@@ -2229,9 +2236,7 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
     if todos.iter().any(|todo| todo.content.trim().is_empty()) {
         return Err(String::from("todo content must not be empty"));
     }
-    if todos.iter().any(|todo| todo.active_form.trim().is_empty()) {
-        return Err(String::from("todo activeForm must not be empty"));
-    }
+    // `activeForm` is optional (Ollama and some models omit it); skip when empty.
     Ok(())
 }
 
