@@ -5,17 +5,17 @@ use serde_json::Value;
 
 use crate::to_pretty_json;
 
-// =============================================================================
+// ---------------------------------------------------------------------------
 // RemoteTrigger
-// =============================================================================
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RemoteTriggerInput {
-    pub url: String,
-    pub prompt: String,
-    pub model: Option<String>,
-    pub session_id: Option<String>,
-    pub api_key: Option<String>,
+    pub(crate) url: String,
+    pub(crate) prompt: String,
+    pub(crate) model: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,21 +104,21 @@ pub(crate) fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, St
     })
 }
 
-// =============================================================================
+// ---------------------------------------------------------------------------
 // Cron tools
-// =============================================================================
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CronCreateInput {
-    pub cron_expression: String,
-    pub prompt: String,
-    pub name: Option<String>,
-    pub target_url: Option<String>,
+    pub(crate) cron_expression: String,
+    pub(crate) prompt: String,
+    pub(crate) name: Option<String>,
+    pub(crate) target_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CronDeleteInput {
-    pub cron_id: String,
+    pub(crate) cron_id: String,
 }
 
 #[allow(clippy::needless_pass_by_value)]

@@ -3,46 +3,38 @@ use serde::Deserialize;
 
 use crate::to_pretty_json;
 
-// ---------------------------------------------------------------------------
-// Input types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct TeamCreateInput {
-    pub name: String,
-    pub description: Option<String>,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TeamAddMemberInput {
-    pub team_id: String,
-    pub name: String,
-    pub role: String,
-    pub model: Option<String>,
-    pub system_prompt: Option<String>,
+    pub(crate) team_id: String,
+    pub(crate) name: String,
+    pub(crate) role: String,
+    pub(crate) model: Option<String>,
+    pub(crate) system_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TeamRemoveMemberInput {
-    pub team_id: String,
-    pub member_name: String,
+    pub(crate) team_id: String,
+    pub(crate) member_name: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TeamDelegateInput {
-    pub team_id: String,
-    pub member_name: String,
-    pub prompt: String,
+    pub(crate) team_id: String,
+    pub(crate) member_name: String,
+    pub(crate) prompt: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TeamStatusInput {
-    pub team_id: String,
+    pub(crate) team_id: String,
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn run_team_create(input: TeamCreateInput) -> Result<String, String> {

@@ -6,45 +6,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::to_pretty_json;
 
-// ---------------------------------------------------------------------------
-// Input / output types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct WebFetchInput {
-    pub url: String,
-    pub prompt: String,
+    pub(crate) url: String,
+    pub(crate) prompt: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct WebSearchInput {
-    pub query: String,
-    pub allowed_domains: Option<Vec<String>>,
-    pub blocked_domains: Option<Vec<String>>,
+    pub(crate) query: String,
+    pub(crate) allowed_domains: Option<Vec<String>>,
+    pub(crate) blocked_domains: Option<Vec<String>>,
     /// Override which search provider to use (e.g. "tavily", "brave").
-    pub provider: Option<String>,
+    pub(crate) provider: Option<String>,
     /// If true, query all enabled providers and merge results.
-    pub search_all: Option<bool>,
+    pub(crate) search_all: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WebFetchOutput {
-    pub bytes: usize,
-    pub code: u16,
+    pub(crate) bytes: usize,
+    pub(crate) code: u16,
     #[serde(rename = "codeText")]
-    pub code_text: String,
-    pub result: String,
+    pub(crate) code_text: String,
+    pub(crate) result: String,
     #[serde(rename = "durationMs")]
-    pub duration_ms: u128,
-    pub url: String,
+    pub(crate) duration_ms: u128,
+    pub(crate) url: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct WebSearchOutput {
-    pub query: String,
-    pub results: Vec<WebSearchResultItem>,
+    pub(crate) query: String,
+    pub(crate) results: Vec<WebSearchResultItem>,
     #[serde(rename = "durationSeconds")]
-    pub duration_seconds: f64,
+    pub(crate) duration_seconds: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,13 +55,9 @@ pub(crate) enum WebSearchResultItem {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SearchHit {
-    pub title: String,
-    pub url: String,
+    pub(crate) title: String,
+    pub(crate) url: String,
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
@@ -76,10 +68,6 @@ pub(crate) fn run_web_fetch(input: WebFetchInput) -> Result<String, String> {
 pub(crate) fn run_web_search(input: WebSearchInput) -> Result<String, String> {
     to_pretty_json(execute_web_search(&input)?)
 }
-
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
 
 pub(crate) fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
     let started = Instant::now();
@@ -248,18 +236,23 @@ pub(crate) fn build_http_client() -> Result<Client, String> {
 /// Returns `true` when the host string appears to be an RFC-1918 private
 /// address, link-local (169.254/16), or loopback range.
 fn is_private_host(host: &str) -> bool {
+    // Loopback
     if host == "localhost" || host == "127.0.0.1" || host == "::1" {
         return true;
     }
+    // RFC-1918: 10.0.0.0/8
     if host.starts_with("10.") {
         return true;
     }
+    // RFC-1918: 192.168.0.0/16
     if host.starts_with("192.168.") {
         return true;
     }
+    // Link-local: 169.254.0.0/16
     if host.starts_with("169.254.") {
         return true;
     }
+    // RFC-1918: 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
     if let Some(rest) = host.strip_prefix("172.") {
         if let Some(second_octet_str) = rest.split('.').next() {
             if let Ok(second) = second_octet_str.parse::<u8>() {
@@ -272,10 +265,12 @@ fn is_private_host(host: &str) -> bool {
     false
 }
 
-pub(crate) fn normalize_fetch_url(url: &str) -> Result<String, String> {
+fn normalize_fetch_url(url: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|error| error.to_string())?;
     let host = parsed.host_str().unwrap_or_default();
 
+    // Block requests to RFC-1918, link-local, and loopback addresses to
+    // prevent SSRF against internal infrastructure.
     if is_private_host(host) {
         return Err(format!(
             "WebFetch: requests to private/internal addresses are not allowed (host: {host})"
@@ -392,7 +387,7 @@ pub(crate) fn html_to_text(html: &str) -> String {
     collapse_whitespace(&decode_html_entities(&text))
 }
 
-pub(crate) fn decode_html_entities(input: &str) -> String {
+fn decode_html_entities(input: &str) -> String {
     input
         .replace("&amp;", "&")
         .replace("&lt;", "<")

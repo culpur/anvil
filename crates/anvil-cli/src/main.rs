@@ -42,7 +42,7 @@ use api::{
 
 use commands::{
     handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
-    render_command_detailed_help, render_slash_command_help, suggest_slash_commands, SlashCommand,
+    render_command_detailed_help, SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use render::{
@@ -53,10 +53,9 @@ use runtime::{
     format_package_detail, format_package_list, load_system_prompt, pricing_for_model,
     render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
-    ConfigLoader, ConfigSource, ContentBlock, ConversationRuntime, CronDaemon,
-    HistoryArchiver, MemoryManager, MessageRole,
-    PermissionMode, ProjectContext, QmdClient, Session, TaskManager,
-    Theme, TokenUsage, UsageTracker,
+    ConfigLoader, ContentBlock, ConversationRuntime, CronDaemon,
+    HistoryArchiver, MessageRole,
+    PermissionMode, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
 use serde_json::json;
@@ -81,7 +80,7 @@ use providers::{
     CliPermissionPrompter, DefaultRuntimeClient, CliToolExecutor,
     InternalPromptProgressReporter,
     final_assistant_text, collect_tool_uses, collect_tool_results,
-    slash_command_completion_candidates, suggest_repl_commands,
+    slash_command_completion_candidates,
 };
 
 /// A shared slot for the TUI sender.  Created once at startup and cloned into

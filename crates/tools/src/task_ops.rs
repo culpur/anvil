@@ -1,60 +1,62 @@
 use runtime::TaskManager;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::to_pretty_json;
 
 // ---------------------------------------------------------------------------
-// Input types
+// Task manager input types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TaskCreateInput {
-    pub description: String,
-    pub command: String,
+    pub(crate) description: String,
+    pub(crate) command: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TaskGetInput {
-    pub task_id: String,
+    pub(crate) task_id: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TaskUpdateInput {
-    pub task_id: String,
-    pub status: Option<String>,
-    pub description: Option<String>,
+    pub(crate) task_id: String,
+    pub(crate) status: Option<String>,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TaskOutputInput {
-    pub task_id: String,
-    pub block: Option<bool>,
-    pub timeout: Option<u64>,
+    pub(crate) task_id: String,
+    pub(crate) block: Option<bool>,
+    pub(crate) timeout: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TaskStopInput {
-    pub task_id: String,
+    pub(crate) task_id: String,
 }
 
 // ---------------------------------------------------------------------------
-// TodoWrite types
+// TodoWrite input types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TodoWriteInput {
-    pub todos: Vec<TodoItem>,
+    pub(crate) todos: Vec<TodoItem>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct TodoItem {
-    pub content: String,
+    pub(crate) content: String,
     /// Ollama and some other models omit `activeForm` or send `id` instead.
     #[serde(rename = "activeForm", default)]
-    pub active_form: String,
+    pub(crate) active_form: String,
+    /// Allow models that send `id` instead of `activeForm`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    pub status: TodoStatus,
+    pub(crate) id: Option<String>,
+    pub(crate) status: TodoStatus,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -65,18 +67,8 @@ pub(crate) enum TodoStatus {
     Completed,
 }
 
-#[derive(Debug, Serialize)]
-pub(crate) struct TodoWriteOutput {
-    #[serde(rename = "oldTodos")]
-    pub old_todos: Vec<TodoItem>,
-    #[serde(rename = "newTodos")]
-    pub new_todos: Vec<TodoItem>,
-    #[serde(rename = "verificationNudgeNeeded")]
-    pub verification_nudge_needed: Option<bool>,
-}
-
 // ---------------------------------------------------------------------------
-// Internal helper
+// Output types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -88,6 +80,20 @@ struct TaskInfo {
     created_at: u64,
     updated_at: u64,
 }
+
+#[derive(Debug, Serialize)]
+struct TodoWriteOutput {
+    #[serde(rename = "oldTodos")]
+    old_todos: Vec<TodoItem>,
+    #[serde(rename = "newTodos")]
+    new_todos: Vec<TodoItem>,
+    #[serde(rename = "verificationNudgeNeeded")]
+    verification_nudge_needed: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
 
 fn task_info_from_manager(mgr: &TaskManager, id: &str) -> Option<TaskInfo> {
     mgr.get(id).map(|t| TaskInfo {
@@ -101,7 +107,7 @@ fn task_info_from_manager(mgr: &TaskManager, id: &str) -> Option<TaskInfo> {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers — Task management
+// Task runner functions
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_pass_by_value)]
@@ -169,7 +175,7 @@ pub(crate) fn run_task_output(input: TaskOutputInput) -> Result<String, String> 
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let output = mgr.output(&input.task_id, block, timeout)?;
-    to_pretty_json(serde_json::json!({
+    to_pretty_json(json!({
         "task_id": input.task_id,
         "output": output,
     }))
@@ -187,14 +193,14 @@ pub(crate) fn run_task_stop(input: TaskStopInput) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers — TodoWrite
+// TodoWrite runner
 // ---------------------------------------------------------------------------
 
 pub(crate) fn run_todo_write(input: TodoWriteInput) -> Result<String, String> {
     to_pretty_json(execute_todo_write(input)?)
 }
 
-pub(crate) fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> {
+fn execute_todo_write(input: TodoWriteInput) -> Result<TodoWriteOutput, String> {
     validate_todos(&input.todos)?;
     let store_path = todo_store_path()?;
     let old_todos = if store_path.exists() {
@@ -244,6 +250,7 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
     if todos.is_empty() {
         return Err(String::from("todos must not be empty"));
     }
+    // Allow multiple in_progress items for parallel workflows
     if todos.iter().any(|todo| todo.content.trim().is_empty()) {
         return Err(String::from("todo content must not be empty"));
     }

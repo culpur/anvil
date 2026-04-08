@@ -7,43 +7,31 @@ use serde_json::json;
 
 use crate::to_pretty_json;
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
 /// Persistent state for an active worktree session.
 #[derive(Debug, Clone)]
-pub(crate) struct WorktreeState {
+struct WorktreeState {
     /// Absolute path to the worktree directory.
-    pub worktree_path: PathBuf,
+    worktree_path: PathBuf,
     /// Branch name created for this worktree.
-    pub branch: String,
+    branch: String,
     /// The working directory that was active before `EnterWorktree` was called.
-    pub original_dir: PathBuf,
+    original_dir: PathBuf,
 }
 
-pub(crate) fn worktree_state() -> &'static Mutex<Option<WorktreeState>> {
+fn worktree_state() -> &'static Mutex<Option<WorktreeState>> {
     static INSTANCE: OnceLock<Mutex<Option<WorktreeState>>> = OnceLock::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
-// ---------------------------------------------------------------------------
-// Input types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct EnterWorktreeInput {
-    pub branch: Option<String>,
+    pub(crate) branch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExitWorktreeInput {
-    pub cleanup: Option<bool>,
+    pub(crate) cleanup: Option<bool>,
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, String> {

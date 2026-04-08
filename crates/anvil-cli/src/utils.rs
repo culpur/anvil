@@ -1,17 +1,13 @@
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use runtime::{
-    load_system_prompt, ContentBlock, MemoryManager, MessageRole, Session, Theme,
-    ArchiveEntry, CompletedTaskInfo, ConfigLoader, ConfigSource, ProjectContext,
-    render_history_context,
+    load_system_prompt, ContentBlock, MemoryManager, MessageRole, Session, Theme, ConfigLoader, ConfigSource, ProjectContext,
 };
-use commands::{render_slash_command_help, suggest_slash_commands, SlashCommand};
+use commands::{render_slash_command_help, suggest_slash_commands};
 use crate::tui::AnvilTui;
-use crate::vault::{write_curl_auth_header, run_vault_command_impl};
 use serde_json;
 use crate::providers::suggest_repl_commands;
 use crate::{
@@ -97,6 +93,9 @@ pub(crate) fn render_mode_unavailable(command: &str, label: &str) -> String {
 // ---------------------------------------------------------------------------
 /// Return `~/.anvil/` as a `PathBuf`.
 pub(crate) fn anvil_home_dir() -> PathBuf {
+    if let Ok(config_home) = std::env::var("ANVIL_CONFIG_HOME") {
+        return PathBuf::from(config_home);
+    }
     std::env::var("HOME").map_or_else(|_| std::env::current_dir().unwrap_or_default(), PathBuf::from)
         .join(".anvil")
 }
