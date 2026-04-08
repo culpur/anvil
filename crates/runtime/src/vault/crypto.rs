@@ -90,7 +90,7 @@ pub(super) fn build_envelope(
     let (dek_nonce, dek_ct) = aes_encrypt(kek, &dek)?;
 
     // Zero DEK from stack.
-    dek.iter_mut().for_each(|b| *b = 0);
+    for b in dek.iter_mut() { *b = 0; }
 
     Ok(EncryptedEnvelope {
         label: label.to_string(),
@@ -121,7 +121,7 @@ pub(super) fn open_envelope_data(
     let data_ct = base64_decode(&envelope.data_ciphertext)?;
     let plaintext = aes_decrypt(&dek, &data_nonce, &data_ct)?;
 
-    dek.iter_mut().for_each(|b| *b = 0);
+    for b in dek.iter_mut() { *b = 0; }
     Ok(plaintext)
 }
 

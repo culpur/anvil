@@ -528,7 +528,6 @@ pub(super) fn third_level_completions(command: &str, subcommand: &str) -> Vec<Co
             CompletionItem { insert: "gpt-image-1.5".into(), hint: "OpenAI Image Gen".into() },
             CompletionItem { insert: "llama3.2".into(), hint: "Ollama local".into() },
         ],
-        ("/configure", "read-only" | "workspace-write" | "danger-full-access") => vec![],
         ("/configure", "tavily" | "brave" | "exa" | "perplexity" | "bing" | "google") => vec![
             CompletionItem { insert: "<api-key>".into(), hint: "Paste your API key".into() },
         ],

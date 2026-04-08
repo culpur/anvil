@@ -1,9 +1,14 @@
 //! First-run interactive setup wizard.
 //!
 //! Runs entirely in plain terminal mode before the TUI starts.  Walks the user
-//! through connecting to each AI provider (Ollama, Anthropic, OpenAI, xAI),
-//! then sets provider priority and the default model, writing the results to
-//! `~/.anvil/config.json` and `~/.anvil/credentials.json`.
+//! through setting up the encrypted vault, then connecting to each AI provider
+//! (Ollama, Anthropic, OpenAI, xAI), then sets provider priority and the
+//! default model, writing the results to `~/.anvil/config.json`.
+//!
+//! API keys and credentials are stored exclusively in the encrypted vault
+//! (`~/.anvil/vault/`).  `~/.anvil/credentials.json` is only written when the
+//! vault setup step is explicitly skipped, preserving backward compatibility
+//! with existing installations that may not have run the wizard.
 
 use std::fs;
 use std::io::{self, Write};
@@ -89,9 +94,27 @@ fn wizard_test_ollama(url: &str) -> Result<Vec<(String, String)>, String> {
     Ok(models)
 }
 
-/// Save a key/value pair to `~/.anvil/credentials.json`, creating the file if
-/// needed.
+/// Save a key/value credential using the best available storage backend.
+///
+/// Priority order:
+///   1. Vault session (if vault was set up and unlocked during this wizard run)
+///   2. Plaintext `~/.anvil/credentials.json` (fallback for skipped vault setup
+///      and for existing installations without a vault)
+///
+/// The fallback path is intentionally preserved so that users who skip vault
+/// setup do not lose their credentials.
 pub(crate) fn wizard_save_credential(key: &str, value: &str) -> io::Result<()> {
+    // Try vault first — best-effort, fall through to plaintext on any error.
+    if runtime::vault_is_session_unlocked() {
+        if let Ok(()) = runtime::vault_session_upsert(key, value) {
+            return Ok(());
+        }
+    }
+    wizard_save_credential_plaintext(key, value)
+}
+
+/// Save a key/value pair to `~/.anvil/credentials.json` (plaintext fallback).
+pub(crate) fn wizard_save_credential_plaintext(key: &str, value: &str) -> io::Result<()> {
     let path = runtime::credentials_path()?;
     let mut root = if path.exists() {
         let raw = fs::read_to_string(&path).unwrap_or_default();
@@ -154,8 +177,103 @@ pub(crate) fn run_first_run_wizard() {
     let mut configured_providers: Vec<String> = Vec::new();
     let mut model_candidates: Vec<(String, String)> = Vec::new(); // (model_id, provider_label)
 
-    // ── Step 1: Ollama ────────────────────────────────────────────────────────
-    wizard_step_header(1, 5, "Ollama (Local AI)");
+    // ── Step 1: Vault setup ───────────────────────────────────────────────────
+    wizard_step_header(1, 6, "Vault Setup (Credential Encryption)");
+    println!();
+    println!("  Anvil stores your API keys in an AES-256-GCM encrypted vault.");
+    println!("  You set a master password now — it is never stored anywhere.");
+    println!("  You will need to enter it once each time you start Anvil.");
+    println!();
+    println!("  [1] Set up encrypted vault (recommended)");
+    println!("  [s] Skip — API keys will be stored in plaintext credentials.json");
+    println!();
+
+    let vault_choice = wizard_read_line("  Choice [1]: ");
+    let vault_setup_done = match vault_choice.to_ascii_lowercase().trim() {
+        "s" | "skip" => {
+            println!("  Skipping vault setup.");
+            println!("  \x1b[33m  Warning: API keys will be stored in plaintext.\x1b[0m");
+            println!("  Run /vault setup later to encrypt your credentials.");
+            false
+        }
+        _ => {
+            // Default is to set up the vault.
+            if runtime::vault_is_initialized() {
+                println!("  Vault already initialized at ~/.anvil/vault/");
+                println!("  Unlocking for this session...");
+                let pw = match rpassword::prompt_password("  Master password: ") {
+                    Ok(p) => p,
+                    Err(_) => wizard_read_line("  Master password: "),
+                };
+                match runtime::init_session_vault(&pw) {
+                    Ok(true) => {
+                        println!("  \x1b[32m  Vault unlocked.\x1b[0m");
+                        true
+                    }
+                    Ok(false) => {
+                        println!("  \x1b[33m  Vault not yet initialized — that is unexpected.\x1b[0m");
+                        false
+                    }
+                    Err(e) => {
+                        println!("  \x1b[31m  Unlock failed: {e}\x1b[0m");
+                        println!("  Continuing without vault — keys will be stored in plaintext.");
+                        false
+                    }
+                }
+            } else {
+                let pw = loop {
+                    let p1 = match rpassword::prompt_password("  Set master password: ") {
+                        Ok(p) => p,
+                        Err(_) => wizard_read_line("  Set master password: "),
+                    };
+                    if p1.is_empty() {
+                        println!("  Password must not be empty. Try again.");
+                        continue;
+                    }
+                    let p2 = match rpassword::prompt_password("  Confirm master password: ") {
+                        Ok(p) => p,
+                        Err(_) => wizard_read_line("  Confirm master password: "),
+                    };
+                    if p1 != p2 {
+                        println!("  Passwords do not match. Try again.");
+                        continue;
+                    }
+                    break p1;
+                };
+                // Initialize vault directly, then register it as the session vault.
+                let mut vm = runtime::VaultManager::with_default_dir();
+                match vm.setup(&pw) {
+                    Ok(()) => {
+                        // Vault is now initialized and unlocked on `vm`.
+                        // Register it in the session cache.
+                        match runtime::init_session_vault(&pw) {
+                            Ok(true) => {
+                                println!("  \x1b[32m  Vault created and unlocked.\x1b[0m");
+                                println!("  API keys entered in this wizard will be stored encrypted.");
+                                true
+                            }
+                            _ => {
+                                // init_session_vault failed but vault is initialized;
+                                // this is non-fatal — keys go to plaintext fallback.
+                                println!("  \x1b[33m  Vault created but session lock failed.\x1b[0m");
+                                println!("  Keys will be stored in plaintext this run.");
+                                false
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("  \x1b[31m  Vault setup failed: {e}\x1b[0m");
+                        println!("  Continuing without vault — keys stored in plaintext.");
+                        false
+                    }
+                }
+            }
+        }
+    };
+    let _ = vault_setup_done; // informational; wizard_save_credential checks session state
+
+    // ── Step 2: Ollama ────────────────────────────────────────────────────────
+    wizard_step_header(2, 6, "Ollama (Local AI)");
     println!();
     println!("  Ollama runs AI models locally on your machine.");
     println!("  No API key required for basic use.");
@@ -275,8 +393,8 @@ pub(crate) fn run_first_run_wizard() {
         }
     }
 
-    // ── Step 2: Anthropic ─────────────────────────────────────────────────────
-    wizard_step_header(2, 5, "Anthropic (Claude)");
+    // ── Step 3: Anthropic ─────────────────────────────────────────────────────
+    wizard_step_header(3, 6, "Anthropic (Claude)");
     println!();
     println!("  Anthropic provides Claude — the most capable AI assistant.");
     println!();
@@ -362,8 +480,8 @@ pub(crate) fn run_first_run_wizard() {
         }
     }
 
-    // ── Step 3: OpenAI ────────────────────────────────────────────────────────
-    wizard_step_header(3, 5, "OpenAI (ChatGPT)");
+    // ── Step 4: OpenAI ────────────────────────────────────────────────────────
+    wizard_step_header(4, 6, "OpenAI (ChatGPT)");
     println!();
     println!("  OpenAI provides GPT models for coding and reasoning.");
     println!();
@@ -417,8 +535,8 @@ pub(crate) fn run_first_run_wizard() {
         }
     }
 
-    // ── Step 4: xAI (Grok) ───────────────────────────────────────────────────
-    wizard_step_header(4, 5, "xAI (Grok)");
+    // ── Step 5: xAI (Grok) ───────────────────────────────────────────────────
+    wizard_step_header(5, 6, "xAI (Grok)");
     println!();
     println!("  xAI provides Grok models.");
     println!();
@@ -453,8 +571,8 @@ pub(crate) fn run_first_run_wizard() {
         }
     }
 
-    // ── Step 5: Provider priority & default model ─────────────────────────────
-    wizard_step_header(5, 5, "Provider Priority & Default Model");
+    // ── Step 6: Provider priority & default model ─────────────────────────────
+    wizard_step_header(6, 6, "Provider Priority & Default Model");
     println!();
 
     let mut seen = std::collections::HashSet::new();

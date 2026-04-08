@@ -33,6 +33,75 @@ impl LiveCli {
     }
 
     pub(crate) fn save_anvil_ui_config_key(key: &str, value: serde_json::Value) -> String {
+        // Sensitive credential keys are stored in the encrypted vault (when
+        // unlocked) rather than in the plaintext config.json file.
+        const CREDENTIAL_KEYS: &[&str] = &[
+            "anthropic_api_key",
+            "openai_api_key",
+            "xai_api_key",
+            "ollama_api_key",
+            "ollama_host",
+            "tavily_api_key",
+            "brave_search_api_key",
+            "exa_api_key",
+            "perplexity_api_key",
+        ];
+        if CREDENTIAL_KEYS.contains(&key) {
+            if let Some(secret) = value.as_str() {
+                if runtime::vault_is_session_unlocked() {
+                    match runtime::vault_session_upsert(key, secret) {
+                        Ok(()) => {
+                            // Also update the env var so it takes effect immediately.
+                            let env_var = match key {
+                                "anthropic_api_key" => "ANTHROPIC_API_KEY",
+                                "openai_api_key" => "OPENAI_API_KEY",
+                                "xai_api_key" => "XAI_API_KEY",
+                                "ollama_host" => "OLLAMA_HOST",
+                                "ollama_api_key" => "OLLAMA_API_KEY",
+                                _ => "",
+                            };
+                            if !env_var.is_empty() {
+                                std::env::set_var(env_var, secret);
+                            }
+                            return format!("Saved {key} to encrypted vault.");
+                        }
+                        Err(e) => {
+                            return format!("Vault error saving {key}: {e}");
+                        }
+                    }
+                }
+                // Vault not unlocked — fall through to plaintext credentials.json
+                // (backward compat for users who skipped vault setup).
+                if let Ok(creds_path) = runtime::credentials_path() {
+                    let mut root = if creds_path.exists() {
+                        fs::read_to_string(&creds_path)
+                            .ok()
+                            .and_then(|d| {
+                                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                                    &d,
+                                )
+                                .ok()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        serde_json::Map::new()
+                    };
+                    root.insert(key.to_string(), value);
+                    if let Some(parent) = creds_path.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let rendered = serde_json::to_string_pretty(&serde_json::Value::Object(root))
+                        .unwrap_or_else(|_| "{}".to_string());
+                    return match fs::write(&creds_path, rendered) {
+                        Ok(()) => format!(
+                            "Saved {key} to credentials.json (set up /vault to encrypt)"
+                        ),
+                        Err(e) => format!("Error writing credentials: {e}"),
+                    };
+                }
+            }
+        }
+
         let Some(home) = dirs_next_home() else {
             return "Error: could not determine home directory.".to_string();
         };
@@ -46,7 +115,7 @@ impl LiveCli {
         let serialised = serde_json::to_string_pretty(&serde_json::Value::Object(map))
             .unwrap_or_else(|_| "{}".to_string());
         match fs::write(&path, serialised) {
-            Ok(()) => format!("Saved {key} = {value} to ~/.anvil/config.json"),
+            Ok(()) => format!("Saved {key} to ~/.anvil/config.json"),
             Err(e) => format!("Error writing config: {e}"),
         }
     }

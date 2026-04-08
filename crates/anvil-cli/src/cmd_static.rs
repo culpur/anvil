@@ -455,10 +455,9 @@ pub(crate) fn run_notify_command(args: Option<&str>) -> String {
         if room.is_empty() || message.is_empty() {
             return "Usage: /notify matrix <room> <message>".to_string();
         }
-        let token = match env::var("MATRIX_TOKEN") {
-            Ok(t) => t,
-            Err(_) => return "MATRIX_TOKEN environment variable not set.\n\
-                              Set it to your Matrix access token.".to_string(),
+        let Ok(token) = env::var("MATRIX_TOKEN") else {
+            return "MATRIX_TOKEN environment variable not set.\n\
+                              Set it to your Matrix access token.".to_string();
         };
         let homeserver = env::var("MATRIX_HOMESERVER")
             .unwrap_or_else(|_| "https://matrix.org".to_string());
@@ -565,10 +564,9 @@ pub(crate) fn run_notify_command(args: Option<&str>) -> String {
             Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
             None => return "Usage: /notify telegram <chat_id> <message>".to_string(),
         };
-        let token = match env::var("TELEGRAM_BOT_TOKEN") {
-            Ok(t) => t,
-            Err(_) => return "TELEGRAM_BOT_TOKEN environment variable not set.\n\
-                              Create a bot via @BotFather and set the token.".to_string(),
+        let Ok(token) = env::var("TELEGRAM_BOT_TOKEN") else {
+            return "TELEGRAM_BOT_TOKEN environment variable not set.\n\
+                              Create a bot via @BotFather and set the token.".to_string();
         };
         let url = format!(
             "https://api.telegram.org/bot{token}/sendMessage"
@@ -600,15 +598,13 @@ pub(crate) fn run_notify_command(args: Option<&str>) -> String {
             Some(idx) => (rest[..idx].trim(), rest[idx + 1..].trim()),
             None => return "Usage: /notify whatsapp <number> <message>".to_string(),
         };
-        let api_url = match env::var("WHATSAPP_API_URL") {
-            Ok(u) => u,
-            Err(_) => return "WHATSAPP_API_URL environment variable not set.\n\
+        let Ok(api_url) = env::var("WHATSAPP_API_URL") else {
+            return "WHATSAPP_API_URL environment variable not set.\n\
                               Set it to your WhatsApp Business API endpoint\n\
-                              (e.g., https://graph.facebook.com/v18.0/<phone_id>/messages).".to_string(),
+                              (e.g., https://graph.facebook.com/v18.0/<phone_id>/messages).".to_string();
         };
-        let token = match env::var("WHATSAPP_TOKEN") {
-            Ok(t) => t,
-            Err(_) => return "WHATSAPP_TOKEN environment variable not set.".to_string(),
+        let Ok(token) = env::var("WHATSAPP_TOKEN") else {
+            return "WHATSAPP_TOKEN environment variable not set.".to_string();
         };
         let payload = format!(
             r#"{{"messaging_product":"whatsapp","to":"{number}","type":"text","text":{{"body":"{msg}"}}}}"#,
@@ -648,10 +644,9 @@ pub(crate) fn run_notify_command(args: Option<&str>) -> String {
         };
         let signal_cli = env::var("SIGNAL_CLI_PATH")
             .unwrap_or_else(|_| "signal-cli".to_string());
-        let sender = match env::var("SIGNAL_SENDER") {
-            Ok(s) => s,
-            Err(_) => return "SIGNAL_SENDER environment variable not set.\n\
-                              Set it to your registered Signal number (e.g., +1234567890).".to_string(),
+        let Ok(sender) = env::var("SIGNAL_SENDER") else {
+            return "SIGNAL_SENDER environment variable not set.\n\
+                              Set it to your registered Signal number (e.g., +1234567890).".to_string();
         };
         let out = Command::new(&signal_cli)
             .args(["send", "-m", message, number, "-a", &sender])
@@ -714,7 +709,8 @@ pub(crate) fn run_ssh_command(args: Option<&str>) -> String {
                         .filter_map(|e| {
                             let p = e.path();
                             let name = p.file_name()?.to_str()?.to_string();
-                            if !name.ends_with(".pub") && (name.starts_with("id_") || name.contains("_key")) {
+                            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                            if !ext.eq_ignore_ascii_case("pub") && (name.starts_with("id_") || name.contains("_key")) {
                                 Some(format!("  {name}"))
                             } else { None }
                         })

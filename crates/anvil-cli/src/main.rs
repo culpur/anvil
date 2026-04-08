@@ -421,13 +421,8 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             let mut idx = 1;
             while idx < rest.len() {
                 match rest[idx].as_str() {
-                    // `anvil login provider <name>`
-                    "provider" => {
-                        provider = rest.get(idx + 1).cloned();
-                        idx += 2;
-                    }
-                    // `anvil login --provider <name>` (backward compat)
-                    "--provider" => {
+                    // `anvil login provider <name>` / `anvil login --provider <name>` (backward compat)
+                    "provider" | "--provider" => {
                         provider = rest.get(idx + 1).cloned();
                         idx += 2;
                     }
@@ -1256,6 +1251,199 @@ fn print_sessions_standalone() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// ─── Vault startup helpers ─────────────────────────────────────────────────────
+
+/// Initialise the vault for the current session.
+///
+/// Covers three scenarios on startup:
+///
+/// 1. **First use, credentials.json exists, vault not initialized**: prompt the
+///    user to migrate their existing plaintext credentials into the vault.
+/// 2. **Vault initialized, not yet unlocked this session**: prompt for the
+///    master password once and unlock into the session cache.
+/// 3. **No vault, no credentials.json**: nothing to do — the wizard handles it.
+///
+/// After unlocking the vault, any credentials stored there are injected into
+/// process environment variables so the rest of the code finds them via the
+/// standard `std::env::var` paths without further changes.
+fn startup_vault_init() {
+    if !io::stdout().is_terminal() {
+        // Non-interactive mode — skip interactive prompts.
+        load_credentials_to_env();
+        return;
+    }
+
+    let home_dir = anvil_home_dir();
+    let creds_json = home_dir.join("credentials.json");
+    let vault_initialized = runtime::vault_is_initialized();
+
+    // ── Migration path ────────────────────────────────────────────────────────
+    if creds_json.exists() && !vault_initialized {
+        println!();
+        println!("\x1b[1;33mAnvil Security Notice\x1b[0m");
+        println!("\x1b[33m{}\x1b[0m", "\u{2500}".repeat(41));
+        println!("  Your API keys are stored in plaintext at:");
+        println!("    {}", creds_json.display());
+        println!();
+        println!("  Set up the encrypted vault now to protect them.");
+        println!("  [1] Migrate to encrypted vault (recommended)");
+        println!("  [s] Skip \u{2014} keep using plaintext credentials.json");
+        println!();
+        print!("  Choice [1]: ");
+        let _ = io::stdout().flush();
+        let mut choice = String::new();
+        let _ = io::stdin().read_line(&mut choice);
+        if !matches!(choice.trim().to_ascii_lowercase().as_str(), "s" | "skip") {
+            let pw = loop {
+                let p1 = match rpassword::prompt_password("  Set master password: ") {
+                    Ok(p) => p,
+                    Err(_) => {
+                        print!("  Set master password: ");
+                        let _ = io::stdout().flush();
+                        let mut b = String::new();
+                        let _ = io::stdin().read_line(&mut b);
+                        b.trim().to_string()
+                    }
+                };
+                if p1.is_empty() {
+                    println!("  Password must not be empty.");
+                    continue;
+                }
+                let p2 = match rpassword::prompt_password("  Confirm master password: ") {
+                    Ok(p) => p,
+                    Err(_) => {
+                        print!("  Confirm: ");
+                        let _ = io::stdout().flush();
+                        let mut b = String::new();
+                        let _ = io::stdin().read_line(&mut b);
+                        b.trim().to_string()
+                    }
+                };
+                if p1 != p2 {
+                    println!("  Passwords do not match. Try again.");
+                    continue;
+                }
+                break p1;
+            };
+            let mut vm = runtime::VaultManager::with_default_dir();
+            match vm.setup(&pw) {
+                Ok(()) => {
+                    drop(vm);
+                    match runtime::init_session_vault(&pw) {
+                        Ok(true) => {
+                            let migrated = migrate_credentials_to_vault(&creds_json);
+                            println!("\x1b[32m  Vault created and unlocked.\x1b[0m");
+                            if migrated > 0 {
+                                println!("  Migrated {migrated} credential(s) into vault.");
+                                let bak = creds_json.with_extension("json.bak");
+                                if fs::rename(&creds_json, &bak).is_ok() {
+                                    println!(
+                                        "  Renamed credentials.json \u{2192} credentials.json.bak"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            println!(
+                                "\x1b[33m  Vault created but session unlock failed.\x1b[0m"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  Vault setup error: {e}");
+                }
+            }
+        }
+        println!();
+        load_credentials_to_env();
+        return;
+    }
+
+    // ── Unlock existing vault ─────────────────────────────────────────────────
+    if vault_initialized && !runtime::vault_is_session_unlocked() {
+        eprint!("  Vault master password: ");
+        match rpassword::read_password() {
+            Ok(pw) if !pw.is_empty() => {
+                match runtime::init_session_vault(&pw) {
+                    Ok(true) => {}
+                    Ok(false) => eprintln!("  Vault not initialized."),
+                    Err(e) => eprintln!("  Vault unlock failed: {e}"),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    load_credentials_to_env();
+}
+
+/// Migrate plaintext credentials.json entries into the session vault.
+/// Skips the `"oauth"` key which is managed by the OAuth subsystem.
+/// Returns the count of migrated entries.
+fn migrate_credentials_to_vault(creds_path: &std::path::Path) -> usize {
+    let Ok(data) = fs::read_to_string(creds_path) else {
+        return 0;
+    };
+    let Ok(root) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+    else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for (key, val) in &root {
+        if key == "oauth" {
+            continue;
+        }
+        if let Some(secret) = val.as_str() {
+            if runtime::vault_session_upsert(key, secret).is_ok() {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Inject credentials from the vault (or plaintext credentials.json fallback)
+/// into process environment variables so the rest of the codebase can find
+/// them via `std::env::var`.  Variables already present in the environment are
+/// never overwritten, preserving explicit user shell overrides.
+fn load_credentials_to_env() {
+    const KEY_ENV_PAIRS: &[(&str, &str)] = &[
+        ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+        ("openai_api_key", "OPENAI_API_KEY"),
+        ("xai_api_key", "XAI_API_KEY"),
+        ("ollama_host", "OLLAMA_HOST"),
+        ("ollama_api_key", "OLLAMA_API_KEY"),
+    ];
+    for &(cred_label, env_var) in KEY_ENV_PAIRS {
+        if std::env::var(env_var).map(|v| !v.is_empty()).unwrap_or(false) {
+            continue;
+        }
+        // Vault first.
+        if let Some(val) = runtime::vault_session_get(cred_label) {
+            if !val.is_empty() {
+                std::env::set_var(env_var, &val);
+                continue;
+            }
+        }
+        // Plaintext fallback.
+        if let Ok(creds_path) = runtime::credentials_path() {
+            if let Ok(data) = fs::read_to_string(&creds_path) {
+                if let Ok(root) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+                {
+                    if let Some(val) = root.get(cred_label).and_then(|v| v.as_str()) {
+                        if !val.is_empty() {
+                            std::env::set_var(env_var, val);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -1282,6 +1470,11 @@ fn run_repl(
     } else {
         model
     };
+
+    // Unlock the vault (or offer migration) once before the REPL starts.
+    // After run_first_run_wizard the vault is already unlocked in the session
+    // cache, so startup_vault_init is a no-op in that case.
+    startup_vault_init();
 
     let cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
 
@@ -1487,8 +1680,8 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // /tab is TUI-only — handle before SlashCommand dispatch.
-                if trimmed.starts_with("/tab") {
-                    let rest = trimmed[4..].trim();
+                if let Some(tab_rest) = trimmed.strip_prefix("/tab") {
+                    let rest = tab_rest.trim();
                     let parts: Vec<&str> = rest.splitn(2, ' ').collect();
                     let action = parts.first().copied().unwrap_or("").trim();
                     let arg = parts.get(1).copied().unwrap_or("").trim();
@@ -2210,8 +2403,8 @@ impl LiveCli {
                 println!("{result}");
                 print!("\nPress Enter to return to Anvil… ");
                 let _ = io::stdout().flush();
-                let mut _buf = String::new();
-                let _ = io::stdin().read_line(&mut _buf);
+                let mut buf = String::new();
+                let _ = io::stdin().read_line(&mut buf);
                 // Re-enter alternate screen.
                 let _ = terminal::enable_raw_mode();
                 let _ = crossterm::execute!(io::stdout(), terminal::EnterAlternateScreen);
@@ -2674,6 +2867,7 @@ impl LiveCli {
 
     /// `/undo` — show unstaged changes and offer to revert them.
     /// Returns the output text. Interactive confirmation is done inline.
+    #[allow(clippy::unused_self)]
     fn run_undo(&self) -> Result<String, Box<dyn std::error::Error>> {
         cmd_static::run_undo()
     }
@@ -2746,11 +2940,13 @@ impl LiveCli {
     }
 
     /// `/pin [path]` — pin a file persistently, or list pinned files.
+    #[allow(clippy::unused_self)]
     fn run_pin(&self, path: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         cmd_static::run_pin(path)
     }
 
     /// `/unpin <path>` — remove a pinned file.
+    #[allow(clippy::unused_self)]
     fn run_unpin(&self, path: &str) -> Result<String, Box<dyn std::error::Error>> {
         cmd_static::run_unpin(path)
     }
@@ -2835,9 +3031,10 @@ impl LiveCli {
         Ok(msg)
     }
 
-    /// `/review-pr [<number>]` — fetch a GitHub PR diff and run an AI review.
+    // `/review-pr [<number>]` — fetch a GitHub PR diff and run an AI review.
 
     /// `/web <query>` — run a web search and display results inline.
+    #[allow(clippy::unused_self)]
     fn run_web_search_command(&self, query: &str) -> String {
         cmd_static::run_web_search_command(query)
     }
@@ -2851,20 +3048,30 @@ impl LiveCli {
             return "Usage: /image <prompt>\n       /image --wp <post-id> <prompt>".to_string();
         }
 
-        // Resolve the OpenAI API key from the environment, or fall back to the
-        // saved credentials file (same location used by /login openai).
+        // Resolve the OpenAI API key using the priority chain:
+        //   1. OPENAI_API_KEY environment variable (explicit user override)
+        //   2. Encrypted vault (if vault is unlocked for this session)
+        //   3. Plaintext credentials.json (backward-compat fallback)
         let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
         let api_key = if api_key.is_empty() {
-            runtime::credentials_path()
-                .ok()
-                .and_then(|p| fs::read_to_string(&p).ok())
-                .and_then(|data| {
-                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+            // Vault
+            runtime::vault_session_get("openai_api_key")
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    // Plaintext fallback
+                    runtime::credentials_path()
                         .ok()
-                        .and_then(|root| {
-                            root.get("openai_api_key")
-                                .and_then(|v| v.as_str())
-                                .map(ToOwned::to_owned)
+                        .and_then(|p| fs::read_to_string(&p).ok())
+                        .and_then(|data| {
+                            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+                                &data,
+                            )
+                            .ok()
+                            .and_then(|root| {
+                                root.get("openai_api_key")
+                                    .and_then(|v| v.as_str())
+                                    .map(ToOwned::to_owned)
+                            })
                         })
                 })
                 .unwrap_or_default()
@@ -2974,8 +3181,9 @@ impl LiveCli {
     ///
     /// Requires `WP_URL`, `WP_USER`, and `WP_APP_PASSWORD` environment variables,
     /// which are the standard variables used by the existing `generate_article_image.sh` script.
-    fn upload_wp_featured_image(&self, path: &str, post_id: &str, _openai_key: &str) -> String {
-        cmd_static::upload_wp_featured_image(path, post_id, _openai_key)
+    #[allow(clippy::unused_self)]
+    fn upload_wp_featured_image(&self, path: &str, post_id: &str, openai_key: &str) -> String {
+        cmd_static::upload_wp_featured_image(path, post_id, openai_key)
     }
 
     /// `/doctor` — check configuration and dependencies.
@@ -3056,7 +3264,7 @@ impl LiveCli {
         let est = self.runtime.estimated_tokens();
 
         // Context window for the current model.
-        let ctx_window: usize = if self.model.contains("opus") { 200_000 } else { 200_000 };
+        let ctx_window: usize = 200_000;
         let ctx_pct = if ctx_window > 0 {
             (est as f64 / ctx_window as f64 * 100.0).min(100.0)
         } else {
@@ -3389,11 +3597,13 @@ impl LiveCli {
         self.format_search_tool_result(args, &input)
     }
 
+    #[allow(clippy::unused_self)]
     fn format_search_tool_result(&self, query: &str, input: &serde_json::Value) -> String {
         cmd_static::format_search_tool_result(query, input)
     }
 
     /// `/failover` — AI provider failover chain management.
+    #[allow(clippy::unused_self)]
     fn run_failover_command(&self, action: Option<&str>) -> String {
         cmd_static::run_failover_command(action)
     }
@@ -4365,6 +4575,7 @@ impl LiveCli {
 
     // ─── Feature 3: Semantic Code Search ─────────────────────────────────────
 
+    #[allow(clippy::unused_self)]
     fn run_semantic_search(&self, args: Option<&str>) -> String {
         cmd_static::run_semantic_search(args)
     }
@@ -4404,8 +4615,8 @@ impl LiveCli {
             return self.run_git_conflicts();
         }
 
-        if args.starts_with("cherry-pick") {
-            let sha = args["cherry-pick".len()..].trim();
+        if let Some(cherry_rest) = args.strip_prefix("cherry-pick") {
+            let sha = cherry_rest.trim();
             return self.run_git_cherry_pick(sha);
         }
 
@@ -4483,6 +4694,7 @@ impl LiveCli {
     // -----------------------------------------------------------------------
 
     /// `/screenshot` — capture screen via OS tool, inject as vision content block.
+    #[allow(clippy::unused_self)]
     fn run_screenshot_command(&self) -> String {
         cmd_static::run_screenshot_command()
     }
@@ -4491,28 +4703,29 @@ impl LiveCli {
     // Feature 9 — Database tools
     // -----------------------------------------------------------------------
 
-    /// `/db [connect <url>|schema|query <sql>|migrate]`
+    // `/db [connect <url>|schema|query <sql>|migrate]`
 
     // -----------------------------------------------------------------------
     // Feature 10 — Security scanning
     // -----------------------------------------------------------------------
 
     /// `/security [scan|secrets|deps|report]`
+    #[allow(clippy::unused_self)]
     fn run_security_command(&self, args: Option<&str>) -> String {
         cmd_static::run_security_command(args)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::unused_self)]
     fn run_security_scan(&self) -> String {
         cmd_static::run_security_scan()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::unused_self)]
     fn run_security_secrets(&self) -> String {
         cmd_static::run_security_secrets()
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::unused_self)]
     fn run_security_deps(&self) -> String {
         cmd_static::run_security_deps()
     }
@@ -4521,7 +4734,7 @@ impl LiveCli {
     // Feature 11 — API development helpers
     // -----------------------------------------------------------------------
 
-    /// `/api [spec <file>|mock <spec>|test <url>|docs]`
+    // `/api [spec <file>|mock <spec>|test <url>|docs]`
 
     // -----------------------------------------------------------------------
     // Feature 12 — Documentation generation
@@ -4654,6 +4867,7 @@ impl LiveCli {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn run_language_command(&self, lang: Option<&str>) -> String {
         cmd_static::run_language_command(lang)
     }
@@ -4749,6 +4963,7 @@ impl LiveCli {
     }
 
     /// Read a string value from `~/.anvil/config.json` with a fallback default.
+    #[allow(clippy::unused_self)]
     fn anvil_config_str(&self, key: &str, default: &str) -> String {
         cmd_static::anvil_config_str(key, default)
     }

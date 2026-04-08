@@ -10,6 +10,7 @@ pub mod search;
 pub mod task;
 pub mod team;
 pub mod vault;
+pub mod vault_session;
 mod compact;
 mod config;
 mod content_filter;
@@ -119,6 +120,10 @@ pub use hub::{
 };
 pub use theme::{Rgb, Theme};
 pub use vault::{Credential, TotpCode, TotpEntry, VaultError, VaultManager};
+pub use vault_session::{
+    init_session_vault, vault_is_initialized, vault_is_session_unlocked,
+    vault_session_get, vault_session_upsert, with_session_vault, with_session_vault_mut,
+};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

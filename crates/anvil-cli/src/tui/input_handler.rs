@@ -48,7 +48,6 @@ impl AnvilTui {
                         _ => {}
                     }
                 }
-                CtEvent::Resize(_, _) => {}
                 _ => {}
             }
         }
@@ -152,16 +151,10 @@ impl AnvilTui {
                     self.push_system("Cannot close the last tab.".to_string());
                 }
             }
-            KeyCode::Right => {
+            KeyCode::Right | KeyCode::Char(']') => {
                 self.next_tab();
             }
-            KeyCode::Left => {
-                self.prev_tab();
-            }
-            KeyCode::Char(']') => {
-                self.next_tab();
-            }
-            KeyCode::Char('[') => {
+            KeyCode::Left | KeyCode::Char('[') => {
                 self.prev_tab();
             }
             KeyCode::Char('n' | 'N') if self.active_tab().input.is_empty() => {
@@ -449,10 +442,11 @@ impl AnvilTui {
             format!("{first_part} {insert}")
         };
         let new_len = new_input.len();
+        let completion = update_completions(&new_input);
         let tab = self.active_tab_mut();
-        tab.input = new_input.clone();
+        tab.input = new_input;
         tab.cursor = new_len;
-        tab.completion = update_completions(&new_input);
+        tab.completion = completion;
     }
 
     pub(super) fn completion_up(&mut self) {

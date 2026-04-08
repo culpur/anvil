@@ -938,11 +938,8 @@ impl AnvilTui {
 
     /// Drain all queued TUI events without blocking.
     fn drain_events(&mut self) {
-        loop {
-            match self.rx.try_recv() {
-                Ok(event) => self.apply_tui_event(event),
-                Err(_) => break,
-            }
+        while let Ok(event) = self.rx.try_recv() {
+            self.apply_tui_event(event);
         }
     }
 
@@ -951,7 +948,7 @@ impl AnvilTui {
             TuiEvent::TextDelta(text) => {
                 self.active_tab_mut().pending_text.push_str(&text);
             }
-            TuiEvent::TextDone => {
+            TuiEvent::TextDone | TuiEvent::TurnDone => {
                 self.flush_pending_text();
                 let tab = self.active_tab_mut();
                 tab.think_label.clear();
@@ -1028,12 +1025,6 @@ impl AnvilTui {
             }
             TuiEvent::System(msg) => {
                 self.active_tab_mut().log.push(LogEntry::System(msg));
-            }
-            TuiEvent::TurnDone => {
-                self.flush_pending_text();
-                let tab = self.active_tab_mut();
-                tab.think_label.clear();
-                tab.think_start = None;
             }
         }
     }
@@ -1475,9 +1466,6 @@ impl AnvilTui {
                     _ => {}
                 }
             }
-            ConfigureState::Integrations { .. } => {
-                // No writable integrations from the TUI yet.
-            }
             ConfigureState::LanguageTheme { selected } => {
                 match selected {
                     0 => {
@@ -1523,9 +1511,6 @@ impl AnvilTui {
                     1 => {
                         self.configure_state = ConfigureState::Inactive;
                         return Ok(ReadResult::ConfigureAction(ConfigureAction::ToggleVaultAutoLock));
-                    }
-                    2 => {
-                        // Status row — no action, just display.
                     }
                     _ => {}
                 }
@@ -1720,7 +1705,7 @@ impl AnvilTui {
     /// Go back one level in the configure hierarchy.
     fn configure_back(&mut self) {
         self.configure_state = match &self.configure_state {
-            ConfigureState::MainMenu { .. } => ConfigureState::Inactive,
+            ConfigureState::MainMenu { .. } | ConfigureState::Inactive => ConfigureState::Inactive,
             ConfigureState::Providers { .. }
             | ConfigureState::Models { .. }
             | ConfigureState::Context { .. }
@@ -1741,7 +1726,6 @@ impl AnvilTui {
             ConfigureState::EditingValue { section, .. } => {
                 section_state_from_name(section, 0)
             }
-            ConfigureState::Inactive => ConfigureState::Inactive,
         };
     }
 
@@ -1804,7 +1788,6 @@ impl AnvilTui {
                 CtEvent::Mouse(_) => {
                     ss.resume();
                 }
-                CtEvent::Resize(_, _) => {}
                 _ => {}
             }
         }

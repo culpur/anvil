@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use serde_json;
 use crate::providers::InternalPromptProgressRun;
 use crate::{
     command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output,
@@ -466,7 +465,8 @@ impl LiveCli {
                         if let Ok(rd) = fs::read_dir(cwd.join(dir)) {
                             for e in rd.flatten() {
                                 let name = e.file_name().to_string_lossy().to_string();
-                                if name.ends_with(".sql") || name.ends_with(".ts") {
+                                let ext = std::path::Path::new(&name).extension().and_then(|e| e.to_str()).unwrap_or("");
+                                if ext.eq_ignore_ascii_case("sql") || ext.eq_ignore_ascii_case("ts") {
                                     files.push(format!("{dir}/{name}"));
                                 }
                             }
@@ -581,7 +581,8 @@ impl LiveCli {
                     if let Ok(entries) = fs::read_dir(cwd.join(dir)) {
                         for e in entries.flatten() {
                             let name = e.file_name().to_string_lossy().to_string();
-                            if name.ends_with(".ts") || name.ends_with(".js") || name.ends_with(".rs") {
+                            let ext = std::path::Path::new(&name).extension().and_then(|e| e.to_str()).unwrap_or("");
+                            if ext.eq_ignore_ascii_case("ts") || ext.eq_ignore_ascii_case("js") || ext.eq_ignore_ascii_case("rs") {
                                 route_files.push(format!("{dir}/{name}"));
                             }
                         }

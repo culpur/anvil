@@ -209,8 +209,8 @@ pub(super) fn configure_selected(state: &ConfigureState) -> usize {
         | ConfigureState::DockerK8s { selected }
         | ConfigureState::Database { selected }
         | ConfigureState::MemoryArchive { selected }
-        | ConfigureState::PluginsCron { selected } => *selected,
-        ConfigureState::ProviderDetail { selected, .. } => *selected,
+        | ConfigureState::PluginsCron { selected }
+        | ConfigureState::ProviderDetail { selected, .. } => *selected,
         _ => 0,
     }
 }
@@ -234,8 +234,8 @@ pub(super) fn configure_set_selected(state: &mut ConfigureState, new: usize) {
         | ConfigureState::DockerK8s { selected }
         | ConfigureState::Database { selected }
         | ConfigureState::MemoryArchive { selected }
-        | ConfigureState::PluginsCron { selected } => *selected = new,
-        ConfigureState::ProviderDetail { selected, .. } => *selected = new,
+        | ConfigureState::PluginsCron { selected }
+        | ConfigureState::ProviderDetail { selected, .. } => *selected = new,
         _ => {}
     }
 }
@@ -244,28 +244,26 @@ pub(super) fn configure_set_selected(state: &mut ConfigureState, new: usize) {
 pub(super) fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
     match state {
         ConfigureState::MainMenu { .. } => 16,
-        ConfigureState::Providers { .. } => 4,
+        ConfigureState::Providers { .. }
+        | ConfigureState::DockerK8s { .. }
+        | ConfigureState::MemoryArchive { .. } => 4,
         ConfigureState::ProviderDetail { provider, .. } => match provider.as_str() {
             "anthropic" => 2,
-            "openai" => 1,
-            "ollama" => 1,
-            "xai" => 1,
+            "openai" | "ollama" | "xai" => 1,
             _ => 0,
         },
-        ConfigureState::Models { .. } => 2,
-        ConfigureState::Context { .. } => 3,
+        ConfigureState::Models { .. }
+        | ConfigureState::Display { .. }
+        | ConfigureState::LanguageTheme { .. }
+        | ConfigureState::Database { .. } => 2,
+        ConfigureState::Context { .. }
+        | ConfigureState::Permissions { .. }
+        | ConfigureState::Integrations { .. }
+        | ConfigureState::Vault { .. }
+        | ConfigureState::Failover { .. }
+        | ConfigureState::Ssh { .. } => 3,
         ConfigureState::Search { .. } => 1 + data.search_providers.len(),
-        ConfigureState::Permissions { .. } => 3,
-        ConfigureState::Display { .. } => 2,
-        ConfigureState::Integrations { .. } => 3,
-        ConfigureState::LanguageTheme { .. } => 2,
-        ConfigureState::Vault { .. } => 3,
         ConfigureState::Notifications { .. } => 10,
-        ConfigureState::Failover { .. } => 3,
-        ConfigureState::Ssh { .. } => 3,
-        ConfigureState::DockerK8s { .. } => 4,
-        ConfigureState::Database { .. } => 2,
-        ConfigureState::MemoryArchive { .. } => 4,
         ConfigureState::PluginsCron { .. } => 3 + data.active_cron_jobs.len(),
         _ => 0,
     }

@@ -139,24 +139,29 @@ pub(crate) fn run_openai_apikey_setup(
         );
     }
 
-    let creds_path = runtime::credentials_path()?;
-    let mut root = if creds_path.exists() {
-        let data = fs::read_to_string(&creds_path)?;
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
-            .unwrap_or_default()
-    } else {
-        serde_json::Map::new()
-    };
+    // Prefer the encrypted vault when it is unlocked for this session.
+    let vault_stored = runtime::vault_is_session_unlocked()
+        && runtime::vault_session_upsert(cred_key, key).is_ok();
 
-    root.insert(
-        cred_key.to_string(),
-        serde_json::Value::String(key.to_string()),
-    );
-
-    if let Some(parent) = creds_path.parent() {
-        fs::create_dir_all(parent)?;
+    if !vault_stored {
+        // Fallback: plaintext credentials.json (backward compat).
+        let creds_path = runtime::credentials_path()?;
+        let mut root = if creds_path.exists() {
+            let data = fs::read_to_string(&creds_path)?;
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+                .unwrap_or_default()
+        } else {
+            serde_json::Map::new()
+        };
+        root.insert(
+            cred_key.to_string(),
+            serde_json::Value::String(key.to_string()),
+        );
+        if let Some(parent) = creds_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&creds_path, serde_json::to_string_pretty(&root)?)?;
     }
-    fs::write(&creds_path, serde_json::to_string_pretty(&root)?)?;
 
     println!("\n✓ {provider_name} API key saved.");
     println!("\nAlternatively, set in your shell: export {env_var}=<key>");
@@ -325,7 +330,22 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if host != default_host || !api_key.is_empty() {
-        if let Ok(creds_path) = runtime::credentials_path() {
+        // Prefer vault when unlocked for this session.
+        let vault_ok = if runtime::vault_is_session_unlocked() {
+            let h = runtime::vault_session_upsert("ollama_host", &host).is_ok();
+            let k = if !api_key.is_empty() {
+                runtime::vault_session_upsert("ollama_api_key", &api_key).is_ok()
+            } else {
+                true
+            };
+            h && k
+        } else {
+            false
+        };
+
+        if vault_ok {
+            println!("\n✓ Ollama configuration saved to encrypted vault.");
+        } else if let Ok(creds_path) = runtime::credentials_path() {
             let mut root = if creds_path.exists() {
                 let data = fs::read_to_string(&creds_path).unwrap_or_default();
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)

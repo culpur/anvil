@@ -756,6 +756,7 @@ impl ThinkingIndicator {
     }
 
     /// Clear the spinner line and print a final done/fail message.
+    #[allow(clippy::unused_self)]
     pub fn finish(&mut self, label: &str, success: bool, out: &mut impl Write) -> io::Result<()> {
         let (icon, color) = if success {
             ("✔", Color::Green)

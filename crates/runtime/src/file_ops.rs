@@ -9,6 +9,140 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+// ---------------------------------------------------------------------------
+// Project-boundary sandbox
+// ---------------------------------------------------------------------------
+
+/// Walk up from the current working directory looking for well-known project
+/// root markers. Returns the first ancestor that contains one of those markers,
+/// or the CWD itself when none is found.
+pub fn find_project_root() -> PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let markers = [".git", ".anvil", "Cargo.toml", "package.json"];
+    let mut current = cwd.as_path();
+    loop {
+        for marker in &markers {
+            if current.join(marker).exists() {
+                return current.to_path_buf();
+            }
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    cwd
+}
+
+/// Returns `true` when `path` is equal to or nested beneath `root`.
+/// Both paths should already be fully resolved (canonicalized or
+/// `normalize_path_allow_missing` output) before calling this function.
+pub fn is_within_boundary(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+}
+
+/// Returns `true` when a path is always permitted for writes regardless of the
+/// project boundary:
+///   - anything under `/tmp`
+///   - anything under the system temp directory (`std::env::temp_dir()`)
+///   - anything under `$TMPDIR` (covers macOS `/private/var/folders/…`)
+///   - anything under the user's `~/.anvil/` directory
+fn is_always_allowed_write(path: &Path) -> bool {
+    // Canonical /tmp
+    if path.starts_with("/tmp") {
+        return true;
+    }
+
+    // std::env::temp_dir() — resolves the platform temp dir (e.g. macOS
+    // returns /private/var/folders/… even though $TMPDIR points there too).
+    let sys_tmp = std::env::temp_dir();
+    if path.starts_with(&sys_tmp) {
+        return true;
+    }
+    // Also try the canonicalized form of the system temp dir in case the path
+    // was already resolved through symlinks.
+    if let Ok(canonical_tmp) = sys_tmp.canonicalize() {
+        if path.starts_with(&canonical_tmp) {
+            return true;
+        }
+    }
+
+    // $TMPDIR env var (explicit, may differ from std::env::temp_dir() result)
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        let tmpdir = PathBuf::from(&tmpdir);
+        if !tmpdir.as_os_str().is_empty() && path.starts_with(&tmpdir) {
+            return true;
+        }
+        // Canonicalized form
+        if let Ok(canonical) = tmpdir.canonicalize() {
+            if path.starts_with(&canonical) {
+                return true;
+            }
+        }
+    }
+
+    // ~/.anvil/
+    if let Some(home) = std::env::var_os("HOME") {
+        let anvil_home = PathBuf::from(home).join(".anvil");
+        if path.starts_with(&anvil_home) {
+            return true;
+        }
+        // Canonicalized form
+        if let Ok(canonical) = anvil_home.canonicalize() {
+            if path.starts_with(&canonical) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Enforces the write sandbox. Returns an error when the write should be
+/// blocked. Respects `ANVIL_ALLOW_GLOBAL_WRITES=1` as a power-user bypass.
+fn enforce_write_boundary(path: &Path) -> io::Result<()> {
+    // Power-user escape hatch
+    if std::env::var("ANVIL_ALLOW_GLOBAL_WRITES").as_deref() == Ok("1") {
+        return Ok(());
+    }
+
+    // Paths that are always safe to write
+    if is_always_allowed_write(path) {
+        return Ok(());
+    }
+
+    let root = find_project_root();
+    // Canonicalize root for a reliable prefix comparison; fall back gracefully.
+    let canonical_root = root.canonicalize().unwrap_or(root);
+
+    if !is_within_boundary(path, &canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "path is outside project boundary: {} (root: {})",
+                path.display(),
+                canonical_root.display()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Emits a warning to stderr when a read targets a path outside the project
+/// boundary. Never blocks the read — read-only access is considered safe.
+fn warn_if_outside_boundary(path: &Path) {
+    let root = find_project_root();
+    let canonical_root = root.canonicalize().unwrap_or(root);
+    if !is_within_boundary(path, &canonical_root) {
+        eprintln!(
+            "[anvil] warning: reading path outside project boundary: {} (root: {})",
+            path.display(),
+            canonical_root.display()
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
@@ -135,6 +269,7 @@ pub fn read_file(
     limit: Option<usize>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
+    warn_if_outside_boundary(&absolute_path);
     let content = fs::read_to_string(&absolute_path)?;
     let lines: Vec<&str> = content.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
@@ -157,6 +292,7 @@ pub fn read_file(
 
 pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     let absolute_path = normalize_path_allow_missing(path)?;
+    enforce_write_boundary(&absolute_path)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
@@ -184,6 +320,7 @@ pub fn edit_file(
     replace_all: bool,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
+    enforce_write_boundary(&absolute_path)?;
     let original_file = fs::read_to_string(&absolute_path)?;
     if old_string == new_string {
         return Err(io::Error::new(
@@ -219,10 +356,12 @@ pub fn edit_file(
 
 pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOutput> {
     let started = Instant::now();
+    // When no explicit path is provided, default to the project root rather
+    // than raw CWD so the search is always scoped to a known boundary.
     let base_dir = path
         .map(normalize_path)
         .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+        .unwrap_or_else(find_project_root);
     let search_pattern = if Path::new(pattern).is_absolute() {
         pattern.to_owned()
     } else {
@@ -261,12 +400,14 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
 }
 
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
+    // When no explicit path is provided, default to the project root so
+    // searches are scoped to the known boundary rather than raw CWD.
     let base_path = input
         .path
         .as_deref()
         .map(normalize_path)
         .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+        .unwrap_or_else(find_project_root);
 
     let regex = RegexBuilder::new(&input.pattern)
         .case_insensitive(input.case_insensitive.unwrap_or(false))
@@ -479,9 +620,18 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput};
+    use super::{
+        edit_file, find_project_root, glob_search, grep_search, is_always_allowed_write,
+        is_within_boundary, read_file, write_file, GrepSearchInput,
+    };
+
+    /// Global mutex to serialise tests that mutate process-level env vars.
+    /// Rust's test harness runs tests in parallel; without this, one thread
+    /// can remove ANVIL_ALLOW_GLOBAL_WRITES while another is relying on it.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -511,6 +661,143 @@ mod tests {
         let output = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
             .expect("edit should succeed");
         assert!(output.replace_all);
+    }
+
+    // ------------------------------------------------------------------
+    // Sandbox helper unit tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn is_within_boundary_returns_true_for_child() {
+        let root = std::path::Path::new("/home/user/project");
+        let child = std::path::Path::new("/home/user/project/src/main.rs");
+        assert!(is_within_boundary(child, root));
+    }
+
+    #[test]
+    fn is_within_boundary_returns_true_for_root_itself() {
+        let root = std::path::Path::new("/home/user/project");
+        assert!(is_within_boundary(root, root));
+    }
+
+    #[test]
+    fn is_within_boundary_returns_false_for_sibling() {
+        let root = std::path::Path::new("/home/user/project");
+        let sibling = std::path::Path::new("/home/user/other/secret.txt");
+        assert!(!is_within_boundary(sibling, root));
+    }
+
+    #[test]
+    fn is_within_boundary_returns_false_for_parent() {
+        let root = std::path::Path::new("/home/user/project");
+        let parent = std::path::Path::new("/home/user");
+        assert!(!is_within_boundary(parent, root));
+    }
+
+    #[test]
+    fn is_within_boundary_rejects_path_traversal_lookalike() {
+        // "/home/user/project-evil" must NOT be considered inside "/home/user/project"
+        let root = std::path::Path::new("/home/user/project");
+        let evil = std::path::Path::new("/home/user/project-evil/foo.txt");
+        assert!(!is_within_boundary(evil, root));
+    }
+
+    #[test]
+    fn find_project_root_returns_a_directory() {
+        let root = find_project_root();
+        // The returned path must exist and be a directory (or at least not a file).
+        // In CI the CWD may not have markers; that is fine — we just verify the
+        // function returns something usable.
+        assert!(!root.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn tmp_writes_are_always_allowed() {
+        let tmp = std::env::temp_dir().join("anvil-sandbox-test.txt");
+        assert!(
+            is_always_allowed_write(&tmp),
+            "temp dir should be an always-allowed write location"
+        );
+    }
+
+    #[test]
+    fn slash_tmp_is_always_allowed() {
+        let path = std::path::Path::new("/tmp/anvil-test/foo.txt");
+        assert!(is_always_allowed_write(path));
+    }
+
+    #[test]
+    fn anvil_home_is_always_allowed() {
+        if let Some(home) = std::env::var_os("HOME") {
+            let anvil_path = std::path::PathBuf::from(home)
+                .join(".anvil")
+                .join("cache.db");
+            assert!(
+                is_always_allowed_write(&anvil_path),
+                "~/.anvil/* should be an always-allowed write location"
+            );
+        }
+    }
+
+    #[test]
+    fn write_to_tmp_succeeds_despite_boundary() {
+        // Writes to temp dir must succeed even when project root is elsewhere.
+        let path = temp_path("sandbox-write.txt");
+        let result = write_file(path.to_string_lossy().as_ref(), "sandbox ok");
+        assert!(result.is_ok(), "write to $TMPDIR should be allowed: {result:?}");
+    }
+
+    #[test]
+    fn write_outside_boundary_blocked_without_bypass() {
+        // Pick a path that is definitely outside any project root but also not
+        // under /tmp or ~/.anvil. We use /var/anvil-test-boundary (not writable
+        // in practice, but the sandbox check happens before the syscall).
+        let outside = std::path::Path::new("/var/anvil-sandbox-boundary-test/secret.txt");
+
+        // Hold the env mutex so no other test can set ANVIL_ALLOW_GLOBAL_WRITES
+        // concurrently and accidentally let this write through.
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES");
+
+        // enforce_write_boundary is private; exercise it through write_file.
+        // The function must return PermissionDenied before trying to touch disk.
+        let result = write_file(outside.to_string_lossy().as_ref(), "should be blocked");
+        match result {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => { /* expected */ }
+            Err(e) => {
+                // Any other OS error (e.g. EROFS, EACCES) also means the write
+                // didn't succeed, which is fine from a security standpoint.
+                let _ = e;
+            }
+            Ok(_) => panic!("write outside project boundary should have been blocked"),
+        }
+    }
+
+    #[test]
+    fn write_bypass_env_var_allows_outside_path() {
+        // ANVIL_ALLOW_GLOBAL_WRITES=1 must skip the boundary check. We cannot
+        // actually write to a protected OS directory, so we verify that any
+        // error that occurs does NOT carry our sandbox message — meaning our
+        // sandbox did not fire and only the OS rejected the write.
+        let outside = std::path::Path::new("/var/anvil-sandbox-bypass-test/secret.txt");
+
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::set_var("ANVIL_ALLOW_GLOBAL_WRITES", "1");
+        let result = write_file(outside.to_string_lossy().as_ref(), "bypass");
+        std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES");
+        drop(_guard);
+
+        match result {
+            Err(e) => {
+                // Our sandbox error always contains this sentinel phrase.
+                // An OS-level denial (EACCES, EROFS, etc.) will not.
+                assert!(
+                    !e.to_string().contains("path is outside project boundary"),
+                    "sandbox should not have fired when bypass is set, but sandbox message found: {e}"
+                );
+            }
+            Ok(_) => { /* wrote successfully — also acceptable */ }
+        }
     }
 
     #[test]

@@ -207,7 +207,7 @@ impl VaultManager {
     /// Lock the vault — zeroes and drops the in-memory KEK.
     pub fn lock(&mut self) {
         if let Some(mut kek) = self.kek.take() {
-            kek.iter_mut().for_each(|b| *b = 0);
+            for b in kek.iter_mut() { *b = 0; }
         }
     }
 
@@ -236,6 +236,17 @@ impl VaultManager {
         let plaintext = open_envelope(kek, &path)?;
         serde_json::from_slice(&plaintext)
             .map_err(|e| VaultError::Serialization(e.to_string()))
+    }
+
+    /// Store a credential, overwriting it if a credential with the same label
+    /// already exists.  This is the upsert variant used during setup/migration.
+    pub fn upsert_credential(&self, cred: &Credential) -> Result<(), VaultError> {
+        let kek = self.require_kek()?;
+        let path = cred_path(&self.vault_dir, &cred.label);
+        let plaintext = serde_json::to_vec(cred)
+            .map_err(|e| VaultError::Serialization(e.to_string()))?;
+        let envelope = build_envelope(kek, &cred.label, &plaintext)?;
+        write_envelope(&path, &envelope)
     }
 
     /// Overwrite an existing credential.

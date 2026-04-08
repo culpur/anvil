@@ -236,18 +236,15 @@ fn process_image(path: &Path, filename: &str, size: usize) -> FileDropResult {
 }
 
 fn process_text(path: &Path, filename: &str, display: &str, size: usize) -> FileDropResult {
-    let raw = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => {
-            // Not valid UTF-8 — treat as unknown binary.
-            return FileDropResult {
-                notice: format!(
-                    "File {filename} ({}) does not appear to be UTF-8 text — skipped",
-                    human_size(size)
-                ),
-                blocks: vec![],
-            };
-        }
+    let Ok(raw) = fs::read_to_string(path) else {
+        // Not valid UTF-8 — treat as unknown binary.
+        return FileDropResult {
+            notice: format!(
+                "File {filename} ({}) does not appear to be UTF-8 text — skipped",
+                human_size(size)
+            ),
+            blocks: vec![],
+        };
     };
 
     let (content, truncated) = if raw.len() > TEXT_SIZE_LIMIT {

@@ -8,7 +8,6 @@ use runtime::{
 };
 use commands::{render_slash_command_help, suggest_slash_commands};
 use crate::tui::AnvilTui;
-use serde_json;
 use crate::providers::suggest_repl_commands;
 use crate::{
     DEFAULT_DATE, VERSION, BUILD_TARGET, GIT_SHA,
@@ -100,7 +99,7 @@ pub(crate) fn anvil_home_dir() -> PathBuf {
         .join(".anvil")
 }
 
-/// Standalone language command handler.
+// ─── Standalone language command handler ─────────────────────────────────────
 // ─── Feature 21 — Credential Vault free function ─────────────────────────────
 
 /// Map a language name to its LSP server binary name.

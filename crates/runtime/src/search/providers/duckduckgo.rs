@@ -34,19 +34,16 @@ fn parse_ddg_html(html: &str, limit: usize) -> Vec<SearchResult> {
         };
         let abs_class = pos + class_offset;
 
-        let tag_start = if let Some(idx) = html[..abs_class].rfind("<a") {
-            idx
-        } else {
+        let Some(tag_start) = html[..abs_class].rfind("<a") else {
             pos = abs_class + class_marker.len();
             continue;
         };
 
-        let tag_end_abs = if let Some(rel) = html[tag_start..].find('>') {
-            tag_start + rel + 1
-        } else {
+        let Some(rel) = html[tag_start..].find('>') else {
             pos = abs_class + class_marker.len();
             continue;
         };
+        let tag_end_abs = tag_start + rel + 1;
         let tag_fragment = &html[tag_start..tag_end_abs];
 
         let href = extract_attr(tag_fragment, "href").unwrap_or_default();

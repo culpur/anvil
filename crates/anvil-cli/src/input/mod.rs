@@ -307,6 +307,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn handle_escape(&mut self, session: &mut EditSession) -> KeyAction {
         match session.mode {
             EditorMode::Plain | EditorMode::Normal => KeyAction::Continue,
@@ -352,6 +353,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn handle_submission(&mut self, line: &str) -> Submission {
         if line.trim() == "/vim" {
             Submission::ToggleVim
@@ -365,6 +367,7 @@ impl LineEditor {
         self.insert_active_text(session, ch.encode_utf8(&mut buffer));
     }
 
+    #[allow(clippy::unused_self)]
     fn insert_active_text(&mut self, session: &mut EditSession, text: &str) {
         if session.mode == EditorMode::Command {
             session
@@ -377,6 +380,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn move_left(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             session.command_cursor =
@@ -386,6 +390,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn move_right(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             session.command_cursor =
@@ -395,6 +400,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn move_line_start(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             session.command_cursor = 1;
@@ -403,6 +409,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn move_line_end(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             session.command_cursor = session.command_buffer.len();
@@ -411,6 +418,7 @@ impl LineEditor {
         }
     }
 
+    #[allow(clippy::unused_self)]
     fn move_up(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             return;
@@ -418,6 +426,7 @@ impl LineEditor {
         session.cursor = move_vertical(&session.text, session.cursor, -1);
     }
 
+    #[allow(clippy::unused_self)]
     fn move_down(&self, session: &mut EditSession) {
         if session.mode == EditorMode::Command {
             return;
@@ -425,6 +434,7 @@ impl LineEditor {
         session.cursor = move_vertical(&session.text, session.cursor, 1);
     }
 
+    #[allow(clippy::unused_self)]
     fn delete_char_under_cursor(&self, session: &mut EditSession) {
         match session.mode {
             EditorMode::Command => {

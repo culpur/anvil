@@ -1,4 +1,4 @@
-/// Shared utility functions used across tui submodules.
+//! Shared utility functions used across tui submodules.
 
 /// Remove ANSI escape codes from a string for plain text rendering.
 pub(super) fn strip_ansi(s: &str) -> String {
