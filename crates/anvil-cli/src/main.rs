@@ -15127,7 +15127,7 @@ mod tests {
             vec![
                 "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
                 "version", "export", "agents", "skills", "qmd", "history", "doctor", "tokens",
-                "history-archive", "configure", "language",
+                "history-archive", "configure", "language", "sleep",
             ]
         );
     }

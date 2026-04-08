@@ -3506,8 +3506,8 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 86);
-        assert_eq!(resume_supported_slash_commands().len(), 20);
+        assert_eq!(slash_command_specs().len(), 89);
+        assert_eq!(resume_supported_slash_commands().len(), 21);
     }
 
     #[test]

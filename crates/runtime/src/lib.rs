@@ -12,14 +12,17 @@ pub mod team;
 pub mod vault;
 mod compact;
 mod config;
+mod content_filter;
 mod conversation;
 mod file_ops;
 mod hooks;
 mod json;
+mod keybindings;
 mod mcp;
 mod mcp_client;
 mod mcp_stdio;
 mod oauth;
+mod permission_memory;
 mod permissions;
 mod prompt;
 mod remote;
@@ -82,6 +85,9 @@ pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,
 };
+pub use permission_memory::{PermissionMemory, PermissionMemoryEntry, PermissionScope};
+pub use keybindings::KeybindingsConfig;
+pub use content_filter::{ContentFilter, ContentFilterConfig, FilterResult, FilterSeverity};
 pub use prompt::{
     load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,
     SystemPromptBuilder, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,

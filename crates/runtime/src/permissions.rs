@@ -33,6 +33,9 @@ pub struct PermissionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionPromptDecision {
     Allow,
+    /// Allow this specific call and remember the grant for the session so the
+    /// user is not prompted again for the same tool.
+    AllowAlways,
     Deny { reason: String },
 }
 
@@ -111,7 +114,9 @@ impl PermissionPolicy {
         {
             return match prompter.as_mut() {
                 Some(prompter) => match prompter.decide(&request) {
-                    PermissionPromptDecision::Allow => PermissionOutcome::Allow,
+                    PermissionPromptDecision::Allow | PermissionPromptDecision::AllowAlways => {
+                        PermissionOutcome::Allow
+                    }
                     PermissionPromptDecision::Deny { reason } => PermissionOutcome::Deny { reason },
                 },
                 None => PermissionOutcome::Deny {
