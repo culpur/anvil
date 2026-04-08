@@ -197,14 +197,24 @@ impl CliOutputFormat {
 
 #[allow(clippy::too_many_lines)]
 fn parse_args(args: &[String]) -> Result<CliAction, String> {
-    // Read default model from config if available, otherwise use hardcoded default
+    // Read default model and Ollama config from config.json
     let mut model = {
         let config_path = anvil_home_dir().join("config.json");
         if let Ok(data) = std::fs::read_to_string(&config_path) {
-            serde_json::from_str::<serde_json::Value>(&data)
-                .ok()
-                .and_then(|v| v.get("default_model").and_then(|m| m.as_str()).map(String::from))
-                .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                // Set OLLAMA_HOST env var from config so agent threads inherit it
+                if let Some(ollama_url) = val.pointer("/providers/ollama/url").and_then(|v| v.as_str()) {
+                    if !ollama_url.is_empty() && std::env::var("OLLAMA_HOST").is_err() {
+                        std::env::set_var("OLLAMA_HOST", ollama_url);
+                    }
+                }
+                val.get("default_model")
+                    .and_then(|m| m.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+            } else {
+                DEFAULT_MODEL.to_string()
+            }
         } else {
             DEFAULT_MODEL.to_string()
         }
