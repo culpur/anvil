@@ -7,7 +7,7 @@ use super::helpers::{next_char_boundary, prev_char_boundary};
 /// Which screen the configure mode is showing.
 #[derive(Debug, Clone, PartialEq)]
 #[derive(Default)]
-pub(super) enum ConfigureState {
+pub(crate) enum ConfigureState {
     #[default]
     Inactive,
     MainMenu { selected: usize },
@@ -107,7 +107,9 @@ pub struct ConfigureData {
     pub vim_mode: bool,
     pub chat_mode: bool,
     pub permission_mode: String,
+    #[allow(dead_code)]
     pub screensaver_timeout_mins: u64,
+    #[allow(dead_code)]
     pub screensaver_enabled: bool,
     pub anvilhub_url: String,
     pub wp_configured: bool,
@@ -397,6 +399,7 @@ pub(super) fn configure_action_for(section: &str, key: &str, value: &str) -> Opt
 
 /// Handle character-level editing for `EditingValue` state.
 /// Returns true if the event was handled.
+#[allow(dead_code)]
 pub(super) fn editing_value_handle_key(
     key: crossterm::event::KeyEvent,
     value: &mut String,

@@ -53,7 +53,7 @@ impl TuiSender {
 
 /// One entry in the scrollable message log.
 #[derive(Debug, Clone)]
-pub(super) enum LogEntry {
+pub(crate) enum LogEntry {
     /// User prompt.
     User(String),
     /// Completed assistant message (plain ANSI-stripped text for ratatui).
@@ -183,7 +183,7 @@ impl LogEntry {
 // ─── Tab ──────────────────────────────────────────────────────────────────────
 
 /// All per-tab mutable state.
-pub(super) struct Tab {
+pub(crate) struct Tab {
     pub id: usize,
     pub name: String,
     pub log: Vec<LogEntry>,
@@ -237,14 +237,14 @@ impl Tab {
 
 /// Tracks the state of the slash-command completion popup.
 #[derive(Debug, Default)]
-pub(super) struct CompletionPopup {
+pub(crate) struct CompletionPopup {
     pub visible: bool,
     pub matches: Vec<CompletionItem>,
     pub selected: usize,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CompletionItem {
+pub(crate) struct CompletionItem {
     pub insert: String,
     pub hint: String,
 }

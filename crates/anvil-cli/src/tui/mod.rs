@@ -110,8 +110,10 @@ pub struct AnvilTui {
     /// Update notification message (empty = no update available).
     pub(super) update_available: String,
     /// Scroll offset for content area (0 = at bottom, >0 = scrolled up)
+    #[allow(dead_code)]
     pub(super) content_scroll_offset: usize,
     /// Whether auto-scroll is active (disabled when user scrolls up)
+    #[allow(dead_code)]
     pub(super) content_auto_scroll: bool,
     /// Whether the agent panel is visible (toggled with Ctrl+A).
     pub agent_panel_visible: bool,
@@ -1174,6 +1176,7 @@ impl AnvilTui {
     }
 
     /// Toggle the agent panel visibility.
+    #[allow(dead_code)]
     pub fn toggle_agent_panel(&mut self) {
         self.agent_panel_visible = !self.agent_panel_visible;
     }

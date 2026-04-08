@@ -494,10 +494,12 @@ impl LineEditor {
         session.cursor = insert_at + self.yank_buffer.text.len();
     }
 
+    #[allow(dead_code)]
     fn history_up(&self, session: &mut EditSession) {
         history_up(&self.history, self.vim_enabled, session);
     }
 
+    #[allow(dead_code)]
     fn history_down(&self, session: &mut EditSession) {
         history_down(&self.history, self.vim_enabled, session);
     }

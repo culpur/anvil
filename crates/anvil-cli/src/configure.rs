@@ -5,10 +5,8 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::env;
 use std::fs;
 
-use runtime::{load_oauth_credentials, SearchEngine};
 
 use crate::tui::{ConfigureAction, ConfigureData};
 use crate::{

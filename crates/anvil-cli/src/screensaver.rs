@@ -145,6 +145,7 @@ pub struct FurnaceScreensaver {
     /// Current animation phase.
     pub phase:      FurnacePhase,
     /// Text lines captured from the TUI at the moment of activation.
+    #[allow(dead_code)]
     captured_lines: Vec<String>,
     /// Falling character particles (Gathering phase).
     falling:        Vec<FallingChar>,

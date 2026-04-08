@@ -4841,6 +4841,7 @@ mod tests {
                 subagent_type: Some("Explore".to_string()),
                 name: Some("ship-audit".to_string()),
                 model: None,
+                isolation: None,
             },
             move |job| {
                 *captured_for_spawn
@@ -4942,6 +4943,7 @@ mod tests {
                 subagent_type: Some("Verification".to_string()),
                 name: Some("fail-task".to_string()),
                 model: None,
+                isolation: None,
             },
             |job| {
                 persist_agent_terminal_state(
@@ -4969,6 +4971,7 @@ mod tests {
                 subagent_type: None,
                 name: Some("spawn-error".to_string()),
                 model: None,
+                isolation: None,
             },
             |_| Err(String::from("thread creation failed")),
         )

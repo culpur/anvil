@@ -19,7 +19,7 @@ use runtime::{
 };
 
 use crate::DEFAULT_OAUTH_CALLBACK_PORT;
-use crate::write_curl_auth_header;
+use crate::vault::write_curl_auth_header;
 
 /// Build the default Anthropic OAuth configuration.
 pub(crate) fn default_oauth_config() -> OAuthConfig {

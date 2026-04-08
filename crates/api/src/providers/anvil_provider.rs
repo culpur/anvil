@@ -573,7 +573,7 @@ impl MessageStream {
 
 #[cfg(test)]
 mod tests {
-    use super::{ALT_REQUEST_ID_HEADER, REQUEST_ID_HEADER};
+    use super::common::{ALT_REQUEST_ID_HEADER, REQUEST_ID_HEADER, is_retryable_status, backoff_for_attempt};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Mutex, OnceLock};
@@ -910,28 +910,28 @@ mod tests {
             Duration::from_millis(25),
         );
         assert_eq!(
-            client.backoff_for_attempt(1).expect("attempt 1"),
+            backoff_for_attempt(1, Duration::from_millis(10), Duration::from_millis(25)).expect("attempt 1"),
             Duration::from_millis(10)
         );
         assert_eq!(
-            client.backoff_for_attempt(2).expect("attempt 2"),
+            backoff_for_attempt(2, Duration::from_millis(10), Duration::from_millis(25)).expect("attempt 2"),
             Duration::from_millis(20)
         );
         assert_eq!(
-            client.backoff_for_attempt(3).expect("attempt 3"),
+            backoff_for_attempt(3, Duration::from_millis(10), Duration::from_millis(25)).expect("attempt 3"),
             Duration::from_millis(25)
         );
     }
 
     #[test]
     fn retryable_statuses_are_detected() {
-        assert!(super::is_retryable_status(
+        assert!(is_retryable_status(
             reqwest::StatusCode::TOO_MANY_REQUESTS
         ));
-        assert!(super::is_retryable_status(
+        assert!(is_retryable_status(
             reqwest::StatusCode::INTERNAL_SERVER_ERROR
         ));
-        assert!(!super::is_retryable_status(
+        assert!(!is_retryable_status(
             reqwest::StatusCode::UNAUTHORIZED
         ));
     }

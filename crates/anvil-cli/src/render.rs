@@ -51,6 +51,7 @@ pub struct Spinner {
     frame_index: usize,
 }
 
+#[allow(dead_code)]
 impl Spinner {
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -245,6 +246,7 @@ impl TerminalRenderer {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn color_theme(&self) -> &ColorTheme {
         &self.color_theme
     }
@@ -589,6 +591,7 @@ impl TerminalRenderer {
         colored_output
     }
 
+    #[allow(dead_code)]
     pub fn stream_markdown(&self, markdown: &str, out: &mut impl Write) -> io::Result<()> {
         let rendered_markdown = self.markdown_to_ansi(markdown);
         write!(out, "{rendered_markdown}")?;
