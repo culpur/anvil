@@ -2500,6 +2500,17 @@ impl LiveCli {
                 }
                 return Ok(false);
             }
+            SlashCommand::RemoteControl { ref action } => {
+                let msg = self.run_remote_control_command(action.as_deref());
+                tui.push_system(msg);
+                // Wire the relay broadcast channel into the TUI for event forwarding
+                if let Some(ref tx) = self.relay_event_tx {
+                    tui.set_relay_tx(tx.clone());
+                } else {
+                    tui.clear_relay_tx();
+                }
+                return Ok(false);
+            }
             _ => {}
         }
 
@@ -2855,10 +2866,6 @@ impl LiveCli {
             }
             SlashCommand::ReviewPr { number } => {
                 let msg = self.run_review_pr_command(number.as_deref());
-                (msg, false)
-            }
-            SlashCommand::RemoteControl { action } => {
-                let msg = self.run_remote_control_command(action.as_deref());
                 (msg, false)
             }
             _ => {
