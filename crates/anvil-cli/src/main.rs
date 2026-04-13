@@ -1499,6 +1499,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // Install the TUI sender so all model/tool output is routed to it.
     cli.enable_tui(sender);
 
+    // Sync thinking mode status to TUI status bar.
+    tui.set_thinking_enabled(cli.thinking_enabled);
+
     // Greet the user with a system message instead of the welcome banner.
     let session_id = cli.session_id().to_string();
     tui.push_system(format!(
@@ -1754,6 +1757,8 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             tui.push_system(format!("Error: {err}"));
                         }
                     }
+                    // Sync thinking mode to status bar after any command (may have toggled).
+                    tui.set_thinking_enabled(cli.thinking_enabled);
                     continue;
                 }
 
@@ -1772,9 +1777,23 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     if any_blocks {
                         // Run a turn so the model can respond to the injected content.
                         tui.push_system(format!("Thinking... ({})", cli.model));
-                        let result = cli.run_turn_file_drop();
-                        tui.wait_for_turn_end()?;
-                        if let Err(err) = result {
+                        tui.scroll_to_bottom();
+                        tui.draw()?;
+                        let cli_ref = &mut cli;
+                        let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+                            std::sync::Arc::new(std::sync::Mutex::new(None));
+                        let turn_err_clone = turn_err.clone();
+                        std::thread::scope(|s| {
+                            s.spawn(move || {
+                                if let Err(e) = cli_ref.run_turn_file_drop() {
+                                    if let Ok(mut guard) = turn_err_clone.lock() {
+                                        *guard = Some(e.to_string());
+                                    }
+                                }
+                            });
+                            let _ = tui.wait_for_turn_end();
+                        });
+                        if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
                             tui.push_system(format!("Turn error: {err}"));
                         }
                     }
@@ -1784,13 +1803,33 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 // User prompt: run a turn.  The TUI sender is already installed,
                 // so model output streams back to the TUI.
                 tui.push_system(format!("Thinking... ({})", cli.model));
-                // run_turn is synchronous (blocks current thread); the TUI
-                // events are enqueued and we drain them after it returns.
-                let result = cli.run_turn(trimmed);
-                // Wait for the TurnDone event while animating the display.
-                tui.wait_for_turn_end()?;
-                if let Err(err) = result {
-                    tui.push_system(format!("Turn error: {err}"));
+                tui.scroll_to_bottom();
+                tui.draw()?; // Immediate visual feedback before blocking API call
+
+                // Run the turn on a scoped background thread so the main
+                // thread can enter the event-drain / animation loop immediately.
+                // This enables live streaming display instead of buffering
+                // the full response before showing anything.
+                {
+                    let cli_ref = &mut cli;
+                    let input_owned = trimmed.to_string();
+                    let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+                        std::sync::Arc::new(std::sync::Mutex::new(None));
+                    let turn_err_clone = turn_err.clone();
+                    std::thread::scope(|s| {
+                        s.spawn(move || {
+                            if let Err(e) = cli_ref.run_turn(&input_owned) {
+                                if let Ok(mut guard) = turn_err_clone.lock() {
+                                    *guard = Some(e.to_string());
+                                }
+                            }
+                        });
+                        // Main thread: animate the TUI while the turn runs.
+                        let _ = tui.wait_for_turn_end();
+                    });
+                    if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
+                        tui.push_system(format!("Turn error: {err}"));
+                    }
                 }
                 // Update footer QMD/archive status after each turn
                 if cli.qmd.is_enabled() {

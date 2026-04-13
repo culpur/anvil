@@ -127,10 +127,17 @@ pub(super) fn build_status1_spans(
     git_branch: &str,
     git_diff: &str,
     cost_usd: &str,
+    thinking_enabled: bool,
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = vec![
         Span::styled("Model: ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
         Span::styled(model.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(" | ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
+        Span::styled("Thinking: ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
+        Span::styled(
+            if thinking_enabled { "Yes".to_string() } else { "No".to_string() },
+            Style::default().fg(if thinking_enabled { Color::Green } else { Color::Rgb(0x88, 0x88, 0x88) }),
+        ),
         Span::styled(
             format!(" | Total: {total_m:.1}M"),
             Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),

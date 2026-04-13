@@ -107,6 +107,8 @@ pub struct AnvilTui {
     pub(super) configure_data: ConfigureData,
     /// Active colour theme — loaded from ~/.anvil/theme.json at startup.
     pub theme: Theme,
+    /// Whether extended thinking mode is enabled.
+    pub(super) thinking_enabled: bool,
     /// Update notification message (empty = no update available).
     pub(super) update_available: String,
     /// Scroll offset for content area (0 = at bottom, >0 = scrolled up)
@@ -169,6 +171,7 @@ impl AnvilTui {
                 configure_state: ConfigureState::Inactive,
                 configure_data: ConfigureData::default(),
                 theme: Theme::load(),
+                thinking_enabled: false,
                 update_available: String::new(),
                 content_scroll_offset: 0,
                 content_auto_scroll: true,
@@ -762,7 +765,7 @@ impl AnvilTui {
             };
             let right3 = format!("{total_tokens} tokens");
             let line3 = build_left_right_line(
-                build_status1_spans(&model, total_m, &git_branch, &git_diff_stats, &cost_usd),
+                build_status1_spans(&model, total_m, &git_branch, &git_diff_stats, &cost_usd, self.thinking_enabled),
                 vec![Span::styled(
                     right3,
                     Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
@@ -1150,6 +1153,10 @@ impl AnvilTui {
     /// Set the update notification message shown in the footer.
     pub fn set_update_available(&mut self, msg: impl Into<String>) {
         self.update_available = msg.into();
+    }
+
+    pub fn set_thinking_enabled(&mut self, enabled: bool) {
+        self.thinking_enabled = enabled;
     }
 
     // ─── Agent panel ─────────────────────────────────────────────────────────
