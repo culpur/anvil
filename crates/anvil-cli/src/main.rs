@@ -4131,10 +4131,38 @@ impl LiveCli {
 
                 let hash = runtime::relay::generate_session_hash();
                 let pairing_code = runtime::relay::generate_pairing_code();
-                let session = runtime::relay::RelaySession::new(hash.clone(), HUB_BASE_URL);
+                let mut session = runtime::relay::RelaySession::new(hash.clone(), HUB_BASE_URL);
                 let url = session.url.clone();
                 let (event_tx, _) = tokio::sync::broadcast::channel::<runtime::relay::RelayMessage>(256);
 
+                // Create the relay host with pairing code display channel
+                let (code_display_tx, _code_display_rx) = tokio::sync::mpsc::unbounded_channel();
+                let relay_host = runtime::relay::RelayHost::new(
+                    hash.clone(),
+                    HUB_BASE_URL,
+                    code_display_tx,
+                );
+
+                // Subscribe to the event broadcast for the relay WS loop
+                let event_rx = event_tx.subscribe();
+
+                // Spawn the relay WebSocket connection on a background thread
+                // using a dedicated tokio runtime (the provider's runtime may not be available)
+                let passage_ws_url = "wss://api.culpur.net/v1/relay/sessions".to_string();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("relay tokio runtime");
+                    let snapshot_fn = std::sync::Arc::new(tokio::sync::Mutex::new(
+                        None::<Box<dyn Fn() -> Vec<runtime::relay::TabSnapshot> + Send>>,
+                    ));
+                    if let Err(e) = rt.block_on(relay_host.run(&passage_ws_url, event_rx, snapshot_fn)) {
+                        eprintln!("Relay disconnected: {e}");
+                    }
+                });
+
+                session.status = runtime::relay::RelayStatus::WaitingForClient;
                 self.relay_session = Some(session);
                 self.relay_event_tx = Some(event_tx);
 

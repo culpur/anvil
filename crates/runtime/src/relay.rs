@@ -371,6 +371,119 @@ impl RelayHost {
         &self.session.hash
     }
 
+    /// Run the relay host — connects to Passage via WebSocket and bridges
+    /// events between CLI and web clients. This is async and should be spawned
+    /// on a tokio runtime.
+    ///
+    /// - `passage_ws_url`: e.g. `"wss://api.culpur.net/v1/relay/sessions"`
+    /// - `event_rx`: receives CLI events to broadcast to web clients
+    /// - `snapshot_fn`: called when a client pairs to get the current session state
+    pub async fn run(
+        &self,
+        passage_ws_url: &str,
+        mut event_rx: broadcast::Receiver<RelayMessage>,
+        snapshot_fn: Arc<Mutex<Option<Box<dyn Fn() -> Vec<TabSnapshot> + Send>>>>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::connect_async;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let url = format!("{}/{hash}?role=host", passage_ws_url, hash = self.session.hash);
+        let (ws_stream, _) = connect_async(&url).await
+            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+
+        let (mut ws_sink, mut ws_stream_read) = ws_stream.split();
+
+        // Send host_hello
+        let hello = RelayMessage::HostHello {
+            hash: self.session.hash.clone(),
+            protocol_version: RELAY_PROTOCOL_VERSION,
+        };
+        ws_sink.send(WsMessage::Text(serde_json::to_string(&hello)?.into())).await?;
+
+        let state = self.state.clone();
+        let input_tx = self.input_tx.clone();
+
+        loop {
+            tokio::select! {
+                // Read from WebSocket (messages from Passage / web clients)
+                ws_msg = ws_stream_read.next() => {
+                    match ws_msg {
+                        Some(Ok(WsMessage::Text(text_bytes))) => {
+                            if let Ok(msg) = serde_json::from_str::<RelayMessage>(&text_bytes) {
+                                match msg {
+                                    RelayMessage::ClientConnected { ref client_id } => {
+                                        let mut st = state.lock().await;
+                                        let _code = st.client_connected(client_id);
+                                        // Relay sends pairing_required to the client automatically
+                                    }
+                                    RelayMessage::PairingAttempt { ref client_id, ref code } => {
+                                        let mut st = state.lock().await;
+                                        let result = st.verify_pairing(client_id, code);
+                                        let reply = RelayMessage::PairingResult {
+                                            client_id: client_id.clone(),
+                                            success: result.is_ok(),
+                                            error: result.err().map(|e| e.to_string()),
+                                        };
+                                        let _ = ws_sink.send(WsMessage::Text(serde_json::to_string(&reply)?.into())).await;
+
+                                        // If paired, send session snapshot
+                                        if st.is_paired(client_id) {
+                                            if let Some(ref func) = *snapshot_fn.lock().await {
+                                                let tabs = func();
+                                                let snapshot = RelayMessage::SessionSnapshot { tabs };
+                                                let _ = ws_sink.send(WsMessage::Text(serde_json::to_string(&snapshot)?.into())).await;
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::UserMessage { tab_id, ref message } => {
+                                        let st = state.lock().await;
+                                        // Only accept input from paired clients
+                                        // (In a full impl, client_id would be on the message)
+                                        if st.paired_count() > 0 {
+                                            let _ = input_tx.send((tab_id, message.clone()));
+                                        }
+                                    }
+                                    RelayMessage::PeerDisconnected => {
+                                        // A web client disconnected
+                                        // Client tracking would need client_id from relay
+                                    }
+                                    _ => {} // Ignore other messages from relay
+                                }
+                            }
+                        }
+                        Some(Ok(WsMessage::Close(_))) | None => {
+                            break; // Connection closed
+                        }
+                        Some(Err(e)) => {
+                            eprintln!("Relay WS error: {e}");
+                            break;
+                        }
+                        _ => {} // Ping/Pong handled by tungstenite
+                    }
+                }
+
+                // Read from CLI event broadcast (forward to all paired web clients)
+                event = event_rx.recv() => {
+                    match event {
+                        Ok(relay_msg) => {
+                            let json = serde_json::to_string(&relay_msg)?;
+                            let _ = ws_sink.send(WsMessage::Text(json.into())).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("Relay broadcast lagged by {n} messages");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break; // CLI shut down the broadcast
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// The full URL for web access.
     pub fn url(&self) -> &str {
         &self.session.url

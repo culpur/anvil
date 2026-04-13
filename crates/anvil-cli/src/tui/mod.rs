@@ -109,6 +109,8 @@ pub struct AnvilTui {
     pub theme: Theme,
     /// Whether extended thinking mode is enabled.
     pub(super) thinking_enabled: bool,
+    /// Relay broadcast sender for forwarding events to web viewers.
+    pub(super) relay_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Update notification message (empty = no update available).
     pub(super) update_available: String,
     /// Scroll offset for content area (0 = at bottom, >0 = scrolled up)
@@ -176,6 +178,7 @@ impl AnvilTui {
                 configure_data: ConfigureData::default(),
                 theme: Theme::load(),
                 thinking_enabled: false,
+                relay_tx: None,
                 update_available: String::new(),
                 content_scroll_offset: 0,
                 content_auto_scroll: true,
@@ -968,7 +971,54 @@ impl AnvilTui {
         }
     }
 
+    /// Set a relay broadcast sender for forwarding TUI events to web clients.
+    pub fn set_relay_tx(&mut self, tx: tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>) {
+        self.relay_tx = Some(tx);
+    }
+
+    /// Clear the relay broadcast sender.
+    pub fn clear_relay_tx(&mut self) {
+        self.relay_tx = None;
+    }
+
+    /// Forward a TUI event to the relay broadcast (if active).
+    fn relay_forward(&self, msg: runtime::relay::RelayMessage) {
+        if let Some(ref tx) = self.relay_tx {
+            let _ = tx.send(msg);
+        }
+    }
+
     fn apply_tui_event(&mut self, event: TuiEvent) {
+        // Mirror events to relay for remote viewers
+        let tab_id = self.active_tab;
+        match &event {
+            TuiEvent::TextDelta(text) => {
+                self.relay_forward(runtime::relay::RelayMessage::TextDelta { tab_id, text: text.clone() });
+            }
+            TuiEvent::TextDone => {
+                self.relay_forward(runtime::relay::RelayMessage::TextDone { tab_id });
+            }
+            TuiEvent::TurnDone => {
+                self.relay_forward(runtime::relay::RelayMessage::TurnDone { tab_id });
+            }
+            TuiEvent::ToolCallStart { name } => {
+                self.relay_forward(runtime::relay::RelayMessage::ToolStart { tab_id, name: name.clone(), detail: String::new() });
+            }
+            TuiEvent::ToolResult { name, summary, is_error } => {
+                self.relay_forward(runtime::relay::RelayMessage::ToolResult { tab_id, name: name.clone(), summary: summary.clone(), is_error: *is_error });
+            }
+            TuiEvent::ThinkLabel(label) => {
+                self.relay_forward(runtime::relay::RelayMessage::ThinkLabel { tab_id, label: label.clone() });
+            }
+            TuiEvent::Tokens { input, output } => {
+                self.relay_forward(runtime::relay::RelayMessage::Tokens { tab_id, input: *input, output: *output });
+            }
+            TuiEvent::System(msg) => {
+                self.relay_forward(runtime::relay::RelayMessage::System { tab_id, message: msg.clone() });
+            }
+            _ => {} // Other events don't need relay forwarding
+        }
+
         match event {
             TuiEvent::TextDelta(text) => {
                 self.active_tab_mut().pending_text.push_str(&text);
