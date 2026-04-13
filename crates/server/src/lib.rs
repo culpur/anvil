@@ -8,7 +8,7 @@ use async_stream::stream;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use runtime::{ConversationMessage, Session as RuntimeSession};
@@ -143,7 +143,15 @@ pub fn app(state: AppState) -> Router {
         .route("/sessions/{id}", get(get_session))
         .route("/sessions/{id}/events", get(stream_session_events))
         .route("/sessions/{id}/message", post(send_message))
+        .route("/viewer/{hash}", get(serve_viewer))
         .with_state(state)
+}
+
+/// Serve the web viewer page for remote control sessions.
+/// The `{hash}` path parameter is used client-side by JavaScript to connect
+/// to the correct relay session via WebSocket.
+async fn serve_viewer(Path(_hash): Path<String>) -> Html<&'static str> {
+    Html(include_str!("viewer.html"))
 }
 
 async fn create_session(

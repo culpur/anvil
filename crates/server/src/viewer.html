@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anvil Remote</title>
+<style>
+:root {
+  --bg: #00020C;
+  --card: #0F172A;
+  --border: #1E293B;
+  --text: #FFFFFF;
+  --text-dim: #94A3B8;
+  --accent: #0FBCFF;
+  --success: #00D084;
+  --error: #EF4444;
+  --warning: #F59E0B;
+  --user-bg: #1a365d;
+  --assistant-bg: #0F172A;
+  --tool-bg: #1a1a2e;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:'JetBrains Mono','Fira Code','SF Mono',monospace; font-size:13px; height:100vh; display:flex; flex-direction:column; }
+a { color:var(--accent); }
+
+/* Header */
+.header { display:flex; align-items:center; padding:8px 16px; background:var(--card); border-bottom:1px solid var(--border); gap:12px; }
+.header .logo { font-weight:700; color:var(--accent); font-size:15px; }
+.header .status { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); }
+.header .dot { width:8px; height:8px; border-radius:50%; }
+.dot.green { background:var(--success); }
+.dot.yellow { background:var(--warning); }
+.dot.red { background:var(--error); }
+
+/* Tab bar */
+.tab-bar { display:flex; background:var(--card); border-bottom:1px solid var(--border); padding:0 8px; overflow-x:auto; }
+.tab-bar .tab { padding:8px 16px; cursor:pointer; color:var(--text-dim); border-bottom:2px solid transparent; font-size:12px; white-space:nowrap; transition:all 0.2s; }
+.tab-bar .tab:hover { color:var(--text); background:rgba(15,188,255,0.05); }
+.tab-bar .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+.tab-bar .tab .unread { width:6px; height:6px; border-radius:50%; background:var(--accent); display:inline-block; margin-left:6px; vertical-align:middle; }
+
+/* Messages area */
+.messages { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
+.msg { padding:8px 12px; border-radius:6px; max-width:90%; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+.msg.user { background:var(--user-bg); align-self:flex-end; border:1px solid rgba(15,188,255,0.2); }
+.msg.assistant { background:var(--assistant-bg); align-self:flex-start; border:1px solid var(--border); }
+.msg.system { color:var(--text-dim); font-style:italic; font-size:12px; align-self:center; }
+.msg.tool { background:var(--tool-bg); border:1px solid var(--border); border-left:3px solid var(--accent); font-size:12px; }
+.msg.tool.error { border-left-color:var(--error); }
+.msg .tool-name { color:var(--accent); font-weight:600; }
+.msg .tool-detail { color:var(--text-dim); margin-top:4px; }
+.msg.streaming { border-left:2px solid var(--accent); animation:pulse 1.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
+
+/* Thinking spinner */
+.thinking { display:flex; align-items:center; gap:8px; padding:8px 12px; color:var(--text-dim); font-style:italic; }
+.thinking .spinner { animation:spin 1s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg)} }
+
+/* Input bar */
+.input-bar { display:flex; padding:8px 16px; background:var(--card); border-top:1px solid var(--border); gap:8px; }
+.input-bar input { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:8px 12px; color:var(--text); font-family:inherit; font-size:13px; outline:none; }
+.input-bar input:focus { border-color:var(--accent); }
+.input-bar input:disabled { opacity:0.5; }
+.input-bar button { background:var(--accent); color:var(--bg); border:none; border-radius:4px; padding:8px 16px; font-family:inherit; font-weight:600; cursor:pointer; }
+.input-bar button:disabled { opacity:0.3; cursor:not-allowed; }
+.input-bar button:hover:not(:disabled) { background:#3dd8ff; }
+
+/* Pairing modal */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,2,12,0.9); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:40px; max-width:400px; width:90%; text-align:center; }
+.modal h2 { color:var(--accent); margin-bottom:8px; font-size:18px; }
+.modal p { color:var(--text-dim); margin-bottom:24px; font-size:13px; }
+.modal input { background:var(--bg); border:2px solid var(--border); border-radius:8px; padding:12px; font-size:24px; letter-spacing:8px; text-align:center; width:200px; color:var(--text); font-family:inherit; outline:none; }
+.modal input:focus { border-color:var(--accent); }
+.modal button { display:block; width:100%; margin-top:16px; padding:12px; background:var(--accent); color:var(--bg); border:none; border-radius:8px; font-size:14px; font-weight:700; cursor:pointer; }
+.modal button:hover { background:#3dd8ff; }
+.modal .error { color:var(--error); margin-top:12px; font-size:12px; }
+.modal .logo-text { font-size:24px; font-weight:700; color:var(--accent); margin-bottom:4px; }
+
+/* Disconnected overlay */
+.disconnected { position:fixed; inset:0; background:rgba(0,2,12,0.85); display:flex; align-items:center; justify-content:center; z-index:99; }
+.disconnected .inner { text-align:center; }
+.disconnected h2 { color:var(--error); font-size:20px; margin-bottom:8px; }
+.disconnected p { color:var(--text-dim); }
+
+.hidden { display:none !important; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <span class="logo">⚒ Anvil Remote</span>
+  <span class="status"><span class="dot yellow" id="status-dot"></span><span id="status-text">Connecting...</span></span>
+  <span style="flex:1"></span>
+  <span style="color:var(--text-dim);font-size:11px" id="session-info"></span>
+</div>
+
+<!-- Tab bar -->
+<div class="tab-bar" id="tab-bar"></div>
+
+<!-- Messages (one per tab, only active visible) -->
+<div class="messages" id="messages"></div>
+
+<!-- Input -->
+<div class="input-bar">
+  <input type="text" id="input" placeholder="Type a message..." disabled>
+  <button id="send-btn" disabled>Send</button>
+</div>
+
+<!-- Pairing modal -->
+<div class="modal-overlay" id="pairing-modal">
+  <div class="modal">
+    <div class="logo-text">⚒ Anvil</div>
+    <h2>Connect to Session</h2>
+    <p>Enter the 6-digit code shown in the Anvil TUI</p>
+    <input type="text" id="pair-code" maxlength="6" placeholder="000000" autofocus>
+    <button id="pair-btn" onclick="submitPairing()">Connect</button>
+    <div class="error hidden" id="pair-error"></div>
+  </div>
+</div>
+
+<!-- Disconnected overlay -->
+<div class="disconnected hidden" id="disconnected">
+  <div class="inner">
+    <h2>Session Disconnected</h2>
+    <p>The Anvil session has ended or the connection was lost.</p>
+  </div>
+</div>
+
+<script>
+const PASSAGE_WS = 'wss://api.culpur.net/v1/relay/sessions';
+const hash = window.location.pathname.split('/').pop();
+let ws = null;
+let paired = false;
+let activeTab = 0;
+let tabs = {}; // tabId -> {name, model, log:[], streaming:''}
+
+// ─── WebSocket Connection ─────────────────────────────────────────
+
+function connect() {
+  ws = new WebSocket(`${PASSAGE_WS}/${hash}?role=client`);
+  ws.onopen = () => {
+    setStatus('yellow', 'Waiting for pairing...');
+    ws.send(JSON.stringify({type: 'client_hello', hash}));
+  };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleMessage(msg);
+  };
+  ws.onclose = () => {
+    if (paired) showDisconnected();
+    else setStatus('red', 'Connection failed');
+  };
+  ws.onerror = () => setStatus('red', 'Connection error');
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'pairing_required':
+      document.getElementById('pairing-modal').classList.remove('hidden');
+      break;
+    case 'pairing_result':
+      if (msg.success) {
+        paired = true;
+        document.getElementById('pairing-modal').classList.add('hidden');
+        document.getElementById('input').disabled = false;
+        document.getElementById('send-btn').disabled = false;
+        setStatus('green', 'Connected');
+      } else {
+        document.getElementById('pair-error').textContent = msg.error || 'Wrong code';
+        document.getElementById('pair-error').classList.remove('hidden');
+      }
+      break;
+    case 'session_snapshot':
+      loadSnapshot(msg.tabs);
+      break;
+    case 'text_delta':
+      appendStreaming(msg.tab_id, msg.text);
+      break;
+    case 'text_done':
+      flushStreaming(msg.tab_id);
+      break;
+    case 'tool_start':
+      addToolMsg(msg.tab_id, msg.name, msg.detail, null, false);
+      break;
+    case 'tool_result':
+      addToolMsg(msg.tab_id, msg.name, '', msg.summary, msg.is_error);
+      break;
+    case 'think_label':
+      showThinking(msg.tab_id, msg.label);
+      break;
+    case 'turn_done':
+      hideThinking(msg.tab_id);
+      break;
+    case 'system':
+      addMsg(msg.tab_id, 'system', msg.message);
+      break;
+    case 'tokens':
+      if (tabs[msg.tab_id]) {
+        tabs[msg.tab_id].tokens = {input: msg.input, output: msg.output};
+      }
+      break;
+    case 'tab_opened':
+      tabs[msg.tab_id] = {name: msg.name, model: msg.model, log: [], streaming: ''};
+      renderTabBar();
+      break;
+    case 'tab_closed':
+      delete tabs[msg.tab_id];
+      if (activeTab === msg.tab_id && Object.keys(tabs).length > 0) {
+        activeTab = parseInt(Object.keys(tabs)[0]);
+      }
+      renderTabBar();
+      renderMessages();
+      break;
+    case 'tab_renamed':
+      if (tabs[msg.tab_id]) tabs[msg.tab_id].name = msg.name;
+      renderTabBar();
+      break;
+    case 'tab_switched':
+      // Host switched tabs — optionally follow
+      break;
+    case 'user_message':
+      addMsg(msg.tab_id, 'user', msg.message);
+      break;
+    case 'peer_disconnected':
+      showDisconnected();
+      break;
+  }
+}
+
+// ─── Pairing ──────────────────────────────────────────────────────
+
+function submitPairing() {
+  const code = document.getElementById('pair-code').value.trim();
+  if (code.length !== 6) return;
+  document.getElementById('pair-error').classList.add('hidden');
+  ws.send(JSON.stringify({type: 'pairing_attempt', code}));
+}
+document.getElementById('pair-code').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitPairing();
+});
+
+// ─── Session Snapshot ─────────────────────────────────────────────
+
+function loadSnapshot(tabList) {
+  tabs = {};
+  tabList.forEach(t => {
+    tabs[t.tab_id] = {
+      name: t.name,
+      model: t.model,
+      log: t.log.map(entry => ({kind: entry.kind, text: entry.text || '', name: entry.name || '', detail: entry.detail || '', result: entry.result || '', is_error: entry.is_error || false})),
+      streaming: '',
+      tokens: t.tokens || {input:0, output:0}
+    };
+    if (t.active) activeTab = t.tab_id;
+  });
+  renderTabBar();
+  renderMessages();
+  document.getElementById('session-info').textContent = `${Object.keys(tabs).length} tab(s)`;
+}
+
+// ─── Tab Bar ──────────────────────────────────────────────────────
+
+function renderTabBar() {
+  const bar = document.getElementById('tab-bar');
+  bar.innerHTML = '';
+  Object.entries(tabs).forEach(([id, tab]) => {
+    const el = document.createElement('div');
+    el.className = 'tab' + (parseInt(id) === activeTab ? ' active' : '');
+    el.textContent = tab.name;
+    el.onclick = () => { activeTab = parseInt(id); renderTabBar(); renderMessages(); };
+    bar.appendChild(el);
+  });
+}
+
+// ─── Message Rendering ────────────────────────────────────────────
+
+function renderMessages() {
+  const container = document.getElementById('messages');
+  container.innerHTML = '';
+  const tab = tabs[activeTab];
+  if (!tab) return;
+  tab.log.forEach(entry => {
+    const div = document.createElement('div');
+    div.className = 'msg ' + entry.kind;
+    if (entry.kind === 'tool_call') {
+      div.className = 'msg tool' + (entry.is_error ? ' error' : '');
+      div.innerHTML = `<span class="tool-name">${esc(entry.name)}</span>`;
+      if (entry.detail) div.innerHTML += `<div class="tool-detail">${esc(entry.detail)}</div>`;
+      if (entry.result) div.innerHTML += `<div class="tool-detail">${esc(entry.result)}</div>`;
+    } else {
+      div.textContent = entry.text;
+    }
+    container.appendChild(div);
+  });
+  if (tab.streaming) {
+    const div = document.createElement('div');
+    div.className = 'msg assistant streaming';
+    div.textContent = tab.streaming;
+    container.appendChild(div);
+  }
+  scrollToBottom();
+}
+
+function addMsg(tabId, kind, text) {
+  if (!tabs[tabId]) return;
+  tabs[tabId].log.push({kind, text});
+  if (tabId === activeTab) renderMessages();
+}
+
+function addToolMsg(tabId, name, detail, result, isError) {
+  if (!tabs[tabId]) return;
+  tabs[tabId].log.push({kind:'tool_call', name, detail, result: result||'', is_error: isError});
+  if (tabId === activeTab) renderMessages();
+}
+
+function appendStreaming(tabId, text) {
+  if (!tabs[tabId]) return;
+  tabs[tabId].streaming += text;
+  if (tabId === activeTab) renderMessages();
+}
+
+function flushStreaming(tabId) {
+  if (!tabs[tabId]) return;
+  const text = tabs[tabId].streaming;
+  if (text) {
+    tabs[tabId].log.push({kind:'assistant', text});
+    tabs[tabId].streaming = '';
+    if (tabId === activeTab) renderMessages();
+  }
+}
+
+function showThinking(tabId, label) {
+  // Shown via the streaming indicator
+  if (!tabs[tabId]) return;
+  tabs[tabId].streaming = '';
+}
+
+function hideThinking(tabId) {
+  // Flush any remaining streaming
+  flushStreaming(tabId);
+}
+
+// ─── Input ────────────────────────────────────────────────────────
+
+document.getElementById('input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+document.getElementById('send-btn').onclick = sendMessage;
+
+function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text || !paired) return;
+  ws.send(JSON.stringify({type:'user_message', tab_id: activeTab, message: text}));
+  addMsg(activeTab, 'user', text);
+  input.value = '';
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────
+
+function setStatus(color, text) {
+  document.getElementById('status-dot').className = 'dot ' + color;
+  document.getElementById('status-text').textContent = text;
+}
+
+function showDisconnected() {
+  document.getElementById('disconnected').classList.remove('hidden');
+  document.getElementById('input').disabled = true;
+  document.getElementById('send-btn').disabled = true;
+  setStatus('red', 'Disconnected');
+}
+
+function scrollToBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ─── Start ────────────────────────────────────────────────────────
+if (hash && hash !== '') {
+  connect();
+} else {
+  setStatus('red', 'No session hash');
+  document.getElementById('pairing-modal').classList.add('hidden');
+}
+</script>
+</body>
+</html>

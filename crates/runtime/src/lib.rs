@@ -26,6 +26,7 @@ mod oauth;
 mod permission_memory;
 mod permissions;
 mod prompt;
+pub mod relay;
 mod remote;
 pub mod sandbox;
 mod session;

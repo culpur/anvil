@@ -243,6 +243,56 @@ impl HubClient {
 
         Ok(dest)
     }
+
+    // ─── Remote Control session management ────────────────────────────────
+
+    /// Register a remote control session with AnvilHub.
+    /// This makes the session URL resolvable and serves the web viewer.
+    pub async fn register_session(
+        &self,
+        hash: &str,
+        model: &str,
+        version: &str,
+    ) -> Result<(), HubError> {
+        let url = format!("{}/v1/sessions", self.base_url);
+        let body = serde_json::json!({
+            "hash": hash,
+            "model": model,
+            "version": version,
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| HubError::Http(e.to_string()))?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(HubError::Api(format!("{status}: {text}")))
+        }
+    }
+
+    /// Deregister a remote control session.
+    pub async fn deregister_session(&self, hash: &str) -> Result<(), HubError> {
+        let url = format!("{}/v1/sessions/{hash}", self.base_url);
+        let resp = self
+            .http
+            .delete(&url)
+            .send()
+            .await
+            .map_err(|e| HubError::Http(e.to_string()))?;
+        if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(())
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(HubError::Api(format!("{status}: {text}")))
+        }
+    }
 }
 
 /// Error type for `AnvilHub` operations.
@@ -383,6 +433,14 @@ impl BlockingHubClient {
         install_dir: &Path,
     ) -> Result<std::path::PathBuf, HubError> {
         self.rt.block_on(self.inner.install(pkg, install_dir))
+    }
+
+    pub fn register_session(&self, hash: &str, model: &str, version: &str) -> Result<(), HubError> {
+        self.rt.block_on(self.inner.register_session(hash, model, version))
+    }
+
+    pub fn deregister_session(&self, hash: &str) -> Result<(), HubError> {
+        self.rt.block_on(self.inner.deregister_session(hash))
     }
 }
 
