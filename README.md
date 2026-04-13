@@ -2,7 +2,7 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue)
+![Version](https://img.shields.io/badge/version-2.1.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Tests](https://img.shields.io/badge/tests-394%20passed-brightgreen)
@@ -12,22 +12,22 @@ Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides inter
 
 ---
 
-## What's New in v2.1.0
+## What's New in v2.1.1
 
-### Encrypted Credential Vault (Security)
-All API keys and credentials are now stored in an **AES-256-GCM encrypted vault** with Argon2id key derivation. The setup wizard prompts for a vault password before provider configuration. Credentials never touch disk unencrypted.
+### Live Streaming Responses
+Responses now render **token-by-token in real-time** as they arrive from the API. The TUI stays fully responsive during generation via scoped background threads — no more waiting for the full response to buffer.
 
-### File Write Sandbox (Security)
-Write operations are now **sandboxed to the project root** by default. Agents cannot write outside your project boundary, preventing path traversal attacks. Always-allowed targets include `/tmp` and `~/.anvil/`.
+### Remote Control
+Type `/remote-control` to generate a shareable URL. Anyone with the link and 6-digit pairing code can **watch and interact with your Anvil session** from any browser via WebSocket relay. Multi-client support with independent pairing per viewer.
 
-### Native Ollama API
-Switched from OpenAI-compatible `/v1/chat/completions` to Ollama's native `/api/chat` endpoint. Proper `think: true/false` control for reasoning models (qwen3, deepseek-r1). Better streaming and token tracking.
+### Thinking Mode
+Toggle visible reasoning with `/think`. When enabled, the TUI shows a thinking status indicator while the model reasons through complex problems. Works with Claude and Ollama reasoning models.
 
-### Multi-Line Input
-The input area dynamically expands from 1 to 5 lines based on content length, with proper word-wrap and cursor tracking.
+### Cross-Platform Release Pipeline
+Automated builds for **5 platforms** — macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, and Windows — via Docker-based cross-compilation toolchains.
 
-### Modular Architecture
-Codebase restructured from 4 monolithic files into **134 focused modules**. The largest file dropped from 15,756 to 4,770 lines. Zero-warning compilation with strict clippy.
+### Previous (v2.1.0): Security & Architecture
+AES-256-GCM encrypted credential vault, file write sandbox, native Ollama `/api/chat`, modular architecture (134 modules), 394 tests passing.
 
 ---
 
@@ -143,6 +143,9 @@ export OLLAMA_HOST="..."          # Ollama (local, no key required)
 ---
 
 ## Feature Highlights
+
+### Live Streaming & Remote Control
+Responses stream token-by-token with real-time TUI rendering. Share sessions via `/remote-control` — viewers connect through any browser with a pairing code. Full multi-client WebSocket relay.
 
 ### Multi-Provider AI
 Switch between Anthropic, OpenAI, Ollama, and xAI/Grok without leaving your session. Native API support for each provider. Automatic failover handles rate limits.
@@ -298,9 +301,10 @@ cargo install --path crates/anvil-cli --locked
 
 ## Release Notes
 
-- [v2.1.0](docs/releases/2.1.0.md)
-- [v2.0.0](docs/releases/2.0.0.md)
-- [v0.1.0](docs/releases/0.1.0.md)
+- [v2.1.1](docs/releases/2.1.1.md) — Live streaming, remote control, thinking mode
+- [v2.1.0](docs/releases/2.1.0.md) — Encrypted vault, file sandbox, modular architecture
+- [v2.0.0](docs/releases/2.0.0.md) — Claude Code parity
+- [v0.1.0](docs/releases/0.1.0.md) — Initial release
 
 ---
 
