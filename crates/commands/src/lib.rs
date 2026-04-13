@@ -335,6 +335,11 @@ pub enum SlashCommand {
         /// PR number; if absent, uses the current branch's open PR
         number: Option<String>,
     },
+    /// `/remote-control [stop|status]` — start (or stop/query) a web viewer relay session
+    RemoteControl {
+        /// Sub-command: `None` = start, `Some("stop")` = stop, `Some("status")` = status
+        action: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -604,6 +609,9 @@ impl SlashCommand {
             "fast" => Self::Fast,
             "review-pr" => Self::ReviewPr {
                 number: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "remote-control" | "rc" => Self::RemoteControl {
+                action: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             other => Self::Unknown(other.to_string()),
         })

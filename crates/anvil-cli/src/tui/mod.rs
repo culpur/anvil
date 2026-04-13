@@ -125,6 +125,10 @@ pub struct AnvilTui {
     /// Timestamp of the last Ctrl+C that fired while the input was already
     /// empty.  A second Ctrl+C within 1 second exits; otherwise it resets.
     pub(super) ctrl_c_empty_at: Option<Instant>,
+    /// Remote-control relay URL (empty = session inactive).
+    pub(super) remote_url: String,
+    /// Remote-control pairing/session code (shown while awaiting a client).
+    pub(super) remote_code: String,
 }
 
 impl AnvilTui {
@@ -178,6 +182,8 @@ impl AnvilTui {
                 agent_panel_visible: true,
                 agent_rows: Vec::new(),
                 ctrl_c_empty_at: None,
+                remote_url: String::new(),
+                remote_code: String::new(),
             },
             TuiSender(tx),
         ))
@@ -313,6 +319,8 @@ impl AnvilTui {
         let theme = self.theme.clone();
         let agent_panel_visible = self.agent_panel_visible;
         let agent_rows = self.agent_rows.clone();
+        let remote_url = self.remote_url.clone();
+        let remote_code = self.remote_code.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -852,6 +860,19 @@ impl AnvilTui {
                         .add_modifier(Modifier::BOLD),
                 ));
             }
+            if !remote_url.is_empty() {
+                let rc_label = if remote_code.is_empty() {
+                    format!("  │  RC {remote_url}")
+                } else {
+                    format!("  │  RC {remote_url}  [{remote_code}]")
+                };
+                line5_left.push(Span::styled(
+                    rc_label,
+                    Style::default()
+                        .fg(Color::Rgb(0x55, 0xCC, 0xFF))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
             let line5 = Line::from(line5_left);
 
             // Assemble footer.
@@ -1157,6 +1178,60 @@ impl AnvilTui {
 
     pub fn set_thinking_enabled(&mut self, enabled: bool) {
         self.thinking_enabled = enabled;
+    }
+
+    // ─── Remote control status ───────────────────────────────────────────────
+
+    /// Show the relay URL and optional pairing code in the status bar.
+    pub fn set_remote_status(&mut self, url: &str, code: &str) {
+        self.remote_url = url.to_string();
+        self.remote_code = code.to_string();
+    }
+
+    /// Clear the relay status (session stopped).
+    pub fn clear_remote_status(&mut self) {
+        self.remote_url.clear();
+        self.remote_code.clear();
+    }
+
+    /// Build a snapshot of all tabs as `relay::TabSnapshot` values for broadcast
+    /// to connected web clients.
+    pub fn build_snapshot(&self) -> Vec<runtime::relay::TabSnapshot> {
+        self.tabs.iter().map(|tab| {
+            let log = tab.log.iter().map(|entry| {
+                match entry {
+                    state::LogEntry::User(text) => {
+                        runtime::relay::LogEntrySnapshot::User { text: text.clone() }
+                    }
+                    state::LogEntry::Assistant(text) => {
+                        runtime::relay::LogEntrySnapshot::Assistant { text: text.clone() }
+                    }
+                    state::LogEntry::System(text) => {
+                        runtime::relay::LogEntrySnapshot::System { text: text.clone() }
+                    }
+                    state::LogEntry::ToolCall { name, detail, done: _, is_error } => {
+                        runtime::relay::LogEntrySnapshot::ToolCall {
+                            name: name.clone(),
+                            detail: detail.clone(),
+                            result: None,
+                            is_error: *is_error,
+                        }
+                    }
+                }
+            }).collect();
+
+            runtime::relay::TabSnapshot {
+                tab_id: tab.id,
+                name: tab.name.clone(),
+                model: tab.model.clone(),
+                active: std::ptr::eq(tab, self.active_tab()),
+                log,
+                tokens: runtime::relay::TokenSnapshot {
+                    input: tab.input_tokens,
+                    output: tab.output_tokens,
+                },
+            }
+        }).collect()
     }
 
     // ─── Agent panel ─────────────────────────────────────────────────────────

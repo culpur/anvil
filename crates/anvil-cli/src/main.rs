@@ -1169,6 +1169,7 @@ fn run_resume_command(
         | SlashCommand::Think
         | SlashCommand::Fast
         | SlashCommand::ReviewPr { .. }
+        | SlashCommand::RemoteControl { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2051,6 +2052,10 @@ struct LiveCli {
     /// Sub-agent manager — tracks spawned agents and their status.
     /// Wrapped in Arc<Mutex<>> so it can be shared with `CliToolExecutor`.
     agent_manager: Arc<Mutex<agents::AgentManager>>,
+    /// Active relay session (present while `/remote-control` is running).
+    relay_session: Option<runtime::relay::RelaySession>,
+    /// Broadcast sender for relay events (present while a relay session is active).
+    relay_event_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
 }
 
 impl LiveCli {
@@ -2105,6 +2110,8 @@ impl LiveCli {
                     .unwrap_or(false)
             },
             fast_mode: false,
+            relay_session: None,
+            relay_event_tx: None,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -2848,6 +2855,10 @@ impl LiveCli {
             }
             SlashCommand::ReviewPr { number } => {
                 let msg = self.run_review_pr_command(number.as_deref());
+                (msg, false)
+            }
+            SlashCommand::RemoteControl { action } => {
+                let msg = self.run_remote_control_command(action.as_deref());
                 (msg, false)
             }
             _ => {
@@ -4066,11 +4077,72 @@ impl LiveCli {
                 println!("{}", self.run_review_pr_command(number.as_deref()));
                 false
             }
+            SlashCommand::RemoteControl { action } => {
+                println!("{}", self.run_remote_control_command(action.as_deref()));
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", render_unknown_repl_command(&name));
                 false
             }
         })
+    }
+
+    /// `/remote-control [stop|status]` — manage the web viewer relay session.
+    fn run_remote_control_command(&mut self, action: Option<&str>) -> String {
+        const HUB_BASE_URL: &str = "https://passage.culpur.net/viewer";
+
+        match action.map(str::trim).unwrap_or("") {
+            "stop" => {
+                if self.relay_session.is_none() {
+                    return "Remote control: no active session.".to_string();
+                }
+                self.relay_session = None;
+                self.relay_event_tx = None;
+                "Remote control: session stopped.".to_string()
+            }
+            "status" => {
+                match &self.relay_session {
+                    None => "Remote control: no active session.".to_string(),
+                    Some(session) => {
+                        let client_count = self
+                            .relay_event_tx
+                            .as_ref()
+                            .map(|tx| tx.receiver_count())
+                            .unwrap_or(0);
+                        format!(
+                            "Remote control\n  URL              {}\n  Hash             {}\n  Clients          {}\n  Status           {:?}\n\nNext\n  /remote-control stop   Stop the relay session",
+                            session.url,
+                            session.hash,
+                            client_count,
+                            session.status,
+                        )
+                    }
+                }
+            }
+            // default: start (or report existing session)
+            _ => {
+                if let Some(ref session) = self.relay_session {
+                    return format!(
+                        "Remote control is already active.\n  URL    {}\n  Hash   {}\n\nUse /remote-control status  to see details.\nUse /remote-control stop    to end the session.",
+                        session.url, session.hash
+                    );
+                }
+
+                let hash = runtime::relay::generate_session_hash();
+                let pairing_code = runtime::relay::generate_pairing_code();
+                let session = runtime::relay::RelaySession::new(hash.clone(), HUB_BASE_URL);
+                let url = session.url.clone();
+                let (event_tx, _) = tokio::sync::broadcast::channel::<runtime::relay::RelayMessage>(256);
+
+                self.relay_session = Some(session);
+                self.relay_event_tx = Some(event_tx);
+
+                format!(
+                    "Remote control started\n  URL              {url}\n  Pairing code     {pairing_code}\n  Hash             {hash}\n\nOpen the URL in a browser and enter the pairing code when prompted.\n\nNext\n  /remote-control status   Check connection status\n  /remote-control stop     Stop the relay session"
+                )
+            }
+        }
     }
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {

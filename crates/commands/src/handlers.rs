@@ -128,6 +128,7 @@ pub fn handle_slash_command(
         | SlashCommand::Think
         | SlashCommand::Fast
         | SlashCommand::ReviewPr { .. }
+        | SlashCommand::RemoteControl { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
