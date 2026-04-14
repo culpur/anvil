@@ -397,6 +397,8 @@ impl RelayHost {
         passage_ws_url: &str,
         mut event_rx: broadcast::Receiver<RelayMessage>,
         snapshot_fn: Arc<Mutex<Option<Box<dyn Fn() -> Vec<TabSnapshot> + Send>>>>,
+        // Optional sync sender for forwarding user messages back to the TUI thread.
+        user_input_tx: Option<std::sync::mpsc::Sender<(usize, String)>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::connect_async;
@@ -453,9 +455,12 @@ impl RelayHost {
                                     RelayMessage::UserMessage { tab_id, ref message } => {
                                         let st = state.lock().await;
                                         // Only accept input from paired clients
-                                        // (In a full impl, client_id would be on the message)
                                         if st.paired_count() > 0 {
                                             let _ = input_tx.send((tab_id, message.clone()));
+                                            // Forward to the sync TUI channel if available
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((tab_id, message.clone()));
+                                            }
                                         }
                                     }
                                     RelayMessage::PeerDisconnected => {

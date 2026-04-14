@@ -1641,6 +1641,39 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         // Drain any queued TUI events (e.g. from previous turn).
         tui.poll_events();
 
+        // Check for messages from remote control web clients.
+        {
+            let mut remote_messages = Vec::new();
+            if let Some(ref rx) = cli.relay_input_rx {
+                while let Ok(msg) = rx.try_recv() {
+                    remote_messages.push(msg);
+                }
+            }
+            for (_tab_id, message) in remote_messages {
+                tui.push_system(format!("[Remote] {message}"));
+                tui.scroll_to_bottom();
+                tui.draw()?;
+                let cli_ref = &mut cli;
+                let input_owned = message;
+                let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(None));
+                let turn_err_clone = turn_err.clone();
+                std::thread::scope(|s| {
+                    s.spawn(move || {
+                        if let Err(e) = cli_ref.run_turn(&input_owned) {
+                            if let Ok(mut guard) = turn_err_clone.lock() {
+                                *guard = Some(e.to_string());
+                            }
+                        }
+                    });
+                    let _ = tui.wait_for_turn_end();
+                });
+                if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
+                    tui.push_system(format!("Turn error: {err}"));
+                }
+            }
+        }
+
         // Read the next key event (returns quickly with Continue most of the time).
         match tui.read_input()? {
             ReadResult::Continue => {
@@ -2110,6 +2143,8 @@ struct LiveCli {
     relay_session: Option<runtime::relay::RelaySession>,
     /// Broadcast sender for relay events (present while a relay session is active).
     relay_event_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
+    /// Receiver for messages from remote control web clients.
+    relay_input_rx: Option<std::sync::mpsc::Receiver<(usize, String)>>,
 }
 
 impl LiveCli {
@@ -2166,6 +2201,7 @@ impl LiveCli {
             fast_mode: false,
             relay_session: None,
             relay_event_tx: None,
+            relay_input_rx: None,
         };
         cli.persist_session()?;
         Ok(cli)
@@ -4160,6 +4196,7 @@ impl LiveCli {
                 }
                 self.relay_session = None;
                 self.relay_event_tx = None;
+                self.relay_input_rx = None;
                 "Remote control: session stopped.".to_string()
             }
             "status" => {
@@ -4211,6 +4248,8 @@ impl LiveCli {
                 // using a dedicated tokio runtime (the provider's runtime may not be available)
                 let passage_ws_url = "wss://api.culpur.net/v1/relay/sessions".to_string();
                 let pairing_code_for_relay = pairing_code.clone();
+                // Create a sync channel for receiving user messages from web clients
+                let (relay_input_tx, relay_input_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -4221,7 +4260,7 @@ impl LiveCli {
                     let snapshot_fn = std::sync::Arc::new(tokio::sync::Mutex::new(
                         None::<Box<dyn Fn() -> Vec<runtime::relay::TabSnapshot> + Send>>,
                     ));
-                    if let Err(e) = rt.block_on(relay_host.run(&passage_ws_url, event_rx, snapshot_fn)) {
+                    if let Err(e) = rt.block_on(relay_host.run(&passage_ws_url, event_rx, snapshot_fn, Some(relay_input_tx))) {
                         eprintln!("Relay disconnected: {e}");
                     }
                 });
@@ -4229,6 +4268,7 @@ impl LiveCli {
                 session.status = runtime::relay::RelayStatus::WaitingForClient;
                 self.relay_session = Some(session);
                 self.relay_event_tx = Some(event_tx);
+                self.relay_input_rx = Some(relay_input_rx);
 
                 // Auto-open the viewer URL in the default browser
                 let _ = open::that(&url);
