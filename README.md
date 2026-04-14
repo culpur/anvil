@@ -5,11 +5,11 @@
 ![Version](https://img.shields.io/badge/version-2.1.3-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-15 MB. Zero dependencies. Four AI providers. Encrypted credential vault. 90+ commands. And the only AI coding assistant with **live remote control** — hand your terminal session to any browser, in real-time, with full bidirectional control.
+15 MB. Zero dependencies. Five AI providers. Encrypted credential vault. 90+ commands. And the only AI coding assistant with **live remote control** — hand your terminal session to any browser, in real-time, with full bidirectional control.
 
 ## Why Anvil?
 
-- **Never interrupted** — Four providers (Claude, OpenAI, Ollama, xAI) with automatic failover. When one hits a rate limit, Anvil switches to the next without dropping your context.
+- **Never interrupted** — Five providers (Claude, OpenAI, Ollama, xAI, Gemini) with automatic failover. When one hits a rate limit, Anvil switches to the next without dropping your context.
 - **Live Remote Control** — Type `/remote-control` and open the URL on any device. Not a transcript. Not a screenshot. A live, bidirectional terminal-to-browser bridge with real-time streaming, 98 commands, and secure 6-digit pairing.
 - **Your secrets stay encrypted** — AES-256-GCM credential vault with Argon2id key derivation. API keys never touch disk unencrypted.
 - **Air-gap ready** — Single binary, zero telemetry, local Ollama support. Runs where other tools can't.
@@ -75,6 +75,7 @@ Or download directly from [releases](https://github.com/culpur/anvil/releases/la
 | OpenAI | GPT-5, o3, o4-mini | API Key |
 | Ollama | Llama, Qwen, Mistral, DeepSeek, Gemma | Local — no key |
 | xAI | Grok-3, Grok-3-mini | API Key |
+| Google | Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 1.5 Pro | API Key |
 
 ## Quick Start
 
