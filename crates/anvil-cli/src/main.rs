@@ -2605,6 +2605,20 @@ impl LiveCli {
                 // Wire the relay broadcast channel into the TUI for event forwarding
                 if let Some(ref tx) = self.relay_event_tx {
                     tui.set_relay_tx(tx.clone());
+                    // Send session metadata so the web viewer has full context
+                    let _ = tx.send(runtime::relay::RelayMessage::SessionMeta {
+                        session_id: self.session_id().to_string(),
+                        model: self.model.clone(),
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        permission_mode: self.permission_mode.as_str().to_string(),
+                        thinking_enabled: self.thinking_enabled,
+                        qmd_status: if self.qmd.is_enabled() {
+                            self.qmd.status().map(|s| format!("{} docs, {} vectors", s.total_docs, s.total_vectors))
+                        } else {
+                            None
+                        },
+                        block_time: None,
+                    });
                 } else {
                     tui.clear_relay_tx();
                 }

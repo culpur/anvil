@@ -185,6 +185,17 @@ pub enum RelayMessage {
         tab_id: usize,
     },
 
+    // ── Session metadata (sent after pairing) ──
+    SessionMeta {
+        session_id: String,
+        model: String,
+        version: String,
+        permission_mode: String,
+        thinking_enabled: bool,
+        qmd_status: Option<String>,
+        block_time: Option<String>,
+    },
+
     // ── Client requests ──
     /// Client requests a new tab be opened on the host.
     RequestNewTab {
