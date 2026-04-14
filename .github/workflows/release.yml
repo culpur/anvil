@@ -92,7 +92,7 @@ jobs:
 
       # ── Upload binaries to the PUBLIC repo (culpur/anvil) ──
       - name: Upload to public repo
-        if: secrets.PUBLIC_REPO_TOKEN != ''
+        if: ${{ secrets.PUBLIC_REPO_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
@@ -106,7 +106,7 @@ jobs:
 
       # ── Update Homebrew formula ──
       - name: Update Homebrew
-        if: secrets.PUBLIC_REPO_TOKEN != ''
+        if: ${{ secrets.PUBLIC_REPO_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
