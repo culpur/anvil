@@ -6,11 +6,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::CredentialType;
+
 /// A detected credential with metadata about where it was found.
 #[derive(Debug, Clone)]
 pub struct DetectedCredential {
     /// Human-readable type (e.g., "OpenAI API Key", "SSH Private Key").
     pub kind: String,
+    /// The typed credential category for vault storage.
+    pub credential_type: CredentialType,
     /// Suggested vault label.
     pub label: String,
     /// The actual secret value.
@@ -21,6 +25,8 @@ pub struct DetectedCredential {
     pub masked: String,
     /// Whether this is a known provider key that should be auto-stored.
     pub auto_store: bool,
+    /// Type-specific metadata parsed from the detected secret.
+    pub metadata: serde_json::Value,
 }
 
 /// Known credential patterns for environment variable scanning.
@@ -82,6 +88,8 @@ pub fn quick_scan() -> Vec<DetectedCredential> {
                     source: format!("env:{var_name}"),
                     masked: mask_secret(&value),
                     auto_store,
+                    credential_type: CredentialType::ApiKey,
+                    metadata: serde_json::Value::Object(serde_json::Map::new()),
                 });
             }
         }
@@ -122,6 +130,8 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
                                     source: format!("file:{}", path.display()),
                                     masked: format!("[SSH key: {name}]"),
                                     auto_store: false,
+                                    credential_type: CredentialType::SshKey,
+                                    metadata: serde_json::Value::Object(serde_json::Map::new()),
                                 });
                             }
                         }
@@ -153,6 +163,8 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
                                     source: format!("file:{}", path.display()),
                                     masked: mask_secret(val),
                                     auto_store: false,
+                                    credential_type: CredentialType::SecretText,
+                                    metadata: serde_json::Value::Object(serde_json::Map::new()),
                                 });
                             }
                         }
@@ -212,6 +224,8 @@ fn scan_env_file(path: &Path) -> Vec<DetectedCredential> {
                         source: format!("file:{}", path.display()),
                         masked: mask_secret(val),
                         auto_store: is_provider,
+                        credential_type: CredentialType::SecretText,
+                        metadata: serde_json::Value::Object(serde_json::Map::new()),
                     });
                 }
             }
@@ -249,6 +263,8 @@ fn scan_tls_directory(dir: &Path) -> Vec<DetectedCredential> {
                             source: format!("file:{}", path.display()),
                             masked: format!("[TLS key: {name}]"),
                             auto_store: false,
+                            credential_type: CredentialType::TlsCert,
+                            metadata: serde_json::Value::Object(serde_json::Map::new()),
                         });
                     } else if content.contains("CERTIFICATE") {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -259,6 +275,8 @@ fn scan_tls_directory(dir: &Path) -> Vec<DetectedCredential> {
                             source: format!("file:{}", path.display()),
                             masked: format!("[TLS cert: {name}]"),
                             auto_store: false,
+                            credential_type: CredentialType::TlsCert,
+                            metadata: serde_json::Value::Object(serde_json::Map::new()),
                         });
                     }
                 }
