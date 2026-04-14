@@ -711,10 +711,23 @@ impl ApiClient for DefaultRuntimeClient {
             let mut pending_tool: Option<(String, String, String)> = None;
             let mut saw_stop = false;
 
-            while let Some(event) = stream
-                .next_event()
-                .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?
+            let stall_timeout = std::time::Duration::from_secs(300); // 5 minutes
+            loop {
+            let next = tokio::time::timeout(stall_timeout, stream.next_event()).await;
+            let event = match next {
+                Ok(Ok(Some(ev))) => ev,
+                Ok(Ok(None)) => break,
+                Ok(Err(error)) => return Err(RuntimeError::new(error.to_string())),
+                Err(_timeout) => {
+                    // Stream stalled for 5 minutes — break to trigger non-streaming fallback
+                    if let Some(ref tx) = tui_tx {
+                        let _ = tx.send(TuiEvent::System(
+                            "Stream stalled for 5 minutes — retrying without streaming...".to_string()
+                        ));
+                    }
+                    break;
+                }
+            };
             {
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
@@ -812,6 +825,7 @@ impl ApiClient for DefaultRuntimeClient {
                     }
                 }
             }
+            } // close loop
 
             if !saw_stop
                 && events.iter().any(|event| {

@@ -842,6 +842,14 @@ impl AnvilTui {
                         format!(" | Session: {session_pct:.1}% | Block: {dur_str}"),
                         Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
                     ),
+                    // Context-low warning
+                    if pct >= 95.0 {
+                        Span::styled(" ⚠ CONTEXT CRITICAL", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                    } else if pct >= 80.0 {
+                        Span::styled(" ⚠ context high", Style::default().fg(Color::Yellow))
+                    } else {
+                        Span::raw("")
+                    },
                 ],
                 vec![Span::styled(
                     version_str,
