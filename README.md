@@ -2,14 +2,17 @@
 
 Built for defense. Geared for offense.
 
-Multi-provider AI coding assistant with full-screen TUI, live streaming, remote control, encrypted credential vault, and 90+ commands.
+Multi-provider AI coding assistant with full-screen TUI, credential auto-detection, network egress control, and 90+ commands.
 
-## What's New in v2.1.1
+## What's New in v2.1.2
 
-- **Live Streaming** — Responses render token-by-token in real-time
-- **Remote Control** — Share sessions via `/remote-control` with browser WebSocket relay
-- **Thinking Mode** — Visible reasoning indicator with `/think` toggle
-- **Cross-Platform Builds** — macOS ARM64/Intel, Linux x86_64/ARM64, Windows
+- **Credential Auto-Detection** — Scans env vars, dotfiles, SSH keys, TLS certs. Auto-vaults provider keys.
+- **Network Egress Control** — Domain allowlist for tool network access. Default: AI provider APIs only.
+- **Signed Audit Trail** — HMAC-SHA256 signed session transcripts for compliance.
+- **Conversation Branching** — `/fork` to snapshot and branch conversations.
+- **Clickable URLs** — OSC 8 hyperlinks in TUI. `/remote-control` auto-opens browser.
+- **Markdown Export** — `/export md` for clean, shareable transcripts.
+- **Expanded Pricing** — Cost tracking for OpenAI, xAI, Ollama alongside Anthropic.
 
 ## Installation
 
@@ -44,28 +47,28 @@ Windows: Download `anvil-x86_64-pc-windows-gnu.exe` from [releases](https://gith
 - **1M Token Context** — automatic archival and QMD-powered retrieval
 - **Live Streaming** — real-time token-by-token response rendering
 - **Remote Control** — share sessions from any browser via WebSocket
-- **Encrypted Vault** — AES-256-GCM credential storage with Argon2id KDF
+- **Credential Scanner** — auto-detects and vaults API keys, SSH keys, TLS certs
+- **Encrypted Vault** — AES-256-GCM storage with Argon2id KDF
+- **Network Egress Control** — domain allowlist for tool network access
 - **File Sandbox** — safe file operations with permission gating
 - **45+ Tools** — Bash, file ops, search, LSP, MCP servers, image generation
 - **90+ Commands** — comprehensive slash command system
-- **Full TUI** — tabs, themes, vim mode, thinking indicator
+- **Full TUI** — tabs, themes, vim mode, thinking indicator, inline images
 - **7 Agent Types** — specialized agents with worktree isolation
+- **Signed Audit Trail** — HMAC-SHA256 session transcripts
 - **AnvilHub** — marketplace for skills, plugins, agents, and themes
 
 ## Quick Start
 
 ```bash
-# Interactive session (wizard runs on first launch)
-anvil
-
-# One-shot prompt
-anvil prompt "explain the architecture of this repo"
-
-# Share your session via browser
-/remote-control
-
-# Toggle thinking mode
-/think
+anvil                    # Interactive session
+anvil prompt "explain"   # One-shot prompt
+/remote-control          # Share via browser
+/fork experiment         # Branch the conversation
+/vault scan              # Detect and vault credentials
+/security egress         # Manage network allowlist
+/export md               # Export as Markdown
+/think                   # Toggle thinking mode
 ```
 
 ## Supported Providers
@@ -80,7 +83,6 @@ anvil prompt "explain the architecture of this repo"
 ## Documentation
 
 - **[anvilhub.culpur.net](https://anvilhub.culpur.net)** — Package marketplace & documentation
-- **[anvilhub.culpur.net/install](https://anvilhub.culpur.net/install)** — Installation guide
 - **[anvilhub.culpur.net/about](https://anvilhub.culpur.net/about)** — Full changelog
 
 ## License
