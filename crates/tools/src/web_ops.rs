@@ -360,11 +360,15 @@ fn extract_title(content: &str, raw_body: &str, content_type: &str) -> Option<St
 }
 
 pub(crate) fn html_to_text(html: &str) -> String {
-    let mut text = String::with_capacity(html.len());
+    // First pass: strip <style>...</style> and <script>...</script> blocks entirely
+    let stripped = strip_element_blocks(html, "style");
+    let stripped = strip_element_blocks(&stripped, "script");
+
+    let mut text = String::with_capacity(stripped.len());
     let mut in_tag = false;
     let mut previous_was_space = false;
 
-    for ch in html.chars() {
+    for ch in stripped.chars() {
         match ch {
             '<' => in_tag = true,
             '>' => in_tag = false,
@@ -387,6 +391,40 @@ pub(crate) fn html_to_text(html: &str) -> String {
     }
 
     collapse_whitespace(&decode_html_entities(&text))
+}
+
+/// Remove all occurrences of `<tag ...>...</tag>` (case-insensitive) from HTML.
+fn strip_element_blocks(html: &str, tag: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let lower = html.to_lowercase();
+    let open_pattern = format!("<{tag}");
+    let close_pattern = format!("</{tag}>");
+    let mut cursor = 0;
+
+    while cursor < html.len() {
+        if let Some(start) = lower[cursor..].find(&open_pattern) {
+            let abs_start = cursor + start;
+            let after_tag = abs_start + open_pattern.len();
+            if after_tag < lower.len() {
+                let next_byte = lower.as_bytes()[after_tag];
+                if next_byte == b'>' || next_byte == b' ' || next_byte == b'\t' || next_byte == b'\n' {
+                    result.push_str(&html[cursor..abs_start]);
+                    if let Some(end) = lower[abs_start..].find(&close_pattern) {
+                        cursor = abs_start + end + close_pattern.len();
+                    } else {
+                        cursor = html.len();
+                    }
+                    continue;
+                }
+            }
+            result.push_str(&html[cursor..after_tag]);
+            cursor = after_tag;
+        } else {
+            result.push_str(&html[cursor..]);
+            break;
+        }
+    }
+    result
 }
 
 fn decode_html_entities(input: &str) -> String {

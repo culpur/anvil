@@ -1179,6 +1179,8 @@ fn run_resume_command(
         | SlashCommand::Fast
         | SlashCommand::ReviewPr { .. }
         | SlashCommand::RemoteControl { .. }
+        | SlashCommand::Loop { .. }
+        | SlashCommand::Focus
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2658,6 +2660,22 @@ impl LiveCli {
                 } else {
                     tui.clear_relay_tx();
                 }
+                return Ok(false);
+            }
+            SlashCommand::Focus => {
+                tui.focus_mode = !tui.focus_mode;
+                tui.push_system(if tui.focus_mode {
+                    "Focus view enabled — showing prompts, tool summaries, and responses only".to_string()
+                } else {
+                    "Focus view disabled — showing full conversation".to_string()
+                });
+                return Ok(false);
+            }
+            SlashCommand::Loop { prompt } => {
+                tui.push_system(format!(
+                    "Loop mode: {}",
+                    if let Some(p) = prompt { format!("will repeat: {p}") } else { "use /loop <prompt> to set a recurring prompt".to_string() }
+                ));
                 return Ok(false);
             }
             _ => {}
@@ -4235,6 +4253,14 @@ impl LiveCli {
             }
             SlashCommand::RemoteControl { action } => {
                 println!("{}", self.run_remote_control_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Loop { prompt } => {
+                println!("Loop mode: {}", prompt.as_deref().unwrap_or("no prompt set"));
+                false
+            }
+            SlashCommand::Focus => {
+                println!("Focus view toggle (TUI only)");
                 false
             }
             SlashCommand::Unknown(name) => {

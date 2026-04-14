@@ -344,6 +344,12 @@ pub enum SlashCommand {
         /// Sub-command: `None` = start, `Some("stop")` = stop, `Some("status")` = status
         action: Option<String>,
     },
+    /// `/loop [prompt]` or `/proactive [prompt]` — autonomous loop mode
+    Loop {
+        prompt: Option<String>,
+    },
+    /// `/focus` — toggle focus view (prompt + tool summary + final response only)
+    Focus,
     Unknown(String),
 }
 
@@ -623,6 +629,10 @@ impl SlashCommand {
             "remote-control" | "rc" => Self::RemoteControl {
                 action: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
+            "loop" | "proactive" => Self::Loop {
+                prompt: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "focus" => Self::Focus,
             other => Self::Unknown(other.to_string()),
         })
     }

@@ -164,6 +164,14 @@ impl AnvilTui {
                 let n = ch as usize - '0' as usize;
                 self.switch_tab(n.saturating_sub(1));
             }
+            KeyCode::Char('o' | 'O') => {
+                self.focus_mode = !self.focus_mode;
+                self.push_system(if self.focus_mode {
+                    "Focus view enabled (Ctrl+O to toggle)".to_string()
+                } else {
+                    "Focus view disabled".to_string()
+                });
+            }
             KeyCode::Char('c' | 'C') => {
                 if self.active_tab().input.is_empty() {
                     if let Some(first) = self.ctrl_c_empty_at {

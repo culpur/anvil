@@ -131,6 +131,8 @@ pub struct AnvilTui {
     pub(super) remote_url: String,
     /// Remote-control pairing/session code (shown while awaiting a client).
     pub(super) remote_code: String,
+    /// Focus mode — show only prompt + tool summary + final response.
+    pub(super) focus_mode: bool,
 }
 
 impl AnvilTui {
@@ -187,6 +189,7 @@ impl AnvilTui {
                 ctrl_c_empty_at: None,
                 remote_url: String::new(),
                 remote_code: String::new(),
+                focus_mode: false,
             },
             TuiSender(tx),
         ))

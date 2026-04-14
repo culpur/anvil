@@ -101,6 +101,9 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/fork".into(), hint: "Branch conversation (fork/list/switch)".into() },
         CompletionItem { insert: "/share".into(), hint: "Share session via URL".into() },
         CompletionItem { insert: "/audit".into(), hint: "Session audit and verification".into() },
+        CompletionItem { insert: "/focus".into(), hint: "Toggle focus view (Ctrl+O)".into() },
+        CompletionItem { insert: "/loop".into(), hint: "Recurring prompt on interval".into() },
+        CompletionItem { insert: "/proactive".into(), hint: "Alias for /loop".into() },
     ]
 }
 
