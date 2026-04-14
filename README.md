@@ -4,15 +4,14 @@ Built for defense. Geared for offense.
 
 Multi-provider AI coding assistant with full-screen TUI, credential auto-detection, network egress control, and 90+ commands.
 
-## What's New in v2.1.2
+## What's New in v2.1.3
 
-- **Credential Auto-Detection** — Scans env vars, dotfiles, SSH keys, TLS certs. Auto-vaults provider keys.
-- **Network Egress Control** — Domain allowlist for tool network access. Default: AI provider APIs only.
-- **Signed Audit Trail** — HMAC-SHA256 signed session transcripts for compliance.
-- **Conversation Branching** — `/fork` to snapshot and branch conversations.
-- **Clickable URLs** — OSC 8 hyperlinks in TUI. `/remote-control` auto-opens browser.
-- **Markdown Export** — `/export md` for clean, shareable transcripts.
-- **Expanded Pricing** — Cost tracking for OpenAI, xAI, Ollama alongside Anthropic.
+- **Edition 2024 Mode** — Optimized session defaults and provider routing for 2024-era models.
+- **Focus View** — Distraction-free single-pane mode. Toggle with `/focus` to hide sidebars and agent panels.
+- **Context-Low Warning** — Proactive alert when context window nears capacity, before auto-compaction fires.
+- **Stalled Stream Handling** — Detects and recovers from stuck token streams without losing the response.
+- **WebFetch Cleanup** — Improved HTML-to-text extraction; strips nav, footer, and cookie banners automatically.
+- **`/loop` and `/proactive`** — New slash commands for recurring prompt loops and proactive agent nudges.
 
 ## Installation
 
@@ -88,3 +87,4 @@ anvil prompt "explain"   # One-shot prompt
 ## License
 
 Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
+
