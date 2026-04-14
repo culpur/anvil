@@ -105,6 +105,7 @@ pub enum SlashCommand {
     Diff,
     Version,
     Export {
+        format: Option<String>,
         path: Option<String>,
     },
     Session {
@@ -408,9 +409,15 @@ impl SlashCommand {
             "init" => Self::Init,
             "diff" => Self::Diff,
             "version" => Self::Version,
-            "export" => Self::Export {
-                path: parts.next().map(ToOwned::to_owned),
-            },
+            "export" => {
+                let first = parts.next().map(ToOwned::to_owned);
+                let (format, path) = match first.as_deref() {
+                    Some("md" | "markdown") => (Some("md".to_string()), parts.next().map(ToOwned::to_owned)),
+                    Some("text" | "txt") => (Some("text".to_string()), parts.next().map(ToOwned::to_owned)),
+                    _ => (None, first),
+                };
+                Self::Export { format, path }
+            }
             "session" => Self::Session {
                 action: parts.next().map(ToOwned::to_owned),
                 target: parts.next().map(ToOwned::to_owned),

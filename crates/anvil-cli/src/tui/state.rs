@@ -151,27 +151,38 @@ impl LogEntry {
                 lines
             }
             LogEntry::System(text) => {
-                let mut lines = vec![Line::from(vec![
-                    Span::styled(
-                        "◆  ",
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                    Span::styled(
-                        text.lines().next().unwrap_or("").to_string(),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ])];
-                for extra in text.lines().skip(1) {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {extra}"),
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
+                let sys_style = Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC);
+                let link_style = Style::default()
+                    .fg(rgb(theme.accent))
+                    .add_modifier(Modifier::UNDERLINED);
+
+                let mut lines = Vec::new();
+                for (i, raw_line) in text.lines().enumerate() {
+                    let prefix = if i == 0 { "◆  " } else { "   " };
+                    let mut spans = vec![Span::styled(prefix.to_string(), sys_style)];
+                    // Detect URLs and render as OSC 8 clickable hyperlinks
+                    let mut rest = raw_line;
+                    while let Some(start) = rest.find("https://").or_else(|| rest.find("http://")) {
+                        if start > 0 {
+                            spans.push(Span::styled(rest[..start].to_string(), sys_style));
+                        }
+                        let url_end = rest[start..].find(|c: char| c.is_whitespace() || c == '>' || c == ')' || c == ']')
+                            .map(|e| start + e)
+                            .unwrap_or(rest.len());
+                        let url = &rest[start..url_end];
+                        // OSC 8 hyperlink: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
+                        spans.push(Span::styled(
+                            format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\"),
+                            link_style,
+                        ));
+                        rest = &rest[url_end..];
+                    }
+                    if !rest.is_empty() {
+                        spans.push(Span::styled(rest.to_string(), sys_style));
+                    }
+                    lines.push(Line::from(spans));
                 }
                 lines.push(Line::from(""));
                 lines

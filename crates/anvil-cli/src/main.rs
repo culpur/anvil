@@ -20,7 +20,7 @@ mod wizard;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
-pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report};
+pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report};
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 
@@ -1069,13 +1069,19 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_version_report()),
         }),
-        SlashCommand::Export { path } => {
+        SlashCommand::Export { format, path } => {
             let export_path = resolve_export_path(path.as_deref(), session)?;
-            fs::write(&export_path, render_export_text(session))?;
+            let content = if format.as_deref() == Some("md") {
+                render_export_markdown(session)
+            } else {
+                render_export_text(session)
+            };
+            fs::write(&export_path, content)?;
+            let fmt_label = if format.as_deref() == Some("md") { "markdown" } else { "text" };
             Ok(ResumeCommandOutcome {
                 session: session.clone(),
                 message: Some(format!(
-                    "Export\n  Result           wrote transcript\n  File             {}\n  Messages         {}",
+                    "Export\n  Result           wrote {fmt_label} transcript\n  File             {}\n  Messages         {}",
                     export_path.display(),
                     session.messages.len(),
                 )),
@@ -2641,8 +2647,8 @@ impl LiveCli {
                 run_init()?;
                 ("Initialized ANVIL.md and config files.".to_string(), false)
             }
-            SlashCommand::Export { path } => {
-                self.export_session(path.as_deref())?;
+            SlashCommand::Export { format, path } => {
+                self.export_session(format.as_deref(), path.as_deref())?;
                 ("Session exported.".to_string(), false)
             }
             // Commands that trigger model turns — run them as normal turns
@@ -3746,8 +3752,8 @@ impl LiveCli {
                 Self::print_version();
                 false
             }
-            SlashCommand::Export { path } => {
-                self.export_session(path.as_deref())?;
+            SlashCommand::Export { format, path } => {
+                self.export_session(format.as_deref(), path.as_deref())?;
                 false
             }
             SlashCommand::Session { action, target } => {
@@ -4173,8 +4179,11 @@ impl LiveCli {
                 self.relay_session = Some(session);
                 self.relay_event_tx = Some(event_tx);
 
+                // Auto-open the viewer URL in the default browser
+                let _ = open::that(&url);
+
                 format!(
-                    "Remote control started\n  URL              {url}\n  Pairing code     {pairing_code}\n  Hash             {hash}\n\nOpen the URL in a browser and enter the pairing code when prompted.\n\nNext\n  /remote-control status   Check connection status\n  /remote-control stop     Stop the relay session"
+                    "Remote control started\n  URL              {url}\n  Pairing code     {pairing_code}\n  Hash             {hash}\n\nThe URL has been opened in your default browser.\nEnter the pairing code when prompted.\n\nNext\n  /remote-control status   Check connection status\n  /remote-control stop     Stop the relay session"
                 )
             }
         }
@@ -4428,12 +4437,19 @@ impl LiveCli {
 
     fn export_session(
         &self,
+        format: Option<&str>,
         requested_path: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let export_path = resolve_export_path(requested_path, self.runtime.session())?;
-        fs::write(&export_path, render_export_text(self.runtime.session()))?;
+        let content = if format == Some("md") {
+            render_export_markdown(self.runtime.session())
+        } else {
+            render_export_text(self.runtime.session())
+        };
+        fs::write(&export_path, content)?;
+        let fmt_label = if format == Some("md") { "markdown" } else { "text" };
         println!(
-            "Export\n  Result           wrote transcript\n  File             {}\n  Messages         {}",
+            "Export\n  Result           wrote {fmt_label} transcript\n  File             {}\n  Messages         {}",
             export_path.display(),
             self.runtime.session().messages.len(),
         );

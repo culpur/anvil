@@ -19,7 +19,7 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/version".into(), hint: "CLI version info".into() },
         CompletionItem { insert: "/memory".into(), hint: "Loaded memory files".into() },
         CompletionItem { insert: "/config".into(), hint: "Inspect configuration".into() },
-        CompletionItem { insert: "/export".into(), hint: "Export conversation".into() },
+        CompletionItem { insert: "/export".into(), hint: "Export conversation (use /export md for Markdown)".into() },
         CompletionItem { insert: "/session".into(), hint: "List or switch sessions".into() },
         CompletionItem { insert: "/permissions".into(), hint: "Show or set permission mode".into() },
         CompletionItem { insert: "/init".into(), hint: "Scaffold ANVIL.md + config".into() },
@@ -93,6 +93,11 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/finetune".into(), hint: "Fine-tuning: prepare data, validate, start job, status".into() },
         CompletionItem { insert: "/webhook".into(), hint: "Webhooks: list, add, test, or remove endpoints".into() },
         CompletionItem { insert: "/plugin-sdk".into(), hint: "Plugin SDK: init, build, test, or publish".into() },
+        CompletionItem { insert: "/remote-control".into(), hint: "Share session via browser WebSocket relay".into() },
+        CompletionItem { insert: "/think".into(), hint: "Toggle thinking/reasoning mode".into() },
+        CompletionItem { insert: "/fast".into(), hint: "Toggle fast mode (lower token budget)".into() },
+        CompletionItem { insert: "/review-pr".into(), hint: "AI-powered pull request review".into() },
+        CompletionItem { insert: "/sleep".into(), hint: "Activate the furnace screensaver".into() },
     ]
 }
 

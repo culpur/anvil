@@ -1207,6 +1207,84 @@ pub(crate) fn render_version_report() -> String {
     )
 }
 
+/// Render a session as clean, readable Markdown with proper formatting.
+pub(crate) fn render_export_markdown(session: &Session) -> String {
+    let mut out = String::from("# Anvil Session Export\n\n");
+    let mut total_input = 0u64;
+    let mut total_output = 0u64;
+    let mut turn = 0usize;
+
+    for message in &session.messages {
+        if let Some(ref u) = message.usage {
+            total_input += u.input_tokens as u64;
+            total_output += u.output_tokens as u64;
+        }
+        match message.role {
+            MessageRole::System => continue, // skip system prompts
+            MessageRole::User => {
+                turn += 1;
+                out.push_str(&format!("---\n\n### Turn {turn} — User\n\n"));
+                for block in &message.blocks {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            out.push_str(text);
+                            out.push_str("\n\n");
+                        }
+                        ContentBlock::Image { media_type, data } => {
+                            out.push_str(&format!("*[Image: {media_type}, {} bytes]*\n\n", data.len()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            MessageRole::Assistant => {
+                out.push_str("### Assistant\n\n");
+                for block in &message.blocks {
+                    match block {
+                        ContentBlock::Text { text } => {
+                            out.push_str(text);
+                            out.push_str("\n\n");
+                        }
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            out.push_str(&format!("> **Tool: {name}**\n"));
+                            // Show first 200 chars of input as context
+                            let preview: String = input.chars().take(200).collect();
+                            if !preview.is_empty() {
+                                out.push_str(&format!("> ```\n> {}\n> ```\n", preview.replace('\n', "\n> ")));
+                            }
+                            out.push('\n');
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            MessageRole::Tool => {
+                for block in &message.blocks {
+                    if let ContentBlock::ToolResult { tool_name, output, is_error, .. } = block {
+                        let status = if *is_error { "error" } else { "ok" };
+                        let preview: String = output.lines().take(5).collect::<Vec<_>>().join("\n");
+                        out.push_str(&format!("> **Result ({tool_name})** [{status}]\n"));
+                        if !preview.is_empty() {
+                            out.push_str(&format!("> ```\n> {}\n> ```\n", preview.replace('\n', "\n> ")));
+                        }
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+    }
+
+    out.push_str("---\n\n");
+    out.push_str(&format!(
+        "**Session summary:** {} turns, {} messages, {} input tokens, {} output tokens\n",
+        turn,
+        session.messages.len(),
+        total_input,
+        total_output,
+    ));
+    out
+}
+
 pub(crate) fn render_export_text(session: &Session) -> String {
     let mut lines = vec!["# Conversation Export".to_string(), String::new()];
     for (index, message) in session.messages.iter().enumerate() {
