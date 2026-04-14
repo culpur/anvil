@@ -1733,6 +1733,19 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
                 // Check if the remote message is a slash command
                 if message.starts_with('/') {
+                    // Vault commands: run silently, send result ONLY to web viewer (not TUI)
+                    if message.starts_with("/vault ") {
+                        let vault_args = message.strip_prefix("/vault ").unwrap_or("");
+                        let result = crate::vault::run_vault_command_impl(Some(vault_args));
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::System {
+                                tab_id: 0,
+                                message: result,
+                            });
+                        }
+                        continue;
+                    }
+
                     if let Some(command) = SlashCommand::parse(&message) {
                         tui.push_system(format!("[Remote] {message}"));
                         match cli.handle_repl_command_tui(command, &mut tui) {
