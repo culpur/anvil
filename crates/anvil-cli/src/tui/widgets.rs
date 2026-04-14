@@ -98,6 +98,9 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/fast".into(), hint: "Toggle fast mode (lower token budget)".into() },
         CompletionItem { insert: "/review-pr".into(), hint: "AI-powered pull request review".into() },
         CompletionItem { insert: "/sleep".into(), hint: "Activate the furnace screensaver".into() },
+        CompletionItem { insert: "/fork".into(), hint: "Branch conversation (fork/list/switch)".into() },
+        CompletionItem { insert: "/share".into(), hint: "Share session via URL".into() },
+        CompletionItem { insert: "/audit".into(), hint: "Session audit and verification".into() },
     ]
 }
 

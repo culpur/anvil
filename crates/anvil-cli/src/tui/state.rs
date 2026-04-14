@@ -215,6 +215,10 @@ pub(crate) struct Tab {
     pub session_id: String,
     pub completion: CompletionPopup,
     pub has_unread: bool,
+    /// Conversation branches — each is a snapshot of log at branch point.
+    pub branches: Vec<(String, Vec<LogEntry>)>,
+    /// Active branch index (0 = main, 1+ = branches).
+    pub active_branch: usize,
 }
 
 impl Tab {
@@ -240,7 +244,39 @@ impl Tab {
             session_id: session_id.into(),
             completion: CompletionPopup::default(),
             has_unread: false,
+            branches: Vec::new(),
+            active_branch: 0,
         }
+    }
+
+    /// Create a new conversation branch from the current log state.
+    pub fn create_branch(&mut self, name: &str) -> usize {
+        self.branches.push((name.to_string(), self.log.clone()));
+        self.branches.len() // 1-indexed for display
+    }
+
+    /// Switch to a branch by index (1-indexed). 0 = stay on current.
+    pub fn switch_branch(&mut self, idx: usize) -> bool {
+        if idx == 0 || idx > self.branches.len() {
+            return false;
+        }
+        // Save current log to the previously active branch slot
+        if self.active_branch > 0 && self.active_branch <= self.branches.len() {
+            self.branches[self.active_branch - 1].1 = self.log.clone();
+        }
+        // Restore the target branch
+        self.log = self.branches[idx - 1].1.clone();
+        self.active_branch = idx;
+        true
+    }
+
+    /// List all branches with names.
+    pub fn list_branches(&self) -> Vec<(usize, &str, bool)> {
+        self.branches
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (i + 1, name.as_str(), i + 1 == self.active_branch))
+            .collect()
     }
 }
 

@@ -1752,6 +1752,54 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                // /fork is TUI-only — conversation branching
+                if let Some(fork_rest) = trimmed.strip_prefix("/fork") {
+                    let rest = fork_rest.trim();
+                    let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                    let action = parts.first().copied().unwrap_or("").trim();
+                    match action {
+                        "list" | "ls" => {
+                            let branches = tui.active_tab().branches.iter().enumerate()
+                                .map(|(i, (name, log))| {
+                                    let active = if i + 1 == tui.active_tab().active_branch { " (active)" } else { "" };
+                                    format!("  {}. {} — {} messages{}", i + 1, name, log.len(), active)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            if branches.is_empty() {
+                                tui.push_system("No branches yet. Use /fork [name] to create one.".to_string());
+                            } else {
+                                tui.push_system(format!("Conversation branches:\n{branches}"));
+                            }
+                        }
+                        "switch" => {
+                            if let Some(idx_str) = parts.get(1) {
+                                if let Ok(idx) = idx_str.trim().parse::<usize>() {
+                                    if tui.active_tab_mut().switch_branch(idx) {
+                                        tui.push_system(format!("Switched to branch {idx}"));
+                                    } else {
+                                        tui.push_system(format!("Invalid branch: {idx}. Use /fork list to see branches."));
+                                    }
+                                } else {
+                                    tui.push_system("Usage: /fork switch <number>".to_string());
+                                }
+                            } else {
+                                tui.push_system("Usage: /fork switch <number>".to_string());
+                            }
+                        }
+                        "" => {
+                            tui.push_system(
+                                "Fork commands:\n  /fork [name]        create a branch from current conversation\n  /fork list           list all branches\n  /fork switch <N>     switch to branch N".to_string(),
+                            );
+                        }
+                        name => {
+                            let idx = tui.active_tab_mut().create_branch(name);
+                            tui.push_system(format!("Branch '{name}' created (#{idx}) — current conversation preserved as branch point"));
+                        }
+                    }
+                    continue;
+                }
+
                 if let Some(command) = SlashCommand::parse(trimmed) {
                     // Handle slash commands — capture their output as a system message.
                     match cli.handle_repl_command_tui(command, &mut tui) {

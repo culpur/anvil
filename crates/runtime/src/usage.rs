@@ -74,6 +74,60 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
     if normalized.contains("sonnet") {
         return Some(ModelPricing::default_sonnet_tier());
     }
+    // OpenAI models
+    if normalized.contains("gpt-4o-mini") || normalized.contains("gpt-4o-m") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.15,
+            output_cost_per_million: 0.60,
+            cache_creation_cost_per_million: 0.075,
+            cache_read_cost_per_million: 0.075,
+        });
+    }
+    if normalized.contains("gpt-4o") || normalized.contains("gpt-5") {
+        return Some(ModelPricing {
+            input_cost_per_million: 2.50,
+            output_cost_per_million: 10.0,
+            cache_creation_cost_per_million: 1.25,
+            cache_read_cost_per_million: 1.25,
+        });
+    }
+    if normalized.contains("o3") || normalized.contains("o4") {
+        return Some(ModelPricing {
+            input_cost_per_million: 10.0,
+            output_cost_per_million: 40.0,
+            cache_creation_cost_per_million: 5.0,
+            cache_read_cost_per_million: 2.5,
+        });
+    }
+    // xAI / Grok
+    if normalized.contains("grok-3-mini") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.30,
+            output_cost_per_million: 0.50,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.0,
+        });
+    }
+    if normalized.contains("grok") {
+        return Some(ModelPricing {
+            input_cost_per_million: 3.0,
+            output_cost_per_million: 15.0,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.0,
+        });
+    }
+    // Ollama / local models — free
+    if normalized.contains("llama") || normalized.contains("qwen") || normalized.contains("mistral")
+        || normalized.contains("deepseek") || normalized.contains("gemma") || normalized.contains("phi")
+        || normalized.contains(':')
+    {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.0,
+            output_cost_per_million: 0.0,
+            cache_creation_cost_per_million: 0.0,
+            cache_read_cost_per_million: 0.0,
+        });
+    }
     None
 }
 
