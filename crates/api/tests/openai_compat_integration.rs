@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -400,7 +403,7 @@ struct ScopedEnvVar {
 impl ScopedEnvVar {
     fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
+        unsafe { std::env::set_var(key, value); }
         Self { key, previous }
     }
 }

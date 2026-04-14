@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
 
@@ -954,7 +957,7 @@ mod tests {
     #[test]
     fn missing_xai_api_key_is_provider_specific() {
         let _lock = env_lock();
-        std::env::remove_var("XAI_API_KEY");
+        unsafe { std::env::remove_var("XAI_API_KEY"); }
         let error = OpenAiCompatClient::from_env(OpenAiCompatConfig::xai())
             .expect_err("missing key should error");
         assert!(matches!(

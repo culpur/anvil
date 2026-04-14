@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::cmp::Reverse;
 use std::fs;
 use std::io;
@@ -757,7 +760,7 @@ mod tests {
         // Hold the env mutex so no other test can set ANVIL_ALLOW_GLOBAL_WRITES
         // concurrently and accidentally let this write through.
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES");
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
 
         // enforce_write_boundary is private; exercise it through write_file.
         // The function must return PermissionDenied before trying to touch disk.
@@ -782,9 +785,9 @@ mod tests {
         let outside = std::path::Path::new("/var/anvil-sandbox-bypass-test/secret.txt");
 
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("ANVIL_ALLOW_GLOBAL_WRITES", "1");
+        unsafe { std::env::set_var("ANVIL_ALLOW_GLOBAL_WRITES", "1"); }
         let result = write_file(outside.to_string_lossy().as_ref(), "bypass");
-        std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES");
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
         drop(_guard);
 
         match result {

@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -1195,7 +1198,7 @@ mod tests {
 
     #[test]
     fn web_fetch_returns_prompt_aware_summary() {
-        std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1");
+        unsafe { std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1"); }
         let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::html(
                 200,
@@ -1235,7 +1238,7 @@ mod tests {
 
     #[test]
     fn web_fetch_supports_plain_text_and_rejects_invalid_url() {
-        std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1");
+        unsafe { std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1"); }
         let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::text(200, "OK", "plain text response")
         }));
@@ -1283,10 +1286,10 @@ mod tests {
             )
         }));
 
-        std::env::set_var(
+        unsafe { std::env::set_var(
             "ANVIL_WEB_SEARCH_BASE_URL",
             format!("http://{}/search", server.addr()),
-        );
+        ); }
         let result = execute_tool(
             "WebSearch",
             &json!({
@@ -1296,7 +1299,7 @@ mod tests {
             }),
         )
         .expect("WebSearch should succeed");
-        std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL");
+        unsafe { std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL"); }
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         assert_eq!(output["query"], "rust web search");
@@ -1331,10 +1334,10 @@ mod tests {
             )
         }));
 
-        std::env::set_var(
+        unsafe { std::env::set_var(
             "ANVIL_WEB_SEARCH_BASE_URL",
             format!("http://{}/fallback", server.addr()),
-        );
+        ); }
         let result = execute_tool(
             "WebSearch",
             &json!({
@@ -1342,7 +1345,7 @@ mod tests {
             }),
         )
         .expect("WebSearch fallback parsing should succeed");
-        std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL");
+        unsafe { std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL"); }
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
         let results = output["results"].as_array().expect("results array");
@@ -1355,10 +1358,10 @@ mod tests {
         assert_eq!(content[0]["url"], "https://example.com/one");
         assert_eq!(content[1]["url"], "https://docs.rs/tokio");
 
-        std::env::set_var("ANVIL_WEB_SEARCH_BASE_URL", "://bad-base-url");
+        unsafe { std::env::set_var("ANVIL_WEB_SEARCH_BASE_URL", "://bad-base-url"); }
         let error = execute_tool("WebSearch", &json!({ "query": "generic links" }))
             .expect_err("invalid base URL should fail");
-        std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL");
+        unsafe { std::env::remove_var("ANVIL_WEB_SEARCH_BASE_URL"); }
         assert!(error.contains("relative URL without a base") || error.contains("empty host"));
     }
 
@@ -1425,7 +1428,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos.json");
-        std::env::set_var("ANVIL_TODO_STORE", &path);
+        unsafe { std::env::set_var("ANVIL_TODO_STORE", &path); }
 
         let first = execute_tool(
             "TodoWrite",
@@ -1451,7 +1454,7 @@ mod tests {
             }),
         )
         .expect("TodoWrite should succeed");
-        std::env::remove_var("ANVIL_TODO_STORE");
+        unsafe { std::env::remove_var("ANVIL_TODO_STORE"); }
         let _ = std::fs::remove_file(path);
 
         let second_output: serde_json::Value = serde_json::from_str(&second).expect("valid json");
@@ -1472,7 +1475,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let path = temp_path("todos-errors.json");
-        std::env::set_var("ANVIL_TODO_STORE", &path);
+        unsafe { std::env::set_var("ANVIL_TODO_STORE", &path); }
 
         let empty = execute_tool("TodoWrite", &json!({ "todos": [] }))
             .expect_err("empty todos should fail");
@@ -1512,7 +1515,7 @@ mod tests {
             }),
         )
         .expect("completed todos should succeed");
-        std::env::remove_var("ANVIL_TODO_STORE");
+        unsafe { std::env::remove_var("ANVIL_TODO_STORE"); }
         let _ = fs::remove_file(path);
 
         let output: serde_json::Value = serde_json::from_str(&nudge).expect("valid json");
@@ -1534,7 +1537,7 @@ mod tests {
             "Guide on using the help skill for Anvil CLI",
         )
         .expect("write SKILL.md");
-        std::env::set_var("ANVIL_CONFIG_HOME", &tmp);
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &tmp); }
 
         let result = execute_tool(
             "Skill",
@@ -1611,7 +1614,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-store");
-        std::env::set_var("ANVIL_AGENT_STORE", &dir);
+        unsafe { std::env::set_var("ANVIL_AGENT_STORE", &dir); }
         let captured = Arc::new(Mutex::new(None::<AgentJob>));
         let captured_for_spawn = Arc::clone(&captured);
 
@@ -1632,7 +1635,7 @@ mod tests {
             },
         )
         .expect("Agent should succeed");
-        std::env::remove_var("ANVIL_AGENT_STORE");
+        unsafe { std::env::remove_var("ANVIL_AGENT_STORE"); }
 
         assert_eq!(manifest.name, "ship-audit");
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
@@ -1689,7 +1692,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = temp_path("agent-runner");
-        std::env::set_var("ANVIL_AGENT_STORE", &dir);
+        unsafe { std::env::set_var("ANVIL_AGENT_STORE", &dir); }
 
         let completed = execute_agent_with_spawn(
             AgentInput {
@@ -1774,7 +1777,7 @@ mod tests {
         assert!(spawn_error_manifest.contains("\"status\": \"failed\""));
         assert!(spawn_error_manifest.contains("thread creation failed"));
 
-        std::env::remove_var("ANVIL_AGENT_STORE");
+        unsafe { std::env::remove_var("ANVIL_AGENT_STORE"); }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2310,8 +2313,8 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
         let original_config_home = std::env::var("ANVIL_CONFIG_HOME").ok();
         let original_dir = std::env::current_dir().expect("cwd");
-        std::env::set_var("HOME", &home);
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::set_var("HOME", &home); }
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         std::env::set_current_dir(&cwd).expect("set cwd");
 
         let get = execute_tool("Config", &json!({"setting": "verbose"})).expect("get config");
@@ -2403,7 +2406,7 @@ printf 'pwsh:%s' "$1"
             .status()
             .expect("chmod");
         let original_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", format!("{}:{}", dir.display(), original_path));
+        unsafe { std::env::set_var("PATH", format!("{}:{}", dir.display(), original_path)); }
 
         let result = execute_tool(
             "PowerShell",
@@ -2417,7 +2420,7 @@ printf 'pwsh:%s' "$1"
         )
         .expect("PowerShell background should succeed");
 
-        std::env::set_var("PATH", original_path);
+        unsafe { std::env::set_var("PATH", original_path); }
         let _ = std::fs::remove_dir_all(dir);
 
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
@@ -2444,12 +2447,12 @@ printf 'pwsh:%s' "$1"
                 .as_nanos()
         ));
         std::fs::create_dir_all(&empty_dir).expect("create empty dir");
-        std::env::set_var("PATH", empty_dir.display().to_string());
+        unsafe { std::env::set_var("PATH", empty_dir.display().to_string()); }
 
         let err = execute_tool("PowerShell", &json!({"command": "Write-Output hello"}))
             .expect_err("PowerShell should fail when shell is missing");
 
-        std::env::set_var("PATH", original_path);
+        unsafe { std::env::set_var("PATH", original_path); }
         let _ = std::fs::remove_dir_all(empty_dir);
 
         assert!(err.contains("PowerShell executable not found"));

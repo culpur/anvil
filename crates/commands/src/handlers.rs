@@ -32,7 +32,7 @@ pub fn handle_slash_command(
             })
         }
         SlashCommand::Help { ref command } => Some(SlashCommandResult {
-            message: if let Some(ref cmd) = command {
+            message: if let Some(cmd) = command {
                 render_command_detailed_help(cmd)
                     .unwrap_or_else(render_slash_command_help)
             } else {

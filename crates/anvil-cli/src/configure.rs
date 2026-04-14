@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 //! Configure command handler and data-builder for `impl LiveCli`.
 //!
 //! These remain `impl LiveCli` methods but are in a separate file to reduce
@@ -61,7 +64,7 @@ impl LiveCli {
                                 _ => "",
                             };
                             if !env_var.is_empty() {
-                                std::env::set_var(env_var, secret);
+                                unsafe { std::env::set_var(env_var, secret); }
                             }
                             return format!("Saved {key} to encrypted vault.");
                         }

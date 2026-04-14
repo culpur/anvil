@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -354,15 +357,15 @@ mod tests {
     #[test]
     fn compact_threshold_defaults_to_85() {
         // Ensure the env var is not set before checking.
-        std::env::remove_var(COMPACT_THRESHOLD_ENV);
+        unsafe { std::env::remove_var(COMPACT_THRESHOLD_ENV); }
         assert_eq!(HistoryArchiver::compact_threshold_pct(), 85);
     }
 
     #[test]
     fn compact_threshold_reads_env_var() {
-        std::env::set_var(COMPACT_THRESHOLD_ENV, "70");
+        unsafe { std::env::set_var(COMPACT_THRESHOLD_ENV, "70"); }
         assert_eq!(HistoryArchiver::compact_threshold_pct(), 70);
-        std::env::remove_var(COMPACT_THRESHOLD_ENV);
+        unsafe { std::env::remove_var(COMPACT_THRESHOLD_ENV); }
     }
 
     #[test]

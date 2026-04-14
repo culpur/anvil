@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 mod agents;
 mod auth;
 mod cmd_ai;
@@ -249,7 +252,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 // Set OLLAMA_HOST env var from config so agent threads inherit it
                 if let Some(ollama_url) = val.pointer("/providers/ollama/url").and_then(|v| v.as_str()) {
                     if !ollama_url.is_empty() && std::env::var("OLLAMA_HOST").is_err() {
-                        std::env::set_var("OLLAMA_HOST", ollama_url);
+                        unsafe { std::env::set_var("OLLAMA_HOST", ollama_url); }
                     }
                 }
                 val.get("default_model")
@@ -978,9 +981,9 @@ fn run_resume_command(
     command: &SlashCommand,
 ) -> Result<ResumeCommandOutcome, Box<dyn std::error::Error>> {
     match command {
-        SlashCommand::Help { ref command } => Ok(ResumeCommandOutcome {
+        SlashCommand::Help { command } => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(if let Some(ref cmd) = command {
+            message: Some(if let Some(cmd) = command {
                 render_command_detailed_help(cmd)
                     .unwrap_or_else(render_repl_help)
             } else {
@@ -1432,7 +1435,7 @@ fn load_credentials_to_env() {
         // Vault first.
         if let Some(val) = runtime::vault_session_get(cred_label) {
             if !val.is_empty() {
-                std::env::set_var(env_var, &val);
+                unsafe { std::env::set_var(env_var, &val); }
                 continue;
             }
         }
@@ -1444,7 +1447,7 @@ fn load_credentials_to_env() {
                 {
                     if let Some(val) = root.get(cred_label).and_then(|v| v.as_str()) {
                         if !val.is_empty() {
-                            std::env::set_var(env_var, val);
+                            unsafe { std::env::set_var(env_var, val); }
                         }
                     }
                 }
@@ -1644,7 +1647,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         // Check for messages from remote control web clients.
         {
             let mut remote_messages = Vec::new();
-            if let Some(ref rx) = cli.relay_input_rx {
+            if let Some(rx) = &cli.relay_input_rx {
                 while let Ok(msg) = rx.try_recv() {
                     remote_messages.push(msg);
                 }
@@ -1655,7 +1658,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(tab_id) = tab_id_str.parse::<usize>() {
                         if let Some(name) = tui.close_tab_by_index(tab_id) {
                             tui.push_system(format!("[Remote] Closed tab: {name}"));
-                            if let Some(ref tx) = cli.relay_event_tx {
+                            if let Some(tx) = &cli.relay_event_tx {
                                 let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id });
                             }
                         }
@@ -1668,7 +1671,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     tui.switch_tab(tab_idx);
                     tui.push_system(format!("[Remote] Opened tab: {tab_name}"));
                     // Broadcast tab_opened to relay so web viewer adds the tab
-                    if let Some(ref tx) = cli.relay_event_tx {
+                    if let Some(tx) = &cli.relay_event_tx {
                         let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
                             tab_id: tab_idx,
                             name: tab_name.to_string(),
@@ -1775,7 +1778,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             let closed_idx = tui.active_tab_index();
                             if let Some(name) = tui.close_active_tab() {
                                 tui.push_system(format!("Closed tab: {name}"));
-                                if let Some(ref tx) = cli.relay_event_tx {
+                                if let Some(tx) = &cli.relay_event_tx {
                                     let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id: closed_idx });
                                 }
                             } else {
@@ -2307,7 +2310,7 @@ impl LiveCli {
             .ok()
             .and_then(|guard| guard.clone());
 
-        if let Some(ref tx) = tui_tx {
+        if let Some(tx) = tui_tx {
             tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
             let result = self
@@ -2392,7 +2395,7 @@ impl LiveCli {
             .ok()
             .and_then(|guard| guard.clone());
 
-        if let Some(ref tx) = tui_tx {
+        if let Some(tx) = tui_tx {
             // TUI path: send thinking indicator update, run turn, send TurnDone.
             tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
@@ -2555,7 +2558,7 @@ impl LiveCli {
                 tui.push_system(format!("Unknown command: /{name}"));
                 return Ok(false);
             }
-            SlashCommand::Model { ref model } if model.is_some() => {
+            SlashCommand::Model { model } if model.is_some() => {
                 let new_model = model.as_deref().unwrap();
                 let previous = self.model.clone();
                 self.model = new_model.to_string();
@@ -2564,7 +2567,7 @@ impl LiveCli {
                 tui.push_system(format_model_switch_report(&previous, &self.model, msg_count));
                 return Ok(false);
             }
-            SlashCommand::GenerateImage { ref prompt, ref wp_post_id } => {
+            SlashCommand::GenerateImage { prompt, wp_post_id } => {
                 // Image generation takes 10-30 seconds — temporarily leave the alternate
                 // screen so the user sees progress output directly on their terminal.
                 let _ = terminal::disable_raw_mode();
@@ -2623,11 +2626,11 @@ impl LiveCli {
                 }
                 return Ok(false);
             }
-            SlashCommand::RemoteControl { ref action } => {
+            SlashCommand::RemoteControl { action } => {
                 let msg = self.run_remote_control_command(action.as_deref());
                 tui.push_system(msg);
                 // Wire the relay broadcast channel into the TUI for event forwarding
-                if let Some(ref tx) = self.relay_event_tx {
+                if let Some(tx) = &self.relay_event_tx {
                     tui.set_relay_tx(tx.clone());
                     // Send session metadata so the web viewer has full context
                     let _ = tx.send(runtime::relay::RelayMessage::SessionMeta {
@@ -2676,8 +2679,8 @@ impl LiveCli {
         command: SlashCommand,
     ) -> Result<(String, bool), Box<dyn std::error::Error>> {
         Ok(match command {
-            SlashCommand::Help { ref command } => {
-                let text = if let Some(ref cmd) = command {
+            SlashCommand::Help { command } => {
+                let text = if let Some(cmd) = command.as_deref() {
                     render_command_detailed_help(cmd).unwrap_or_else(render_repl_help)
                 } else {
                     render_repl_help()
@@ -2734,7 +2737,7 @@ impl LiveCli {
                 self.compact()?;
                 ("Session compacted.".to_string(), false)
             }
-            SlashCommand::Agents { ref args } => {
+            SlashCommand::Agents { args } => {
                 // Route subcommands that target the live agent manager
                 // (list, view, stop, clear) to the manager first.  If the
                 // subcommand is not recognised locally, fall through to the
@@ -3819,8 +3822,8 @@ impl LiveCli {
         command: SlashCommand,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         Ok(match command {
-            SlashCommand::Help { ref command } => {
-                let text = if let Some(ref cmd) = command {
+            SlashCommand::Help { command } => {
+                let text = if let Some(cmd) = command.as_deref() {
                     render_command_detailed_help(cmd).unwrap_or_else(render_repl_help)
                 } else {
                     render_repl_help()
@@ -4276,7 +4279,7 @@ impl LiveCli {
             }
             // default: start (or report existing session)
             _ => {
-                if let Some(ref session) = self.relay_session {
+                if let Some(session) = &self.relay_session {
                     return format!(
                         "Remote control is already active.\n  URL    {}\n  Hash   {}\n\nUse /remote-control status  to see details.\nUse /remote-control stop    to end the session.",
                         session.url, session.hash

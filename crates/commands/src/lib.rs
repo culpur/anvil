@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 pub mod agents;
 pub mod git;
 pub mod handlers;
@@ -1492,9 +1495,9 @@ mod tests {
             new_path.push(':');
             new_path.push_str(&path.to_string_lossy());
         }
-        env::set_var("PATH", &new_path);
+        unsafe { env::set_var("PATH", &new_path); }
         let previous_safeuser = env::var_os("SAFEUSER");
-        env::set_var("SAFEUSER", "tester");
+        unsafe { env::set_var("SAFEUSER", "tester"); }
 
         let request = CommitPushPrRequest {
             commit_message: Some("feat: add feature file".to_string()),
@@ -1519,14 +1522,14 @@ mod tests {
         assert!(gh_invocations.contains("--base main"));
 
         if let Some(path) = previous_path {
-            env::set_var("PATH", path);
+            unsafe { env::set_var("PATH", path); }
         } else {
-            env::remove_var("PATH");
+            unsafe { env::remove_var("PATH"); }
         }
         if let Some(safeuser) = previous_safeuser {
-            env::set_var("SAFEUSER", safeuser);
+            unsafe { env::set_var("SAFEUSER", safeuser); }
         } else {
-            env::remove_var("SAFEUSER");
+            unsafe { env::remove_var("SAFEUSER"); }
         }
 
         let _ = fs::remove_dir_all(repo);

@@ -1,3 +1,6 @@
+// Edition 2024: env::set_var/remove_var require unsafe
+#![allow(unsafe_code)]
+
 use std::collections::VecDeque;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -651,11 +654,11 @@ mod tests {
         // are found even if the real user config contains them, preventing a real
         // key from leaking into a panic message.
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         let error = super::read_api_key().expect_err("missing key should error");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
         assert!(matches!(
             error,
@@ -669,12 +672,12 @@ mod tests {
         // Point ANVIL_CONFIG_HOME at an empty temp dir so no saved OAuth credentials
         // are found, preventing a real key from leaking into a panic message.
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", ""); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         let error = super::read_api_key().expect_err("empty key should error");
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
         assert!(matches!(
             error,
@@ -685,22 +688,22 @@ mod tests {
     #[test]
     fn read_api_key_prefers_api_key_env() {
         let _guard = env_lock();
-        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
-        std::env::set_var("ANTHROPIC_API_KEY", "legacy-key");
+        unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token"); }
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "legacy-key"); }
         assert_eq!(
             super::read_api_key().expect("api key should load"),
             "legacy-key"
         );
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
     }
 
     #[test]
     fn read_auth_token_reads_auth_token_env() {
         let _guard = env_lock();
-        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
+        unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token"); }
         assert_eq!(super::read_auth_token().as_deref(), Some("auth-token"));
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
     }
 
     #[test]
@@ -718,22 +721,22 @@ mod tests {
     #[test]
     fn auth_source_from_env_combines_api_key_and_bearer_token() {
         let _guard = env_lock();
-        std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token");
-        std::env::set_var("ANTHROPIC_API_KEY", "legacy-key");
+        unsafe { std::env::set_var("ANTHROPIC_AUTH_TOKEN", "auth-token"); }
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "legacy-key"); }
         let auth = AuthSource::from_env().expect("env auth");
         assert_eq!(auth.api_key(), Some("legacy-key"));
         assert_eq!(auth.bearer_token(), Some("auth-token"));
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
     }
 
     #[test]
     fn auth_source_from_saved_oauth_when_env_absent() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
@@ -746,7 +749,7 @@ mod tests {
         assert_eq!(auth.bearer_token(), Some("saved-access-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
     }
 
@@ -770,9 +773,9 @@ mod tests {
     fn resolve_saved_oauth_token_refreshes_expired_credentials() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "expired-access-token".to_string(),
             refresh_token: Some("refresh-token".to_string()),
@@ -794,7 +797,7 @@ mod tests {
         assert_eq!(stored.access_token, "refreshed-token");
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
     }
 
@@ -802,9 +805,9 @@ mod tests {
     fn resolve_startup_auth_source_uses_saved_oauth_without_loading_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
@@ -818,7 +821,7 @@ mod tests {
         assert_eq!(auth.bearer_token(), Some("saved-access-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
     }
 
@@ -826,9 +829,9 @@ mod tests {
     fn resolve_startup_auth_source_errors_when_refreshable_token_lacks_config() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "expired-access-token".to_string(),
             refresh_token: Some("refresh-token".to_string()),
@@ -850,7 +853,7 @@ mod tests {
         assert_eq!(stored.refresh_token.as_deref(), Some("refresh-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
     }
 
@@ -858,9 +861,9 @@ mod tests {
     fn resolve_saved_oauth_token_preserves_refresh_token_when_refresh_response_omits_it() {
         let _guard = env_lock();
         let config_home = temp_config_home();
-        std::env::set_var("ANVIL_CONFIG_HOME", &config_home);
-        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        unsafe { std::env::remove_var("ANTHROPIC_AUTH_TOKEN"); }
+        unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); }
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "expired-access-token".to_string(),
             refresh_token: Some("refresh-token".to_string()),
@@ -883,7 +886,7 @@ mod tests {
         assert_eq!(stored.refresh_token.as_deref(), Some("refresh-token"));
 
         clear_oauth_credentials().expect("clear credentials");
-        std::env::remove_var("ANVIL_CONFIG_HOME");
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         cleanup_temp_config_home(&config_home);
     }
 
