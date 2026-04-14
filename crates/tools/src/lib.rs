@@ -2344,12 +2344,12 @@ mod tests {
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");
         match original_home {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
+            Some(value) => unsafe { std::env::set_var("HOME", value); },
+            None => unsafe { std::env::remove_var("HOME"); },
         }
         match original_config_home {
-            Some(value) => std::env::set_var("ANVIL_CONFIG_HOME", value),
-            None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+            Some(value) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", value); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
         }
         let _ = std::fs::remove_dir_all(root);
     }

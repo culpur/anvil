@@ -1,3 +1,4 @@
+#![allow(unsafe_code)]
 // Edition 2024: env::set_var/remove_var require unsafe
 #![allow(unsafe_code)]
 
@@ -411,8 +412,8 @@ impl ScopedEnvVar {
 impl Drop for ScopedEnvVar {
     fn drop(&mut self) {
         match &self.previous {
-            Some(value) => std::env::set_var(self.key, value),
-            None => std::env::remove_var(self.key),
+            Some(value) => unsafe { std::env::set_var(self.key, value) },
+            None => unsafe { std::env::remove_var(self.key) },
         }
     }
 }

@@ -15,10 +15,10 @@ base64 = "0.22"
 commands = { path = "../commands" }
 rust-i18n.workspace = true
 compat-harness = { path = "../compat-harness" }
-crossterm = "0.28"
+crossterm = "0.29"
 lsp-types.workspace = true
 pulldown-cmark = "0.13"
-ratatui = "0.29"
+ratatui = "0.30"
 rpassword = "7"
 rustyline = "15"
 runtime = { path = "../runtime" }
