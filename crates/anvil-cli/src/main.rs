@@ -3645,8 +3645,15 @@ impl LiveCli {
                         }
                     }
                     ProviderKind::Xai => {
-                        out.push_str("  grok                     Grok\n");
-                        out.push_str("  grok-mini                Grok Mini\n");
+                        out.push_str("  grok-3                   Grok 3\n");
+                        out.push_str("  grok-3-mini              Grok 3 Mini\n");
+                    }
+                    ProviderKind::Gemini => {
+                        out.push_str("  gemini-2.5-pro           Gemini 2.5 Pro (1M context, thinking)\n");
+                        out.push_str("  gemini-2.5-flash         Gemini 2.5 Flash (fast, 1M context)\n");
+                        out.push_str("  gemini-2.0-flash         Gemini 2.0 Flash\n");
+                        out.push_str("  gemini-1.5-pro           Gemini 1.5 Pro (2M context)\n");
+                        out.push_str("  gemini-1.5-flash         Gemini 1.5 Flash\n");
                     }
                 }
                 out
@@ -3699,6 +3706,7 @@ impl LiveCli {
             match detect_provider_kind(&self.model) {
                 ProviderKind::AnvilApi => "anthropic",
                 ProviderKind::OpenAi => "openai",
+                ProviderKind::Gemini => "gemini",
                 ProviderKind::Ollama => "ollama",
                 ProviderKind::Xai => "xai",
             }

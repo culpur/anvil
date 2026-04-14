@@ -30,6 +30,7 @@ pub enum ProviderKind {
     AnvilApi,
     Xai,
     OpenAi,
+    Gemini,
     Ollama,
 }
 
@@ -60,6 +61,13 @@ const OPENAI_META: ProviderMetadata = ProviderMetadata {
     auth_env: "OPENAI_API_KEY",
     base_url_env: "OPENAI_BASE_URL",
     default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+};
+
+const GEMINI_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Gemini,
+    auth_env: "GEMINI_API_KEY",
+    base_url_env: "GEMINI_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_GEMINI_BASE_URL,
 };
 
 const OLLAMA_META: ProviderMetadata = ProviderMetadata {
@@ -116,6 +124,14 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     ("o1", OPENAI_META),
     ("o1-mini", OPENAI_META),
     ("o1-preview", OPENAI_META),
+    // Google Gemini
+    ("gemini-2.5-pro", GEMINI_META),
+    ("gemini-2.5-flash", GEMINI_META),
+    ("gemini-2.0-flash", GEMINI_META),
+    ("gemini-1.5-pro", GEMINI_META),
+    ("gemini-1.5-flash", GEMINI_META),
+    ("gemini-pro", GEMINI_META),
+    ("gemini", GEMINI_META),
     // Ollama — well-known local model names
     ("llama3.2", OLLAMA_META),
     ("llama3.1", OLLAMA_META),
@@ -163,7 +179,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi | ProviderKind::Ollama => trimmed,
+                ProviderKind::OpenAi | ProviderKind::Gemini | ProviderKind::Ollama => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -226,6 +242,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if openai_compat::has_api_key("XAI_API_KEY") {
         return ProviderKind::Xai;
     }
+    if openai_compat::has_api_key("GEMINI_API_KEY") || openai_compat::has_api_key("GOOGLE_API_KEY") {
+        return ProviderKind::Gemini;
+    }
     ProviderKind::AnvilApi
 }
 
@@ -236,6 +255,7 @@ pub fn provider_display_name(kind: ProviderKind) -> &'static str {
         ProviderKind::AnvilApi => "Anthropic (Anvil)",
         ProviderKind::Xai => "xAI",
         ProviderKind::OpenAi => "OpenAI",
+        ProviderKind::Gemini => "Google Gemini",
         ProviderKind::Ollama => "Ollama (local)",
     }
 }

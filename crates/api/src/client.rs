@@ -25,6 +25,7 @@ pub enum ProviderClient {
     AnvilApi(AnvilApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    Gemini(OpenAiCompatClient),
     Ollama(OllamaClient),
 }
 
@@ -49,6 +50,9 @@ impl ProviderClient {
             ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::openai(),
             )?)),
+            ProviderKind::Gemini => Ok(Self::Gemini(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::gemini(),
+            )?)),
             ProviderKind::Ollama => Ok(Self::Ollama(OllamaClient::from_env())),
         }
     }
@@ -59,6 +63,7 @@ impl ProviderClient {
             Self::AnvilApi(_) => ProviderKind::AnvilApi,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::Gemini(_) => ProviderKind::Gemini,
             Self::Ollama(_) => ProviderKind::Ollama,
         }
     }
@@ -69,7 +74,7 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::AnvilApi(client) => send_via_provider(client, request).await,
-            Self::Xai(client) | Self::OpenAi(client) => send_via_provider(client, request).await,
+            Self::Xai(client) | Self::OpenAi(client) | Self::Gemini(client) => send_via_provider(client, request).await,
             Self::Ollama(client) => send_via_provider(client, request).await,
         }
     }
@@ -82,7 +87,7 @@ impl ProviderClient {
             Self::AnvilApi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::AnvilApi),
-            Self::Xai(client) | Self::OpenAi(client) => stream_via_provider(client, request)
+            Self::Xai(client) | Self::OpenAi(client) | Self::Gemini(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::OpenAiCompat),
             Self::Ollama(client) => stream_via_provider(client, request)

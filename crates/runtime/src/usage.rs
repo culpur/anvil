@@ -116,6 +116,23 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
             cache_read_cost_per_million: 0.0,
         });
     }
+    // Google Gemini
+    if normalized.contains("gemini-2.5-pro") {
+        return Some(ModelPricing {
+            input_cost_per_million: 1.25,
+            output_cost_per_million: 10.0,
+            cache_creation_cost_per_million: 0.3125,
+            cache_read_cost_per_million: 0.3125,
+        });
+    }
+    if normalized.contains("gemini") {
+        return Some(ModelPricing {
+            input_cost_per_million: 0.15,
+            output_cost_per_million: 0.60,
+            cache_creation_cost_per_million: 0.0375,
+            cache_read_cost_per_million: 0.0375,
+        });
+    }
     // Ollama / local models — free
     if normalized.contains("llama") || normalized.contains("qwen") || normalized.contains("mistral")
         || normalized.contains("deepseek") || normalized.contains("gemma") || normalized.contains("phi")
