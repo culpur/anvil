@@ -1738,9 +1738,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         let vault_args = message.strip_prefix("/vault ").unwrap_or("");
                         let result = crate::vault::run_vault_command_impl(Some(vault_args));
                         if let Some(tx) = &cli.relay_event_tx {
-                            let _ = tx.send(runtime::relay::RelayMessage::System {
-                                tab_id: 0,
-                                message: result,
+                            // Send as ConfigData with vault_result so viewer renders it in the vault panel
+                            let _ = tx.send(runtime::relay::RelayMessage::ConfigData {
+                                data: serde_json::json!({
+                                    "vault_result": result,
+                                }),
                             });
                         }
                         continue;
