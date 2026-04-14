@@ -2,7 +2,7 @@
 
 **Built for defense. Geared for offense.**
 
-![Version](https://img.shields.io/badge/version-2.2.0-blue)
+![Version](https://img.shields.io/badge/version-2.2.1-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
 15 MB. Zero dependencies. Five AI providers. Typed Credential Vault. 90+ commands. And the only AI coding assistant with **live remote control** — hand your terminal session to any browser, in real-time, with full bidirectional control.
@@ -46,7 +46,7 @@ Or download directly from [releases](https://github.com/culpur/anvil/releases/la
 | Linux ARM64 | `anvil-aarch64-unknown-linux-gnu` |
 | Windows x86_64 | `anvil-x86_64-pc-windows-gnu.exe` |
 
-## What's New in v2.2.0
+## What's New in v2.2.1
 
 | Feature | Description |
 |---------|-------------|
