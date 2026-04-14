@@ -185,6 +185,12 @@ pub enum RelayMessage {
         tab_id: usize,
     },
 
+    // ── Client requests ──
+    /// Client requests a new tab be opened on the host.
+    RequestNewTab {
+        name: Option<String>,
+    },
+
     // ── Client input ──
     UserMessage {
         tab_id: usize,
@@ -420,12 +426,25 @@ impl RelayHost {
         let state = self.state.clone();
         let input_tx = self.input_tx.clone();
 
+        // Keepalive ping every 30 seconds to prevent Cloudflare/Apache timeout
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+        ping_interval.tick().await; // skip first immediate tick
+
         loop {
             tokio::select! {
+                // Send periodic WebSocket pings to keep the connection alive
+                _ = ping_interval.tick() => {
+                    let _ = ws_sink.send(WsMessage::Ping(vec![].into())).await;
+                }
                 // Read from WebSocket (messages from Passage / web clients)
                 ws_msg = ws_stream_read.next() => {
                     match ws_msg {
                         Some(Ok(WsMessage::Text(text_bytes))) => {
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/anvil-relay-debug.log") {
+                                use std::io::Write;
+                                let preview: String = text_bytes.chars().take(200).collect();
+                                let _ = writeln!(f, "RECV: {preview}");
+                            }
                             if let Ok(msg) = serde_json::from_str::<RelayMessage>(&text_bytes) {
                                 match msg {
                                     RelayMessage::ClientConnected { ref client_id } => {
@@ -463,9 +482,18 @@ impl RelayHost {
                                             }
                                         }
                                     }
+                                    RelayMessage::RequestNewTab { ref name } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0 {
+                                            let tab_name = name.as_deref().unwrap_or("remote");
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                // Use special prefix so TUI knows this is a tab request
+                                                let _ = sync_tx.send((0, format!("__new_tab:{tab_name}")));
+                                            }
+                                        }
+                                    }
                                     RelayMessage::PeerDisconnected => {
                                         // A web client disconnected
-                                        // Client tracking would need client_id from relay
                                     }
                                     _ => {} // Ignore other messages from relay
                                 }
@@ -487,6 +515,10 @@ impl RelayHost {
                     match event {
                         Ok(relay_msg) => {
                             let json = serde_json::to_string(&relay_msg)?;
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/anvil-relay-debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(f, "FWD: {}", &json[..json.len().min(200)]);
+                            }
                             let _ = ws_sink.send(WsMessage::Text(json.into())).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
