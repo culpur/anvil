@@ -167,7 +167,7 @@ impl LogEntry {
                 for (i, raw_line) in text.lines().enumerate() {
                     let prefix = if i == 0 { "◆  " } else { "   " };
                     let mut spans = vec![Span::styled(prefix.to_string(), sys_style)];
-                    // Detect URLs and render as OSC 8 clickable hyperlinks
+                    // Highlight URLs with accent color (no OSC 8 — ratatui doesn't support it)
                     let mut rest = raw_line;
                     while let Some(start) = rest.find("https://").or_else(|| rest.find("http://")) {
                         if start > 0 {
@@ -177,11 +177,7 @@ impl LogEntry {
                             .map(|e| start + e)
                             .unwrap_or(rest.len());
                         let url = &rest[start..url_end];
-                        // OSC 8 hyperlink: \x1b]8;;URL\x1b\\TEXT\x1b]8;;\x1b\\
-                        spans.push(Span::styled(
-                            format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\"),
-                            link_style,
-                        ));
+                        spans.push(Span::styled(url.to_string(), link_style));
                         rest = &rest[url_end..];
                     }
                     if !rest.is_empty() {
