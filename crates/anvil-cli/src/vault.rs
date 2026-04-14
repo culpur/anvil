@@ -56,6 +56,97 @@ pub(crate) fn mask_secret(s: &str) -> String {
     format!("{}…{}", &s[..4], &s[s.len() - 4..])
 }
 
+/// Structured vault operations for the web viewer — returns JSON instead of formatted text.
+/// Takes a password and an operation, returns serde_json::Value.
+pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -> serde_json::Value {
+    use runtime::{Credential, VaultManager};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let mut vm = VaultManager::with_default_dir();
+
+    if !vm.is_initialized() {
+        return serde_json::json!({"error": "Vault not initialized. Run /vault setup in the TUI."});
+    }
+
+    if let Err(e) = vm.unlock(password) {
+        return serde_json::json!({"error": format!("Invalid master password: {e}")});
+    }
+
+    match operation {
+        "list" => {
+            match vm.list_credentials() {
+                Ok(labels) => {
+                    let creds: Vec<serde_json::Value> = labels.iter().map(|label| {
+                        // Try to get each credential for metadata
+                        let meta = vm.get_credential(label).ok().map(|c| {
+                            serde_json::json!({
+                                "label": c.label,
+                                "username": c.username,
+                                "masked_secret": mask_secret(&c.secret),
+                                "has_notes": c.notes.is_some(),
+                                "created_at": c.created_at,
+                            })
+                        }).unwrap_or_else(|| serde_json::json!({"label": label}));
+                        meta
+                    }).collect();
+                    serde_json::json!({"operation": "list", "credentials": creds, "count": creds.len()})
+                }
+                Err(e) => serde_json::json!({"error": format!("List failed: {e}")}),
+            }
+        }
+        "get" => {
+            if arg.is_empty() {
+                return serde_json::json!({"error": "No label specified"});
+            }
+            match vm.get_credential(arg) {
+                Ok(cred) => serde_json::json!({
+                    "operation": "get",
+                    "label": cred.label,
+                    "username": cred.username,
+                    "secret": cred.secret,
+                    "notes": cred.notes,
+                    "created_at": cred.created_at,
+                }),
+                Err(e) => serde_json::json!({"error": format!("Get failed: {e}")}),
+            }
+        }
+        "store" => {
+            if arg.is_empty() {
+                return serde_json::json!({"error": "No label specified"});
+            }
+            // arg format: "label secret"
+            let mut parts = arg.splitn(2, ' ');
+            let label = parts.next().unwrap_or("");
+            let secret = parts.next().unwrap_or("");
+            if secret.is_empty() {
+                return serde_json::json!({"error": "No secret value provided"});
+            }
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let cred = Credential {
+                label: label.to_string(),
+                username: None,
+                secret: secret.to_string(),
+                notes: None,
+                created_at: now,
+            };
+            match vm.store_credential(&cred) {
+                Ok(()) => serde_json::json!({"operation": "store", "label": label, "success": true}),
+                Err(e) => serde_json::json!({"error": format!("Store failed: {e}")}),
+            }
+        }
+        "delete" => {
+            if arg.is_empty() {
+                return serde_json::json!({"error": "No label specified"});
+            }
+            match vm.delete_credential(arg) {
+                Ok(()) => serde_json::json!({"operation": "delete", "label": arg, "success": true}),
+                Err(e) => serde_json::json!({"error": format!("Delete failed: {e}")}),
+            }
+        }
+        _ => serde_json::json!({"error": format!("Unknown vault operation: {operation}")}),
+    }
+}
+
 /// Execute a `/vault` slash command.
 ///
 /// This is called from `LiveCli::run_vault_command`.  All sub-commands that

@@ -1733,17 +1733,51 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
                 // Check if the remote message is a slash command
                 if message.starts_with('/') {
-                    // Vault commands: run silently, send result ONLY to web viewer (not TUI)
+                    // Vault commands: run silently via JSON API, send structured result to web viewer
                     if message.starts_with("/vault ") {
-                        let vault_args = message.strip_prefix("/vault ").unwrap_or("");
-                        let result = crate::vault::run_vault_command_impl(Some(vault_args));
+                        let vault_args = message.strip_prefix("/vault ").unwrap_or("").trim();
+                        // Parse: /vault <operation> [password] [args...]
+                        // For web viewer, format is: /vault list <pw> or /vault get <label> <pw> or /vault store <label> <secret> <pw>
+                        let mut parts = vault_args.splitn(2, ' ');
+                        let operation = parts.next().unwrap_or("");
+                        let rest = parts.next().unwrap_or("");
+
+                        // Extract password (last space-separated token for list/unlock, or handled differently for get/store/delete)
+                        let (password, arg) = match operation {
+                            "list" | "unlock" | "lock" | "scan" => (rest.to_string(), String::new()),
+                            "get" | "delete" => {
+                                // /vault get <label> <pw>
+                                let mut p = rest.rsplitn(2, ' ');
+                                let pw = p.next().unwrap_or("").to_string();
+                                let label = p.next().unwrap_or("").to_string();
+                                (pw, label)
+                            }
+                            "store" => {
+                                // /vault store <label> <secret> <pw>  — pw is last token
+                                let mut p = rest.rsplitn(2, ' ');
+                                let pw = p.next().unwrap_or("").to_string();
+                                let label_secret = p.next().unwrap_or("").to_string();
+                                (pw, label_secret)
+                            }
+                            _ => (String::new(), rest.to_string()),
+                        };
+
                         if let Some(tx) = &cli.relay_event_tx {
-                            // Send as ConfigData with vault_result so viewer renders it in the vault panel
-                            let _ = tx.send(runtime::relay::RelayMessage::ConfigData {
-                                data: serde_json::json!({
-                                    "vault_result": result,
-                                }),
-                            });
+                            if operation == "lock" {
+                                let _ = tx.send(runtime::relay::RelayMessage::ConfigData {
+                                    data: serde_json::json!({"vault_op": "lock", "success": true}),
+                                });
+                            } else if operation == "scan" {
+                                let result = crate::vault::run_vault_command_impl(Some("scan"));
+                                let _ = tx.send(runtime::relay::RelayMessage::ConfigData {
+                                    data: serde_json::json!({"vault_result": result}),
+                                });
+                            } else {
+                                let result = crate::vault::vault_json_operation(&password, operation, &arg);
+                                let _ = tx.send(runtime::relay::RelayMessage::ConfigData {
+                                    data: serde_json::json!({"vault_op": operation, "vault_data": result}),
+                                });
+                            }
                         }
                         continue;
                     }
