@@ -252,7 +252,7 @@ impl AnvilTui {
         Some(name)
     }
 
-    /// Close a tab by its index. Returns the name if closed, None if last tab or invalid.
+    /// Close a tab by its array index. Returns the name if closed, None if last tab or invalid.
     pub fn close_tab_by_index(&mut self, index: usize) -> Option<String> {
         if self.tabs.len() <= 1 || index >= self.tabs.len() {
             return None;
@@ -265,6 +265,33 @@ impl AnvilTui {
         Some(name)
     }
 
+    /// Close a tab by its unique ID (not array index). Returns the name if closed.
+    pub fn close_tab_by_id(&mut self, tab_id: usize) -> Option<String> {
+        if self.tabs.len() <= 1 {
+            return None;
+        }
+        if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
+            let name = self.tabs[pos].name.clone();
+            self.tabs.remove(pos);
+            if self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            }
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    /// Rename a tab by its unique ID. Returns true if found and renamed.
+    pub fn rename_tab_by_id(&mut self, tab_id: usize, new_name: &str) -> bool {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == tab_id) {
+            tab.name = new_name.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Rename the active tab.
     pub fn rename_active_tab(&mut self, name: impl Into<String>) {
         self.active_tab_mut().name = name.into();
@@ -275,9 +302,9 @@ impl AnvilTui {
         self.tabs.iter().enumerate().map(|(i, t)| (i, t.id, t.name.as_str(), t.has_unread)).collect()
     }
 
-    /// Return full tab info for relay broadcast: (index, name, model, session_id).
+    /// Return full tab info for relay broadcast: (tab_id, name, model, session_id).
     pub fn tab_details(&self) -> Vec<(usize, String, String, String)> {
-        self.tabs.iter().enumerate().map(|(i, t)| (i, t.name.clone(), t.model.clone(), t.session_id.clone())).collect()
+        self.tabs.iter().map(|t| (t.id, t.name.clone(), t.model.clone(), t.session_id.clone())).collect()
     }
 
     /// Return the 0-based index of the currently active tab.

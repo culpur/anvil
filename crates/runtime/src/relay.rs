@@ -206,6 +206,11 @@ pub enum RelayMessage {
     RequestCloseTab {
         tab_id: usize,
     },
+    /// Client requests renaming a tab.
+    RequestRenameTab {
+        tab_id: usize,
+        name: String,
+    },
 
     // ── Client input ──
     UserMessage {
@@ -508,6 +513,14 @@ impl RelayHost {
                                         if st.paired_count() > 0 {
                                             if let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__close_tab:{tab_id}")));
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::RequestRenameTab { tab_id, ref name } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0 {
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__rename_tab:{tab_id}:{name}")));
                                             }
                                         }
                                     }

@@ -1658,10 +1658,28 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 // Handle special relay commands
                 if let Some(tab_id_str) = message.strip_prefix("__close_tab:") {
                     if let Ok(tab_id) = tab_id_str.parse::<usize>() {
-                        if let Some(name) = tui.close_tab_by_index(tab_id) {
+                        if let Some(name) = tui.close_tab_by_id(tab_id) {
                             tui.push_system(format!("[Remote] Closed tab: {name}"));
                             if let Some(tx) = &cli.relay_event_tx {
                                 let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id });
+                            }
+                        } else {
+                            tui.push_system(format!("[Remote] Cannot close tab {tab_id} (last tab or not found)"));
+                        }
+                    }
+                    continue;
+                }
+                if let Some(rest) = message.strip_prefix("__rename_tab:") {
+                    if let Some((id_str, new_name)) = rest.split_once(':') {
+                        if let Ok(tab_id) = id_str.parse::<usize>() {
+                            if tui.rename_tab_by_id(tab_id, new_name) {
+                                tui.push_system(format!("[Remote] Renamed tab to: {new_name}"));
+                                if let Some(tx) = &cli.relay_event_tx {
+                                    let _ = tx.send(runtime::relay::RelayMessage::TabRenamed {
+                                        tab_id,
+                                        name: new_name.to_string(),
+                                    });
+                                }
                             }
                         }
                     }
