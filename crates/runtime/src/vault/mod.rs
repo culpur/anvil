@@ -71,19 +71,110 @@ impl From<std::io::Error> for VaultError {
     }
 }
 
+// ─── Credential Types ────────────────────────────────────────────────────────
+
+/// The type of credential stored in the vault.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialType {
+    // Secrets & Keys
+    ApiKey,
+    EncryptionKey,
+    WebhookSecret,
+    LicenseKey,
+    SecretText,
+
+    // Identities
+    UsernamePassword,
+    OAuthToken,
+    CloudCredential,
+
+    // Infrastructure
+    HostCredential,
+    DatabaseUrl,
+    DockerRegistry,
+    KubeConfig,
+    VpnConfig,
+
+    // Certificates
+    TlsCert,
+    ClientCert,
+    SigningKey,
+
+    // Authentication
+    Totp,
+    SshKey,
+    RecoveryCode,
+
+    // Files
+    EnvFile,
+    ConfigBlob,
+}
+
+impl Default for CredentialType {
+    fn default() -> Self {
+        Self::SecretText
+    }
+}
+
+impl std::fmt::Display for CredentialType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiKey => write!(f, "API Key"),
+            Self::EncryptionKey => write!(f, "Encryption Key"),
+            Self::WebhookSecret => write!(f, "Webhook Secret"),
+            Self::LicenseKey => write!(f, "License Key"),
+            Self::SecretText => write!(f, "Secret"),
+            Self::UsernamePassword => write!(f, "Username/Password"),
+            Self::OAuthToken => write!(f, "OAuth Token"),
+            Self::CloudCredential => write!(f, "Cloud Credential"),
+            Self::HostCredential => write!(f, "Host"),
+            Self::DatabaseUrl => write!(f, "Database"),
+            Self::DockerRegistry => write!(f, "Docker Registry"),
+            Self::KubeConfig => write!(f, "Kubernetes"),
+            Self::VpnConfig => write!(f, "VPN Config"),
+            Self::TlsCert => write!(f, "TLS Certificate"),
+            Self::ClientCert => write!(f, "Client Certificate"),
+            Self::SigningKey => write!(f, "Signing Key"),
+            Self::Totp => write!(f, "TOTP"),
+            Self::SshKey => write!(f, "SSH Key"),
+            Self::RecoveryCode => write!(f, "Recovery Code"),
+            Self::EnvFile => write!(f, "Env File"),
+            Self::ConfigBlob => write!(f, "Config File"),
+        }
+    }
+}
+
 // ─── Public data types ────────────────────────────────────────────────────────
 
-/// Plaintext credential.
+/// Plaintext credential — the single type for ALL secrets in the vault.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Credential {
     pub label: String,
+    #[serde(default)]
+    pub credential_type: CredentialType,
     pub username: Option<String>,
     pub secret: String,
+    pub url: Option<String>,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: u64,
+    #[serde(default)]
+    pub updated_at: u64,
+    pub expires_at: Option<u64>,
+    pub last_rotated: Option<u64>,
+    /// Type-specific metadata (provider info, fingerprints, cert CN, TOTP params, etc.)
+    #[serde(default = "default_metadata")]
+    pub metadata: serde_json::Value,
 }
 
-/// Plaintext TOTP entry.
+fn default_metadata() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// Plaintext TOTP entry — kept for backward compatibility with existing totp_*.enc files.
+/// New TOTP entries should use Credential with credential_type: Totp.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TotpEntry {
     pub label: String,
@@ -394,7 +485,15 @@ mod tests {
             secret: "ghp_supersecret".into(),
             notes: Some("personal".into()),
             created_at: 0,
-        };
+        
+                credential_type: CredentialType::default(),
+                url: None,
+                tags: Vec::new(),
+                updated_at: 0,
+                expires_at: None,
+                last_rotated: None,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
+            };
         vm.store_credential(&cred).unwrap();
         let got = vm.get_credential("github").unwrap();
         assert_eq!(got.secret, "ghp_supersecret");
@@ -412,6 +511,14 @@ mod tests {
                 secret: label.into(),
                 notes: None,
                 created_at: 0,
+            
+                credential_type: CredentialType::default(),
+                url: None,
+                tags: Vec::new(),
+                updated_at: 0,
+                expires_at: None,
+                last_rotated: None,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
             })
             .unwrap();
         }

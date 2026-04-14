@@ -59,7 +59,7 @@ pub(crate) fn mask_secret(s: &str) -> String {
 /// Structured vault operations for the web viewer — returns JSON instead of formatted text.
 /// Takes a password and an operation, returns serde_json::Value.
 pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -> serde_json::Value {
-    use runtime::{Credential, VaultManager};
+    use runtime::{Credential, CredentialType, VaultManager};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let mut vm = VaultManager::with_default_dir();
@@ -128,6 +128,14 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
                 secret: secret.to_string(),
                 notes: None,
                 created_at: now,
+            
+                credential_type: CredentialType::default(),
+                url: None,
+                tags: Vec::new(),
+                updated_at: 0,
+                expires_at: None,
+                last_rotated: None,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
             };
             match vm.store_credential(&cred) {
                 Ok(()) => serde_json::json!({"operation": "store", "label": label, "success": true}),
@@ -153,7 +161,7 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
 /// require a master password read it via `read_password_prompt` (no echo).
 #[allow(clippy::similar_names)]
 pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
-    use runtime::{Credential, TotpEntry, VaultManager};
+    use runtime::{Credential, CredentialType, TotpEntry, VaultManager};
 
     let sub = args.unwrap_or("").trim();
     let mut parts = sub.splitn(2, ' ');
@@ -246,6 +254,14 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
                 secret,
                 notes: None,
                 created_at: now,
+            
+                credential_type: CredentialType::default(),
+                url: None,
+                tags: Vec::new(),
+                updated_at: 0,
+                expires_at: None,
+                last_rotated: None,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
             };
             match vm.store_credential(&cred) {
                 Ok(()) => format!("Vault\n  Result           Stored\n  Label            {label}"),

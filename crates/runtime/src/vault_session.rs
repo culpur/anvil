@@ -14,7 +14,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use crate::vault::{Credential, VaultError, VaultManager};
+use crate::vault::{Credential, CredentialType, VaultError, VaultManager};
 
 /// Global process-level vault session, lazily initialised.
 static SESSION_VAULT: OnceLock<Mutex<VaultManager>> = OnceLock::new();
@@ -111,7 +111,15 @@ pub fn vault_session_upsert(label: &str, secret: &str) -> Result<(), VaultError>
         secret: secret.to_string(),
         notes: Some("Set during Anvil session".to_string()),
         created_at: now,
-    };
+    
+                credential_type: CredentialType::default(),
+                url: None,
+                tags: Vec::new(),
+                updated_at: 0,
+                expires_at: None,
+                last_rotated: None,
+                metadata: serde_json::Value::Object(serde_json::Map::new()),
+            };
     with_session_vault(|vm| vm.upsert_credential(&cred))
 }
 
