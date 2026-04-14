@@ -173,14 +173,61 @@ else
 fi
 
 echo
-echo "▸ Phase 5: Deploy to AnvilHub..."
-# Update version references on AnvilHub (dev0001)
-PREV_VERSION=$(echo "$VERSION" | awk -F. '{print $1"."$2"."$3-1}')
-# This is best-effort — AnvilHub may not be accessible
-echo "  (AnvilHub version update handled separately)"
+echo "▸ Phase 5: Update Homebrew formula..."
+ARM_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $1}')
+INTEL_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-x86_64-apple-darwin" | awk '{print $1}')
+ARM_LINUX=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu" | awk '{print $1}')
+X86_LINUX=$(shasum -a 256 "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu" | awk '{print $1}')
+
+BREW_SHA=$(gh api repos/culpur/homebrew-anvil/contents/Formula/anvil.rb --jq '.sha' 2>/dev/null)
+if [ -n "$BREW_SHA" ]; then
+    cat > /tmp/anvil-brew.rb << BREWEOF
+class Anvil < Formula
+  desc "AI coding assistant with typed credential vault, live remote control, 5 providers"
+  homepage "https://culpur.net/anvil"
+  version "$VERSION"
+  license "Proprietary"
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-aarch64-apple-darwin"
+      sha256 "$ARM_MAC"
+    else
+      url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-x86_64-apple-darwin"
+      sha256 "$INTEL_MAC"
+    end
+  end
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-aarch64-unknown-linux-gnu"
+      sha256 "$ARM_LINUX"
+    else
+      url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-x86_64-unknown-linux-gnu"
+      sha256 "$X86_LINUX"
+    end
+  end
+  def install
+    downloaded = Dir["anvil-*"].first || "anvil"
+    bin.install downloaded => "anvil"
+  end
+  test do
+    assert_match "Anvil CLI", shell_output("#{bin}/anvil --version")
+  end
+end
+BREWEOF
+    BREW_CONTENT=$(base64 -i /tmp/anvil-brew.rb | tr -d '\n')
+    gh api repos/culpur/homebrew-anvil/contents/Formula/anvil.rb \
+        -X PUT -f message="formula: bump to $TAG" \
+        -f content="$BREW_CONTENT" -f sha="$BREW_SHA" \
+        --jq '.commit.sha' 2>/dev/null
+    echo "  ✓ Homebrew formula updated to $TAG"
+else
+    echo "  ⚠ Could not update Homebrew (missing sha)"
+fi
 
 echo
 echo "╔══════════════════════════════════════════════╗"
 echo "║  ✓ Release complete: Anvil $TAG              ║"
-echo "║  https://github.com/culpur/anvil-source/releases/tag/$TAG"
+echo "║  Binary: $OUTPUT_DIR/                        ║"
+echo "║  GitHub: https://github.com/culpur/anvil/releases/tag/$TAG"
+echo "║  Brew:   brew upgrade anvil                  ║"
 echo "╚══════════════════════════════════════════════╝"

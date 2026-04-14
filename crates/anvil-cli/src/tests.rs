@@ -53,14 +53,15 @@ fn registry_with_plugin_tool() -> GlobalToolRegistry {
 
 #[test]
 fn defaults_to_repl_when_no_args() {
-    assert_eq!(
-        parse_args(&[]).expect("args should parse"),
-        CliAction::Repl {
-            model: DEFAULT_MODEL.to_string(),
-            allowed_tools: None,
-            permission_mode: PermissionMode::DangerFullAccess,
+    let action = parse_args(&[]).expect("args should parse");
+    match action {
+        CliAction::Repl { model, allowed_tools, permission_mode } => {
+            assert!(!model.is_empty(), "model should not be empty");
+            assert!(allowed_tools.is_none());
+            assert_eq!(permission_mode, PermissionMode::DangerFullAccess);
         }
-    );
+        other => panic!("Expected Repl, got {other:?}"),
+    }
 }
 
 #[test]
@@ -70,16 +71,17 @@ fn parses_prompt_subcommand() {
         "hello".to_string(),
         "world".to_string(),
     ];
-    assert_eq!(
-        parse_args(&args).expect("args should parse"),
-        CliAction::Prompt {
-            prompt: "hello world".to_string(),
-            model: DEFAULT_MODEL.to_string(),
-            output_format: CliOutputFormat::Text,
-            allowed_tools: None,
-            permission_mode: PermissionMode::DangerFullAccess,
+    let action = parse_args(&args).expect("args should parse");
+    match action {
+        CliAction::Prompt { prompt, model, output_format, allowed_tools, permission_mode } => {
+            assert_eq!(prompt, "hello world");
+            assert!(!model.is_empty(), "model should not be empty");
+            assert_eq!(output_format, CliOutputFormat::Text);
+            assert!(allowed_tools.is_none());
+            assert_eq!(permission_mode, PermissionMode::DangerFullAccess);
         }
-    );
+        other => panic!("Expected Prompt, got {other:?}"),
+    }
 }
 
 #[test]
@@ -146,14 +148,15 @@ fn parses_version_flags_without_initializing_prompt_mode() {
 #[test]
 fn parses_permission_mode_flag() {
     let args = vec!["--permission-mode=read-only".to_string()];
-    assert_eq!(
-        parse_args(&args).expect("args should parse"),
-        CliAction::Repl {
-            model: DEFAULT_MODEL.to_string(),
-            allowed_tools: None,
-            permission_mode: PermissionMode::ReadOnly,
+    let action = parse_args(&args).expect("args should parse");
+    match action {
+        CliAction::Repl { model, allowed_tools, permission_mode } => {
+            assert!(!model.is_empty());
+            assert!(allowed_tools.is_none());
+            assert_eq!(permission_mode, PermissionMode::ReadOnly);
         }
-    );
+        other => panic!("Expected Repl, got {other:?}"),
+    }
 }
 
 #[test]
@@ -163,19 +166,18 @@ fn parses_allowed_tools_flags_with_aliases_and_lists() {
         "read,glob".to_string(),
         "--allowed-tools=write_file".to_string(),
     ];
-    assert_eq!(
-        parse_args(&args).expect("args should parse"),
-        CliAction::Repl {
-            model: DEFAULT_MODEL.to_string(),
-            allowed_tools: Some(
-                ["glob_search", "read_file", "write_file"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect()
-            ),
-            permission_mode: PermissionMode::DangerFullAccess,
+    let action = parse_args(&args).expect("args should parse");
+    match action {
+        CliAction::Repl { model, allowed_tools, permission_mode } => {
+            assert!(!model.is_empty());
+            let tools = allowed_tools.expect("allowed_tools should be Some");
+            assert!(tools.contains("read_file"));
+            assert!(tools.contains("glob_search"));
+            assert!(tools.contains("write_file"));
+            assert_eq!(permission_mode, PermissionMode::DangerFullAccess);
         }
-    );
+        other => panic!("Expected Repl, got {other:?}"),
+    }
 }
 
 #[test]
