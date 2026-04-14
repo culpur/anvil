@@ -255,3 +255,191 @@ fn url_decode(s: &str) -> String {
     }
     String::from_utf8(bytes).unwrap_or_else(|_| s.to_string())
 }
+
+// ─── SSH Key Parsing ────────────────────────────────────────────────────────
+
+/// Parse an SSH private key and extract metadata.
+pub fn parse_ssh_key(content: &str) -> serde_json::Value {
+    let mut info = serde_json::Map::new();
+
+    // Detect key type from PEM header
+    let key_type = if content.contains("BEGIN OPENSSH PRIVATE KEY") {
+        // Could be ed25519, RSA, ECDSA — need to check further
+        if content.len() < 500 { "ed25519" } else if content.len() < 2000 { "ecdsa" } else { "rsa" }
+    } else if content.contains("BEGIN RSA PRIVATE KEY") {
+        "rsa"
+    } else if content.contains("BEGIN EC PRIVATE KEY") {
+        "ecdsa"
+    } else if content.contains("BEGIN DSA PRIVATE KEY") {
+        "dsa"
+    } else {
+        "unknown"
+    };
+    info.insert("key_type".into(), serde_json::Value::String(key_type.into()));
+
+    // Try to extract fingerprint using ssh-keygen
+    if let Ok(fingerprint) = ssh_key_fingerprint(content) {
+        info.insert("fingerprint".into(), serde_json::Value::String(fingerprint));
+    }
+
+    // Extract comment if present (last line before END marker sometimes has it)
+    let lines: Vec<&str> = content.lines().collect();
+    if let Some(comment_line) = lines.iter().find(|l| l.starts_with("Comment:")) {
+        info.insert("comment".into(), serde_json::Value::String(
+            comment_line.trim_start_matches("Comment:").trim().trim_matches('"').to_string()
+        ));
+    }
+
+    serde_json::Value::Object(info)
+}
+
+/// Compute SSH key fingerprint using ssh-keygen subprocess.
+fn ssh_key_fingerprint(key_content: &str) -> Result<String, String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("ssh-keygen")
+        .args(["-lf", "/dev/stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(key_content.as_bytes());
+    }
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        let line = String::from_utf8_lossy(&output.stdout);
+        // Format: "256 SHA256:abc123... comment (ED25519)"
+        Ok(line.trim().to_string())
+    } else {
+        Err("ssh-keygen failed".into())
+    }
+}
+
+// ─── X.509 Certificate Parsing ──────────────────────────────────────────────
+
+/// Parse a PEM-encoded X.509 certificate and extract metadata.
+pub fn parse_x509_cert(pem_content: &str) -> serde_json::Value {
+    let mut info = serde_json::Map::new();
+
+    // Use openssl subprocess to extract metadata
+    if let Ok(subject) = openssl_x509_field(pem_content, "-subject") {
+        // Parse CN from subject line: "subject= /CN=*.culpur.net"
+        if let Some(cn) = subject.split("CN=").nth(1) {
+            let cn = cn.split('/').next().unwrap_or(cn).trim();
+            info.insert("cn".into(), serde_json::Value::String(cn.to_string()));
+        }
+        info.insert("subject".into(), serde_json::Value::String(subject));
+    }
+
+    if let Ok(issuer) = openssl_x509_field(pem_content, "-issuer") {
+        if let Some(issuer_cn) = issuer.split("CN=").nth(1) {
+            let issuer_cn = issuer_cn.split('/').next().unwrap_or(issuer_cn).trim();
+            info.insert("issuer".into(), serde_json::Value::String(issuer_cn.to_string()));
+        }
+    }
+
+    if let Ok(dates) = openssl_x509_field(pem_content, "-dates") {
+        for line in dates.lines() {
+            if line.starts_with("notAfter=") {
+                info.insert("not_after".into(), serde_json::Value::String(
+                    line.trim_start_matches("notAfter=").trim().to_string()
+                ));
+            }
+            if line.starts_with("notBefore=") {
+                info.insert("not_before".into(), serde_json::Value::String(
+                    line.trim_start_matches("notBefore=").trim().to_string()
+                ));
+            }
+        }
+    }
+
+    if let Ok(sans) = openssl_x509_field(pem_content, "-ext subjectAltName") {
+        let san_list: Vec<String> = sans.lines()
+            .filter(|l| l.contains("DNS:"))
+            .flat_map(|l| l.split(','))
+            .map(|s| s.trim().trim_start_matches("DNS:").to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !san_list.is_empty() {
+            info.insert("sans".into(), serde_json::json!(san_list));
+        }
+    }
+
+    // Check if it's a private key too
+    info.insert("has_private_key".into(), serde_json::Value::Bool(
+        pem_content.contains("PRIVATE KEY")
+    ));
+
+    serde_json::Value::Object(info)
+}
+
+/// Run openssl x509 with a specific flag and return stdout.
+fn openssl_x509_field(pem: &str, flag: &str) -> Result<String, String> {
+    use std::io::Write;
+    let args: Vec<&str> = std::iter::once("x509")
+        .chain(std::iter::once("-noout"))
+        .chain(flag.split_whitespace())
+        .collect();
+    let mut child = std::process::Command::new("openssl")
+        .args(&args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(pem.as_bytes());
+    }
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err("openssl failed".into())
+    }
+}
+
+// ─── Database URL Parsing ───────────────────────────────────────────────────
+
+/// Parse a database connection URL and extract metadata.
+pub fn parse_database_url(url: &str) -> serde_json::Value {
+    let mut info = serde_json::Map::new();
+
+    // Format: engine://user:pass@host:port/database?params
+    if let Some(engine_end) = url.find("://") {
+        let engine = &url[..engine_end];
+        info.insert("engine".into(), serde_json::Value::String(engine.to_string()));
+
+        let rest = &url[engine_end + 3..];
+        // Split at @ for auth vs host
+        if let Some(at_pos) = rest.find('@') {
+            let host_part = &rest[at_pos + 1..];
+            // Split host:port/database
+            let (host_port, database) = if let Some(slash) = host_part.find('/') {
+                (&host_part[..slash], host_part[slash + 1..].split('?').next().unwrap_or(""))
+            } else {
+                (host_part, "")
+            };
+            let (host, port) = if let Some(colon) = host_port.rfind(':') {
+                (&host_port[..colon], host_port[colon + 1..].parse::<u16>().ok())
+            } else {
+                (host_port, None)
+            };
+            info.insert("host".into(), serde_json::Value::String(host.to_string()));
+            if let Some(p) = port {
+                info.insert("port".into(), serde_json::json!(p));
+            }
+            if !database.is_empty() {
+                info.insert("database".into(), serde_json::Value::String(database.to_string()));
+            }
+        }
+
+        info.insert("ssl".into(), serde_json::Value::Bool(url.contains("ssl=true") || url.contains("sslmode=")));
+    }
+
+    serde_json::Value::Object(info)
+}

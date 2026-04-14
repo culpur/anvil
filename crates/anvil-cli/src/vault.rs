@@ -77,19 +77,38 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
             match vm.list_credentials() {
                 Ok(labels) => {
                     let creds: Vec<serde_json::Value> = labels.iter().map(|label| {
-                        // Try to get each credential for metadata
-                        let meta = vm.get_credential(label).ok().map(|c| {
+                        vm.get_credential(label).ok().map(|c| {
                             serde_json::json!({
                                 "label": c.label,
+                                "credential_type": format!("{}", c.credential_type),
+                                "type_id": serde_json::to_value(&c.credential_type).unwrap_or_default(),
                                 "username": c.username,
+                                "url": c.url,
                                 "masked_secret": mask_secret(&c.secret),
                                 "has_notes": c.notes.is_some(),
+                                "tags": c.tags,
                                 "created_at": c.created_at,
+                                "updated_at": c.updated_at,
+                                "expires_at": c.expires_at,
+                                "last_rotated": c.last_rotated,
+                                "metadata": c.metadata,
                             })
-                        }).unwrap_or_else(|| serde_json::json!({"label": label}));
-                        meta
+                        }).unwrap_or_else(|| serde_json::json!({"label": label, "credential_type": "Secret"}))
                     }).collect();
-                    serde_json::json!({"operation": "list", "credentials": creds, "count": creds.len()})
+                    // Also list TOTP entries
+                    let totp_labels = vm.list_totp().unwrap_or_default();
+                    let totp_creds: Vec<serde_json::Value> = totp_labels.iter().map(|label| {
+                        serde_json::json!({
+                            "label": label,
+                            "credential_type": "TOTP",
+                            "type_id": "totp",
+                            "masked_secret": "••••••",
+                            "metadata": {},
+                        })
+                    }).collect();
+                    let mut all = creds;
+                    all.extend(totp_creds);
+                    serde_json::json!({"operation": "list", "credentials": all, "count": all.len()})
                 }
                 Err(e) => serde_json::json!({"error": format!("List failed: {e}")}),
             }
@@ -102,10 +121,17 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
                 Ok(cred) => serde_json::json!({
                     "operation": "get",
                     "label": cred.label,
+                    "credential_type": format!("{}", cred.credential_type),
+                    "type_id": serde_json::to_value(&cred.credential_type).unwrap_or_default(),
                     "username": cred.username,
+                    "url": cred.url,
                     "secret": cred.secret,
                     "notes": cred.notes,
+                    "tags": cred.tags,
                     "created_at": cred.created_at,
+                    "updated_at": cred.updated_at,
+                    "expires_at": cred.expires_at,
+                    "metadata": cred.metadata,
                 }),
                 Err(e) => serde_json::json!({"error": format!("Get failed: {e}")}),
             }
