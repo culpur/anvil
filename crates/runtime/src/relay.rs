@@ -173,6 +173,7 @@ pub enum RelayMessage {
         tab_id: usize,
         name: String,
         model: String,
+        session_id: String,
     },
     TabClosed {
         tab_id: usize,

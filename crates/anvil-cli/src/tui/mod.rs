@@ -272,6 +272,11 @@ impl AnvilTui {
         self.tabs.iter().enumerate().map(|(i, t)| (i, t.id, t.name.as_str(), t.has_unread)).collect()
     }
 
+    /// Return full tab info for relay broadcast: (index, name, model, session_id).
+    pub fn tab_details(&self) -> Vec<(usize, String, String, String)> {
+        self.tabs.iter().enumerate().map(|(i, t)| (i, t.name.clone(), t.model.clone(), t.session_id.clone())).collect()
+    }
+
     /// Return the 0-based index of the currently active tab.
     pub fn active_tab_index(&self) -> usize {
         self.active_tab

@@ -1673,6 +1673,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             tab_id: tab_idx,
                             name: tab_name.to_string(),
                             model: cli.model.clone(),
+                            session_id: new_session.id.clone(),
                         });
                     }
                     continue;
@@ -2643,11 +2644,12 @@ impl LiveCli {
                         block_time: None,
                     });
                     // Broadcast existing tabs so the viewer knows what tabs exist
-                    for (idx, _id, name, _unread) in tui.tab_list() {
+                    for (idx, name, model, session_id) in tui.tab_details() {
                         let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
                             tab_id: idx,
-                            name: name.to_string(),
-                            model: self.model.clone(),
+                            name,
+                            model,
+                            session_id,
                         });
                     }
                 } else {
