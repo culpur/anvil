@@ -2,7 +2,7 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.1.1-blue)
+![Version](https://img.shields.io/badge/version-2.1.2-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Tests](https://img.shields.io/badge/tests-394%20passed-brightgreen)
@@ -12,22 +12,33 @@ Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides inter
 
 ---
 
-## What's New in v2.1.1
+## What's New in v2.1.2
 
-### Live Streaming Responses
-Responses now render **token-by-token in real-time** as they arrive from the API. The TUI stays fully responsive during generation via scoped background threads — no more waiting for the full response to buffer.
+### Credential Auto-Detection & Vault Import
+Anvil now **automatically detects credentials** across environment variables, dotfiles, `.env` files, SSH keys, and TLS certificates. Provider API keys are auto-vaulted; others prompt for confirmation. Run `/vault scan` for a full sweep.
 
-### Remote Control
-Type `/remote-control` to generate a shareable URL. Anyone with the link and 6-digit pairing code can **watch and interact with your Anvil session** from any browser via WebSocket relay. Multi-client support with independent pairing per viewer.
+### Network Egress Control
+Configurable **domain allowlist** for tool network access. Default: only AI provider APIs. Tools cannot exfiltrate data to unauthorized endpoints. Manage with `/security egress`.
 
-### Thinking Mode
-Toggle visible reasoning with `/think`. When enabled, the TUI shows a thinking status indicator while the model reasons through complex problems. Works with Claude and Ollama reasoning models.
+### Signed Session Transcripts
+Every session generates an **HMAC-SHA256 signed audit trail** in `~/.anvil/audit/`. Tamper-evident transcripts for compliance and forensics. Verify with `/audit verify`.
 
-### Cross-Platform Release Pipeline
-Automated builds for **5 platforms** — macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, and Windows — via Docker-based cross-compilation toolchains.
+### Conversation Branching
+Type `/fork <name>` to snapshot the current conversation and try a different approach. Switch between branches with `/fork switch N`. Never lose a good conversation thread.
 
-### Previous (v2.1.0): Security & Architecture
-AES-256-GCM encrypted credential vault, file write sandbox, native Ollama `/api/chat`, modular architecture (134 modules), 394 tests passing.
+### Enhanced Markdown Export
+`/export md` produces clean, readable Markdown with proper code blocks, tool call formatting, and a token usage summary.
+
+### Clickable URLs & Browser Auto-Open
+System messages now render **clickable hyperlinks** via OSC 8. `/remote-control` automatically opens the viewer URL in your default browser.
+
+### Expanded Cost Tracking
+Per-provider pricing for **OpenAI** (GPT-4o, o3, GPT-4o-mini), **xAI** (Grok-3, Grok-3-mini), and Ollama ($0). Running cost total in the status bar.
+
+### Previous Releases
+- **v2.1.1**: Live streaming responses, remote control, thinking mode
+- **v2.1.0**: AES-256-GCM encrypted vault, file sandbox, modular architecture
+- **v2.0.0**: Full Claude Code parity
 
 ---
 
