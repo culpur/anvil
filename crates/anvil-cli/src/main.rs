@@ -3695,10 +3695,11 @@ impl LiveCli {
                 let (new_model, name) = match provider.to_lowercase().as_str() {
                     "anthropic" | "claude" | "ant" => ("claude-sonnet-4-6", "Anthropic"),
                     "openai" | "gpt" | "oai" => ("gpt-5.4-mini", "OpenAI"),
+                    "gemini" | "google" => ("gemini-2.5-flash", "Gemini"),
                     "ollama" | "local" => ("llama3.2", "Ollama"),
                     "xai" | "grok" => ("grok", "xAI"),
                     other => {
-                        return format!("Unknown provider: {other}\nAvailable: anthropic, openai, ollama, xai");
+                        return format!("Unknown provider: {other}\nAvailable: anthropic, openai, gemini, ollama, xai");
                     }
                 };
 

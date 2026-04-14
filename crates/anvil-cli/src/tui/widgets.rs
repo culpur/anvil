@@ -114,6 +114,7 @@ pub(super) fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "list".into(), hint: "List models for current provider".into() },
             CompletionItem { insert: "anthropic".into(), hint: "Switch to Anthropic (Claude)".into() },
             CompletionItem { insert: "openai".into(), hint: "Switch to OpenAI (GPT)".into() },
+            CompletionItem { insert: "gemini".into(), hint: "Switch to Google Gemini".into() },
             CompletionItem { insert: "ollama".into(), hint: "Switch to Ollama (local)".into() },
             CompletionItem { insert: "xai".into(), hint: "Switch to xAI (Grok)".into() },
             CompletionItem { insert: "login".into(), hint: "Login/refresh current provider".into() },
@@ -121,6 +122,7 @@ pub(super) fn subcommands_for(command: &str) -> Vec<CompletionItem> {
         "/login" => vec![
             CompletionItem { insert: "anthropic".into(), hint: "Login to Anthropic (OAuth)".into() },
             CompletionItem { insert: "openai".into(), hint: "Setup OpenAI API key".into() },
+            CompletionItem { insert: "gemini".into(), hint: "Setup Gemini API key".into() },
             CompletionItem { insert: "ollama".into(), hint: "Configure Ollama endpoint".into() },
         ],
         "/config" => vec![
