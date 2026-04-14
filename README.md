@@ -20,6 +20,8 @@ You're shipping production code. You don't have time for a browser tab that forg
 
 - **A whole toolchain in 15 MB.** 45 built-in tools, 7 agent types with worktree isolation, MCP server support, HMAC-SHA256 signed audit trails, and an AnvilHub marketplace for community skills and plugins.
 
+- **Share your terminal session from a browser.** `/remote-control` generates a URL and a 6-digit pairing code. Open it on your phone, a tablet, or a colleague's machine — messages stream token-by-token, tabs sync bidirectionally, and 98 slash commands are available with autocomplete in the web UI. No other terminal AI tool does this.
+
 ---
 
 ## Quick Install
@@ -73,6 +75,30 @@ Windows: Download `anvil-x86_64-pc-windows-gnu.exe` from [releases](https://gith
 | 🗂 Tabbed Sessions | 🖥 Vim Keybindings | 📦 MCP Server Support |
 | 🔄 Smart Failover | 🏠 Air-Gap / Ollama | 👁 Focus View (Ctrl+O) |
 | ⚠ Context Warning | ♻ Stream Recovery | 🌿 Worktree Isolation |
+
+---
+
+## Remote Control
+
+Type `/remote-control` in any Anvil session and you get a URL and a 6-digit pairing code. Open the URL in any browser — your phone, a tablet, a second machine — enter the code, and you have a full web interface to that exact session.
+
+No other CLI AI tool does this. Every message streams token-by-token to the browser in real time. You can send messages, create tabs, rename tabs, and close tabs from the web UI, and the TUI reflects the changes immediately. The session runs bidirectionally: the terminal stays fully functional while the browser mirrors it live.
+
+What the web UI gives you:
+
+- **Full message history** with streaming responses as they arrive
+- **98 slash commands** with autocomplete — no memorization needed on a phone keyboard
+- **Status bar** showing active model, token count, cost, and context usage percentage
+- **Session metadata** — QMD status, version, and pairing state
+- **Send messages, manage tabs** — same as the TUI, from any device
+
+Pairing uses 6-digit codes with auto-reconnect if the browser tab goes offline. The relay is WebSocket-based and scoped to your session.
+
+**When it matters:**
+- Pair programming: hand a reviewer the URL and they follow along without screen share overhead
+- Teaching: students watch your session and ask questions via a second tab
+- Long-running tasks: kick off an agent run from your workstation, monitor it from your phone
+- Phone access: full Anvil capability without needing SSH on mobile
 
 ---
 
