@@ -1267,6 +1267,11 @@ impl AnvilTui {
                             is_error: *is_error,
                         }
                     }
+                    state::LogEntry::Image { path, label } => {
+                        runtime::relay::LogEntrySnapshot::System {
+                            text: format!("[Image: {label} — {path}]"),
+                        }
+                    }
                 }
             }).collect();
 
@@ -1878,6 +1883,9 @@ impl AnvilTui {
                 }
                 LogEntry::ToolCall { name, detail, .. } => {
                     out.push(format!("  {name}: {}", detail.lines().next().unwrap_or("")));
+                }
+                LogEntry::Image { path, label } => {
+                    out.push(format!("[Image: {label} — {path}]"));
                 }
             }
         }

@@ -67,6 +67,11 @@ pub(crate) enum LogEntry {
     },
     /// System message / error.
     System(String),
+    /// Inline image (rendered via iTerm2/Kitty protocol if supported).
+    Image {
+        path: String,
+        label: String,
+    },
 }
 
 /// Convert a runtime `Rgb` triple into a ratatui `Color`.
@@ -186,6 +191,23 @@ impl LogEntry {
                 }
                 lines.push(Line::from(""));
                 lines
+            }
+            LogEntry::Image { path, label } => {
+                // For terminals that support inline images, we'd emit the protocol escape.
+                // Ratatui doesn't directly support image protocols, so we render a styled
+                // placeholder that the raw terminal writer can intercept.
+                let display = if label.is_empty() {
+                    format!("[Image: {path}]")
+                } else {
+                    format!("[Image: {label} — {path}]")
+                };
+                vec![
+                    Line::from(Span::styled(
+                        display,
+                        Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::ITALIC),
+                    )),
+                    Line::from(""),
+                ]
             }
         }
     }
