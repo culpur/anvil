@@ -271,6 +271,8 @@ pub struct RelayHostState {
     clients: HashMap<String, ClientState>,
     /// Channel to notify the TUI when a new pairing code is generated.
     code_display_tx: mpsc::UnboundedSender<(String, String)>, // (client_id, code)
+    /// Fixed pairing code set by the CLI — all clients use this same code.
+    fixed_code: Option<String>,
 }
 
 impl RelayHostState {
@@ -278,12 +280,18 @@ impl RelayHostState {
         Self {
             clients: HashMap::new(),
             code_display_tx,
+            fixed_code: None,
         }
     }
 
-    /// A new client connected — generate a pairing code and notify the TUI.
+    /// Set a fixed pairing code — all clients will use this code instead of random ones.
+    pub fn set_fixed_code(&mut self, code: String) {
+        self.fixed_code = Some(code);
+    }
+
+    /// A new client connected — use fixed code if set, otherwise generate a new one.
     pub fn client_connected(&mut self, client_id: &str) -> String {
-        let code = generate_pairing_code();
+        let code = self.fixed_code.clone().unwrap_or_else(generate_pairing_code);
         let verifier = PairingVerifier::with_defaults(code.clone());
         self.clients.insert(client_id.to_string(), ClientState::Pairing(verifier));
         let _ = self.code_display_tx.send((client_id.to_string(), code.clone()));
@@ -359,6 +367,12 @@ impl RelayHost {
             input_tx,
             state,
         }
+    }
+
+    /// Set the fixed pairing code that all clients must enter.
+    /// Must be called before `run()` for the code to take effect.
+    pub async fn set_pairing_code(&self, code: String) {
+        self.state.lock().await.set_fixed_code(code);
     }
 
     /// Get a sender for broadcasting events from the CLI to web clients.

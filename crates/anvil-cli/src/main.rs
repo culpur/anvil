@@ -4210,11 +4210,14 @@ impl LiveCli {
                 // Spawn the relay WebSocket connection on a background thread
                 // using a dedicated tokio runtime (the provider's runtime may not be available)
                 let passage_ws_url = "wss://api.culpur.net/v1/relay/sessions".to_string();
+                let pairing_code_for_relay = pairing_code.clone();
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                         .expect("relay tokio runtime");
+                    // Set the fixed pairing code BEFORE running the relay
+                    rt.block_on(relay_host.set_pairing_code(pairing_code_for_relay));
                     let snapshot_fn = std::sync::Arc::new(tokio::sync::Mutex::new(
                         None::<Box<dyn Fn() -> Vec<runtime::relay::TabSnapshot> + Send>>,
                     ));
