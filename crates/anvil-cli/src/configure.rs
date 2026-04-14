@@ -17,6 +17,87 @@ use crate::{
     LiveCli,
 };
 
+/// Serialize ConfigureData into a JSON Value for the browser config panel.
+pub(crate) fn config_data_to_json(data: &ConfigureData) -> serde_json::Value {
+    serde_json::json!({
+        "providers": {
+            "anthropic_status": data.anthropic_status,
+            "openai_status": data.openai_status,
+            "ollama_status": data.ollama_status,
+            "ollama_host": data.ollama_host,
+            "xai_status": data.xai_status,
+        },
+        "models": {
+            "current_model": data.current_model,
+            "default_model": data.default_model,
+            "image_model": data.image_model,
+            "failover_chain": data.failover_chain,
+        },
+        "context": {
+            "context_size": data.context_size,
+            "compact_threshold": data.compact_threshold,
+            "qmd_status": data.qmd_status,
+            "history_count": data.history_count,
+            "pinned_count": data.pinned_count,
+        },
+        "search": {
+            "default_search": data.default_search,
+        },
+        "permissions": {
+            "permission_mode": data.permission_mode,
+        },
+        "display": {
+            "vim_mode": data.vim_mode,
+            "chat_mode": data.chat_mode,
+            "language": data.language,
+            "active_theme": data.active_theme,
+        },
+        "vault": {
+            "vault_session_ttl": data.vault_session_ttl,
+            "vault_auto_lock": data.vault_auto_lock,
+            "vault_status": data.vault_status,
+        },
+        "notifications": {
+            "notify_platform": data.notify_platform,
+            "notify_discord_webhook": data.notify_discord_webhook,
+            "notify_slack_webhook": data.notify_slack_webhook,
+            "notify_telegram_token": data.notify_telegram_token,
+            "notify_matrix_homeserver": data.notify_matrix_homeserver,
+        },
+        "failover": {
+            "failover_cooldown": data.failover_cooldown,
+            "failover_budget": data.failover_budget,
+            "failover_auto_recovery": data.failover_auto_recovery,
+        },
+        "ssh": {
+            "ssh_key_path": data.ssh_key_path,
+            "ssh_bastion_host": data.ssh_bastion_host,
+            "ssh_config_path": data.ssh_config_path,
+        },
+        "docker_k8s": {
+            "docker_compose_file": data.docker_compose_file,
+            "docker_registry": data.docker_registry,
+            "k8s_context": data.k8s_context,
+            "k8s_namespace": data.k8s_namespace,
+        },
+        "database": {
+            "db_url": data.db_url,
+            "db_schema_tool": data.db_schema_tool,
+        },
+        "memory": {
+            "auto_save_memory": data.auto_save_memory,
+            "archive_frequency": data.archive_frequency,
+            "archive_retention_days": data.archive_retention_days,
+            "memory_dir": data.memory_dir,
+        },
+        "plugins": {
+            "plugin_search_paths": data.plugin_search_paths,
+            "auto_enable_plugins": data.auto_enable_plugins,
+            "cron_enabled": data.cron_enabled,
+        },
+    })
+}
+
 impl LiveCli {
     pub(crate) fn load_anvil_ui_config() -> serde_json::Map<String, serde_json::Value> {
         let Some(home) = dirs_next_home() else {

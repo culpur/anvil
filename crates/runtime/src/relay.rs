@@ -212,6 +212,25 @@ pub enum RelayMessage {
         name: String,
     },
 
+    // ── Configuration (browser ↔ TUI) ──
+    /// Browser requests current config values.
+    ConfigGet,
+    /// TUI sends current config values to browser.
+    ConfigData {
+        data: serde_json::Value,
+    },
+    /// Browser sets a config key.
+    ConfigSet {
+        key: String,
+        value: String,
+    },
+    /// TUI confirms config change.
+    ConfigUpdated {
+        key: String,
+        success: bool,
+        message: String,
+    },
+
     // ── Client input ──
     UserMessage {
         tab_id: usize,
@@ -513,6 +532,22 @@ impl RelayHost {
                                         if st.paired_count() > 0 {
                                             if let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__close_tab:{tab_id}")));
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::ConfigGet => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0 {
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, "__config_get".to_string()));
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::ConfigSet { ref key, ref value } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0 {
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__config_set:{key}:{value}")));
                                             }
                                         }
                                     }

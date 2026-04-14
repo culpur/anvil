@@ -25,6 +25,8 @@ mod wizard;
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
 pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report};
 
+pub(crate) use configure::config_data_to_json;
+
 rust_i18n::i18n!("../../locales", fallback = "en");
 
 
@@ -1681,6 +1683,33 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                             }
+                        }
+                    }
+                    continue;
+                }
+                if message == "__config_get" {
+                    let data = cli.build_configure_data();
+                    let json = config_data_to_json(&data);
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::ConfigData { data: json });
+                    }
+                    continue;
+                }
+                if let Some(rest) = message.strip_prefix("__config_set:") {
+                    if let Some((key, value)) = rest.split_once(':') {
+                        let json_value = serde_json::Value::String(value.to_string());
+                        let msg = LiveCli::save_anvil_ui_config_key(key, json_value);
+                        let success = !msg.contains("error") && !msg.contains("Error");
+                        tui.push_system(format!("[Remote Config] {msg}"));
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::ConfigUpdated {
+                                key: key.to_string(),
+                                success,
+                                message: msg,
+                            });
+                        }
+                        if success && key == "default_model" {
+                            let _ = cli.set_model(Some(value.to_string()));
                         }
                     }
                     continue;
