@@ -225,6 +225,32 @@ else
 fi
 
 echo
+echo "▸ Phase 6: Update version configs..."
+# AnvilHub config.ts — update version (if accessible via SSH)
+ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
+    "ssh dev0001 'sed -i \"s/version: \\\"[0-9.]*\\\"/version: \\\"$VERSION\\\"/\" /opt/projects/anvilhub/packages/web/src/lib/anvil-config.ts'" 2>/dev/null \
+    && echo "  ✓ AnvilHub config.ts updated" \
+    || echo "  ⚠ AnvilHub config.ts update skipped (SSH not available)"
+
+# WordPress shortcodes — update ANVIL_VERSION constant
+ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
+    "ssh 10.0.70.6 'sudo docker exec wordpress-wordpress-1 sed -i \"s/ANVIL_VERSION.*,.*/ANVIL_VERSION\\\", \\\"$VERSION\\\");/\" /var/www/html/wp-content/mu-plugins/culpur-hardening.php && sudo docker exec wordpress-wordpress-1 rm -rf /var/www/html/wp-content/wphb-cache/'" 2>/dev/null \
+    && echo "  ✓ WordPress shortcodes updated + cache cleared" \
+    || echo "  ⚠ WordPress update skipped (SSH not available)"
+
+# GitHub README — update version badge
+README_SHA=$(gh api repos/culpur/anvil/contents/README.md --jq '.sha' 2>/dev/null)
+if [ -n "$README_SHA" ]; then
+    README_CONTENT=$(gh api repos/culpur/anvil/contents/README.md --jq '.content' | base64 -d)
+    UPDATED_README=$(echo "$README_CONTENT" | sed "s/version-[0-9.]*-/version-$VERSION-/g" | sed "s/v[0-9]*\.[0-9]*\.[0-9]*/v$VERSION/g")
+    ENCODED=$(echo "$UPDATED_README" | base64 | tr -d '\n')
+    gh api repos/culpur/anvil/contents/README.md \
+        -X PUT -f message="docs: auto-bump to $TAG" \
+        -f content="$ENCODED" -f sha="$README_SHA" --jq '.commit.sha' 2>/dev/null
+    echo "  ✓ GitHub README updated to $TAG"
+fi
+
+echo
 echo "╔══════════════════════════════════════════════╗"
 echo "║  ✓ Release complete: Anvil $TAG              ║"
 echo "║  Binary: $OUTPUT_DIR/                        ║"
