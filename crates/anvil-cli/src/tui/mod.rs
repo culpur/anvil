@@ -249,6 +249,19 @@ impl AnvilTui {
         Some(name)
     }
 
+    /// Close a tab by its index. Returns the name if closed, None if last tab or invalid.
+    pub fn close_tab_by_index(&mut self, index: usize) -> Option<String> {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+            return None;
+        }
+        let name = self.tabs[index].name.clone();
+        self.tabs.remove(index);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+        Some(name)
+    }
+
     /// Rename the active tab.
     pub fn rename_active_tab(&mut self, name: impl Into<String>) {
         self.active_tab_mut().name = name.into();

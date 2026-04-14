@@ -201,6 +201,10 @@ pub enum RelayMessage {
     RequestNewTab {
         name: Option<String>,
     },
+    /// Client requests closing a tab.
+    RequestCloseTab {
+        tab_id: usize,
+    },
 
     // ── Client input ──
     UserMessage {
@@ -495,6 +499,14 @@ impl RelayHost {
                                             if let Some(ref sync_tx) = user_input_tx {
                                                 // Use special prefix so TUI knows this is a tab request
                                                 let _ = sync_tx.send((0, format!("__new_tab:{tab_name}")));
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::RequestCloseTab { tab_id } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0 {
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__close_tab:{tab_id}")));
                                             }
                                         }
                                     }

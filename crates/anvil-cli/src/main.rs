@@ -1651,11 +1651,30 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             }
             for (_tab_id, message) in remote_messages {
                 // Handle special relay commands
+                if let Some(tab_id_str) = message.strip_prefix("__close_tab:") {
+                    if let Ok(tab_id) = tab_id_str.parse::<usize>() {
+                        if let Some(name) = tui.close_tab_by_index(tab_id) {
+                            tui.push_system(format!("[Remote] Closed tab: {name}"));
+                            if let Some(ref tx) = cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id });
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Some(tab_name) = message.strip_prefix("__new_tab:") {
                     let new_session = create_managed_session_handle()?;
                     let tab_idx = tui.new_tab(tab_name, cli.model.clone(), new_session.id.clone());
                     tui.switch_tab(tab_idx);
                     tui.push_system(format!("[Remote] Opened tab: {tab_name}"));
+                    // Broadcast tab_opened to relay so web viewer adds the tab
+                    if let Some(ref tx) = cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
+                            tab_id: tab_idx,
+                            name: tab_name.to_string(),
+                            model: cli.model.clone(),
+                        });
+                    }
                     continue;
                 }
 
@@ -1752,8 +1771,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             ));
                         }
                         "close" => {
+                            let closed_idx = tui.active_tab_index();
                             if let Some(name) = tui.close_active_tab() {
                                 tui.push_system(format!("Closed tab: {name}"));
+                                if let Some(ref tx) = cli.relay_event_tx {
+                                    let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id: closed_idx });
+                                }
                             } else {
                                 tui.push_system("Cannot close the last tab.".to_string());
                             }
@@ -2619,6 +2642,14 @@ impl LiveCli {
                         },
                         block_time: None,
                     });
+                    // Broadcast existing tabs so the viewer knows what tabs exist
+                    for (idx, _id, name, _unread) in tui.tab_list() {
+                        let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
+                            tab_id: idx,
+                            name: name.to_string(),
+                            model: self.model.clone(),
+                        });
+                    }
                 } else {
                     tui.clear_relay_tx();
                 }
