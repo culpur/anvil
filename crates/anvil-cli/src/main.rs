@@ -1650,6 +1650,15 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             for (_tab_id, message) in remote_messages {
+                // Handle special relay commands
+                if let Some(tab_name) = message.strip_prefix("__new_tab:") {
+                    let new_session = create_managed_session_handle()?;
+                    let tab_idx = tui.new_tab(tab_name, cli.model.clone(), new_session.id.clone());
+                    tui.switch_tab(tab_idx);
+                    tui.push_system(format!("[Remote] Opened tab: {tab_name}"));
+                    continue;
+                }
+
                 tui.push_system(format!("[Remote] {message}"));
                 tui.scroll_to_bottom();
                 tui.draw()?;
