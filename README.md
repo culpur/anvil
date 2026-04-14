@@ -2,16 +2,16 @@
 
 **Built for defense. Geared for offense.**
 
-![Version](https://img.shields.io/badge/version-2.1.4-blue)
+![Version](https://img.shields.io/badge/version-2.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
-15 MB. Zero dependencies. Five AI providers. Encrypted credential vault. 90+ commands. And the only AI coding assistant with **live remote control** — hand your terminal session to any browser, in real-time, with full bidirectional control.
+15 MB. Zero dependencies. Five AI providers. Typed Credential Vault. 90+ commands. And the only AI coding assistant with **live remote control** — hand your terminal session to any browser, in real-time, with full bidirectional control.
 
 ## Why Anvil?
 
 - **Never interrupted** — Five providers (Claude, OpenAI, Ollama, xAI, Gemini) with automatic failover. When one hits a rate limit, Anvil switches to the next without dropping your context.
 - **Live Remote Control** — Type `/remote-control` and open the URL on any device. Not a transcript. Not a screenshot. A live, bidirectional terminal-to-browser bridge with real-time streaming, 98 commands, and secure 6-digit pairing.
-- **Your secrets stay encrypted** — AES-256-GCM credential vault with Argon2id key derivation. API keys never touch disk unencrypted.
+- **Typed Credential Vault** — The vault is now the single source of truth for ALL sensitive data. API keys, SSH keys, TLS certs, tokens, and environment secrets — typed, named, and AES-256-GCM encrypted with Argon2id key derivation. Credentials never touch disk unencrypted.
 - **Air-gap ready** — Single binary, zero telemetry, local Ollama support. Runs where other tools can't.
 - **Full-screen TUI** — Tabs, streaming output, tool call visualization, focus view, thinking mode, vim keybindings. Not a chat window — a development environment.
 - **AnvilHub Marketplace** — Skills, plugins, agents, and themes from the community. Install with one command.
@@ -46,25 +46,26 @@ Or download directly from [releases](https://github.com/culpur/anvil/releases/la
 | Linux ARM64 | `anvil-aarch64-unknown-linux-gnu` |
 | Windows x86_64 | `anvil-x86_64-pc-windows-gnu.exe` |
 
-## What's New in v2.1.4
+## What's New in v2.2.0
 
 | Feature | Description |
 |---------|-------------|
-| **Focus View** | Ctrl+O — see only prompts, tool summaries, and responses |
-| **Context Warning** | Footer shows ⚠ at 80% context, CRITICAL at 95% |
-| **Stream Recovery** | Stalled API streams abort after 5 min and retry |
-| **WebFetch Cleanup** | CSS and JavaScript stripped before text extraction |
-| **Recurring Prompts** | `/loop` and `/proactive` for automated workflows |
-| **Performance** | Modernized internals — leaner and faster |
+| **Typed Credential Vault** | The vault is now the single source of truth for ALL sensitive data — API keys, SSH keys, TLS certs, tokens, and env secrets with named types |
+| **Vault Schema v2** | Structured credential entries: `name`, `type`, `value`, `tags`, `created_at`, `rotated_at` |
+| **`/vault add`** | Interactive typed credential entry with category selection |
+| **`/vault rotate`** | Rotate any credential in-place, preserving audit history |
+| **`/vault export`** | Encrypted vault export for backup and migration |
+| **Env secret injection** | `/vault inject` — load vault secrets into shell env for any subprocess |
+| **Audit trail v2** | Every vault access logged with timestamp, operation, and credential type |
 
 ## Features
 
 | | | |
 |---|---|---|
-| ⚡ Multi-Provider Failover | 🖥 Full-Screen TUI | 🔐 Encrypted Vault |
+| ⚡ Multi-Provider Failover | 🖥 Full-Screen TUI | 🔐 Typed Credential Vault |
 | 🌐 Live Remote Control | 📋 90+ Commands | 🧠 1M Token Context |
-| 🔧 45 Built-in Tools | 🤖 7 Agent Types | 📦 AnvilHub Marketplace |
-| 👁 Focus View | 🔄 Smart Compaction | 🛡 File Sandbox |
+| 🔧 45 Built-in Tools | 🤖 7 Agent Types | 🛒 AnvilHub Marketplace |
+| 👁 Focus View | 📚 Smart Compaction | 🛡 File Sandbox |
 | 🌍 7 Languages | 🎨 Custom Themes | 📱 Browser Access |
 
 ## Providers
@@ -80,13 +81,14 @@ Or download directly from [releases](https://github.com/culpur/anvil/releases/la
 ## Quick Start
 
 ```bash
-anvil                           # Start interactive session
-/remote-control                 # Share via browser
-/model claude-opus-4-6          # Switch model
-/fork experiment                # Branch the conversation
-/focus                          # Toggle focus view
-/vault scan                     # Detect and vault credentials
-/export md                      # Export as Markdown
+anvil                               # Start interactive session
+/remote-control                     # Share via browser
+/model claude-opus-4-6              # Switch model
+/fork experiment                    # Branch the conversation
+/focus                              # Toggle focus view
+/vault add                          # Add a typed credential
+/vault scan                         # Detect and vault credentials
+/export md                          # Export as Markdown
 ```
 
 ## Links
