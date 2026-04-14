@@ -74,7 +74,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
-      - name: Create Release
+      - name: Create source repo release
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -89,3 +89,75 @@ jobs:
             anvil-x86_64-pc-windows-msvc.exe/anvil-x86_64-pc-windows-msvc.exe
             anvil-x86_64-pc-windows-msvc.exe/anvil-x86_64-pc-windows-msvc.exe.sha256
           generate_release_notes: true
+
+      # ── Upload binaries to the PUBLIC repo (culpur/anvil) ──
+      - name: Upload to public repo
+        if: secrets.PUBLIC_REPO_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          for dir in anvil-*/; do
+            for f in "$dir"anvil-*; do
+              [ -f "$f" ] && gh release upload "$TAG" "$f" --repo culpur/anvil --clobber 2>/dev/null || true
+            done
+          done
+          echo "Public repo binaries uploaded"
+
+      # ── Update Homebrew formula ──
+      - name: Update Homebrew
+        if: secrets.PUBLIC_REPO_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          ARM_MAC=$(sha256sum anvil-aarch64-apple-darwin/anvil-aarch64-apple-darwin | awk '{print $1}')
+          INTEL_MAC=$(sha256sum anvil-x86_64-apple-darwin/anvil-x86_64-apple-darwin | awk '{print $1}')
+          ARM_LINUX=$(sha256sum anvil-aarch64-unknown-linux-gnu/anvil-aarch64-unknown-linux-gnu | awk '{print $1}')
+          X86_LINUX=$(sha256sum anvil-x86_64-unknown-linux-gnu/anvil-x86_64-unknown-linux-gnu | awk '{print $1}')
+
+          cat > /tmp/anvil.rb << FORMULA
+          class Anvil < Formula
+            desc "AI coding assistant with typed credential vault, live remote control, 5 providers"
+            homepage "https://culpur.net/anvil"
+            version "$VERSION"
+            license "Proprietary"
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-aarch64-apple-darwin"
+                sha256 "$ARM_MAC"
+              else
+                url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-x86_64-apple-darwin"
+                sha256 "$INTEL_MAC"
+              end
+            end
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-aarch64-unknown-linux-gnu"
+                sha256 "$ARM_LINUX"
+              else
+                url "https://github.com/culpur/anvil/releases/download/$TAG/anvil-x86_64-unknown-linux-gnu"
+                sha256 "$X86_LINUX"
+              end
+            end
+            def install
+              downloaded = Dir["anvil-*"].first || "anvil"
+              bin.install downloaded => "anvil"
+            end
+            test do
+              assert_match "Anvil CLI", shell_output("#{bin}/anvil --version")
+            end
+          end
+          FORMULA
+          sed -i 's/^          //' /tmp/anvil.rb
+
+          SHA=$(gh api repos/culpur/homebrew-anvil/contents/Formula/anvil.rb --jq '.sha')
+          CONTENT=$(base64 -w0 /tmp/anvil.rb)
+          gh api repos/culpur/homebrew-anvil/contents/Formula/anvil.rb \
+            -X PUT \
+            -f message="formula: auto-bump to $TAG" \
+            -f content="$CONTENT" \
+            -f sha="$SHA"
+          echo "Homebrew updated to $TAG"
