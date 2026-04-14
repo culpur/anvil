@@ -1702,6 +1702,21 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                // Check if the remote message is a slash command
+                if message.starts_with('/') {
+                    if let Some(command) = SlashCommand::parse(&message) {
+                        tui.push_system(format!("[Remote] {message}"));
+                        match cli.handle_repl_command_tui(command, &mut tui) {
+                            Ok(_) => {}
+                            Err(err) => {
+                                tui.push_system(format!("Error: {err}"));
+                            }
+                        }
+                        tui.set_thinking_enabled(cli.thinking_enabled);
+                        continue;
+                    }
+                }
+
                 tui.push_system(format!("[Remote] {message}"));
                 tui.scroll_to_bottom();
                 tui.draw()?;
