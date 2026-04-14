@@ -251,9 +251,28 @@ if [ -n "$README_SHA" ]; then
 fi
 
 echo
+echo "▸ Phase 7: Generate release notes draft..."
+PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+if [ -n "$PREV_TAG" ]; then
+    echo "  Changes since $PREV_TAG:"
+    git log --oneline "$PREV_TAG..$TAG" | head -20
+    echo
+    echo "  ── Draft changelog entry ──"
+    echo "  v${VERSION} — $(date +%B\ %d,\ %Y)"
+    git log --oneline "$PREV_TAG..$TAG" | sed 's/^[a-f0-9]* /  - /'
+    echo
+fi
+
 echo "╔══════════════════════════════════════════════╗"
 echo "║  ✓ Release complete: Anvil $TAG              ║"
-echo "║  Binary: $OUTPUT_DIR/                        ║"
-echo "║  GitHub: https://github.com/culpur/anvil/releases/tag/$TAG"
-echo "║  Brew:   brew upgrade anvil                  ║"
+echo "║                                              ║"
+echo "║  Binaries:  $OUTPUT_DIR/                     ║"
+echo "║  GitHub:    https://github.com/culpur/anvil/releases/tag/$TAG"
+echo "║  Brew:      brew upgrade anvil               ║"
+echo "║                                              ║"
+echo "║  MANUAL STEPS REMAINING:                     ║"
+echo "║  1. Review + edit changelog on AnvilHub about ║"
+echo "║  2. Update feature descriptions if needed     ║"
+echo "║  3. Update docs/usage page if commands added  ║"
+echo "║  4. Post to marketing channels if major       ║"
 echo "╚══════════════════════════════════════════════╝"
