@@ -51,6 +51,7 @@ pub(crate) fn config_data_to_json(data: &ConfigureData) -> serde_json::Value {
             "chat_mode": data.chat_mode,
             "language": data.language,
             "active_theme": data.active_theme,
+            "status_line_preset": data.status_line_preset,
         },
         "vault": {
             "vault_session_ttl": data.vault_session_ttl,
@@ -681,6 +682,54 @@ impl LiveCli {
                 }
             }
 
+            // ── Status Line ─────────────────────────────────────────────
+            "statusline" | "status-line" | "status_line" => {
+                use runtime::theme::StatusLinePreset;
+                let current = cfg_str("status_line_preset", "default");
+                let preset_list: String = StatusLinePreset::all()
+                    .iter()
+                    .map(|p| format!(
+                        "  {}{:<16} {}",
+                        if p.name() == current { "► " } else { "  " },
+                        p.name(),
+                        p.description()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                match rest {
+                    "" => format!(
+                        "Status Line Configuration\n\n\
+                         Current preset: {current}\n\n\
+                         Available presets:\n{preset_list}\n\n\
+                         To change:\n  /configure statusline <preset-name>\n\n\
+                         Presets control which widgets appear in the status bar and where.\n\
+                         Each preset is designed for a different workflow or audience."
+                    ),
+                    name => {
+                        if StatusLinePreset::from_name(name).is_some() {
+                            let saved = Self::save_anvil_ui_config_key(
+                                "status_line_preset",
+                                serde_json::Value::String(name.to_string()),
+                            );
+                            // Also save the full config for web viewer sync
+                            let config = runtime::theme::StatusLineConfig::from_preset(
+                                StatusLinePreset::from_name(name).unwrap(),
+                            );
+                            let _ = Self::save_anvil_ui_config_key(
+                                "status_line",
+                                config.to_json(),
+                            );
+                            format!("{saved}\nStatus line switched to: {name}\nRestart or the change takes effect immediately.")
+                        } else {
+                            format!(
+                                "Unknown preset: {name}\n\nAvailable presets:\n{preset_list}"
+                            )
+                        }
+                    }
+                }
+            }
+
             // ── Integrations ──────────────────────────────────────────────
             "integrations" => {
                 let anvilhub_url = cfg_str("anvilhub_url", "https://anvilhub.culpur.net");
@@ -976,6 +1025,7 @@ impl LiveCli {
             // Section 7
             language,
             active_theme,
+            status_line_preset: cfg_str("status_line_preset", "default"),
             // Section 8
             vault_session_ttl,
             vault_auto_lock,
@@ -1175,6 +1225,19 @@ impl LiveCli {
                 let cfg = Self::load_anvil_ui_config();
                 let current = cfg.get("cron_enabled").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 Self::save_anvil_ui_config_key("cron_enabled", serde_json::Value::Bool(!current))
+            }
+            // ── Section 16: Status Line ──────────────────────────────────
+            ConfigureAction::SetStatusLinePreset { preset } => {
+                let saved = Self::save_anvil_ui_config_key(
+                    "status_line_preset",
+                    serde_json::Value::String(preset.clone()),
+                );
+                // Also save the full config for web viewer sync
+                if let Some(p) = runtime::theme::StatusLinePreset::from_name(&preset) {
+                    let config = runtime::theme::StatusLineConfig::from_preset(p);
+                    let _ = Self::save_anvil_ui_config_key("status_line", config.to_json());
+                }
+                saved
             }
         }
     }

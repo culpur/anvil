@@ -1,7 +1,8 @@
 /// Ratatui layout calculation, constraint definitions, area splitting,
 /// and status-line span builders.
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use runtime::theme::{Rgb, StatusLineConfig, StatusWidget};
 
 // ─── Input line count ─────────────────────────────────────────────────────────
 
@@ -164,4 +165,336 @@ pub(super) fn build_status1_spans(
         ));
     }
     spans
+}
+
+// ─── Dynamic status line widget system ───────────────────────────────────────
+
+/// Convert a runtime `Rgb` triple into a ratatui `Color`.
+#[inline]
+fn to_color(c: Rgb) -> Color {
+    Color::Rgb(c.0, c.1, c.2)
+}
+
+/// All live data that widgets may need to render.
+pub(super) struct StatusLineData {
+    pub model: String,
+    pub thinking_enabled: bool,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cost_usd: String,
+    pub context_used: u32,
+    pub context_max: u32,
+    pub elapsed_secs: u64,
+    pub git_branch: String,
+    pub git_diff: String,
+    pub git_clean: bool,
+    pub permission_mode: String,
+    pub qmd_status: String,
+    pub archive_status: String,
+    pub update_available: String,
+    pub remote_url: String,
+    pub remote_code: String,
+    pub vim_mode: bool,
+    pub version: String,
+    pub provider: String,
+    pub token_speed: f64,
+    // Theme colors
+    pub accent: Rgb,
+    pub warning: Rgb,
+    pub success: Rgb,
+    pub error: Rgb,
+}
+
+/// Render a single widget into spans.
+fn render_widget(
+    widget: &StatusWidget,
+    data: &StatusLineData,
+    separator_char: &str,
+) -> Vec<Span<'static>> {
+    let gray = Color::Rgb(0x88, 0x88, 0x88);
+    let dim = Style::default().fg(gray);
+
+    match widget {
+        StatusWidget::Model => vec![
+            Span::styled("Model: ", dim),
+            Span::styled(data.model.clone(), Style::default().fg(Color::Yellow)),
+        ],
+        StatusWidget::Thinking => {
+            let (text, color) = if data.thinking_enabled {
+                ("Yes".to_string(), Color::Green)
+            } else {
+                ("No".to_string(), gray)
+            };
+            vec![
+                Span::styled("Thinking: ", dim),
+                Span::styled(text, Style::default().fg(color)),
+            ]
+        }
+        StatusWidget::Effort => vec![
+            Span::styled("Effort: ", dim),
+            Span::styled("standard", dim),
+        ],
+        StatusWidget::Provider => vec![
+            Span::styled("Provider: ", dim),
+            Span::styled(data.provider.clone(), Style::default().fg(to_color(data.accent))),
+        ],
+        StatusWidget::TokensTotal => {
+            let total = data.input_tokens.saturating_add(data.output_tokens);
+            vec![Span::styled(format!("{total} tokens"), dim)]
+        }
+        StatusWidget::TokensInput => {
+            vec![Span::styled(format!("In: {}", data.input_tokens), dim)]
+        }
+        StatusWidget::TokensOutput => {
+            vec![Span::styled(format!("Out: {}", data.output_tokens), dim)]
+        }
+        StatusWidget::Cost => {
+            vec![Span::styled(
+                format!("Cost: {}", data.cost_usd),
+                Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
+            )]
+        }
+        StatusWidget::TokenSpeed => {
+            if data.token_speed > 0.0 {
+                vec![Span::styled(format!("{:.0} t/s", data.token_speed), dim)]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::ContextBar => {
+            let bar_width: usize = 16;
+            let pct = if data.context_max > 0 {
+                ((f64::from(data.context_used) / f64::from(data.context_max)) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            let filled = ((pct / 100.0) * bar_width as f64).round() as usize;
+            let empty = bar_width.saturating_sub(filled);
+            let bar_color = if pct >= 95.0 {
+                Color::Red
+            } else if pct >= 80.0 {
+                Color::Yellow
+            } else {
+                Color::Blue
+            };
+            vec![
+                Span::raw("Context: ["),
+                Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
+                Span::styled("░".repeat(empty), Style::default().fg(Color::Rgb(0x33, 0x33, 0x33))),
+                Span::raw("] "),
+            ]
+        }
+        StatusWidget::ContextPct => {
+            let pct = if data.context_max > 0 {
+                ((f64::from(data.context_used) / f64::from(data.context_max)) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            let mut spans = vec![Span::styled(
+                format!("{pct:.0}%"),
+                Style::default().fg(Color::Yellow),
+            )];
+            if pct >= 95.0 {
+                spans.push(Span::styled(
+                    " ⚠ CRITICAL",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ));
+            } else if pct >= 80.0 {
+                spans.push(Span::styled(" ⚠ high", Style::default().fg(Color::Yellow)));
+            }
+            spans
+        }
+        StatusWidget::ContextTokens => {
+            let used_k = data.context_used / 1000;
+            let max_k = data.context_max / 1000;
+            vec![Span::styled(
+                format!("{used_k}k/{max_k}k"),
+                Style::default().fg(Color::Yellow),
+            )]
+        }
+        StatusWidget::SessionTime => {
+            let secs = data.elapsed_secs;
+            let dur = if secs < 3600 {
+                format!("{}m{}s", secs / 60, secs % 60)
+            } else {
+                format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+            };
+            vec![Span::styled(format!("Session: {dur}"), dim)]
+        }
+        StatusWidget::SessionPct => {
+            let pct = if data.context_max > 0 {
+                ((f64::from(data.context_used) / f64::from(data.context_max)) * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            vec![Span::styled(format!("Session: {pct:.1}%"), dim)]
+        }
+        StatusWidget::BlockTime => {
+            let secs = data.elapsed_secs;
+            let dur = if secs < 3600 {
+                format!("{}m", secs / 60)
+            } else {
+                format!("{}hr", secs / 3600)
+            };
+            vec![Span::styled(format!("Block: {dur}"), dim)]
+        }
+        StatusWidget::GitBranch => {
+            if data.git_branch.is_empty() {
+                vec![]
+            } else {
+                vec![
+                    Span::styled("⌐", dim),
+                    Span::styled(data.git_branch.clone(), Style::default().fg(Color::Green)),
+                ]
+            }
+        }
+        StatusWidget::GitStatus => {
+            if data.git_branch.is_empty() {
+                vec![]
+            } else {
+                let (label, color) = if data.git_clean {
+                    ("clean", Color::Green)
+                } else {
+                    ("dirty", Color::Yellow)
+                };
+                vec![Span::styled(label.to_string(), Style::default().fg(color))]
+            }
+        }
+        StatusWidget::GitDiff => {
+            if data.git_diff.is_empty() {
+                vec![]
+            } else {
+                vec![Span::styled(format!("({})", data.git_diff), dim)]
+            }
+        }
+        StatusWidget::Permissions => {
+            vec![
+                Span::styled("▸▸ ", Style::default().fg(to_color(data.warning))),
+                Span::styled(
+                    data.permission_mode.clone(),
+                    Style::default().fg(to_color(data.warning)).add_modifier(Modifier::DIM),
+                ),
+            ]
+        }
+        StatusWidget::QmdStatus => {
+            if data.qmd_status.is_empty() {
+                vec![]
+            } else {
+                vec![Span::styled(
+                    format!("📚 {}", data.qmd_status),
+                    Style::default().fg(Color::Rgb(0x55, 0x88, 0x55)),
+                )]
+            }
+        }
+        StatusWidget::Version => {
+            vec![Span::styled(
+                format!("v{}", data.version),
+                Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
+            )]
+        }
+        StatusWidget::VimMode => {
+            if data.vim_mode {
+                vec![Span::styled("VIM", Style::default().fg(Color::Green))]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::RemoteControl => {
+            if data.remote_url.is_empty() {
+                vec![]
+            } else {
+                let label = if data.remote_code.is_empty() {
+                    format!("RC {}", data.remote_url)
+                } else {
+                    format!("RC {}  [{}]", data.remote_url, data.remote_code)
+                };
+                vec![Span::styled(
+                    label,
+                    Style::default()
+                        .fg(Color::Rgb(0x55, 0xCC, 0xFF))
+                        .add_modifier(Modifier::BOLD),
+                )]
+            }
+        }
+        StatusWidget::UpdateAvailable => {
+            if data.update_available.is_empty() {
+                vec![]
+            } else {
+                vec![Span::styled(
+                    format!("⬆ {}", data.update_available),
+                    Style::default()
+                        .fg(Color::Rgb(0xFF, 0xAA, 0x00))
+                        .add_modifier(Modifier::BOLD),
+                )]
+            }
+        }
+        StatusWidget::ArchiveStatus => {
+            if data.archive_status.is_empty() {
+                vec![]
+            } else {
+                vec![Span::styled(
+                    format!("📦 {}", data.archive_status),
+                    Style::default().fg(Color::Rgb(0x55, 0x77, 0xAA)),
+                )]
+            }
+        }
+        StatusWidget::Text { content } => {
+            vec![Span::styled(content.clone(), dim)]
+        }
+        StatusWidget::Spacer => {
+            // Spacers are handled at the line-composition level
+            vec![]
+        }
+        StatusWidget::Separator => {
+            vec![Span::styled(separator_char.to_string(), dim)]
+        }
+    }
+}
+
+/// Render all status lines from a `StatusLineConfig` into ratatui `Line`s.
+pub(super) fn render_status_lines(
+    config: &StatusLineConfig,
+    data: &StatusLineData,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let sep = &config.separator_char;
+    let mut result = Vec::with_capacity(config.lines.len());
+
+    for line_cfg in &config.lines {
+        let mut left_spans: Vec<Span<'static>> = Vec::new();
+        for widget in &line_cfg.left {
+            let rendered = render_widget(widget, data, sep);
+            if rendered.is_empty() {
+                continue;
+            }
+            // Add separator spacing between non-empty widgets (except if this IS a separator)
+            if !left_spans.is_empty() && widget.id() != "separator" {
+                // Check if previous widget was a separator — if so, skip auto-spacing
+                let prev_is_sep = left_spans
+                    .last()
+                    .map(|s| s.content.contains('│') || s.content.contains('·'))
+                    .unwrap_or(false);
+                if !prev_is_sep {
+                    left_spans.push(Span::raw(" "));
+                }
+            }
+            left_spans.extend(rendered);
+        }
+
+        let mut right_spans: Vec<Span<'static>> = Vec::new();
+        for widget in &line_cfg.right {
+            let rendered = render_widget(widget, data, sep);
+            if rendered.is_empty() {
+                continue;
+            }
+            if !right_spans.is_empty() && widget.id() != "separator" {
+                right_spans.push(Span::raw(" "));
+            }
+            right_spans.extend(rendered);
+        }
+
+        result.push(build_left_right_line(left_spans, right_spans, width));
+    }
+
+    result
 }

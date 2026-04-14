@@ -4,6 +4,9 @@
 /// TUI.  The current theme is persisted to `~/.anvil/theme.json` so it
 /// survives across sessions.  Five built-in themes are provided; users can
 /// also hand-edit the JSON to create custom palettes.
+///
+/// The `StatusLineConfig` system provides widget-based customization of the
+/// TUI status bar.  Users choose a preset or configure individual widgets.
 use std::io;
 use std::path::PathBuf;
 
@@ -342,6 +345,527 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+// ─── Status Line Widget System ───────────────────────────────────────────────
+
+/// A single widget that can appear in the status line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusWidget {
+    // Model & AI
+    Model,
+    Thinking,
+    Effort,
+    Provider,
+    // Tokens & Cost
+    TokensTotal,
+    TokensInput,
+    TokensOutput,
+    Cost,
+    TokenSpeed,
+    // Context
+    ContextBar,
+    ContextPct,
+    ContextTokens,
+    // Session
+    SessionTime,
+    SessionPct,
+    BlockTime,
+    // Git
+    GitBranch,
+    GitStatus,
+    GitDiff,
+    // System
+    Permissions,
+    QmdStatus,
+    Version,
+    VimMode,
+    RemoteControl,
+    UpdateAvailable,
+    ArchiveStatus,
+    // Custom
+    Text { content: String },
+    Spacer,
+    Separator,
+}
+
+impl StatusWidget {
+    /// Short identifier for this widget type.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Model => "model",
+            Self::Thinking => "thinking",
+            Self::Effort => "effort",
+            Self::Provider => "provider",
+            Self::TokensTotal => "tokens_total",
+            Self::TokensInput => "tokens_input",
+            Self::TokensOutput => "tokens_output",
+            Self::Cost => "cost",
+            Self::TokenSpeed => "token_speed",
+            Self::ContextBar => "context_bar",
+            Self::ContextPct => "context_pct",
+            Self::ContextTokens => "context_tokens",
+            Self::SessionTime => "session_time",
+            Self::SessionPct => "session_pct",
+            Self::BlockTime => "block_time",
+            Self::GitBranch => "git_branch",
+            Self::GitStatus => "git_status",
+            Self::GitDiff => "git_diff",
+            Self::Permissions => "permissions",
+            Self::QmdStatus => "qmd_status",
+            Self::Version => "version",
+            Self::VimMode => "vim_mode",
+            Self::RemoteControl => "remote_control",
+            Self::UpdateAvailable => "update_available",
+            Self::ArchiveStatus => "archive_status",
+            Self::Text { .. } => "text",
+            Self::Spacer => "spacer",
+            Self::Separator => "separator",
+        }
+    }
+
+    /// Human-readable label for the config panel.
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Model => "Model",
+            Self::Thinking => "Thinking",
+            Self::Effort => "Effort",
+            Self::Provider => "Provider",
+            Self::TokensTotal => "Total Tokens",
+            Self::TokensInput => "Input Tokens",
+            Self::TokensOutput => "Output Tokens",
+            Self::Cost => "Cost",
+            Self::TokenSpeed => "Token Speed",
+            Self::ContextBar => "Context Bar",
+            Self::ContextPct => "Context %",
+            Self::ContextTokens => "Context Tokens",
+            Self::SessionTime => "Session Time",
+            Self::SessionPct => "Session %",
+            Self::BlockTime => "Block Time",
+            Self::GitBranch => "Git Branch",
+            Self::GitStatus => "Git Status",
+            Self::GitDiff => "Git Diff",
+            Self::Permissions => "Permissions",
+            Self::QmdStatus => "QMD Status",
+            Self::Version => "Version",
+            Self::VimMode => "Vim Mode",
+            Self::RemoteControl => "Remote Control",
+            Self::UpdateAvailable => "Update Available",
+            Self::ArchiveStatus => "Archive Status",
+            Self::Text { .. } => "Text",
+            Self::Spacer => "Spacer",
+            Self::Separator => "Separator",
+        }
+    }
+}
+
+/// One horizontal line in the status bar, with left-aligned and right-aligned widgets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusLine {
+    pub left: Vec<StatusWidget>,
+    pub right: Vec<StatusWidget>,
+}
+
+/// Per-widget style overrides.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WidgetStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+}
+
+/// Full status line configuration: lines + style settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusLineConfig {
+    pub preset: String,
+    pub lines: Vec<StatusLine>,
+    #[serde(default = "default_separator")]
+    pub separator_char: String,
+    #[serde(default)]
+    pub compact: bool,
+    #[serde(default)]
+    pub widgets: std::collections::HashMap<String, WidgetStyle>,
+}
+
+fn default_separator() -> String {
+    " │ ".to_string()
+}
+
+/// Named presets for different user demographics and workflows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusLinePreset {
+    /// Balanced — model, tokens, context, git, permissions (3 lines)
+    Default,
+    /// Clean and quiet — model + context bar only (2 lines)
+    Minimal,
+    /// Full git info, permissions, QMD, vim — for power users (3 lines)
+    Developer,
+    /// Token counts front and center — for cost-conscious users (3 lines)
+    TokenHeavy,
+    /// Git branch, status, diff prominent — for commit-heavy workflows (3 lines)
+    GitHeavy,
+    /// Everything on 2 lines — maximizes content area
+    Compact,
+    /// Cost and token speed prominent — for API budget tracking (3 lines)
+    CostFocused,
+    /// Large model name, no cost — clean for screen sharing (2 lines)
+    Streamer,
+}
+
+impl StatusLinePreset {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Minimal => "minimal",
+            Self::Developer => "developer",
+            Self::TokenHeavy => "token-heavy",
+            Self::GitHeavy => "git-heavy",
+            Self::Compact => "compact",
+            Self::CostFocused => "cost-focused",
+            Self::Streamer => "streamer",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Default => "Balanced layout — model, tokens, context, git, permissions",
+            Self::Minimal => "Clean and quiet — model + context bar only",
+            Self::Developer => "Full git info, permissions, QMD — for power users",
+            Self::TokenHeavy => "Token counts front and center — for cost-conscious users",
+            Self::GitHeavy => "Git branch, status, diff prominent — for commit-heavy workflows",
+            Self::Compact => "Everything on 2 lines — maximizes content area",
+            Self::CostFocused => "Cost and token speed prominent — for API budget tracking",
+            Self::Streamer => "Large model name, no cost — clean for screen sharing",
+        }
+    }
+
+    pub fn all() -> &'static [StatusLinePreset] {
+        &[
+            Self::Default,
+            Self::Minimal,
+            Self::Developer,
+            Self::TokenHeavy,
+            Self::GitHeavy,
+            Self::Compact,
+            Self::CostFocused,
+            Self::Streamer,
+        ]
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "default" => Some(Self::Default),
+            "minimal" => Some(Self::Minimal),
+            "developer" => Some(Self::Developer),
+            "token-heavy" => Some(Self::TokenHeavy),
+            "git-heavy" => Some(Self::GitHeavy),
+            "compact" => Some(Self::Compact),
+            "cost-focused" => Some(Self::CostFocused),
+            "streamer" => Some(Self::Streamer),
+            _ => None,
+        }
+    }
+}
+
+impl StatusLineConfig {
+    /// Load from `~/.anvil/config.json` under the `"status_line"` key.
+    /// Falls back to `default()` if missing or invalid.
+    pub fn load() -> Self {
+        Self::try_load().unwrap_or_default()
+    }
+
+    fn try_load() -> Option<Self> {
+        let home = dirs_home()?;
+        let path = home.join(".anvil").join("config.json");
+        let text = std::fs::read_to_string(path).ok()?;
+        let obj: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let sl = obj.get("status_line")?;
+        serde_json::from_value(sl.clone()).ok()
+    }
+
+    /// Serialize this config as a JSON value for embedding in config.json.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Number of status lines this config renders.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Build a config from a named preset.
+    pub fn from_preset(preset: StatusLinePreset) -> Self {
+        match preset {
+            StatusLinePreset::Default => Self::preset_default(),
+            StatusLinePreset::Minimal => Self::preset_minimal(),
+            StatusLinePreset::Developer => Self::preset_developer(),
+            StatusLinePreset::TokenHeavy => Self::preset_token_heavy(),
+            StatusLinePreset::GitHeavy => Self::preset_git_heavy(),
+            StatusLinePreset::Compact => Self::preset_compact(),
+            StatusLinePreset::CostFocused => Self::preset_cost_focused(),
+            StatusLinePreset::Streamer => Self::preset_streamer(),
+        }
+    }
+
+    // ── Preset definitions ──────────────────────────────────────────────
+
+    fn preset_default() -> Self {
+        Self {
+            preset: "default".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::GitBranch, StatusWidget::GitDiff,
+                    ],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator,
+                        StatusWidget::SessionPct, StatusWidget::BlockTime,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::QmdStatus, StatusWidget::ArchiveStatus,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_minimal() -> Self {
+        Self {
+            preset: "minimal".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![StatusWidget::Model],
+                    right: vec![StatusWidget::Cost],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::ContextBar, StatusWidget::ContextPct],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " · ".into(),
+            compact: true,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_developer() -> Self {
+        Self {
+            preset: "developer".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost,
+                    ],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator,
+                        StatusWidget::SessionPct, StatusWidget::BlockTime,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::GitBranch, StatusWidget::GitStatus,
+                        StatusWidget::GitDiff, StatusWidget::Separator,
+                        StatusWidget::QmdStatus, StatusWidget::ArchiveStatus,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![StatusWidget::VimMode],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_token_heavy() -> Self {
+        Self {
+            preset: "token-heavy".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::TokensInput, StatusWidget::Separator,
+                        StatusWidget::TokensOutput, StatusWidget::Separator,
+                        StatusWidget::TokensTotal, StatusWidget::Separator,
+                        StatusWidget::Cost,
+                    ],
+                    right: vec![StatusWidget::TokenSpeed],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::ContextPct,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::GitBranch,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_git_heavy() -> Self {
+        Self {
+            preset: "git-heavy".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::GitBranch, StatusWidget::Separator,
+                        StatusWidget::GitStatus, StatusWidget::Separator,
+                        StatusWidget::GitDiff,
+                    ],
+                    right: vec![StatusWidget::Model],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator, StatusWidget::Cost,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::QmdStatus,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_compact() -> Self {
+        Self {
+            preset: "compact".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::GitBranch, StatusWidget::GitDiff,
+                    ],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextPct,
+                        StatusWidget::Separator,
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::BlockTime,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " · ".into(),
+            compact: true,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_cost_focused() -> Self {
+        Self {
+            preset: "cost-focused".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::TokenSpeed, StatusWidget::Separator,
+                        StatusWidget::Model,
+                    ],
+                    right: vec![
+                        StatusWidget::TokensInput, StatusWidget::Separator,
+                        StatusWidget::TokensOutput,
+                    ],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator, StatusWidget::SessionPct,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::GitBranch,
+                        StatusWidget::UpdateAvailable, StatusWidget::RemoteControl,
+                    ],
+                    right: vec![],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_streamer() -> Self {
+        Self {
+            preset: "streamer".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![StatusWidget::Model, StatusWidget::Separator, StatusWidget::Thinking],
+                    right: vec![StatusWidget::GitBranch],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::ContextBar, StatusWidget::ContextPct],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl Default for StatusLineConfig {
+    fn default() -> Self {
+        Self::preset_default()
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -372,5 +896,67 @@ mod tests {
     #[test]
     fn unknown_builtin_returns_none() {
         assert!(Theme::builtin("does-not-exist").is_none());
+    }
+
+    // ── Status line tests ───────────────────────────────────────────────
+
+    #[test]
+    fn all_presets_round_trip() {
+        for preset in StatusLinePreset::all() {
+            let cfg = StatusLineConfig::from_preset(*preset);
+            assert_eq!(cfg.preset, preset.name());
+            assert!(!cfg.lines.is_empty(), "preset {} has no lines", preset.name());
+            // Serialize and deserialize
+            let json = serde_json::to_string(&cfg).expect("serialize");
+            let back: StatusLineConfig = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back.preset, preset.name());
+            assert_eq!(back.lines.len(), cfg.lines.len());
+        }
+    }
+
+    #[test]
+    fn preset_from_name_round_trip() {
+        for preset in StatusLinePreset::all() {
+            let found = StatusLinePreset::from_name(preset.name());
+            assert_eq!(found, Some(*preset));
+        }
+        assert_eq!(StatusLinePreset::from_name("nonexistent"), None);
+    }
+
+    #[test]
+    fn default_config_has_3_lines() {
+        let cfg = StatusLineConfig::default();
+        assert_eq!(cfg.line_count(), 3);
+        assert_eq!(cfg.preset, "default");
+    }
+
+    #[test]
+    fn compact_presets_have_2_lines() {
+        let minimal = StatusLineConfig::from_preset(StatusLinePreset::Minimal);
+        assert_eq!(minimal.line_count(), 2);
+        let compact = StatusLineConfig::from_preset(StatusLinePreset::Compact);
+        assert_eq!(compact.line_count(), 2);
+        let streamer = StatusLineConfig::from_preset(StatusLinePreset::Streamer);
+        assert_eq!(streamer.line_count(), 2);
+    }
+
+    #[test]
+    fn widget_id_unique() {
+        let widgets = vec![
+            StatusWidget::Model, StatusWidget::Thinking, StatusWidget::Effort,
+            StatusWidget::Provider, StatusWidget::TokensTotal, StatusWidget::TokensInput,
+            StatusWidget::TokensOutput, StatusWidget::Cost, StatusWidget::TokenSpeed,
+            StatusWidget::ContextBar, StatusWidget::ContextPct, StatusWidget::ContextTokens,
+            StatusWidget::SessionTime, StatusWidget::SessionPct, StatusWidget::BlockTime,
+            StatusWidget::GitBranch, StatusWidget::GitStatus, StatusWidget::GitDiff,
+            StatusWidget::Permissions, StatusWidget::QmdStatus, StatusWidget::Version,
+            StatusWidget::VimMode, StatusWidget::RemoteControl, StatusWidget::UpdateAvailable,
+            StatusWidget::ArchiveStatus, StatusWidget::Spacer, StatusWidget::Separator,
+        ];
+        let mut ids: Vec<&str> = widgets.iter().map(|w| w.id()).collect();
+        let len_before = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), len_before, "widget IDs must be unique");
     }
 }

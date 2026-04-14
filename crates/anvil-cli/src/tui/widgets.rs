@@ -186,6 +186,7 @@ pub(super) fn subcommands_for(command: &str) -> Vec<CompletionItem> {
             CompletionItem { insert: "database".into(), hint: "Database connection settings".into() },
             CompletionItem { insert: "memoryarchive".into(), hint: "Memory dir & archive settings".into() },
             CompletionItem { insert: "pluginscron".into(), hint: "Plugin search paths & cron jobs".into() },
+            CompletionItem { insert: "statusline".into(), hint: "Status bar layout presets".into() },
         ],
         "/theme" => vec![
             CompletionItem { insert: "list".into(), hint: "Show available themes".into() },
@@ -502,6 +503,16 @@ pub(super) fn third_level_completions(command: &str, subcommand: &str) -> Vec<Co
             CompletionItem { insert: "size".into(), hint: "Set context size (e.g. 1M)".into() },
             CompletionItem { insert: "threshold".into(), hint: "Set auto-compact % (e.g. 85)".into() },
             CompletionItem { insert: "qmd".into(), hint: "Toggle QMD (on/off)".into() },
+        ],
+        ("/configure", "statusline") | ("/configure", "status-line") | ("/configure", "status_line") => vec![
+            CompletionItem { insert: "default".into(), hint: "Balanced — model, tokens, context, git".into() },
+            CompletionItem { insert: "minimal".into(), hint: "Clean — model + context bar only".into() },
+            CompletionItem { insert: "developer".into(), hint: "Full git, QMD, vim — power users".into() },
+            CompletionItem { insert: "token-heavy".into(), hint: "Token counts front and center".into() },
+            CompletionItem { insert: "git-heavy".into(), hint: "Git branch, status, diff prominent".into() },
+            CompletionItem { insert: "compact".into(), hint: "Everything on 2 lines".into() },
+            CompletionItem { insert: "cost-focused".into(), hint: "Cost + token speed prominent".into() },
+            CompletionItem { insert: "streamer".into(), hint: "Clean for screen sharing".into() },
         ],
         ("/configure", "display") => vec![
             CompletionItem { insert: "vim".into(), hint: "Toggle vim mode (on/off)".into() },

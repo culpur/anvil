@@ -81,6 +81,7 @@ pub enum ConfigureAction {
     ToggleAutoEnablePlugins,
     ToggleCronEnabled,
     SetPluginSearchPaths { paths: String },
+    SetStatusLinePreset { preset: String },
 }
 
 // ─── ConfigureData ────────────────────────────────────────────────────────────
@@ -116,6 +117,7 @@ pub struct ConfigureData {
     pub github_configured: bool,
     pub language: String,
     pub active_theme: String,
+    pub status_line_preset: String,
     pub vault_session_ttl: u64,
     pub vault_auto_lock: bool,
     pub vault_status: String,

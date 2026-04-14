@@ -29,7 +29,7 @@ use configure_types::{
     configure_action_for, configure_data_notify_value, mask_sensitive,
 };
 use helpers::{strip_ansi, truncate_str, permission_mode_display, prev_char_boundary, next_char_boundary};
-use layout::{compute_input_lines, cursor_visual_position, build_left_right_line, build_status1_spans};
+use layout::{compute_input_lines, cursor_visual_position, render_status_lines, StatusLineData};
 use state::{Tab, LogEntry, THINK_FRAMES};
 
 
@@ -38,6 +38,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use runtime::{format_usd, pricing_for_model, Rgb, Theme};
+use runtime::theme::StatusLineConfig;
 
 use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
@@ -133,6 +134,8 @@ pub struct AnvilTui {
     pub(super) remote_code: String,
     /// Focus mode — show only prompt + tool summary + final response.
     pub(super) focus_mode: bool,
+    /// Status line configuration — determines which widgets appear and where.
+    pub(super) status_line_config: StatusLineConfig,
 }
 
 impl AnvilTui {
@@ -190,6 +193,7 @@ impl AnvilTui {
                 remote_url: String::new(),
                 remote_code: String::new(),
                 focus_mode: false,
+                status_line_config: StatusLineConfig::load(),
             },
             TuiSender(tx),
         ))
@@ -372,6 +376,7 @@ impl AnvilTui {
         let agent_rows = self.agent_rows.clone();
         let remote_url = self.remote_url.clone();
         let remote_code = self.remote_code.clone();
+        let sl_config = self.status_line_config.clone();
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -380,12 +385,13 @@ impl AnvilTui {
             // ── layout ──────────────────────────────────────────────────────
             // header=2 (tab bar + model/session line), content=fill,
             // [agent panel = 2+N lines when visible and agents exist],
-            // footer = 5 + input_line_count  (grows 6–10 as input expands)
+            // footer = separator + input rows + blank + N status lines
 
             // How many visual rows does the current input occupy? (1–5)
             let input_line_count = compute_input_lines(&input_text, width);
-            // Total footer height: separator + input rows + blank + 3 status lines.
-            let footer_height: u16 = (5 + input_line_count) as u16;
+            // Total footer height: separator(1) + input rows + blank(1) + N status lines.
+            let status_line_count = sl_config.line_count();
+            let footer_height: u16 = (2 + input_line_count + status_line_count) as u16;
 
             // Agent panel height: 2 lines for border + 1 per agent row (max 6).
             let agent_panel_height: u16 = if agent_panel_visible && !agent_rows.is_empty() {
@@ -806,9 +812,7 @@ impl AnvilTui {
             // Blank line after input.
             let line_blank = Line::from("");
 
-            // Line 3: Model: {name} | Total: {n}M | Cost: ${x} | ⌐{branch} | (+x,-y)    {total} tokens
-            let total_tokens = input_tokens.saturating_add(output_tokens);
-            let total_m = f64::from(total_tokens) / 1_000_000.0;
+            // Dynamic status lines from widget configuration.
             let cost_usd = {
                 if model.contains(':') && !model.contains(":cloud") {
                     "local".to_string()
@@ -822,126 +826,41 @@ impl AnvilTui {
                     format_usd(0.0)
                 }
             };
-            let right3 = format!("{total_tokens} tokens");
-            let line3 = build_left_right_line(
-                build_status1_spans(&model, total_m, &git_branch, &git_diff_stats, &cost_usd, self.thinking_enabled),
-                vec![Span::styled(
-                    right3,
-                    Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
-                )],
-                width,
-            );
-
-            // Line 4: Context bar | session % | block dur    version
-            let used_tokens = input_tokens;
-            let bar_width: usize = 16;
-            let pct = if context_max_tokens > 0 {
-                ((f64::from(used_tokens) / f64::from(context_max_tokens)) * 100.0).min(100.0)
-            } else {
-                0.0
+            let sl_data = StatusLineData {
+                model: model.clone(),
+                thinking_enabled: self.thinking_enabled,
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                context_used: input_tokens,
+                context_max: context_max_tokens,
+                elapsed_secs: elapsed.as_secs(),
+                git_branch: git_branch.clone(),
+                git_diff: git_diff_stats.clone(),
+                git_clean: git_diff_stats.is_empty(),
+                permission_mode: permission_mode_display(&permission_mode),
+                qmd_status: qmd_status.clone(),
+                archive_status: last_archive_status.clone(),
+                update_available: update_available.clone(),
+                remote_url: remote_url.clone(),
+                remote_code: remote_code.clone(),
+                vim_mode: false, // TODO: wire from config
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                provider: String::new(),
+                token_speed: 0.0,
+                accent: theme.accent,
+                warning: theme.warning,
+                success: theme.success,
+                error: theme.error,
             };
-            let filled = ((pct / 100.0) * bar_width as f64).round() as usize;
-            let empty = bar_width.saturating_sub(filled);
-            let bar_filled = "█".repeat(filled);
-            let bar_empty = "░".repeat(empty);
-            let used_k = used_tokens / 1000;
-            let max_k = context_max_tokens / 1000;
-            let session_pct = if context_max_tokens > 0 { pct } else { 0.0 };
-            let secs = elapsed.as_secs();
-            let dur_str = if secs < 3600 {
-                format!("{}m", secs / 60)
-            } else {
-                format!("{}hr", secs / 3600)
-            };
-            let version_str = format!("currentVersion: {}", env!("CARGO_PKG_VERSION"));
-
-            let line4 = build_left_right_line(
-                vec![
-                    Span::raw("Context: ["),
-                    Span::styled(bar_filled, Style::default().fg(Color::Blue)),
-                    Span::styled(bar_empty, Style::default().fg(Color::Rgb(0x33, 0x33, 0x33))),
-                    Span::raw("] "),
-                    Span::styled(
-                        format!("{used_k}k/{max_k}k ({pct:.0}%)"),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                    Span::styled(
-                        format!(" | Session: {session_pct:.1}% | Block: {dur_str}"),
-                        Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
-                    ),
-                    // Context-low warning
-                    if pct >= 95.0 {
-                        Span::styled(" ⚠ CONTEXT CRITICAL", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-                    } else if pct >= 80.0 {
-                        Span::styled(" ⚠ context high", Style::default().fg(Color::Yellow))
-                    } else {
-                        Span::raw("")
-                    },
-                ],
-                vec![Span::styled(
-                    version_str,
-                    Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
-                )],
-                width,
-            );
-
-            // Line 5: ▸▸ permissions | QMD status | archive status
-            let perm_display = permission_mode_display(&permission_mode);
-            let mut line5_left = vec![
-                Span::styled(
-                    "▸▸ ",
-                    Style::default().fg(rgb(theme.warning)),
-                ),
-                Span::styled(
-                    perm_display,
-                    Style::default()
-                        .fg(rgb(theme.warning))
-                        .add_modifier(Modifier::DIM),
-                ),
-            ];
-            if !qmd_status.is_empty() {
-                line5_left.push(Span::styled(
-                    format!("  │  📚 {qmd_status}"),
-                    Style::default().fg(Color::Rgb(0x55, 0x88, 0x55)),
-                ));
-            }
-            if !last_archive_status.is_empty() {
-                line5_left.push(Span::styled(
-                    format!("  │  📦 {last_archive_status}"),
-                    Style::default().fg(Color::Rgb(0x55, 0x77, 0xAA)),
-                ));
-            }
-            if !update_available.is_empty() {
-                line5_left.push(Span::styled(
-                    format!("  │  ⬆ {update_available}"),
-                    Style::default()
-                        .fg(Color::Rgb(0xFF, 0xAA, 0x00))
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            if !remote_url.is_empty() {
-                let rc_label = if remote_code.is_empty() {
-                    format!("  │  RC {remote_url}")
-                } else {
-                    format!("  │  RC {remote_url}  [{remote_code}]")
-                };
-                line5_left.push(Span::styled(
-                    rc_label,
-                    Style::default()
-                        .fg(Color::Rgb(0x55, 0xCC, 0xFF))
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            let line5 = Line::from(line5_left);
+            let status_lines = render_status_lines(&sl_config, &sl_data, width);
 
             // Assemble footer.
             let mut footer_lines: Vec<Line<'static>> = Vec::new();
             footer_lines.push(line0);
             footer_lines.extend(input_lines_rendered);
             footer_lines.push(line_blank);
-            footer_lines.push(line3);
-            footer_lines.push(line4);
-            footer_lines.push(line5);
+            footer_lines.extend(status_lines);
             let footer_widget = Paragraph::new(Text::from(footer_lines));
             frame.render_widget(footer_widget, footer_area);
 
@@ -1284,6 +1203,29 @@ impl AnvilTui {
 
     pub fn set_thinking_enabled(&mut self, enabled: bool) {
         self.thinking_enabled = enabled;
+    }
+
+    // ─── Status line configuration ──────────────────────────────────────────
+
+    /// Switch the status line layout to a named preset.
+    pub fn set_status_line_preset(&mut self, name: &str) -> bool {
+        use runtime::theme::StatusLinePreset;
+        if let Some(preset) = StatusLinePreset::from_name(name) {
+            self.status_line_config = StatusLineConfig::from_preset(preset);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the status line config wholesale (e.g. from config_set via web viewer).
+    pub fn set_status_line_config(&mut self, config: StatusLineConfig) {
+        self.status_line_config = config;
+    }
+
+    /// Get a reference to the current status line config.
+    pub fn status_line_config(&self) -> &StatusLineConfig {
+        &self.status_line_config
     }
 
     // ─── Remote control status ───────────────────────────────────────────────

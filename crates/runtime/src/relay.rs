@@ -195,6 +195,7 @@ pub enum RelayMessage {
         thinking_enabled: bool,
         qmd_status: Option<String>,
         block_time: Option<String>,
+        status_line_preset: Option<String>,
     },
 
     // ── Client requests ──

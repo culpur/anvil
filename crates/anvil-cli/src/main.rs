@@ -65,7 +65,7 @@ use runtime::{
 use crossterm::terminal;
 use serde_json::json;
 use tools::GlobalToolRegistry;
-use tui::{AnvilTui, ReadResult, TuiEvent, TuiSender};
+use tui::{AnvilTui, ConfigureAction, ReadResult, TuiEvent, TuiSender};
 
 use auth::{
     query_anthropic_models, run_anthropic_login, run_login, run_logout, run_ollama_setup,
@@ -1711,6 +1711,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         if success && key == "default_model" {
                             let _ = cli.set_model(Some(value.to_string()));
                         }
+                        if success && key == "status_line_preset" {
+                            tui.set_status_line_preset(value);
+                        }
                     }
                     continue;
                 }
@@ -1829,6 +1832,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 break 'outer;
             }
             ReadResult::ConfigureAction(action) => {
+                // Apply status line preset changes immediately to the TUI.
+                if let ConfigureAction::SetStatusLinePreset { ref preset } = action {
+                    tui.set_status_line_preset(preset);
+                }
                 let msg = cli.apply_configure_action(action);
                 // Rebuild a fresh ConfigureData snapshot and re-enter configure mode
                 // so the menu immediately reflects the change.
@@ -2758,6 +2765,7 @@ impl LiveCli {
                             None
                         },
                         block_time: None,
+                        status_line_preset: Some(tui.status_line_config().preset.clone()),
                     });
                     // Broadcast existing tabs so the viewer knows what tabs exist
                     for (idx, name, model, session_id) in tui.tab_details() {
