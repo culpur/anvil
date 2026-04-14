@@ -112,9 +112,14 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
 
         // ── Unlock ───────────────────────────────────────────────────────────
         "unlock" => {
-            let password = match read_password_prompt("Master password: ") {
-                Ok(p) => p,
-                Err(e) => return format!("Vault\n  Error            {e}"),
+            // Accept password as parameter (for remote/web viewer) or prompt interactively
+            let password = if !arg1.is_empty() {
+                arg1.to_string()
+            } else {
+                match read_password_prompt("Master password: ") {
+                    Ok(p) => p,
+                    Err(e) => return format!("Vault\n  Error            {e}"),
+                }
             };
             match vm.unlock(&password) {
                 Ok(()) => "Vault\n  Result           Unlocked\n  Note             Known limitation: vault session is not persistent across commands. Each vault operation prompts for the master password.".to_string(),
