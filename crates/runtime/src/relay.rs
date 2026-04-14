@@ -440,11 +440,6 @@ impl RelayHost {
                 ws_msg = ws_stream_read.next() => {
                     match ws_msg {
                         Some(Ok(WsMessage::Text(text_bytes))) => {
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/anvil-relay-debug.log") {
-                                use std::io::Write;
-                                let preview: String = text_bytes.chars().take(200).collect();
-                                let _ = writeln!(f, "RECV: {preview}");
-                            }
                             if let Ok(msg) = serde_json::from_str::<RelayMessage>(&text_bytes) {
                                 match msg {
                                     RelayMessage::ClientConnected { ref client_id } => {
@@ -515,10 +510,6 @@ impl RelayHost {
                     match event {
                         Ok(relay_msg) => {
                             let json = serde_json::to_string(&relay_msg)?;
-                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/anvil-relay-debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(f, "FWD: {}", &json[..json.len().min(200)]);
-                            }
                             let _ = ws_sink.send(WsMessage::Text(json.into())).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
