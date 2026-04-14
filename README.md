@@ -4,7 +4,7 @@
 
 ![Version](https://img.shields.io/badge/version-2.1.3-0FBCFF?style=flat-square) ![License](https://img.shields.io/badge/license-proprietary-red?style=flat-square) ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-555?style=flat-square)
 
-You're shipping production code. You don't have time for a browser tab that forgets your context, drops the thread mid-response, or locks you into a single AI provider with no fallback. Anvil is a full-screen terminal AI assistant built in Rust — 15 MB, zero dependencies, four AI providers with automatic failover, an encrypted credential vault, 90+ commands, and a multi-agent system that does real work while you stay in the loop. It runs on your hardware, keeps your secrets, and doesn't phone home.
+You're shipping production code. You don't have time for a browser tab that forgets your context, drops the thread mid-response, or locks you into a single AI provider with no fallback. Anvil is a full-screen terminal AI assistant 15 MB, zero dependencies, four AI providers with automatic failover, an encrypted credential vault, 90+ commands, and a multi-agent system that does real work while you stay in the loop. It runs on your hardware, keeps your secrets, and doesn't phone home.
 
 ---
 
@@ -54,7 +54,7 @@ Windows: Download `anvil-x86_64-pc-windows-gnu.exe` from [releases](https://gith
 
 ## What's New in v2.1.3
 
-- **Rust Edition 2024** — Full codebase upgrade with crossterm 0.29, ratatui 0.30, reqwest 0.13. Leaner and faster across the board.
+- **Performance Upgrade** — Modernized internals with latest dependencies. Leaner and faster across the board.
 - **Focus View (Ctrl+O)** — See only prompts, tool summaries, and responses. Everything else disappears.
 - **Context-Low Warning** — Footer shows ⚠ at 80% context usage, CRITICAL at 95%. No more surprise compactions.
 - **Stalled Stream Recovery** — Streams idle for 5+ minutes are aborted and retried non-streaming automatically.
