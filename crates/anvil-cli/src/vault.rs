@@ -164,13 +164,20 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
 
         // ── Get ───────────────────────────────────────────────────────────────
         "get" => {
-            let label = arg1;
+            // /vault get <label> [password] — password optional for remote use
+            let mut get_parts = arg1.splitn(2, ' ');
+            let label = get_parts.next().unwrap_or("").trim();
+            let inline_pw = get_parts.next().unwrap_or("").trim();
             if label.is_empty() {
                 return "Vault\n  Usage            /vault get <label>".to_string();
             }
-            let password = match read_password_prompt("Master password: ") {
-                Ok(p) => p,
-                Err(e) => return format!("Vault\n  Error            {e}"),
+            let password = if !inline_pw.is_empty() {
+                inline_pw.to_string()
+            } else {
+                match read_password_prompt("Master password: ") {
+                    Ok(p) => p,
+                    Err(e) => return format!("Vault\n  Error            {e}"),
+                }
             };
             if let Err(e) = vm.unlock(&password) { return format!("Vault unlock error: {e}") }
             match vm.get_credential(label) {
@@ -204,9 +211,14 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
 
         // ── List ──────────────────────────────────────────────────────────────
         "list" => {
-            let password = match read_password_prompt("Master password: ") {
-                Ok(p) => p,
-                Err(e) => return format!("Vault\n  Error            {e}"),
+            // Accept password as parameter for remote/non-interactive use
+            let password = if !arg1.is_empty() {
+                arg1.to_string()
+            } else {
+                match read_password_prompt("Master password: ") {
+                    Ok(p) => p,
+                    Err(e) => return format!("Vault\n  Error            {e}"),
+                }
             };
             if let Err(e) = vm.unlock(&password) { return format!("Vault unlock error: {e}") }
             match vm.list_credentials() {
