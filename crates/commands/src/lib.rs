@@ -931,6 +931,7 @@ mod tests {
         assert_eq!(
             SlashCommand::parse("/export notes.txt"),
             Some(SlashCommand::Export {
+                format: None,
                 path: Some("notes.txt".to_string())
             })
         );

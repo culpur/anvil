@@ -9,6 +9,8 @@ pub mod qmd;
 pub mod search;
 pub mod task;
 pub mod team;
+pub mod audit;
+pub mod egress;
 pub mod vault;
 pub mod vault_session;
 mod compact;

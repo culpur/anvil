@@ -13,6 +13,7 @@
 //! TOTP: HMAC-SHA1, Base32 secret, 6-digit code, 30-second window (RFC 6238).
 
 pub mod crypto;
+pub mod scan;
 pub mod storage;
 
 use std::fs;
