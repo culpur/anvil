@@ -410,10 +410,7 @@ fn render_widget(
         }
         StatusWidget::RemoteControl => {
             if data.remote_url.is_empty() {
-                vec![Span::styled(
-                    "\u{1f6f8} RC Disconnected".to_string(),
-                    Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
-                )]
+                vec![]
             } else {
                 // Show compact hash — extract last path segment or use first 12 chars of code
                 let short_id = if !data.remote_code.is_empty() {
