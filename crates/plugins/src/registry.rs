@@ -40,7 +40,7 @@ pub struct InstalledPluginRegistry {
     pub plugins: BTreeMap<String, InstalledPluginRecord>,
 }
 
-fn default_plugin_kind() -> PluginKind {
+const fn default_plugin_kind() -> PluginKind {
     PluginKind::External
 }
 

@@ -161,7 +161,7 @@ impl Theme {
 
     /// Names of all built-in themes.
     #[must_use]
-    pub fn builtin_names() -> &'static [&'static str] {
+    pub const fn builtin_names() -> &'static [&'static str] {
         &[
             "culpur-defense",
             "cyberpunk",
@@ -402,7 +402,7 @@ pub enum StatusWidget {
 impl StatusWidget {
     /// Short identifier for this widget type.
     #[must_use] 
-    pub fn id(&self) -> &str {
+    pub const fn id(&self) -> &str {
         match self {
             Self::Model => "model",
             Self::Thinking => "thinking",
@@ -446,7 +446,7 @@ impl StatusWidget {
 
     /// Human-readable label for the config panel.
     #[must_use] 
-    pub fn display_name(&self) -> &str {
+    pub const fn display_name(&self) -> &str {
         match self {
             Self::Model => "Model",
             Self::Thinking => "Thinking",
@@ -490,7 +490,7 @@ impl StatusWidget {
 
     /// Widget category for color-coding in the editor UI.
     #[must_use] 
-    pub fn category(&self) -> &str {
+    pub const fn category(&self) -> &str {
         match self {
             Self::Model | Self::Thinking | Self::Effort | Self::Provider => "model",
             Self::TokensTotal | Self::TokensInput | Self::TokensOutput
@@ -640,7 +640,7 @@ pub enum StatusLinePreset {
 
 impl StatusLinePreset {
     #[must_use] 
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Default => "default",
             Self::Minimal => "minimal",
@@ -662,7 +662,7 @@ impl StatusLinePreset {
     }
 
     #[must_use] 
-    pub fn description(self) -> &'static str {
+    pub const fn description(self) -> &'static str {
         match self {
             Self::Default => "Balanced layout — model, tokens, context, git, permissions",
             Self::Minimal => "Clean and quiet — model + context bar only",
@@ -684,7 +684,7 @@ impl StatusLinePreset {
     }
 
     #[must_use] 
-    pub fn all() -> &'static [StatusLinePreset] {
+    pub const fn all() -> &'static [StatusLinePreset] {
         &[
             Self::Default,
             Self::Minimal,
@@ -754,7 +754,7 @@ impl StatusLineConfig {
 
     /// Number of status lines this config renders.
     #[must_use] 
-    pub fn line_count(&self) -> usize {
+    pub const fn line_count(&self) -> usize {
         self.lines.len()
     }
 

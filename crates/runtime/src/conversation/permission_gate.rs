@@ -13,21 +13,21 @@ use super::ToolExecutor;
 pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     tool_use_id: String,
     tool_name: String,
-    input: String,
+    input: &str,
     policy: &PermissionPolicy,
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     hook_runner: &HookRunner,
     executor: &mut T,
 ) -> ConversationMessage {
     let permission_outcome = if let Some(prompt) = prompter.as_mut() {
-        policy.authorize(&tool_name, &input, Some(*prompt))
+        policy.authorize(&tool_name, input, Some(*prompt))
     } else {
-        policy.authorize(&tool_name, &input, None)
+        policy.authorize(&tool_name, input, None)
     };
 
     match permission_outcome {
         PermissionOutcome::Allow => {
-            let pre_hook_result = hook_runner.run_pre_tool_use(&tool_name, &input);
+            let pre_hook_result = hook_runner.run_pre_tool_use(&tool_name, input);
             if pre_hook_result.is_denied() {
                 let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
                 ConversationMessage::tool_result(
@@ -38,14 +38,14 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
                 )
             } else {
                 let (mut output, mut is_error) =
-                    match executor.execute(&tool_name, &input) {
+                    match executor.execute(&tool_name, input) {
                         Ok(output) => (output, false),
                         Err(error) => (error.to_string(), true),
                     };
                 output = merge_hook_feedback(pre_hook_result.messages(), output, false);
 
                 let post_hook_result =
-                    hook_runner.run_post_tool_use(&tool_name, &input, &output, is_error);
+                    hook_runner.run_post_tool_use(&tool_name, input, &output, is_error);
                 if post_hook_result.is_denied() {
                     is_error = true;
                 }

@@ -72,7 +72,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             let result_message = evaluate_and_execute(
                 tool_use_id,
                 tool_name,
-                input,
+                &input,
                 permission_policy,
                 prompter,
                 hook_runner,

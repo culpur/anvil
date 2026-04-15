@@ -5,6 +5,8 @@ mod agents;
 mod auth;
 mod cmd_ai;
 mod cmd_static;
+mod commands_extra;
+mod commands_util;
 mod configure;
 mod file_drop;
 mod format_tool;
@@ -12,6 +14,7 @@ mod help;
 mod init;
 mod input;
 mod providers;
+mod remote_control;
 mod render;
 mod screensaver;
 mod session;
@@ -58,8 +61,8 @@ use runtime::{
     format_package_detail, format_package_list, load_system_prompt, pricing_for_model,
     render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
-    ConfigLoader, ContentBlock, ConversationRuntime, CronDaemon,
-    HistoryArchiver, MessageRole,
+    ConfigLoader, ConversationRuntime, CronDaemon,
+    HistoryArchiver,
     PermissionMode, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
@@ -3251,170 +3254,6 @@ impl LiveCli {
     // New slash command implementations
     // -----------------------------------------------------------------
 
-    /// `/undo` — show unstaged changes and offer to revert them.
-    /// Returns the output text. Interactive confirmation is done inline.
-    #[allow(clippy::unused_self)]
-    fn run_undo(&self) -> Result<String, Box<dyn std::error::Error>> {
-        cmd_static::run_undo()
-    }
-
-    /// `/history [all]` — display conversation messages.
-    fn format_history(&self, show_all: bool) -> String {
-        let messages = &self.runtime.session().messages;
-        let limit = if show_all { messages.len() } else { 20 };
-        let start = messages.len().saturating_sub(limit);
-        let visible = &messages[start..];
-        if visible.is_empty() {
-            return "No conversation history yet.".to_string();
-        }
-        let mut lines = vec![format!(
-            "Conversation history ({} of {} messages):",
-            visible.len(),
-            messages.len()
-        )];
-        for (i, msg) in visible.iter().enumerate() {
-            let index = start + i;
-            let role = match msg.role {
-                MessageRole::User => "user",
-                MessageRole::Assistant => "assistant",
-                MessageRole::System => "system",
-                MessageRole::Tool => "tool",
-            };
-            // Render the first text block as a short snippet.
-            let snippet: String = msg
-                .blocks
-                .iter()
-                .find_map(|block| {
-                    if let ContentBlock::Text { text } = block {
-                        Some(text.chars().take(100).collect())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "<non-text content>".to_string());
-            let ellipsis = if snippet.len() == 100 { "..." } else { "" };
-            lines.push(format!("[{index}] {role}: \"{snippet}{ellipsis}\""));
-        }
-        lines.join("\n")
-    }
-
-    /// `/mcp [list|status|tools <server>]` — MCP server management.
-    fn run_mcp_command(&self, action: Option<&str>) -> String {
-        // Read MCP server config from settings.json
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        let settings_path = home.as_ref().map(|h| h.join(".anvil").join("settings.json"));
-        let servers: Vec<String> = settings_path
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .and_then(|v| v.get("mcpServers").cloned())
-            .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
-            .unwrap_or_default();
-        let count = servers.len();
-
-        match action.unwrap_or("list").split_whitespace().next().unwrap_or("list") {
-            "list" | "status" => {
-                if servers.is_empty() {
-                    return "No MCP servers configured.\n\n\
-                        Configure MCP servers in ~/.anvil/settings.json under \"mcpServers\".\n\
-                        Example:\n  \"mcpServers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path\"]\n    }\n  }"
-                        .to_string();
-                }
-                let mut lines = vec![format!("🔌 MCP Servers ({count} configured):")];
-                for name in &servers {
-                    lines.push(format!("  🟢  {name}"));
-                }
-                lines.push(String::new());
-                lines.push("MCP tools are auto-discovered at startup and available to the AI.".to_string());
-                lines.push("Configure in ~/.anvil/settings.json under \"mcpServers\".".to_string());
-                lines.join("\n")
-            }
-            other => format!("Unknown MCP action: {other}\nUsage: /mcp [list|status]"),
-        }
-    }
-
-    /// `/productivity` — show session productivity stats.
-    fn run_productivity_command(&self) -> String {
-        use std::process::Command;
-
-        let diff_output = Command::new("git")
-            .args(["diff", "--shortstat"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .unwrap_or_default();
-
-        let mut ins: u32 = 0;
-        let mut del: u32 = 0;
-        for part in diff_output.split(',') {
-            let part = part.trim();
-            if part.contains("insertion") {
-                if let Some(n) = part.split_whitespace().next() { ins = n.parse().unwrap_or(0); }
-            } else if part.contains("deletion")
-                && let Some(n) = part.split_whitespace().next() { del = n.parse().unwrap_or(0); }
-        }
-
-        let files_changed = Command::new("git")
-            .args(["diff", "--name-only"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map_or(0, |s| s.lines().filter(|l| !l.is_empty()).count());
-
-        let session = self.runtime.session();
-        let total_tokens = session.messages.iter()
-            .filter_map(|m| m.usage.as_ref())
-            .map(|u| u.input_tokens + u.output_tokens)
-            .sum::<u32>();
-
-        let efficiency = if ins + del > 0 {
-            format!("{:.0} tokens/line", f64::from(total_tokens) / f64::from(ins + del))
-        } else {
-            "—".to_string()
-        };
-
-        format!(
-            "📊 Session Productivity\n\
-             ─────────────────────────\n\
-             📝 Lines added:    +{ins}\n\
-             📝 Lines removed:  -{del}\n\
-             📁 Files changed:  {files_changed}\n\
-             🎯 Token efficiency: {efficiency}\n\
-             💰 Total tokens:   {total_tokens}\n\
-             ─────────────────────────\n\
-             Tip: Use the 'academic' or 'dashboard' status line preset\n\
-             to see live productivity in the status bar."
-        )
-    }
-
-    /// `/context [path]` — add a file to per-session context or list context files.
-    fn run_context(&mut self, path: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
-        let Some(path_str) = path else {
-            if self.context_files.is_empty() {
-                return Ok("No context files added this session.".to_string());
-            }
-            let mut lines = vec!["Context files:".to_string()];
-            for p in &self.context_files {
-                lines.push(format!("  {}", p.display()));
-            }
-            return Ok(lines.join("\n"));
-        };
-
-        let path_buf = PathBuf::from(path_str);
-        let content = fs::read_to_string(&path_buf)
-            .map_err(|e| format!("Failed to read {path_str}: {e}"))?;
-        let injection = format!(
-            "<system-reminder>File context: {}\n{}</system-reminder>",
-            path_buf.display(),
-            content
-        );
-        // Inject as a user message so the model sees it on the next turn.
-        self.runtime.inject_user_message(&injection);
-        self.context_files.push(path_buf.clone());
-        Ok(format!("Added to context: {}", path_buf.display()))
-    }
-
     /// `/pin [path]` — pin a file persistently, or list pinned files.
     #[allow(clippy::unused_self)]
     fn run_pin(&self, path: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
@@ -4536,104 +4375,6 @@ impl LiveCli {
         })
     }
 
-    /// `/remote-control [stop|status]` — manage the web viewer relay session.
-    fn run_remote_control_command(&mut self, action: Option<&str>) -> String {
-        const HUB_BASE_URL: &str = "https://passage.culpur.net/viewer";
-
-        match action.map_or("", str::trim) {
-            "stop" => {
-                if self.relay_session.is_none() {
-                    return "Remote control: no active session.".to_string();
-                }
-                self.relay_session = None;
-                self.relay_event_tx = None;
-                self.relay_input_rx = None;
-                "Remote control: session stopped.".to_string()
-            }
-            "status" => {
-                match &self.relay_session {
-                    None => "Remote control: no active session.".to_string(),
-                    Some(session) => {
-                        let client_count = self
-                            .relay_event_tx
-                            .as_ref()
-                            .map_or(0, tokio::sync::broadcast::Sender::receiver_count);
-                        format!(
-                            "Remote control\n  URL              {}\n  Hash             {}\n  Clients          {}\n  Status           {:?}\n\nNext\n  /remote-control stop   Stop the relay session",
-                            session.url,
-                            session.hash,
-                            client_count,
-                            session.status,
-                        )
-                    }
-                }
-            }
-            // default: start (or report existing session)
-            _ => {
-                if let Some(session) = &self.relay_session {
-                    return format!(
-                        "Remote control is already active.\n  URL    {}\n  Hash   {}\n\nUse /remote-control status  to see details.\nUse /remote-control stop    to end the session.",
-                        session.url, session.hash
-                    );
-                }
-
-                let hash = runtime::relay::generate_session_hash();
-                let pairing_code = runtime::relay::generate_pairing_code();
-                let mut session = runtime::relay::RelaySession::new(hash.clone(), HUB_BASE_URL);
-                let url = session.url.clone();
-                let (event_tx, _) = tokio::sync::broadcast::channel::<runtime::relay::RelayMessage>(256);
-
-                // Create the relay host with pairing code display channel
-                let (code_display_tx, _code_display_rx) = tokio::sync::mpsc::unbounded_channel();
-                let relay_host = runtime::relay::RelayHost::new(
-                    hash.clone(),
-                    HUB_BASE_URL,
-                    code_display_tx,
-                );
-
-                // Subscribe to the event broadcast for the relay WS loop
-                let event_rx = event_tx.subscribe();
-
-                // Spawn the relay WebSocket connection on a background thread
-                // using a dedicated tokio runtime (the provider's runtime may not be available)
-                let passage_ws_url = "wss://api.culpur.net/v1/relay/sessions".to_string();
-                let pairing_code_for_relay = pairing_code.clone();
-                // Create a sync channel for receiving user messages from web clients
-                let (relay_input_tx, relay_input_rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                    else {
-                        eprintln!("Failed to create relay tokio runtime");
-                        return;
-                    };
-                    // Set the fixed pairing code BEFORE running the relay
-                    rt.block_on(relay_host.set_pairing_code(pairing_code_for_relay));
-                    let snapshot_fn = std::sync::Arc::new(tokio::sync::Mutex::new(
-                        None::<Box<dyn Fn() -> Vec<runtime::relay::TabSnapshot> + Send>>,
-                    ));
-                    if let Err(e) = rt.block_on(relay_host.run(&passage_ws_url, event_rx, snapshot_fn, Some(relay_input_tx))) {
-                        eprintln!("Relay disconnected: {e}");
-                    }
-                });
-
-                session.status = runtime::relay::RelayStatus::WaitingForClient;
-                session.pairing_code = pairing_code.clone();
-                self.relay_session = Some(session);
-                self.relay_event_tx = Some(event_tx);
-                self.relay_input_rx = Some(relay_input_rx);
-
-                // Auto-open the viewer URL in the default browser
-                let _ = open::that(&url);
-
-                format!(
-                    "Remote control started\n  URL              {url}\n  Pairing code     {pairing_code}\n  Hash             {hash}\n\nThe URL has been opened in your default browser.\nEnter the pairing code when prompted.\n\nNext\n  /remote-control status   Check connection status\n  /remote-control stop     Stop the relay session"
-                )
-            }
-        }
-    }
-
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime.session().save_to_path(&self.session.path)?;
         Ok(())
@@ -5081,105 +4822,6 @@ impl LiveCli {
             "Auto-compact\n  Reason           Context at {threshold_pct}% ({estimated}/{context_max} tokens)\n  Removed          {} messages\n{archive_note}  Tip              Previous conversation searchable via /history-archive",
             result.removed_message_count,
         ))
-    }
-
-    /// Handle `/history-archive [search <q> | view <id>]` commands.
-    fn run_history_archive_command(&self, action: Option<&str>) -> String {
-        let archiver = &self.history_archiver;
-
-        match action {
-            None => format_history_archive_list(&archiver.list_archives()),
-
-            Some("stats" | "summary") => {
-                let entries = archiver.list_archives();
-                let total = entries.len();
-                let total_messages: usize = entries.iter().map(|e| e.message_count).sum();
-                let models: std::collections::HashMap<String, usize> = {
-                    let mut m = std::collections::HashMap::new();
-                    for e in &entries {
-                        *m.entry(e.model.clone()).or_insert(0) += 1;
-                    }
-                    m
-                };
-                let mut model_lines: Vec<String> = models.iter().map(|(k, v)| format!("  {k}: {v} sessions")).collect();
-                model_lines.sort();
-                format!(
-                    "📊 Session History Stats\n\
-                     ─────────────────────────\n\
-                     📁 Total archived sessions: {total}\n\
-                     💬 Total messages: {total_messages}\n\
-                     🤖 Models used:\n{}\n\
-                     ─────────────────────────\n\
-                     Tip: /history-archive search <query> to search\n\
-                     Tip: /history-archive view <id> to read a session",
-                    model_lines.join("\n")
-                )
-            }
-
-            Some(arg) if arg.starts_with("search ") => {
-                let query = arg["search ".len()..].trim();
-                if query.is_empty() {
-                    return "Usage: /history-archive search <query>".to_string();
-                }
-                if !self.qmd.is_enabled() {
-                    return "QMD is not available — install it at /opt/homebrew/bin/qmd or ensure it is on PATH.".to_string();
-                }
-                let results = self.qmd.search_collection("anvil-history", query, 5, 0.3);
-                if results.is_empty() {
-                    format!("No history results for: {query}")
-                } else {
-                    let mut lines = vec![format!("History search: {query}\n")];
-                    for (i, r) in results.iter().enumerate() {
-                        lines.push(format!("  {}. {} ({:.2})", i + 1, r.file, r.score));
-                        if !r.snippet.is_empty() {
-                            for line in r.snippet.lines().take(3) {
-                                lines.push(format!("     {line}"));
-                            }
-                        }
-                        lines.push(String::new());
-                    }
-                    lines.join("\n")
-                }
-            }
-
-            Some(arg) if arg.starts_with("view ") => {
-                let target = arg["view ".len()..].trim();
-                if target.is_empty() {
-                    return "Usage: /history-archive view <session-id>".to_string();
-                }
-                // Find the first archive whose filename or session_id contains the target.
-                let entries = archiver.list_archives();
-                let found = entries.iter().find(|e| {
-                    e.session_id.contains(target)
-                        || e.path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.contains(target))
-                });
-                match found {
-                    Some(entry) => match fs::read_to_string(&entry.path) {
-                        Ok(content) => {
-                            // Print a concise header + the summary section only.
-                            let summary = extract_summary_from_archive(&content);
-                            format!(
-                                "Archive: {}\nModel:   {}\nMessages: {}\nPath:    {}\n\n{}",
-                                entry.session_id,
-                                entry.model,
-                                entry.message_count,
-                                entry.path.display(),
-                                summary.unwrap_or_else(|| "(no summary)".to_string()),
-                            )
-                        }
-                        Err(e) => format!("Could not read archive: {e}"),
-                    },
-                    None => format!("No archive found matching: {target}"),
-                }
-            }
-
-            Some(unknown) => format!(
-                "Unknown sub-command: {unknown}\nUsage: /history-archive [search <query> | view <session-id>]"
-            ),
-        }
     }
 
     // -----------------------------------------------------------------------

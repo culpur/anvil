@@ -84,7 +84,7 @@ impl QmdClient {
 
     /// Returns `true` when the QMD binary was found and the client is active.
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.qmd_path.is_some()
     }
 

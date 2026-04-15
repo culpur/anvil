@@ -16,7 +16,7 @@ pub enum MemoryType {
 }
 
 impl MemoryType {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Feedback => "feedback",
@@ -76,7 +76,7 @@ impl MemoryManager {
     /// Create a `MemoryManager` rooted at a specific directory (useful for
     /// tests and alternative config homes).
     #[must_use]
-    pub fn with_dir(memory_dir: PathBuf) -> Self {
+    pub const fn with_dir(memory_dir: PathBuf) -> Self {
         Self { memory_dir }
     }
 

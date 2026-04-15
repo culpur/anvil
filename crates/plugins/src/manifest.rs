@@ -22,7 +22,7 @@ pub struct PluginHooks {
 
 impl PluginHooks {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.pre_tool_use.is_empty() && self.post_tool_use.is_empty()
     }
 
@@ -49,7 +49,7 @@ pub struct PluginLifecycle {
 
 impl PluginLifecycle {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.init.is_empty() && self.shutdown.is_empty()
     }
 }
@@ -68,7 +68,7 @@ pub enum PluginPermission {
 
 impl PluginPermission {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Read => "read",
             Self::Write => "write",
@@ -106,7 +106,7 @@ pub enum PluginToolPermission {
 
 impl PluginToolPermission {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
             Self::WorkspaceWrite => "workspace-write",
@@ -604,7 +604,7 @@ pub(crate) fn validate_command_entry(
     if !validate_path_within_root(root, entry) {
         errors.push(PluginManifestValidationError::PathTraversal {
             kind,
-            path: path.clone(),
+            path,
         });
     }
 }

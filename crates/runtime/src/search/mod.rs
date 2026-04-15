@@ -21,7 +21,7 @@ pub enum SearchProvider {
 
 impl SearchProvider {
     #[allow(dead_code)]
-    fn name(&self) -> &'static str {
+    const fn name(&self) -> &'static str {
         match self {
             Self::DuckDuckGo => "duckduckgo",
             Self::Tavily => "tavily",
@@ -343,7 +343,7 @@ fn inject_env_api_keys(config: &mut SearchConfig) {
     }
 }
 
-fn provider_has_credentials(cfg: &ProviderConfig) -> bool {
+const fn provider_has_credentials(cfg: &ProviderConfig) -> bool {
     match cfg.provider_type {
         SearchProvider::DuckDuckGo | SearchProvider::SearXNG => true, // public instances need no key
         SearchProvider::Google => cfg.api_key.is_some() && cfg.cx.is_some(),

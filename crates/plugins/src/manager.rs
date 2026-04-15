@@ -79,7 +79,7 @@ pub struct PluginManager {
 
 impl PluginManager {
     #[must_use]
-    pub fn new(config: PluginManagerConfig) -> Self {
+    pub const fn new(config: PluginManagerConfig) -> Self {
         Self { config }
     }
 

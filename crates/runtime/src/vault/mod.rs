@@ -215,7 +215,7 @@ impl VaultManager {
 
     /// Create a new manager pointing at `vault_dir`.
     #[must_use]
-    pub fn new(vault_dir: PathBuf) -> Self {
+    pub const fn new(vault_dir: PathBuf) -> Self {
         Self {
             vault_dir,
             kek: None,

@@ -49,7 +49,7 @@ impl PluginTool {
     }
 
     #[must_use]
-    pub fn definition(&self) -> &PluginToolDefinition {
+    pub const fn definition(&self) -> &PluginToolDefinition {
         &self.definition
     }
 

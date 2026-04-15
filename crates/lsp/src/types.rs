@@ -58,12 +58,12 @@ pub struct SymbolLocation {
 
 impl SymbolLocation {
     #[must_use]
-    pub fn start_line(&self) -> u32 {
+    pub const fn start_line(&self) -> u32 {
         self.range.start.line + 1
     }
 
     #[must_use]
-    pub fn start_character(&self) -> u32 {
+    pub const fn start_character(&self) -> u32 {
         self.range.start.character + 1
     }
 }
@@ -175,7 +175,7 @@ pub(crate) fn normalize_extension(extension: &str) -> String {
     }
 }
 
-fn diagnostic_severity_label(severity: Option<lsp_types::DiagnosticSeverity>) -> &'static str {
+const fn diagnostic_severity_label(severity: Option<lsp_types::DiagnosticSeverity>) -> &'static str {
     match severity {
         Some(lsp_types::DiagnosticSeverity::ERROR) => "error",
         Some(lsp_types::DiagnosticSeverity::WARNING) => "warning",

@@ -250,7 +250,7 @@ impl CronField {
         Some(Self::Exact(n))
     }
 
-    fn matches(&self, value: u32) -> bool {
+    const fn matches(&self, value: u32) -> bool {
         match self {
             Self::Any => true,
             Self::Exact(n) => value == *n,

@@ -51,7 +51,7 @@ impl Display for PluginKind {
 
 impl PluginKind {
     #[must_use]
-    pub(crate) fn marketplace(self) -> &'static str {
+    pub(crate) const fn marketplace(self) -> &'static str {
         match self {
             Self::Builtin => loader::BUILTIN_MARKETPLACE,
             Self::Bundled => loader::BUNDLED_MARKETPLACE,
@@ -281,7 +281,7 @@ pub struct RegisteredPlugin {
 
 impl RegisteredPlugin {
     #[must_use]
-    pub fn new(definition: PluginDefinition, enabled: bool) -> Self {
+    pub const fn new(definition: PluginDefinition, enabled: bool) -> Self {
         Self {
             definition,
             enabled,
@@ -304,7 +304,7 @@ impl RegisteredPlugin {
     }
 
     #[must_use]
-    pub fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 
