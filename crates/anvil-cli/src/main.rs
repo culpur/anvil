@@ -2779,7 +2779,9 @@ impl LiveCli {
                 tui.push_system(msg);
                 // Update TUI status bar with remote control state
                 if let Some(session) = &self.relay_session {
-                    tui.set_remote_status(&session.url, "");
+                    // Extract the hash from the URL for a compact display
+                    let display_url = session.url.replace("https://passage.culpur.net/viewer#", "");
+                    tui.set_remote_status(&display_url, "");
                 } else {
                     tui.clear_remote_status();
                 }
