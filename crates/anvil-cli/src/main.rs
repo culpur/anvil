@@ -1695,6 +1695,29 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     continue;
                 }
+                // JSON config set — for complex payloads like full StatusLineConfig
+                if let Some(rest) = message.strip_prefix("__config_set_json:") {
+                    if let Some((key, json_str)) = rest.split_once(':') {
+                        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            let msg = LiveCli::save_anvil_ui_config_key(key, json_value);
+                            let success = !msg.contains("error") && !msg.contains("Error");
+                            tui.push_system(format!("[Remote Config JSON] {msg}"));
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::ConfigUpdated {
+                                    key: key.to_string(),
+                                    success,
+                                    message: msg,
+                                });
+                            }
+                            if success && key == "status_line" {
+                                if let Ok(config) = serde_json::from_str::<runtime::theme::StatusLineConfig>(json_str) {
+                                    tui.set_status_line_config(config);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Some(rest) = message.strip_prefix("__config_set:") {
                     if let Some((key, value)) = rest.split_once(':') {
                         let json_value = serde_json::Value::String(value.to_string());

@@ -143,6 +143,7 @@ pub struct ConfigureData {
     pub language: String,
     pub active_theme: String,
     pub status_line_preset: String,
+    pub status_line_config_json: Option<serde_json::Value>,
     pub vault_session_ttl: u64,
     pub vault_auto_lock: bool,
     pub vault_status: String,

@@ -52,6 +52,7 @@ pub(crate) fn config_data_to_json(data: &ConfigureData) -> serde_json::Value {
             "language": data.language,
             "active_theme": data.active_theme,
             "status_line_preset": data.status_line_preset,
+            "status_line_config": data.status_line_config_json,
         },
         "vault": {
             "vault_session_ttl": data.vault_session_ttl,
@@ -1026,6 +1027,7 @@ impl LiveCli {
             language,
             active_theme,
             status_line_preset: cfg_str("status_line_preset", "default"),
+            status_line_config_json: cfg.get("status_line").cloned(),
             // Section 8
             vault_session_ttl,
             vault_auto_lock,
