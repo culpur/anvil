@@ -415,13 +415,16 @@ fn render_widget(
                     Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
                 )]
             } else {
-                let label = if data.remote_code.is_empty() {
-                    format!("\u{1f6f8} RC {}", data.remote_url)
+                // Show compact hash — extract last path segment or use first 12 chars of code
+                let short_id = if !data.remote_code.is_empty() {
+                    let code = &data.remote_code;
+                    if code.len() > 12 { &code[..12] } else { code }
                 } else {
-                    format!("\u{1f6f8} RC {}  [{}]", data.remote_url, data.remote_code)
+                    // Extract hash from URL (after last /)
+                    data.remote_url.rsplit('/').next().map(|h| if h.len() > 12 { &h[..12] } else { h }).unwrap_or("active")
                 };
                 vec![Span::styled(
-                    label,
+                    format!("\u{1f6f8} RC {short_id}"),
                     Style::default()
                         .fg(Color::Rgb(0x55, 0xCC, 0xFF))
                         .add_modifier(Modifier::BOLD),
