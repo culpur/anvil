@@ -1659,6 +1659,27 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             for (_tab_id, message) in remote_messages {
+                // Handle client connect/disconnect signals from the relay
+                if let Some(count_str) = message.strip_prefix("__client_connected:") {
+                    let count: usize = count_str.parse().unwrap_or(1);
+                    if let Some(session) = &cli.relay_session {
+                        tui.set_remote_status(&session.url, &format!("{count} client{}", if count == 1 { "" } else { "s" }));
+                    }
+                    tui.push_system(format!("[Remote] Client connected ({count} active)"));
+                    continue;
+                }
+                if let Some(count_str) = message.strip_prefix("__client_disconnected:") {
+                    let count: usize = count_str.parse().unwrap_or(0);
+                    if count == 0 {
+                        // All clients disconnected — clear the RC widget
+                        tui.clear_remote_status();
+                        tui.push_system("[Remote] All clients disconnected".to_string());
+                    } else if let Some(session) = &cli.relay_session {
+                        tui.set_remote_status(&session.url, &format!("{count} client{}", if count == 1 { "" } else { "s" }));
+                        tui.push_system(format!("[Remote] Client disconnected ({count} remaining)"));
+                    }
+                    continue;
+                }
                 // Handle special relay commands
                 if let Some(tab_id_str) = message.strip_prefix("__close_tab:") {
                     if let Ok(tab_id) = tab_id_str.parse::<usize>() {
@@ -2809,7 +2830,7 @@ impl LiveCli {
                 }
                 // Update TUI status bar — must be after all relay setup
                 if let Some(s) = &self.relay_session {
-                    tui.set_remote_status(&s.url, &s.hash);
+                    tui.set_remote_status(&s.url, "waiting");
                 } else {
                     tui.clear_remote_status();
                 }

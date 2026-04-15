@@ -498,12 +498,17 @@ impl RelayHost {
                                         };
                                         let _ = ws_sink.send(WsMessage::Text(serde_json::to_string(&reply)?.into())).await;
 
-                                        // If paired, send session snapshot
+                                        // If paired, send session snapshot + notify TUI
                                         if st.is_paired(client_id) {
                                             if let Some(ref func) = *snapshot_fn.lock().await {
                                                 let tabs = func();
                                                 let snapshot = RelayMessage::SessionSnapshot { tabs };
                                                 let _ = ws_sink.send(WsMessage::Text(serde_json::to_string(&snapshot)?.into())).await;
+                                            }
+                                            // Signal TUI that a client connected
+                                            let count = st.paired_count();
+                                            if let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__client_connected:{count}")));
                                             }
                                         }
                                     }
@@ -561,7 +566,12 @@ impl RelayHost {
                                         }
                                     }
                                     RelayMessage::PeerDisconnected => {
-                                        // A web client disconnected
+                                        // A web client disconnected — notify TUI
+                                        let st = state.lock().await;
+                                        let count = st.paired_count();
+                                        if let Some(ref sync_tx) = user_input_tx {
+                                            let _ = sync_tx.send((0, format!("__client_disconnected:{count}")));
+                                        }
                                     }
                                     _ => {} // Ignore other messages from relay
                                 }

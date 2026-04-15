@@ -412,19 +412,20 @@ fn render_widget(
             if data.remote_url.is_empty() {
                 vec![]
             } else {
-                // Show compact hash — extract last path segment or use first 12 chars of code
-                let short_id = if !data.remote_code.is_empty() {
-                    let code = &data.remote_code;
-                    if code.len() > 12 { &code[..12] } else { code }
+                // remote_code carries status: "waiting", "1 client", "2 clients", or hash
+                let status = if data.remote_code.is_empty() || data.remote_code == "waiting" {
+                    "waiting".to_string()
                 } else {
-                    // Extract hash from URL (after last /)
-                    data.remote_url.rsplit('/').next().map(|h| if h.len() > 12 { &h[..12] } else { h }).unwrap_or("active")
+                    data.remote_code.clone()
+                };
+                let color = if status == "waiting" {
+                    Color::Yellow
+                } else {
+                    Color::Rgb(0x55, 0xCC, 0xFF)
                 };
                 vec![Span::styled(
-                    format!("\u{1f6f8} RC {short_id}"),
-                    Style::default()
-                        .fg(Color::Rgb(0x55, 0xCC, 0xFF))
-                        .add_modifier(Modifier::BOLD),
+                    format!("\u{1f6f8} RC [{status}]"),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )]
             }
         }
