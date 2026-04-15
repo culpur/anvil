@@ -210,7 +210,7 @@ impl Plugin for ExternalPlugin {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginDefinition {
     Builtin(BuiltinPlugin),
     Bundled(BundledPlugin),
@@ -273,7 +273,7 @@ impl Plugin for PluginDefinition {
 // RegisteredPlugin and PluginSummary
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredPlugin {
     definition: PluginDefinition,
     enabled: bool,
@@ -339,7 +339,7 @@ pub struct PluginSummary {
 // PluginRegistry — in-memory collection of registered plugins
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginRegistry {
     plugins: Vec<RegisteredPlugin>,
 }
