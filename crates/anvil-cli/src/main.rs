@@ -2777,14 +2777,6 @@ impl LiveCli {
             SlashCommand::RemoteControl { action } => {
                 let msg = self.run_remote_control_command(action.as_deref());
                 tui.push_system(msg);
-                // Update TUI status bar with remote control state
-                if let Some(session) = &self.relay_session {
-                    // Extract the hash from the URL for a compact display
-                    let display_url = session.url.replace("https://passage.culpur.net/viewer#", "");
-                    tui.set_remote_status(&display_url, "");
-                } else {
-                    tui.clear_remote_status();
-                }
                 // Wire the relay broadcast channel into the TUI for event forwarding
                 if let Some(tx) = &self.relay_event_tx {
                     tui.set_relay_tx(tx.clone());
@@ -2814,6 +2806,12 @@ impl LiveCli {
                     }
                 } else {
                     tui.clear_relay_tx();
+                }
+                // Update TUI status bar — must be after all relay setup
+                if let Some(s) = &self.relay_session {
+                    tui.set_remote_status(&s.url, &s.hash);
+                } else {
+                    tui.clear_remote_status();
                 }
                 return Ok(false);
             }
