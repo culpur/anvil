@@ -350,6 +350,12 @@ pub enum SlashCommand {
     },
     /// `/focus` — toggle focus view (prompt + tool summary + final response only)
     Focus,
+    /// `/mcp [list|status|tools <server>]` — MCP server management
+    Mcp {
+        action: Option<String>,
+    },
+    /// `/productivity` — show session productivity stats
+    Productivity,
     Unknown(String),
 }
 
@@ -633,6 +639,10 @@ impl SlashCommand {
                 prompt: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             "focus" => Self::Focus,
+            "mcp" => Self::Mcp {
+                action: remainder_after_command(trimmed, command),
+            },
+            "productivity" => Self::Productivity,
             other => Self::Unknown(other.to_string()),
         })
     }

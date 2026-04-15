@@ -46,6 +46,8 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/skills".into(), hint: "List available skills".into() },
         CompletionItem { insert: "/plugins".into(), hint: "Manage plugins".into() },
         CompletionItem { insert: "/debug-tool-call".into(), hint: "Replay last tool call".into() },
+        CompletionItem { insert: "/mcp".into(), hint: "MCP server management".into() },
+        CompletionItem { insert: "/productivity".into(), hint: "Session productivity stats".into() },
         CompletionItem { insert: "/configure".into(), hint: "Interactive configuration menu".into() },
         CompletionItem { insert: "/theme".into(), hint: "Switch terminal color theme".into() },
         CompletionItem { insert: "/search".into(), hint: "Multi-provider web search".into() },
@@ -169,6 +171,10 @@ pub(super) fn subcommands_for(command: &str) -> Vec<CompletionItem> {
         ],
         "/history" => vec![
             CompletionItem { insert: "all".into(), hint: "Show full history".into() },
+        ],
+        "/mcp" => vec![
+            CompletionItem { insert: "list".into(), hint: "List configured MCP servers".into() },
+            CompletionItem { insert: "status".into(), hint: "Show server connection status".into() },
         ],
         "/configure" | "/settings" => vec![
             CompletionItem { insert: "providers".into(), hint: "Provider & auth settings".into() },

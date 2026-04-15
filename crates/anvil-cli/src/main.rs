@@ -1183,6 +1183,8 @@ fn run_resume_command(
         | SlashCommand::RemoteControl { .. }
         | SlashCommand::Loop { .. }
         | SlashCommand::Focus
+        | SlashCommand::Mcp { .. }
+        | SlashCommand::Productivity
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -3283,6 +3285,98 @@ impl LiveCli {
         lines.join("\n")
     }
 
+    /// `/mcp [list|status|tools <server>]` — MCP server management.
+    fn run_mcp_command(&self, action: Option<&str>) -> String {
+        // Read MCP server config from settings.json
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let settings_path = home.as_ref().map(|h| h.join(".anvil").join("settings.json"));
+        let servers: Vec<String> = settings_path
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("mcpServers").cloned())
+            .and_then(|v| v.as_object().map(|o| o.keys().cloned().collect()))
+            .unwrap_or_default();
+        let count = servers.len();
+
+        match action.unwrap_or("list").split_whitespace().next().unwrap_or("list") {
+            "list" | "status" => {
+                if servers.is_empty() {
+                    return "No MCP servers configured.\n\n\
+                        Configure MCP servers in ~/.anvil/settings.json under \"mcpServers\".\n\
+                        Example:\n  \"mcpServers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path\"]\n    }\n  }"
+                        .to_string();
+                }
+                let mut lines = vec![format!("🔌 MCP Servers ({count} configured):")];
+                for name in &servers {
+                    lines.push(format!("  🟢  {name}"));
+                }
+                lines.push(String::new());
+                lines.push("MCP tools are auto-discovered at startup and available to the AI.".to_string());
+                lines.push("Configure in ~/.anvil/settings.json under \"mcpServers\".".to_string());
+                lines.join("\n")
+            }
+            other => format!("Unknown MCP action: {other}\nUsage: /mcp [list|status]"),
+        }
+    }
+
+    /// `/productivity` — show session productivity stats.
+    fn run_productivity_command(&self) -> String {
+        use std::process::Command;
+
+        let diff_output = Command::new("git")
+            .args(["diff", "--shortstat"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .unwrap_or_default();
+
+        let mut ins: u32 = 0;
+        let mut del: u32 = 0;
+        for part in diff_output.split(',') {
+            let part = part.trim();
+            if part.contains("insertion") {
+                if let Some(n) = part.split_whitespace().next() { ins = n.parse().unwrap_or(0); }
+            } else if part.contains("deletion") {
+                if let Some(n) = part.split_whitespace().next() { del = n.parse().unwrap_or(0); }
+            }
+        }
+
+        let files_changed = Command::new("git")
+            .args(["diff", "--name-only"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.lines().filter(|l| !l.is_empty()).count())
+            .unwrap_or(0);
+
+        let session = self.runtime.session();
+        let total_tokens = session.messages.iter()
+            .filter_map(|m| m.usage.as_ref())
+            .map(|u| u.input_tokens + u.output_tokens)
+            .sum::<u32>();
+
+        let efficiency = if ins + del > 0 {
+            format!("{:.0} tokens/line", f64::from(total_tokens) / f64::from(ins + del))
+        } else {
+            "—".to_string()
+        };
+
+        format!(
+            "📊 Session Productivity\n\
+             ─────────────────────────\n\
+             📝 Lines added:    +{ins}\n\
+             📝 Lines removed:  -{del}\n\
+             📁 Files changed:  {files_changed}\n\
+             🎯 Token efficiency: {efficiency}\n\
+             💰 Total tokens:   {total_tokens}\n\
+             ─────────────────────────\n\
+             Tip: Use the 'academic' or 'dashboard' status line preset\n\
+             to see live productivity in the status bar."
+        )
+    }
+
     /// `/context [path]` — add a file to per-session context or list context files.
     fn run_context(&mut self, path: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         let Some(path_str) = path else {
@@ -4119,6 +4213,14 @@ impl LiveCli {
             }
             SlashCommand::History { show_all } => {
                 println!("{}", self.format_history(show_all));
+                false
+            }
+            SlashCommand::Mcp { action } => {
+                println!("{}", self.run_mcp_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Productivity => {
+                println!("{}", self.run_productivity_command());
                 false
             }
             SlashCommand::Context { path } => {

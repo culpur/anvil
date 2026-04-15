@@ -861,7 +861,15 @@ impl AnvilTui {
                 cache_hit_pct: 0.0,
                 lines_added: self.lines_added,
                 lines_removed: self.lines_removed,
-                mcp_server_count: 0,
+                mcp_server_count: {
+                    // Count MCP servers from settings.json
+                    std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .and_then(|h| std::fs::read_to_string(h.join(".anvil").join("settings.json")).ok())
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .and_then(|v| v.get("mcpServers").and_then(|m| m.as_object()).map(|o| o.len() as u32))
+                        .unwrap_or(0)
+                },
                 accent: theme.accent,
                 warning: theme.warning,
                 success: theme.success,
