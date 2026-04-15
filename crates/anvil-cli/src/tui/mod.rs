@@ -136,6 +136,10 @@ pub struct AnvilTui {
     pub(super) focus_mode: bool,
     /// Status line configuration — determines which widgets appear and where.
     pub(super) status_line_config: StatusLineConfig,
+    /// Lines added in current session (from git diff).
+    pub(super) lines_added: u32,
+    /// Lines removed in current session (from git diff).
+    pub(super) lines_removed: u32,
 }
 
 impl AnvilTui {
@@ -161,7 +165,7 @@ impl AnvilTui {
         let model_str: String = model.into();
         let session_id_str: String = session_id.into();
         let context_max = context_max_for_model(&model_str);
-        let (git_branch, git_diff_stats) = fetch_git_info();
+        let (git_branch, git_diff_stats, initial_added, initial_removed) = fetch_git_info();
 
         let initial_tab = Tab::new(1, "main", model_str.clone(), session_id_str);
 
@@ -194,6 +198,8 @@ impl AnvilTui {
                 remote_code: String::new(),
                 focus_mode: false,
                 status_line_config: StatusLineConfig::load(),
+                lines_added: initial_added,
+                lines_removed: initial_removed,
             },
             TuiSender(tx),
         ))
@@ -853,8 +859,8 @@ impl AnvilTui {
                 cost_weekly: 0.0,
                 cost_monthly: 0.0,
                 cache_hit_pct: 0.0,
-                lines_added: 0,
-                lines_removed: 0,
+                lines_added: self.lines_added,
+                lines_removed: self.lines_removed,
                 mcp_server_count: 0,
                 accent: theme.accent,
                 warning: theme.warning,
@@ -983,6 +989,8 @@ impl AnvilTui {
             }
             TuiEvent::TurnDone => {
                 self.relay_forward(runtime::relay::RelayMessage::TurnDone { tab_id });
+                // Refresh git/productivity stats after each turn (files may have changed)
+                self.refresh_git_info();
             }
             TuiEvent::ToolCallStart { name } => {
                 self.relay_forward(runtime::relay::RelayMessage::ToolStart { tab_id, name: name.clone(), detail: String::new() });
@@ -1186,12 +1194,13 @@ impl AnvilTui {
         self.permission_mode = mode.into();
     }
 
-    /// Re-run git queries and update cached branch/diff info.
-    #[allow(dead_code)]
+    /// Re-run git queries and update cached branch/diff/productivity info.
     pub fn refresh_git_info(&mut self) {
-        let (branch, diff) = fetch_git_info();
+        let (branch, diff, added, removed) = fetch_git_info();
         self.git_branch = branch;
         self.git_diff_stats = diff;
+        self.lines_added = added;
+        self.lines_removed = removed;
     }
 
     /// Update the QMD status line in the footer.
@@ -2818,7 +2827,8 @@ fn render_configure_menu(
 // ─── Git helpers ──────────────────────────────────────────────────────────────
 
 /// Fetch git branch and diff stats for the current working directory.
-fn fetch_git_info() -> (String, String) {
+/// Fetch git branch, diff stats string, and lines added/removed.
+fn fetch_git_info() -> (String, String, u32, u32) {
     use std::process::Command;
 
     let branch = Command::new("git")
@@ -2831,17 +2841,18 @@ fn fetch_git_info() -> (String, String) {
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
 
-    let diff_stats = Command::new("git")
+    let raw_stat = Command::new("git")
         .args(["diff", "--shortstat"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| parse_shortstat(&s))
-        .filter(|s| !s.is_empty())
         .unwrap_or_default();
 
-    (branch, diff_stats)
+    let diff_stats = parse_shortstat(&raw_stat);
+    let (added, removed) = parse_shortstat_nums(&raw_stat);
+
+    (branch, diff_stats, added, removed)
 }
 
 /// Parse the output of `git diff --shortstat` into a compact "+N,-M" string.
@@ -2865,6 +2876,25 @@ fn parse_shortstat(s: &str) -> String {
     } else {
         format!("+{ins},-{del}")
     }
+}
+
+/// Parse `git diff --shortstat` into `(insertions, deletions)` as raw numbers.
+fn parse_shortstat_nums(s: &str) -> (u32, u32) {
+    let mut ins: u32 = 0;
+    let mut del: u32 = 0;
+    for part in s.split(',') {
+        let part = part.trim();
+        if part.contains("insertion") {
+            if let Some(n) = part.split_whitespace().next() {
+                ins = n.parse().unwrap_or(0);
+            }
+        } else if part.contains("deletion") {
+            if let Some(n) = part.split_whitespace().next() {
+                del = n.parse().unwrap_or(0);
+            }
+        }
+    }
+    (ins, del)
 }
 
 // ─── Model context helpers ────────────────────────────────────────────────────
