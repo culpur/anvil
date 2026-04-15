@@ -2813,6 +2813,8 @@ impl LiveCli {
                 } else {
                     tui.clear_remote_status();
                 }
+                // Force immediate redraw so the status bar updates visually
+                let _ = tui.draw();
                 return Ok(false);
             }
             SlashCommand::Focus => {
