@@ -326,11 +326,10 @@ impl FailoverChain {
         let now = Instant::now();
 
         // Check rate-limit cooldown.
-        if let Some(&cooldown_until) = self.rate_limit_cooldowns.get(&idx) {
-            if cooldown_until > now {
+        if let Some(&cooldown_until) = self.rate_limit_cooldowns.get(&idx)
+            && cooldown_until > now {
                 return false;
             }
-        }
 
         // Check daily budgets.
         let entry = match self.entries.get(idx) {
@@ -340,16 +339,14 @@ impl FailoverChain {
 
         if let Some(budget) = self.usage_budgets.get_mut(&idx) {
             budget.maybe_reset();
-            if let Some(max_tok) = entry.max_daily_tokens {
-                if budget.tokens_used_today >= max_tok {
+            if let Some(max_tok) = entry.max_daily_tokens
+                && budget.tokens_used_today >= max_tok {
                     return false;
                 }
-            }
-            if let Some(max_cost) = entry.max_daily_cost_usd {
-                if budget.cost_today_usd >= max_cost {
+            if let Some(max_cost) = entry.max_daily_cost_usd
+                && budget.cost_today_usd >= max_cost {
                     return false;
                 }
-            }
         }
 
         true
@@ -365,11 +362,10 @@ impl FailoverChain {
         }
         let now = Instant::now();
         // Check if index 0 is now available.
-        if let Some(&cooldown_until) = self.rate_limit_cooldowns.get(&0) {
-            if cooldown_until > now {
+        if let Some(&cooldown_until) = self.rate_limit_cooldowns.get(&0)
+            && cooldown_until > now {
                 return;
             }
-        }
         // Primary is no longer rate-limited — reset to it.
         self.active_index = 0;
         // We don't emit a recovery event here; callers inspect active_model().

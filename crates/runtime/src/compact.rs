@@ -606,7 +606,7 @@ mod tests {
         };
 
         let first = compact_session(&initial_session, config);
-        let mut follow_up_messages = first.compacted_session.messages.clone();
+        let mut follow_up_messages = first.compacted_session.messages;
         follow_up_messages.extend([
             ConversationMessage::user_text("Please add regression tests for compaction."),
             ConversationMessage::assistant(vec![ContentBlock::Text {

@@ -875,11 +875,9 @@ fn parse_toml_str_value(contents: &str, key: &str) -> Option<String> {
         if let Some(inner) = rest
             .strip_prefix('"')
             .and_then(|v| v.strip_suffix('"'))
-        {
-            if !inner.is_empty() {
+            && !inner.is_empty() {
                 return Some(inner.to_string());
             }
-        }
     }
     None
 }
@@ -1021,13 +1019,11 @@ where
     let created_at = iso8601_now();
 
     let mut system_prompt = build_agent_system_prompt(&normalized_subagent_type)?;
-    if let Some(ref def) = user_def {
-        if let Some(ref agent_system) = def.system_prompt {
-            if !agent_system.trim().is_empty() {
+    if let Some(ref def) = user_def
+        && let Some(ref agent_system) = def.system_prompt
+            && !agent_system.trim().is_empty() {
                 system_prompt.insert(0, agent_system.clone());
             }
-        }
-    }
 
     let allowed_tools = if let Some(ref def) = user_def {
         if let Some(ref tools) = def.allowed_tools {
@@ -1098,7 +1094,7 @@ where
         allowed_tools,
         worktree_path: worktree_dir.clone(),
     };
-    let wt_dir_for_spawn = worktree_dir.clone();
+    let wt_dir_for_spawn = worktree_dir;
     if let Err(error) = spawn_fn(job) {
         if let Some(ref wt) = wt_dir_for_spawn {
             let _ = std::process::Command::new("git")
@@ -1342,7 +1338,7 @@ pub(crate) struct ProviderRuntimeClient {
 impl ProviderRuntimeClient {
     #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn new(model: String, allowed_tools: BTreeSet<String>) -> Result<Self, String> {
-        let model = resolve_model_alias(&model).clone();
+        let model = resolve_model_alias(&model);
         let client = ProviderClient::from_model(&model).map_err(|error| error.to_string())?;
         Ok(Self {
             runtime: tokio::runtime::Runtime::new().map_err(|error| error.to_string())?,

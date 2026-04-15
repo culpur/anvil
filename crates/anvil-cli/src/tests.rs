@@ -8,7 +8,7 @@ use super::{
     render_repl_help, render_unknown_repl_command, resolve_model_alias,
     slash_command_completion_candidates, status_context,
     CliAction, CliOutputFormat,
-    SlashCommand, StatusUsage, DEFAULT_MODEL,
+    SlashCommand, StatusUsage,
 };
 use super::providers::{
     describe_tool_progress, permission_policy,

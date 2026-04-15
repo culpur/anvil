@@ -167,7 +167,7 @@ impl AnvilTui {
         let context_max = context_max_for_model(&model_str);
         let (git_branch, git_diff_stats, initial_added, initial_removed) = fetch_git_info();
 
-        let initial_tab = Tab::new(1, "main", model_str.clone(), session_id_str);
+        let initial_tab = Tab::new(1, "main", model_str, session_id_str);
 
         Ok((
             Self {
@@ -312,7 +312,7 @@ impl AnvilTui {
         self.tabs.iter().enumerate().map(|(i, t)| (i, t.id, t.name.as_str(), t.has_unread)).collect()
     }
 
-    /// Return full tab info for relay broadcast: (tab_id, name, model, session_id).
+    /// Return full tab info for relay broadcast: (`tab_id`, name, model, `session_id`).
     pub fn tab_details(&self) -> Vec<(usize, String, String, String)> {
         self.tabs.iter().map(|t| (t.id, t.name.clone(), t.model.clone(), t.session_id.clone())).collect()
     }
@@ -1045,12 +1045,10 @@ impl AnvilTui {
                         done,
                         ..
                     } = entry
-                    {
-                        if *n == name && !*done {
+                        && *n == name && !*done {
                             *d = detail;
                             break;
                         }
-                    }
                 }
             }
             TuiEvent::ToolResult {
@@ -1065,13 +1063,11 @@ impl AnvilTui {
                         is_error: err,
                         ..
                     } = entry
-                    {
-                        if *n == name && !*done {
+                        && *n == name && !*done {
                             *done = true;
                             *err = is_error;
                             break;
                         }
-                    }
                 }
                 let label = if is_error { "error" } else { "ok" };
                 let first_line = summary
@@ -1243,7 +1239,7 @@ impl AnvilTui {
         }
     }
 
-    /// Replace the status line config wholesale (e.g. from config_set via web viewer).
+    /// Replace the status line config wholesale (e.g. from `config_set` via web viewer).
     pub fn set_status_line_config(&mut self, config: StatusLineConfig) {
         self.status_line_config = config;
     }
@@ -2701,8 +2697,8 @@ fn render_configure_menu(
                 }
                 StatusLineEditorSub::LineList => {
                     for i in 0..draft.line_count() {
-                        let left_summary: Vec<&str> = draft.widgets_on_side(i, Side::Left).iter().map(|w| w.id()).collect();
-                        let right_summary: Vec<&str> = draft.widgets_on_side(i, Side::Right).iter().map(|w| w.id()).collect();
+                        let left_summary: Vec<&str> = draft.widgets_on_side(i, Side::Left).iter().map(runtime::theme::StatusWidget::id).collect();
+                        let right_summary: Vec<&str> = draft.widgets_on_side(i, Side::Right).iter().map(runtime::theme::StatusWidget::id).collect();
                         let desc = format!("[{}] \u{2192} [{}]", left_summary.join(", "), right_summary.join(", "));
                         lines.push(make_row(&format!("Line {}", i + 1), &desc, sel == i));
                     }
@@ -2719,7 +2715,7 @@ fn render_configure_menu(
                         format!("    LEFT WIDGETS (Line {})", li + 1),
                         Style::default().fg(Color::Yellow),
                     )));
-                    for (_i, w) in left_widgets.iter().enumerate() {
+                    for w in &left_widgets {
                         lines.push(make_row(
                             &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
                             &format!("[{}]", w.category()),
@@ -2735,7 +2731,7 @@ fn render_configure_menu(
                         format!("    RIGHT WIDGETS (Line {})", li + 1),
                         Style::default().fg(Color::Cyan),
                     )));
-                    for (_i, w) in right_widgets.iter().enumerate() {
+                    for w in &right_widgets {
                         lines.push(make_row(
                             &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
                             &format!("[{}]", w.category()),
@@ -2873,11 +2869,10 @@ fn parse_shortstat(s: &str) -> String {
             if let Some(n) = part.split_whitespace().next() {
                 ins = n.parse().unwrap_or(0);
             }
-        } else if part.contains("deletion") {
-            if let Some(n) = part.split_whitespace().next() {
+        } else if part.contains("deletion")
+            && let Some(n) = part.split_whitespace().next() {
                 del = n.parse().unwrap_or(0);
             }
-        }
     }
     if ins == 0 && del == 0 {
         String::new()
@@ -2896,11 +2891,10 @@ fn parse_shortstat_nums(s: &str) -> (u32, u32) {
             if let Some(n) = part.split_whitespace().next() {
                 ins = n.parse().unwrap_or(0);
             }
-        } else if part.contains("deletion") {
-            if let Some(n) = part.split_whitespace().next() {
+        } else if part.contains("deletion")
+            && let Some(n) = part.split_whitespace().next() {
                 del = n.parse().unwrap_or(0);
             }
-        }
     }
     (ins, del)
 }
@@ -2909,13 +2903,12 @@ fn parse_shortstat_nums(s: &str) -> (u32, u32) {
 
 /// Return the approximate context window size (in tokens) for a known model.
 fn context_max_for_model(model: &str) -> u32 {
-    if let Ok(val) = std::env::var("ANVIL_CONTEXT_SIZE") {
-        if let Ok(n) = val.replace(['k', 'K'], "000")
+    if let Ok(val) = std::env::var("ANVIL_CONTEXT_SIZE")
+        && let Ok(n) = val.replace(['k', 'K'], "000")
             .replace(['m', 'M'], "000000")
             .parse::<u32>() {
             return n;
         }
-    }
 
     let m = model.to_lowercase();
     if m.contains("opus") || m.contains("sonnet") {

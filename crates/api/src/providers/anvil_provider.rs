@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn backoff_doubles_until_maximum() {
-        let client = AnvilApiClient::new("test-key").with_retry_policy(
+        let _client = AnvilApiClient::new("test-key").with_retry_policy(
             3,
             Duration::from_millis(10),
             Duration::from_millis(25),

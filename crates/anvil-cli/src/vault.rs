@@ -57,7 +57,7 @@ pub(crate) fn mask_secret(s: &str) -> String {
 }
 
 /// Structured vault operations for the web viewer — returns JSON instead of formatted text.
-/// Takes a password and an operation, returns serde_json::Value.
+/// Takes a password and an operation, returns `serde_json::Value`.
 pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -> serde_json::Value {
     use runtime::{Credential, CredentialType, VaultManager};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -77,7 +77,7 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
             match vm.list_credentials() {
                 Ok(labels) => {
                     let creds: Vec<serde_json::Value> = labels.iter().map(|label| {
-                        vm.get_credential(label).ok().map(|c| {
+                        vm.get_credential(label).ok().map_or_else(|| serde_json::json!({"label": label, "credential_type": "Secret"}), |c| {
                             serde_json::json!({
                                 "label": c.label,
                                 "credential_type": format!("{}", c.credential_type),
@@ -93,7 +93,7 @@ pub(crate) fn vault_json_operation(password: &str, operation: &str, arg: &str) -
                                 "last_rotated": c.last_rotated,
                                 "metadata": c.metadata,
                             })
-                        }).unwrap_or_else(|| serde_json::json!({"label": label, "credential_type": "Secret"}))
+                        })
                     }).collect();
                     // Also list TOTP entries
                     let totp_labels = vm.list_totp().unwrap_or_default();
@@ -238,13 +238,13 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
         // ── Unlock ───────────────────────────────────────────────────────────
         "unlock" => {
             // Accept password as parameter (for remote/web viewer) or prompt interactively
-            let password = if !arg1.is_empty() {
-                arg1.to_string()
-            } else {
+            let password = if arg1.is_empty() {
                 match read_password_prompt("Master password: ") {
                     Ok(p) => p,
                     Err(e) => return format!("Vault\n  Error            {e}"),
                 }
+            } else {
+                arg1.to_string()
             };
             match vm.unlock(&password) {
                 Ok(()) => "Vault\n  Result           Unlocked\n  Note             Known limitation: vault session is not persistent across commands. Each vault operation prompts for the master password.".to_string(),
@@ -304,13 +304,13 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
             if label.is_empty() {
                 return "Vault\n  Usage            /vault get <label>".to_string();
             }
-            let password = if !inline_pw.is_empty() {
-                inline_pw.to_string()
-            } else {
+            let password = if inline_pw.is_empty() {
                 match read_password_prompt("Master password: ") {
                     Ok(p) => p,
                     Err(e) => return format!("Vault\n  Error            {e}"),
                 }
+            } else {
+                inline_pw.to_string()
             };
             if let Err(e) = vm.unlock(&password) { return format!("Vault unlock error: {e}") }
             match vm.get_credential(label) {
@@ -345,13 +345,13 @@ pub(crate) fn run_vault_command_impl(args: Option<&str>) -> String {
         // ── List ──────────────────────────────────────────────────────────────
         "list" => {
             // Accept password as parameter for remote/non-interactive use
-            let password = if !arg1.is_empty() {
-                arg1.to_string()
-            } else {
+            let password = if arg1.is_empty() {
                 match read_password_prompt("Master password: ") {
                     Ok(p) => p,
                     Err(e) => return format!("Vault\n  Error            {e}"),
                 }
+            } else {
+                arg1.to_string()
             };
             if let Err(e) = vm.unlock(&password) { return format!("Vault unlock error: {e}") }
             match vm.list_credentials() {

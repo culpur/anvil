@@ -133,14 +133,13 @@ pub fn extract_commands(source: &str) -> CommandRegistry {
             }
         }
 
-        if line.contains("feature('") && line.contains("./commands/") {
-            if let Some(name) = first_assignment_identifier(line) {
+        if line.contains("feature('") && line.contains("./commands/")
+            && let Some(name) = first_assignment_identifier(line) {
                 entries.push(CommandManifestEntry {
                     name,
                     source: CommandSource::FeatureGated,
                 });
             }
-        }
     }
 
     dedupe_commands(entries)
@@ -163,16 +162,14 @@ pub fn extract_tools(source: &str) -> ToolRegistry {
             }
         }
 
-        if line.contains("feature('") && line.contains("Tool") {
-            if let Some(name) = first_assignment_identifier(line) {
-                if name.ends_with("Tool") || name.ends_with("Tools") {
+        if line.contains("feature('") && line.contains("Tool")
+            && let Some(name) = first_assignment_identifier(line)
+                && (name.ends_with("Tool") || name.ends_with("Tools")) {
                     entries.push(ToolManifestEntry {
                         name,
                         source: ToolSource::Conditional,
                     });
                 }
-            }
-        }
     }
 
     dedupe_tools(entries)

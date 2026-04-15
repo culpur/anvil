@@ -99,8 +99,8 @@ pub(crate) fn run_openai_apikey_setup(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n⚒ {provider_name} API Key Setup\n");
 
-    if let Ok(existing) = std::env::var(env_var) {
-        if !existing.is_empty() {
+    if let Ok(existing) = std::env::var(env_var)
+        && !existing.is_empty() {
             let masked = if existing.len() > 12 {
                 format!("{}...{}", &existing[..8], &existing[existing.len() - 4..])
             } else {
@@ -116,7 +116,6 @@ pub(crate) fn run_openai_apikey_setup(
                 return Ok(());
             }
         }
-    }
 
     println!("Get your API key from:");
     if provider_name == "OpenAI" {
@@ -288,8 +287,8 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
             println!("✓ Connected\n");
 
             let mut model_names: Vec<String> = Vec::new();
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                && let Some(models) = val.get("models").and_then(|m| m.as_array()) {
                     println!("Available models:");
                     for (i, m) in models.iter().enumerate() {
                         let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("?");
@@ -301,7 +300,6 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
                         model_names.push(name.to_string());
                     }
                 }
-            }
 
             if !model_names.is_empty() {
                 println!();
@@ -314,13 +312,12 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
                 io::stdin().read_line(&mut choice)?;
                 let choice = choice.trim();
 
-                if let Ok(n) = choice.parse::<usize>() {
-                    if n >= 1 && n <= model_names.len() {
+                if let Ok(n) = choice.parse::<usize>()
+                    && n >= 1 && n <= model_names.len() {
                         let selected = &model_names[n - 1];
                         println!("\n✓ Selected: {selected}");
                         println!("\nStart Anvil with: anvil model {selected}");
                     }
-                }
             }
         }
         _ => {

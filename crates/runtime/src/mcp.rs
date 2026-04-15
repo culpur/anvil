@@ -51,11 +51,10 @@ pub fn unwrap_ccr_proxy_url(url: &str) -> String {
     let query = &url[query_start + 1..];
     for pair in query.split('&') {
         let mut parts = pair.splitn(2, '=');
-        if matches!(parts.next(), Some("mcp_url")) {
-            if let Some(value) = parts.next() {
+        if matches!(parts.next(), Some("mcp_url"))
+            && let Some(value) = parts.next() {
                 return percent_decode(value);
             }
-        }
     }
 
     url.to_string()

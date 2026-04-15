@@ -76,12 +76,14 @@ impl From<std::io::Error> for VaultError {
 /// The type of credential stored in the vault.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CredentialType {
     // Secrets & Keys
     ApiKey,
     EncryptionKey,
     WebhookSecret,
     LicenseKey,
+    #[default]
     SecretText,
 
     // Identities
@@ -111,11 +113,6 @@ pub enum CredentialType {
     ConfigBlob,
 }
 
-impl Default for CredentialType {
-    fn default() -> Self {
-        Self::SecretText
-    }
-}
 
 impl std::fmt::Display for CredentialType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -174,7 +171,7 @@ fn default_metadata() -> serde_json::Value {
 }
 
 /// Plaintext TOTP entry — kept for backward compatibility with existing totp_*.enc files.
-/// New TOTP entries should use Credential with credential_type: Totp.
+/// New TOTP entries should use Credential with `credential_type`: Totp.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TotpEntry {
     pub label: String,

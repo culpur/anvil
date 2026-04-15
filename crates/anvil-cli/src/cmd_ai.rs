@@ -52,13 +52,13 @@ impl LiveCli {
             let body = v.get("body").and_then(|b| b.as_str()).unwrap_or("");
             format!("PR: {title}\nAuthor: {author}\nDescription:\n{body}\n")
         } else {
-            meta.clone()
+            meta
         };
 
         let diff_truncated = if diff.len() > 40_000 {
             format!("{}\n... (truncated)", &diff[..40_000])
         } else {
-            diff.clone()
+            diff
         };
 
         let prompt = format!(
@@ -1516,9 +1516,8 @@ impl LiveCli {
                     if let Ok(rd) = fs::read_dir(&cwd) {
                         for e in rd.flatten() {
                             let p = e.path();
-                            if p.extension().and_then(|x| x.to_str()) == Some(ext) {
-                                if let Some(n) = p.file_name() { files.push(n.to_string_lossy().to_string()); }
-                            }
+                            if p.extension().and_then(|x| x.to_str()) == Some(ext)
+                                && let Some(n) = p.file_name() { files.push(n.to_string_lossy().to_string()); }
                         }
                     }
                 }

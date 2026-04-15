@@ -64,11 +64,10 @@ fn is_always_allowed_write(path: &Path) -> bool {
     }
     // Also try the canonicalized form of the system temp dir in case the path
     // was already resolved through symlinks.
-    if let Ok(canonical_tmp) = sys_tmp.canonicalize() {
-        if path.starts_with(&canonical_tmp) {
+    if let Ok(canonical_tmp) = sys_tmp.canonicalize()
+        && path.starts_with(&canonical_tmp) {
             return true;
         }
-    }
 
     // $TMPDIR env var (explicit, may differ from std::env::temp_dir() result)
     if let Ok(tmpdir) = std::env::var("TMPDIR") {
@@ -77,11 +76,10 @@ fn is_always_allowed_write(path: &Path) -> bool {
             return true;
         }
         // Canonicalized form
-        if let Ok(canonical) = tmpdir.canonicalize() {
-            if path.starts_with(&canonical) {
+        if let Ok(canonical) = tmpdir.canonicalize()
+            && path.starts_with(&canonical) {
                 return true;
             }
-        }
     }
 
     // ~/.anvil/
@@ -91,11 +89,10 @@ fn is_always_allowed_write(path: &Path) -> bool {
             return true;
         }
         // Canonicalized form
-        if let Ok(canonical) = anvil_home.canonicalize() {
-            if path.starts_with(&canonical) {
+        if let Ok(canonical) = anvil_home.canonicalize()
+            && path.starts_with(&canonical) {
                 return true;
             }
-        }
     }
 
     false
@@ -633,7 +630,7 @@ mod tests {
 
     /// Global mutex to serialise tests that mutate process-level env vars.
     /// Rust's test harness runs tests in parallel; without this, one thread
-    /// can remove ANVIL_ALLOW_GLOBAL_WRITES while another is relying on it.
+    /// can remove `ANVIL_ALLOW_GLOBAL_WRITES` while another is relying on it.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -790,17 +787,14 @@ mod tests {
         unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
         drop(_guard);
 
-        match result {
-            Err(e) => {
-                // Our sandbox error always contains this sentinel phrase.
-                // An OS-level denial (EACCES, EROFS, etc.) will not.
-                assert!(
-                    !e.to_string().contains("path is outside project boundary"),
-                    "sandbox should not have fired when bypass is set, but sandbox message found: {e}"
-                );
-            }
-            Ok(_) => { /* wrote successfully — also acceptable */ }
-        }
+        if let Err(e) = result {
+            // Our sandbox error always contains this sentinel phrase.
+            // An OS-level denial (EACCES, EROFS, etc.) will not.
+            assert!(
+                !e.to_string().contains("path is outside project boundary"),
+                "sandbox should not have fired when bypass is set, but sandbox message found: {e}"
+            );
+        } else { /* wrote successfully — also acceptable */ }
     }
 
     #[test]

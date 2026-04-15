@@ -319,32 +319,27 @@ fn inject_env_api_keys(config: &mut SearchConfig) {
             SearchProvider::Bing => "BING_SEARCH_API_KEY",
             SearchProvider::SearXNG => {
                 // Base URL from env (no auth key)
-                if provider.base_url.is_none() {
-                    if let Ok(url) = std::env::var("SEARXNG_URL") {
-                        if !url.is_empty() {
+                if provider.base_url.is_none()
+                    && let Ok(url) = std::env::var("SEARXNG_URL")
+                        && !url.is_empty() {
                             provider.base_url = Some(url);
                         }
-                    }
-                }
                 continue;
             }
             SearchProvider::DuckDuckGo => continue,
         };
-        if let Ok(key) = std::env::var(env_var) {
-            if !key.is_empty() {
+        if let Ok(key) = std::env::var(env_var)
+            && !key.is_empty() {
                 provider.api_key = Some(key);
             }
-        }
     }
     // Also inject Google CX.
     for provider in &mut config.providers {
-        if provider.provider_type == SearchProvider::Google && provider.cx.is_none() {
-            if let Ok(cx) = std::env::var("GOOGLE_SEARCH_CX") {
-                if !cx.is_empty() {
+        if provider.provider_type == SearchProvider::Google && provider.cx.is_none()
+            && let Ok(cx) = std::env::var("GOOGLE_SEARCH_CX")
+                && !cx.is_empty() {
                     provider.cx = Some(cx);
                 }
-            }
-        }
     }
 }
 

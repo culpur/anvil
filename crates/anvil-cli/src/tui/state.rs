@@ -174,8 +174,7 @@ impl LogEntry {
                             spans.push(Span::styled(rest[..start].to_string(), sys_style));
                         }
                         let url_end = rest[start..].find(|c: char| c.is_whitespace() || c == '>' || c == ')' || c == ']')
-                            .map(|e| start + e)
-                            .unwrap_or(rest.len());
+                            .map_or(rest.len(), |e| start + e);
                         let url = &rest[start..url_end];
                         spans.push(Span::styled(url.to_string(), link_style));
                         rest = &rest[url_end..];

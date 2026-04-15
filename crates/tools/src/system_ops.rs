@@ -124,11 +124,9 @@ fn iso8601_timestamp() -> String {
     if let Ok(output) = Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
         .output()
-    {
-        if output.status.success() {
+        && output.status.success() {
             return String::from_utf8_lossy(&output.stdout).trim().to_string();
         }
-    }
     // fallback to unix epoch seconds
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -1093,7 +1093,7 @@ mod tests {
 
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
-        config.install_root = Some(install_root.clone());
+        config.install_root = Some(install_root);
         let manager = PluginManager::new(config);
 
         let mut registry = InstalledPluginRegistry::default();
@@ -1153,7 +1153,7 @@ mod tests {
                 description: "stale external plugin".to_string(),
                 install_path: missing_install_path.clone(),
                 source: PluginInstallSource::LocalPath {
-                    path: missing_install_path.clone(),
+                    path: missing_install_path,
                 },
                 installed_at_unix_ms: 1,
                 updated_at_unix_ms: 1,
@@ -1183,7 +1183,7 @@ mod tests {
 
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
-        let mut manager = PluginManager::new(config.clone());
+        let mut manager = PluginManager::new(config);
 
         manager
             .enable("starter@bundled")

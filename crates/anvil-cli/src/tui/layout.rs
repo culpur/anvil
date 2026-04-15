@@ -550,8 +550,7 @@ pub(super) fn render_status_lines(
                 // Check if previous widget was a separator — if so, skip auto-spacing
                 let prev_is_sep = left_spans
                     .last()
-                    .map(|s| s.content.contains('│') || s.content.contains('·'))
-                    .unwrap_or(false);
+                    .is_some_and(|s| s.content.contains('│') || s.content.contains('·'));
                 if !prev_is_sep {
                     left_spans.push(Span::raw(" "));
                 }

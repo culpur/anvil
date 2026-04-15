@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, mpsc, Mutex};
 // ─── Session Hash & Pairing Code Generation ─────────────────────────────────
 
 /// Generate a cryptographically random session hash (256-bit → 43-char base64url).
+#[must_use] 
 pub fn generate_session_hash() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill(&mut bytes);
@@ -25,6 +26,7 @@ pub fn generate_session_hash() -> String {
 }
 
 /// Generate a 6-digit pairing code.
+#[must_use] 
 pub fn generate_pairing_code() -> String {
     let code: u32 = OsRng.gen_range(0..1_000_000);
     format!("{code:06}")
@@ -43,6 +45,7 @@ pub struct PairingVerifier {
 
 impl PairingVerifier {
     /// Create a new verifier with a fresh code. Expires after `ttl`.
+    #[must_use] 
     pub fn new(code: String, ttl: Duration) -> Self {
         Self {
             code,
@@ -53,6 +56,7 @@ impl PairingVerifier {
     }
 
     /// Default TTL of 5 minutes.
+    #[must_use] 
     pub fn with_defaults(code: String) -> Self {
         Self::new(code, Duration::from_secs(300))
     }
@@ -76,6 +80,7 @@ impl PairingVerifier {
     }
 
     /// The pairing code (for display in the TUI).
+    #[must_use] 
     pub fn code(&self) -> &str {
         &self.code
     }
@@ -297,6 +302,7 @@ pub struct RelaySession {
 }
 
 impl RelaySession {
+    #[must_use] 
     pub fn new(hash: String, hub_base_url: &str) -> Self {
         let url = format!("{hub_base_url}/{hash}");
         Self {
@@ -328,6 +334,7 @@ pub struct RelayHostState {
 }
 
 impl RelayHostState {
+    #[must_use] 
     pub fn new(code_display_tx: mpsc::UnboundedSender<(String, String)>) -> Self {
         Self {
             clients: HashMap::new(),
@@ -369,11 +376,13 @@ impl RelayHostState {
     }
 
     /// Check if a client is paired.
+    #[must_use] 
     pub fn is_paired(&self, client_id: &str) -> bool {
         matches!(self.clients.get(client_id), Some(ClientState::Paired))
     }
 
     /// Count of currently paired clients.
+    #[must_use] 
     pub fn paired_count(&self) -> usize {
         self.clients.values().filter(|s| matches!(s, ClientState::Paired)).count()
     }
@@ -402,6 +411,7 @@ pub struct RelayHost {
 
 impl RelayHost {
     /// Create a new relay host session. Does NOT connect yet — call `run()` to start.
+    #[must_use] 
     pub fn new(
         hash: String,
         hub_base_url: &str,
@@ -428,11 +438,13 @@ impl RelayHost {
     }
 
     /// Get a sender for broadcasting events from the CLI to web clients.
+    #[must_use] 
     pub fn event_sender(&self) -> broadcast::Sender<RelayMessage> {
         self.event_tx.clone()
     }
 
     /// The session hash.
+    #[must_use] 
     pub fn hash(&self) -> &str {
         &self.session.hash
     }
@@ -540,35 +552,31 @@ impl RelayHost {
                                     }
                                     RelayMessage::RequestCloseTab { tab_id } => {
                                         let st = state.lock().await;
-                                        if st.paired_count() > 0 {
-                                            if let Some(ref sync_tx) = user_input_tx {
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__close_tab:{tab_id}")));
                                             }
-                                        }
                                     }
                                     RelayMessage::ConfigGet => {
                                         let st = state.lock().await;
-                                        if st.paired_count() > 0 {
-                                            if let Some(ref sync_tx) = user_input_tx {
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, "__config_get".to_string()));
                                             }
-                                        }
                                     }
                                     RelayMessage::ConfigSet { ref key, ref value } => {
                                         let st = state.lock().await;
-                                        if st.paired_count() > 0 {
-                                            if let Some(ref sync_tx) = user_input_tx {
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__config_set:{key}:{value}")));
                                             }
-                                        }
                                     }
                                     RelayMessage::RequestRenameTab { tab_id, ref name } => {
                                         let st = state.lock().await;
-                                        if st.paired_count() > 0 {
-                                            if let Some(ref sync_tx) = user_input_tx {
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__rename_tab:{tab_id}:{name}")));
                                             }
-                                        }
                                     }
                                     RelayMessage::PeerDisconnected { client_id } => {
                                         // A web client disconnected — remove from state + notify TUI
@@ -618,6 +626,7 @@ impl RelayHost {
     }
 
     /// The full URL for web access.
+    #[must_use] 
     pub fn url(&self) -> &str {
         &self.session.url
     }

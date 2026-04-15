@@ -259,6 +259,7 @@ fn url_decode(s: &str) -> String {
 // ─── SSH Key Parsing ────────────────────────────────────────────────────────
 
 /// Parse an SSH private key and extract metadata.
+#[must_use] 
 pub fn parse_ssh_key(content: &str) -> serde_json::Value {
     let mut info = serde_json::Map::new();
 
@@ -321,6 +322,7 @@ fn ssh_key_fingerprint(key_content: &str) -> Result<String, String> {
 // ─── X.509 Certificate Parsing ──────────────────────────────────────────────
 
 /// Parse a PEM-encoded X.509 certificate and extract metadata.
+#[must_use] 
 pub fn parse_x509_cert(pem_content: &str) -> serde_json::Value {
     let mut info = serde_json::Map::new();
 
@@ -334,12 +336,11 @@ pub fn parse_x509_cert(pem_content: &str) -> serde_json::Value {
         info.insert("subject".into(), serde_json::Value::String(subject));
     }
 
-    if let Ok(issuer) = openssl_x509_field(pem_content, "-issuer") {
-        if let Some(issuer_cn) = issuer.split("CN=").nth(1) {
+    if let Ok(issuer) = openssl_x509_field(pem_content, "-issuer")
+        && let Some(issuer_cn) = issuer.split("CN=").nth(1) {
             let issuer_cn = issuer_cn.split('/').next().unwrap_or(issuer_cn).trim();
             info.insert("issuer".into(), serde_json::Value::String(issuer_cn.to_string()));
         }
-    }
 
     if let Ok(dates) = openssl_x509_field(pem_content, "-dates") {
         for line in dates.lines() {
@@ -406,6 +407,7 @@ fn openssl_x509_field(pem: &str, flag: &str) -> Result<String, String> {
 // ─── Database URL Parsing ───────────────────────────────────────────────────
 
 /// Parse a database connection URL and extract metadata.
+#[must_use] 
 pub fn parse_database_url(url: &str) -> serde_json::Value {
     let mut info = serde_json::Map::new();
 

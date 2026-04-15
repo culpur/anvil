@@ -105,11 +105,10 @@ fn wizard_test_ollama(url: &str) -> Result<Vec<(String, String)>, String> {
 /// setup do not lose their credentials.
 pub(crate) fn wizard_save_credential(key: &str, value: &str) -> io::Result<()> {
     // Try vault first — best-effort, fall through to plaintext on any error.
-    if runtime::vault_is_session_unlocked() {
-        if let Ok(()) = runtime::vault_session_upsert(key, value) {
+    if runtime::vault_is_session_unlocked()
+        && let Ok(()) = runtime::vault_session_upsert(key, value) {
             return Ok(());
         }
-    }
     wizard_save_credential_plaintext(key, value)
 }
 
@@ -383,7 +382,7 @@ pub(crate) fn run_first_run_wizard() {
             if !api_key.is_empty() {
                 let _ = wizard_save_credential("ollama_api_key", &api_key);
             }
-            ollama_url = Some(url.clone());
+            ollama_url = Some(url);
         }
         "s" | "skip" => {
             println!("  Skipping Ollama.");
@@ -701,7 +700,7 @@ pub(crate) fn run_first_run_wizard() {
 
     let ollama_enabled = provider_priority.contains(&"ollama".to_string());
     let ollama_url_val = ollama_url
-        .clone()
+        
         .unwrap_or_else(|| "http://localhost:11434".to_string());
     providers_obj.insert(
         "ollama".to_string(),
@@ -739,7 +738,7 @@ pub(crate) fn run_first_run_wizard() {
     );
     config.insert(
         "default_provider".to_string(),
-        serde_json::Value::String(default_provider.clone()),
+        serde_json::Value::String(default_provider),
     );
     config.insert(
         "provider_priority".to_string(),

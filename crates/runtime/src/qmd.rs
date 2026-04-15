@@ -100,11 +100,10 @@ impl QmdClient {
 
         // Check the per-session cache first.
         let cache_key = format!("search:{limit}:{min_score:.2}:{query}");
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.get(&cache_key) {
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(&cache_key) {
                 return cached.clone();
             }
-        }
 
         let output = Command::new(path)
             .args(["search", query, "-n", &limit.to_string(), "--json"])
@@ -173,11 +172,10 @@ impl QmdClient {
         };
 
         let cache_key = format!("col:{collection}:{limit}:{min_score:.2}:{query}");
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.get(&cache_key) {
+        if let Ok(cache) = self.cache.lock()
+            && let Some(cached) = cache.get(&cache_key) {
                 return cached.clone();
             }
-        }
 
         let output = Command::new(path)
             .args([

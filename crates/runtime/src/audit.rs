@@ -17,6 +17,7 @@ fn audit_dir() -> Option<PathBuf> {
 }
 
 /// Generate an HMAC-SHA256 signature of the given content.
+#[must_use] 
 pub fn sign_transcript(content: &str, key: &[u8; 32]) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
     mac.update(content.as_bytes());
@@ -25,6 +26,7 @@ pub fn sign_transcript(content: &str, key: &[u8; 32]) -> String {
 }
 
 /// Verify an HMAC-SHA256 signature using constant-time comparison.
+#[must_use] 
 pub fn verify_signature(content: &str, signature: &str, key: &[u8; 32]) -> bool {
     let Ok(sig_bytes) = hex::decode(signature) else {
         return false;

@@ -1022,24 +1022,20 @@ pub(crate) enum WorkspaceKind {
 
 pub(crate) fn detect_workspace_kind() -> WorkspaceKind {
     // Cargo workspace: Cargo.toml must contain [workspace]
-    if Path::new("Cargo.toml").exists() {
-        if let Ok(content) = fs::read_to_string("Cargo.toml") {
-            if content.contains("[workspace]") {
+    if Path::new("Cargo.toml").exists()
+        && let Ok(content) = fs::read_to_string("Cargo.toml")
+            && content.contains("[workspace]") {
                 return WorkspaceKind::Cargo;
             }
-        }
-    }
     if Path::new("pnpm-workspace.yaml").exists() {
         return WorkspaceKind::Pnpm;
     }
     // npm workspaces: package.json must have a "workspaces" key
-    if Path::new("package.json").exists() {
-        if let Ok(content) = fs::read_to_string("package.json") {
-            if content.contains("\"workspaces\"") {
+    if Path::new("package.json").exists()
+        && let Ok(content) = fs::read_to_string("package.json")
+            && content.contains("\"workspaces\"") {
                 return WorkspaceKind::Npm;
             }
-        }
-    }
     WorkspaceKind::None
 }
 
@@ -1224,11 +1220,10 @@ pub(crate) fn run_semantic_search(args: Option<&str>) -> String {
 
     for (type_key, type_label, base_pattern) in patterns {
         // Apply type filter
-        if let Some(ref filter) = symbol_filter {
-            if filter != type_key {
+        if let Some(ref filter) = symbol_filter
+            && filter != type_key {
                 continue;
             }
-        }
 
         // Build combined pattern: base pattern AND query somewhere on the line
         let combined = format!("(?i)(?=.*{})(?=.*{})", regex_escape(&query), base_pattern);
@@ -1730,8 +1725,8 @@ pub(crate) fn upload_wp_featured_image(path: &str, post_id: &str, _openai_key: &
 pub(crate) fn format_search_tool_result(query: &str, input: &serde_json::Value) -> String {
     match execute_builtin_tool("WebSearch", input) {
         Ok(raw) => {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if let Some(results) = parsed.get("results").and_then(|r| r.as_array()) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw)
+                && let Some(results) = parsed.get("results").and_then(|r| r.as_array()) {
                     let mut lines = vec![format!("Search results for \"{query}\":")];
                     for item in results {
                         if let Some(arr) = item.get("content").and_then(|c| c.as_array()) {
@@ -1750,7 +1745,6 @@ pub(crate) fn format_search_tool_result(query: &str, input: &serde_json::Value) 
                     }
                     return lines.join("\n");
                 }
-            }
             let trimmed = if raw.len() > 1200 { &raw[..1200] } else { &raw };
             format!("Search results for \"{query}\":\n{trimmed}")
         }

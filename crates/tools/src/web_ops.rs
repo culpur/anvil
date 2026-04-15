@@ -74,7 +74,7 @@ pub(crate) fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput,
     let client = build_http_client()?;
     let request_url = normalize_fetch_url(&input.url)?;
     let response = client
-        .get(request_url.clone())
+        .get(request_url)
         .send()
         .map_err(|error| error.to_string())?;
 
@@ -253,15 +253,12 @@ fn is_private_host(host: &str) -> bool {
         return true;
     }
     // RFC-1918: 172.16.0.0/12  (172.16.x.x – 172.31.x.x)
-    if let Some(rest) = host.strip_prefix("172.") {
-        if let Some(second_octet_str) = rest.split('.').next() {
-            if let Ok(second) = second_octet_str.parse::<u8>() {
-                if (16..=31).contains(&second) {
+    if let Some(rest) = host.strip_prefix("172.")
+        && let Some(second_octet_str) = rest.split('.').next()
+            && let Ok(second) = second_octet_str.parse::<u8>()
+                && (16..=31).contains(&second) {
                     return true;
                 }
-            }
-        }
-    }
     false
 }
 

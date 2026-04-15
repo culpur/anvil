@@ -287,13 +287,11 @@ pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
 /// Return the currently configured language code, defaulting to "en".
 pub(crate) fn current_language_code() -> String {
     let path = anvil_home_dir().join("config.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data) {
-            if let Some(lang) = map.get("language").and_then(|v| v.as_str()) {
+    if let Ok(data) = fs::read_to_string(&path)
+        && let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+            && let Some(lang) = map.get("language").and_then(|v| v.as_str()) {
                 return lang.to_string();
             }
-        }
-    }
     "en".to_string()
 }
 
@@ -1216,8 +1214,8 @@ pub(crate) fn render_export_markdown(session: &Session) -> String {
 
     for message in &session.messages {
         if let Some(ref u) = message.usage {
-            total_input += u.input_tokens as u64;
-            total_output += u.output_tokens as u64;
+            total_input += u64::from(u.input_tokens);
+            total_output += u64::from(u.output_tokens);
         }
         match message.role {
             MessageRole::System => continue, // skip system prompts

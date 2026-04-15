@@ -246,7 +246,7 @@ impl HubClient {
 
     // ─── Remote Control session management ────────────────────────────────
 
-    /// Register a remote control session with AnvilHub.
+    /// Register a remote control session with `AnvilHub`.
     /// This makes the session URL resolvable and serves the web viewer.
     pub async fn register_session(
         &self,

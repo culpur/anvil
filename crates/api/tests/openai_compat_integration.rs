@@ -86,7 +86,7 @@ async fn send_message_accepts_full_chat_completions_endpoint_override() {
     )
     .await;
 
-    let endpoint_url = server.base_url().to_string();
+    let endpoint_url = server.base_url();
     let client = OpenAiCompatClient::new("xai-test-key", OpenAiCompatConfig::xai())
         .with_base_url(endpoint_url);
     let response = client
@@ -393,7 +393,7 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| StdMutex::new(()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct ScopedEnvVar {

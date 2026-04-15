@@ -39,6 +39,7 @@ impl Default for EgressPolicy {
 
 impl EgressPolicy {
     /// Check if a URL is allowed by the egress policy.
+    #[must_use] 
     pub fn is_allowed(&self, url: &str) -> bool {
         if !self.enabled {
             return true;
@@ -62,6 +63,7 @@ impl EgressPolicy {
     }
 
     /// Render the current policy as a human-readable string.
+    #[must_use] 
     pub fn render_status(&self) -> String {
         let status = if self.enabled { "ENABLED" } else { "DISABLED" };
         let mut domains: Vec<_> = self.allowlist.iter().cloned().collect();
@@ -74,6 +76,7 @@ impl EgressPolicy {
     }
 
     /// Load from config values (list of domain strings).
+    #[must_use] 
     pub fn from_config(domains: &[String], enabled: bool) -> Self {
         let mut allowlist: HashSet<String> =
             DEFAULT_ALLOWLIST.iter().map(|s| (*s).to_string()).collect();

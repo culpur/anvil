@@ -134,8 +134,8 @@ impl TaskManager {
 
         let task = Task {
             id: id.clone(),
-            description: description.clone(),
-            command: command.clone(),
+            description,
+            command,
             status: TaskStatus::Running,
             output: Arc::clone(&output_buf),
             cancel: Arc::clone(&cancel_flag),

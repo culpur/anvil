@@ -401,6 +401,7 @@ pub enum StatusWidget {
 
 impl StatusWidget {
     /// Short identifier for this widget type.
+    #[must_use] 
     pub fn id(&self) -> &str {
         match self {
             Self::Model => "model",
@@ -444,6 +445,7 @@ impl StatusWidget {
     }
 
     /// Human-readable label for the config panel.
+    #[must_use] 
     pub fn display_name(&self) -> &str {
         match self {
             Self::Model => "Model",
@@ -487,6 +489,7 @@ impl StatusWidget {
     }
 
     /// Widget category for color-coding in the editor UI.
+    #[must_use] 
     pub fn category(&self) -> &str {
         match self {
             Self::Model | Self::Thinking | Self::Effort | Self::Provider => "model",
@@ -506,6 +509,7 @@ impl StatusWidget {
     }
 
     /// All concrete widget variants (excludes `Text { content }` which needs special handling).
+    #[must_use] 
     pub fn all_widgets() -> Vec<StatusWidget> {
         vec![
             Self::Model, Self::Thinking, Self::Effort, Self::Provider,
@@ -524,6 +528,7 @@ impl StatusWidget {
     }
 
     /// Parse a widget from its ID string (inverse of `id()`).
+    #[must_use] 
     pub fn from_id(id: &str) -> Option<StatusWidget> {
         match id {
             "model" => Some(Self::Model),
@@ -634,6 +639,7 @@ pub enum StatusLinePreset {
 }
 
 impl StatusLinePreset {
+    #[must_use] 
     pub fn name(self) -> &'static str {
         match self {
             Self::Default => "default",
@@ -655,6 +661,7 @@ impl StatusLinePreset {
         }
     }
 
+    #[must_use] 
     pub fn description(self) -> &'static str {
         match self {
             Self::Default => "Balanced layout — model, tokens, context, git, permissions",
@@ -676,6 +683,7 @@ impl StatusLinePreset {
         }
     }
 
+    #[must_use] 
     pub fn all() -> &'static [StatusLinePreset] {
         &[
             Self::Default,
@@ -697,6 +705,7 @@ impl StatusLinePreset {
         ]
     }
 
+    #[must_use] 
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "default" => Some(Self::Default),
@@ -723,6 +732,7 @@ impl StatusLinePreset {
 impl StatusLineConfig {
     /// Load from `~/.anvil/config.json` under the `"status_line"` key.
     /// Falls back to `default()` if missing or invalid.
+    #[must_use] 
     pub fn load() -> Self {
         Self::try_load().unwrap_or_default()
     }
@@ -737,11 +747,13 @@ impl StatusLineConfig {
     }
 
     /// Serialize this config as a JSON value for embedding in config.json.
+    #[must_use] 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
 
     /// Number of status lines this config renders.
+    #[must_use] 
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }
@@ -797,6 +809,7 @@ impl StatusLineConfig {
     }
 
     /// Get the widgets on a given side of a line.
+    #[must_use] 
     pub fn widgets_on_side(&self, line_idx: usize, side: Side) -> &[StatusWidget] {
         self.lines.get(line_idx).map_or(&[], |line| match side {
             Side::Left => &line.left,
@@ -817,6 +830,7 @@ impl StatusLineConfig {
     }
 
     /// Build a config from a named preset.
+    #[must_use] 
     pub fn from_preset(preset: StatusLinePreset) -> Self {
         match preset {
             StatusLinePreset::Default => Self::preset_default(),
@@ -1455,9 +1469,9 @@ mod tests {
             StatusWidget::CostMonthly, StatusWidget::CostProjection, StatusWidget::CacheHitRate,
             StatusWidget::CodeProductivity, StatusWidget::Spacer, StatusWidget::Separator,
         ];
-        let mut ids: Vec<&str> = widgets.iter().map(|w| w.id()).collect();
+        let mut ids: Vec<&str> = widgets.iter().map(super::StatusWidget::id).collect();
         let len_before = ids.len();
-        ids.sort();
+        ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), len_before, "widget IDs must be unique");
     }

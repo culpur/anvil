@@ -70,16 +70,13 @@ impl AnvilTui {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.handle_ctrl_key(key);
         }
-        if key.modifiers.contains(KeyModifiers::ALT) {
-            if let KeyCode::Char(ch) = key.code {
-                if let Some(n) = ch.to_digit(10) {
-                    if n >= 1 {
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && let KeyCode::Char(ch) = key.code
+                && let Some(n) = ch.to_digit(10)
+                    && n >= 1 {
                         self.switch_tab((n as usize).saturating_sub(1));
                         return Ok(ReadResult::Continue);
                     }
-                }
-            }
-        }
 
         match key.code {
             KeyCode::Enter => {
@@ -174,11 +171,10 @@ impl AnvilTui {
             }
             KeyCode::Char('c' | 'C') => {
                 if self.active_tab().input.is_empty() {
-                    if let Some(first) = self.ctrl_c_empty_at {
-                        if first.elapsed() <= Duration::from_secs(1) {
+                    if let Some(first) = self.ctrl_c_empty_at
+                        && first.elapsed() <= Duration::from_secs(1) {
                             return Ok(ReadResult::Exit);
                         }
-                    }
                     self.ctrl_c_empty_at = Some(std::time::Instant::now());
                     self.push_system(
                         "(press Ctrl+C again to exit)".to_string(),

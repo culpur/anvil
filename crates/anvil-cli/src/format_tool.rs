@@ -241,17 +241,16 @@ pub(crate) fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> Stri
         write!(&mut lines[0], " {status}").expect("write to string");
     }
 
-    if let Some(stdout) = parsed.get("stdout").and_then(|value| value.as_str()) {
-        if !stdout.trim().is_empty() {
+    if let Some(stdout) = parsed.get("stdout").and_then(|value| value.as_str())
+        && !stdout.trim().is_empty() {
             lines.push(truncate_output_for_display(
                 stdout,
                 TOOL_OUTPUT_DISPLAY_MAX_LINES,
                 TOOL_OUTPUT_DISPLAY_MAX_CHARS,
             ));
         }
-    }
-    if let Some(stderr) = parsed.get("stderr").and_then(|value| value.as_str()) {
-        if !stderr.trim().is_empty() {
+    if let Some(stderr) = parsed.get("stderr").and_then(|value| value.as_str())
+        && !stderr.trim().is_empty() {
             lines.push(format!(
                 "\x1b[38;5;203m{}\x1b[0m",
                 truncate_output_for_display(
@@ -261,7 +260,6 @@ pub(crate) fn format_bash_result(icon: &str, parsed: &serde_json::Value) -> Stri
                 )
             ));
         }
-    }
 
     lines.join("\n\n")
 }

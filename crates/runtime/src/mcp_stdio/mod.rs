@@ -359,11 +359,10 @@ mod tests {
 
     fn python_command() -> String {
         for key in ["MCP_TEST_PYTHON", "PYTHON3", "PYTHON"] {
-            if let Ok(value) = std::env::var(key) {
-                if !value.trim().is_empty() {
+            if let Ok(value) = std::env::var(key)
+                && !value.trim().is_empty() {
                     return value;
                 }
-            }
         }
 
         for candidate in ["python3", "python"] {

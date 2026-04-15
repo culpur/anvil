@@ -17,7 +17,7 @@ use crate::{
     LiveCli,
 };
 
-/// Serialize ConfigureData into a JSON Value for the browser config panel.
+/// Serialize `ConfigureData` into a JSON Value for the browser config panel.
 pub(crate) fn config_data_to_json(data: &ConfigureData) -> serde_json::Value {
     serde_json::json!({
         "providers": {
@@ -132,8 +132,8 @@ impl LiveCli {
             "exa_api_key",
             "perplexity_api_key",
         ];
-        if CREDENTIAL_KEYS.contains(&key) {
-            if let Some(secret) = value.as_str() {
+        if CREDENTIAL_KEYS.contains(&key)
+            && let Some(secret) = value.as_str() {
                 if runtime::vault_is_session_unlocked() {
                     match runtime::vault_session_upsert(key, secret) {
                         Ok(()) => {
@@ -186,7 +186,6 @@ impl LiveCli {
                     };
                 }
             }
-        }
 
         let Some(home) = dirs_next_home() else {
             return "Error: could not determine home directory.".to_string();
@@ -197,7 +196,7 @@ impl LiveCli {
         }
         let path = anvil_dir.join("config.json");
         let mut map = Self::load_anvil_ui_config();
-        map.insert(key.to_string(), value.clone());
+        map.insert(key.to_string(), value);
         let serialised = serde_json::to_string_pretty(&serde_json::Value::Object(map))
             .unwrap_or_else(|_| "{}".to_string());
         match fs::write(&path, serialised) {
@@ -1136,10 +1135,10 @@ impl LiveCli {
             }
             // ── Section 7: Language & Theme ───────────────────────────────
             ConfigureAction::SetLanguage { lang } => {
-                Self::save_anvil_ui_config_key("language", serde_json::Value::String(lang.clone()))
+                Self::save_anvil_ui_config_key("language", serde_json::Value::String(lang))
             }
             ConfigureAction::SetTheme { theme } => {
-                Self::save_anvil_ui_config_key("theme", serde_json::Value::String(theme.clone()))
+                Self::save_anvil_ui_config_key("theme", serde_json::Value::String(theme))
             }
             // ── Section 8: Vault ─────────────────────────────────────────
             ConfigureAction::SetVaultSessionTtl { secs } => {

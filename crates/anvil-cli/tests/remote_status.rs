@@ -18,14 +18,14 @@ fn relay_session_hash_is_nonempty() {
 
 #[test]
 fn remote_control_widget_metadata() {
-    use runtime::theme::{StatusWidget, Side};
+    use runtime::theme::StatusWidget;
     assert_eq!(StatusWidget::RemoteControl.id(), "remote_control");
     assert_eq!(StatusWidget::RemoteControl.category(), "system");
 }
 
 #[test]
 fn default_preset_includes_remote_control() {
-    use runtime::theme::{StatusLineConfig, StatusWidget};
+    use runtime::theme::StatusLineConfig;
     let config = StatusLineConfig::default();
     // Check that RemoteControl widget exists in one of the lines
     let mut found = false;
@@ -33,13 +33,13 @@ fn default_preset_includes_remote_control() {
         for w in &line.left {
             if w.id() == "remote_control" {
                 found = true;
-                println!("Found RemoteControl in line {} left", i);
+                println!("Found RemoteControl in line {i} left");
             }
         }
         for w in &line.right {
             if w.id() == "remote_control" {
                 found = true;
-                println!("Found RemoteControl in line {} right", i);
+                println!("Found RemoteControl in line {i} right");
             }
         }
     }
@@ -55,7 +55,7 @@ fn simulate_full_remote_control_flow() {
 
     // Step 1: Create a relay session (same as run_remote_control_command does)
     let hash = runtime::relay::generate_session_hash();
-    let session = runtime::relay::RelaySession::new(hash.clone(), "https://passage.culpur.net/viewer");
+    let session = runtime::relay::RelaySession::new(hash, "https://passage.culpur.net/viewer");
     let relay_session: Option<runtime::relay::RelaySession> = Some(session);
 
     // Step 2: Extract URL (same as main.rs line 2781)
@@ -63,21 +63,21 @@ fn simulate_full_remote_control_flow() {
     let rc_hash = relay_session.as_ref().map(|s| s.hash.clone()).unwrap_or_default();
 
     // Step 3: Verify URL is not empty
-    assert!(!rc_url.is_empty(), "rc_url must not be empty after session creation, got: '{}'", rc_url);
+    assert!(!rc_url.is_empty(), "rc_url must not be empty after session creation, got: '{rc_url}'");
     assert!(!rc_hash.is_empty(), "rc_hash must not be empty");
-    println!("rc_url = {}", rc_url);
-    println!("rc_hash = {}", rc_hash);
+    println!("rc_url = {rc_url}");
+    println!("rc_hash = {rc_hash}");
 
     // Step 4: Simulate what set_remote_status does
     // This is what set_remote_status does:
-    let remote_url = rc_url.clone();
-    let remote_code = rc_hash.clone();
+    let remote_url = rc_url;
+    let remote_code = rc_hash;
 
     // Step 5: Verify the status line data would show connected
     assert!(!remote_url.is_empty(), "remote_url should be set after set_remote_status");
 
     // Step 6: Simulate what the draw closure does
-    let data_remote_url = remote_url.clone(); // This is what draw() snapshots
+    let data_remote_url = remote_url; // This is what draw() snapshots
     assert!(!data_remote_url.is_empty(), "data.remote_url must not be empty in draw");
 
     // Step 7: Simulate what the widget render does
@@ -85,11 +85,11 @@ fn simulate_full_remote_control_flow() {
         panic!("Widget would show 'RC Disconnected' — BUG!");
     } else {
         let label = if remote_code.is_empty() {
-            format!("🛸 RC {}", data_remote_url)
+            format!("🛸 RC {data_remote_url}")
         } else {
-            format!("🛸 RC {}  [{}]", data_remote_url, remote_code)
+            format!("🛸 RC {data_remote_url}  [{remote_code}]")
         };
-        println!("Widget would render: {}", label);
+        println!("Widget would render: {label}");
         assert!(label.contains("passage.culpur.net"), "Label must contain URL");
         assert!(!label.contains("Disconnected"), "Label must NOT contain Disconnected");
     }

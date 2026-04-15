@@ -510,7 +510,7 @@ pub(super) fn third_level_completions(command: &str, subcommand: &str) -> Vec<Co
             CompletionItem { insert: "threshold".into(), hint: "Set auto-compact % (e.g. 85)".into() },
             CompletionItem { insert: "qmd".into(), hint: "Toggle QMD (on/off)".into() },
         ],
-        ("/configure", "statusline") | ("/configure", "status-line") | ("/configure", "status_line") => vec![
+        ("/configure", "statusline" | "status-line" | "status_line") => vec![
             CompletionItem { insert: "default".into(), hint: "Balanced — model, tokens, context, git".into() },
             CompletionItem { insert: "minimal".into(), hint: "Clean — model + context bar only".into() },
             CompletionItem { insert: "developer".into(), hint: "Full git, QMD, vim — power users".into() },
@@ -737,8 +737,8 @@ pub fn init_ollama_model_cache() {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                    if let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
+                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&o.stdout)
+                    && let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
                         return arr.iter().filter_map(|m| {
                             let name = m.get("name").and_then(|n| n.as_str())?;
                             let size = m.get("size").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
@@ -746,7 +746,6 @@ pub fn init_ollama_model_cache() {
                             Some((name.to_string(), format!("{gb:.1}GB")))
                         }).collect();
                     }
-                }
                 Vec::new()
             }
             _ => Vec::new(),

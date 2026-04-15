@@ -243,8 +243,8 @@ pub fn handle_commit_push_pr_slash_command(
 }
 
 pub fn detect_default_branch(cwd: &Path) -> io::Result<String> {
-    if let Ok(reference) = git_stdout(cwd, &["symbolic-ref", "refs/remotes/origin/HEAD"]) {
-        if let Some(branch) = reference
+    if let Ok(reference) = git_stdout(cwd, &["symbolic-ref", "refs/remotes/origin/HEAD"])
+        && let Some(branch) = reference
             .trim()
             .rsplit('/')
             .next()
@@ -252,7 +252,6 @@ pub fn detect_default_branch(cwd: &Path) -> io::Result<String> {
         {
             return Ok(branch.to_string());
         }
-    }
 
     for branch in ["main", "master"] {
         if branch_exists(cwd, branch) {

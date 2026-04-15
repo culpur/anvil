@@ -80,8 +80,8 @@ impl PermissionMemory {
         // Load global entries first, then project entries (project wins on
         // conflicts because it is more specific).
         for path in [&global_path, &project_path] {
-            if let Ok(raw) = std::fs::read_to_string(path) {
-                if let Ok(file) = serde_json::from_str::<PermissionsFile>(&raw) {
+            if let Ok(raw) = std::fs::read_to_string(path)
+                && let Ok(file) = serde_json::from_str::<PermissionsFile>(&raw) {
                     for entry in file.entries {
                         entries
                             .entry(entry.tool_name.clone())
@@ -89,7 +89,6 @@ impl PermissionMemory {
                             .push(entry);
                     }
                 }
-            }
         }
 
         Self {

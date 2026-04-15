@@ -530,7 +530,7 @@ pub(crate) fn build_runtime_with_tui_slot(
             tui_slot.clone(),
         )?,
         CliToolExecutor::new(
-            allowed_tools.clone(),
+            allowed_tools,
             emit_output,
             tool_registry.clone(),
             mcp_manager,
@@ -721,7 +721,7 @@ impl ApiClient for DefaultRuntimeClient {
                 Err(_timeout) => {
                     // Stream stalled for 5 minutes — break to trigger non-streaming fallback
                     if let Some(ref tx) = tui_tx {
-                        let _ = tx.send(TuiEvent::System(
+                        let () = tx.send(TuiEvent::System(
                             "Stream stalled for 5 minutes — retrying without streaming...".to_string()
                         ));
                     }
@@ -1106,7 +1106,7 @@ impl ToolExecutor for CliToolExecutor {
                     })
                     .unwrap_or_else(|| response.clone())
             } else {
-                response.clone()
+                response
             };
 
             if self.emit_output {

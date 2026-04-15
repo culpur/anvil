@@ -11,7 +11,7 @@ use super::CredentialType;
 /// A detected credential with metadata about where it was found.
 #[derive(Debug, Clone)]
 pub struct DetectedCredential {
-    /// Human-readable type (e.g., "OpenAI API Key", "SSH Private Key").
+    /// Human-readable type (e.g., "`OpenAI` API Key", "SSH Private Key").
     pub kind: String,
     /// The typed credential category for vault storage.
     pub credential_type: CredentialType,
@@ -19,7 +19,7 @@ pub struct DetectedCredential {
     pub label: String,
     /// The actual secret value.
     pub value: String,
-    /// Where it was found (e.g., "env:OPENAI_API_KEY", "file:~/.ssh/id_ed25519").
+    /// Where it was found (e.g., "`env:OPENAI_API_KEY`", "file:~/.`ssh/id_ed25519`").
     pub source: String,
     /// Masked preview for display (e.g., "sk-proj-***...4f2k").
     pub masked: String,
@@ -76,11 +76,12 @@ fn label_from_source(source: &str) -> String {
 }
 
 /// Quick scan: environment variables only. Fast enough for session start (<50ms).
+#[must_use] 
 pub fn quick_scan() -> Vec<DetectedCredential> {
     let mut found = Vec::new();
     for &(var_name, kind, auto_store) in ENV_PATTERNS {
-        if let Ok(value) = env::var(var_name) {
-            if !value.is_empty() && value.len() > 8 {
+        if let Ok(value) = env::var(var_name)
+            && !value.is_empty() && value.len() > 8 {
                 found.push(DetectedCredential {
                     kind: kind.to_string(),
                     label: var_name.to_lowercase().replace('_', "-"),
@@ -92,12 +93,12 @@ pub fn quick_scan() -> Vec<DetectedCredential> {
                     metadata: serde_json::Value::Object(serde_json::Map::new()),
                 });
             }
-        }
     }
     found
 }
 
 /// Full scan: environment variables + dotfiles + project files + SSH keys + TLS certs.
+#[must_use] 
 pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
     let mut found = quick_scan();
     let home = dirs_next::home_dir();
@@ -115,13 +116,13 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
     if let Some(ref home) = home {
         // Scan SSH keys
         let ssh_dir = home.join(".ssh");
-        if ssh_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&ssh_dir) {
+        if ssh_dir.is_dir()
+            && let Ok(entries) = fs::read_dir(&ssh_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if is_private_key_file(&path) {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if content.contains("PRIVATE KEY") {
+                    if is_private_key_file(&path)
+                        && let Ok(content) = fs::read_to_string(&path)
+                            && content.contains("PRIVATE KEY") {
                                 let name = path.file_name().unwrap_or_default().to_string_lossy();
                                 found.push(DetectedCredential {
                                     kind: "SSH Private Key".to_string(),
@@ -134,11 +135,8 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
                                     metadata: serde_json::Value::Object(serde_json::Map::new()),
                                 });
                             }
-                        }
-                    }
                 }
             }
-        }
 
         // Scan common credential files
         let cred_files: Vec<(PathBuf, &str)> = vec![
@@ -147,8 +145,8 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
             (home.join(".pypirc"), "PyPI Config"),
         ];
         for (path, kind) in cred_files {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
+            if path.exists()
+                && let Ok(content) = fs::read_to_string(&path) {
                     // Look for key-like values
                     for line in content.lines() {
                         let line = line.trim();
@@ -170,7 +168,6 @@ pub fn full_scan(project_root: Option<&Path>) -> Vec<DetectedCredential> {
                         }
                     }
                 }
-            }
         }
     }
 
@@ -252,8 +249,8 @@ fn scan_tls_directory(dir: &Path) -> Vec<DetectedCredential> {
         for entry in entries.flatten() {
             let path = entry.path();
             let ext = path.extension().unwrap_or_default().to_string_lossy();
-            if matches!(ext.as_ref(), "pem" | "key" | "crt" | "p12" | "pfx") {
-                if let Ok(content) = fs::read_to_string(&path) {
+            if matches!(ext.as_ref(), "pem" | "key" | "crt" | "p12" | "pfx")
+                && let Ok(content) = fs::read_to_string(&path) {
                     if content.contains("PRIVATE KEY") {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
                         found.push(DetectedCredential {
@@ -280,7 +277,6 @@ fn scan_tls_directory(dir: &Path) -> Vec<DetectedCredential> {
                         });
                     }
                 }
-            }
         }
     }
     found

@@ -367,13 +367,12 @@ impl AgentManager {
 
     /// Mark a running agent as failed (used by the `/agents stop` command).
     pub fn stop(&mut self, id: usize) -> bool {
-        if let Some(handle) = self.agents.iter_mut().find(|a| a.id == id) {
-            if matches!(handle.status, AgentStatus::Running | AgentStatus::Waiting) {
+        if let Some(handle) = self.agents.iter_mut().find(|a| a.id == id)
+            && matches!(handle.status, AgentStatus::Running | AgentStatus::Waiting) {
                 handle.status = AgentStatus::Failed("stopped by user".to_string());
                 handle.rx = None;
                 return true;
             }
-        }
         false
     }
 

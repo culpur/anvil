@@ -252,11 +252,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         if let Ok(data) = std::fs::read_to_string(&config_path) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
                 // Set OLLAMA_HOST env var from config so agent threads inherit it
-                if let Some(ollama_url) = val.pointer("/providers/ollama/url").and_then(|v| v.as_str()) {
-                    if !ollama_url.is_empty() && std::env::var("OLLAMA_HOST").is_err() {
+                if let Some(ollama_url) = val.pointer("/providers/ollama/url").and_then(|v| v.as_str())
+                    && !ollama_url.is_empty() && std::env::var("OLLAMA_HOST").is_err() {
                         unsafe { std::env::set_var("OLLAMA_HOST", ollama_url); }
                     }
-                }
                 val.get("default_model")
                     .and_then(|m| m.as_str()).map_or_else(|| DEFAULT_MODEL.to_string(), String::from)
             } else {
@@ -1412,11 +1411,10 @@ fn migrate_credentials_to_vault(creds_path: &std::path::Path) -> usize {
         if key == "oauth" {
             continue;
         }
-        if let Some(secret) = val.as_str() {
-            if runtime::vault_session_upsert(key, secret).is_ok() {
+        if let Some(secret) = val.as_str()
+            && runtime::vault_session_upsert(key, secret).is_ok() {
                 count += 1;
             }
-        }
     }
     count
 }
@@ -1438,26 +1436,20 @@ fn load_credentials_to_env() {
             continue;
         }
         // Vault first.
-        if let Some(val) = runtime::vault_session_get(cred_label) {
-            if !val.is_empty() {
+        if let Some(val) = runtime::vault_session_get(cred_label)
+            && !val.is_empty() {
                 unsafe { std::env::set_var(env_var, &val); }
                 continue;
             }
-        }
         // Plaintext fallback.
-        if let Ok(creds_path) = runtime::credentials_path() {
-            if let Ok(data) = fs::read_to_string(&creds_path) {
-                if let Ok(root) =
+        if let Ok(creds_path) = runtime::credentials_path()
+            && let Ok(data) = fs::read_to_string(&creds_path)
+                && let Ok(root) =
                     serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
-                {
-                    if let Some(val) = root.get(cred_label).and_then(|v| v.as_str()) {
-                        if !val.is_empty() {
+                    && let Some(val) = root.get(cred_label).and_then(|v| v.as_str())
+                        && !val.is_empty() {
                             unsafe { std::env::set_var(env_var, val); }
                         }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1557,11 +1549,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         let update_slot = Arc::clone(&update_check);
         let current_version = VERSION.to_string();
         thread::spawn(move || {
-            if let Some(msg) = check_for_update(&current_version) {
-                if let Ok(mut slot) = update_slot.lock() {
+            if let Some(msg) = check_for_update(&current_version)
+                && let Ok(mut slot) = update_slot.lock() {
                     *slot = Some(msg);
                 }
-            }
         });
     }
 
@@ -1615,11 +1606,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Check if the background update check completed.
-        if let Ok(mut slot) = update_check.try_lock() {
-            if let Some(msg) = slot.take() {
+        if let Ok(mut slot) = update_check.try_lock()
+            && let Some(msg) = slot.take() {
                 tui.set_update_available(msg);
             }
-        }
 
         // ── Screensaver: auto-activate on 15-min idle ──────────────────────
         if screensaver_state.is_none()
@@ -1697,9 +1687,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 if let Some(rest) = message.strip_prefix("__rename_tab:") {
-                    if let Some((id_str, new_name)) = rest.split_once(':') {
-                        if let Ok(tab_id) = id_str.parse::<usize>() {
-                            if tui.rename_tab_by_id(tab_id, new_name) {
+                    if let Some((id_str, new_name)) = rest.split_once(':')
+                        && let Ok(tab_id) = id_str.parse::<usize>()
+                            && tui.rename_tab_by_id(tab_id, new_name) {
                                 tui.push_system(format!("[Remote] Renamed tab to: {new_name}"));
                                 if let Some(tx) = &cli.relay_event_tx {
                                     let _ = tx.send(runtime::relay::RelayMessage::TabRenamed {
@@ -1708,8 +1698,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 }
                             }
-                        }
-                    }
                     continue;
                 }
                 if message == "__config_get" {
@@ -1722,8 +1710,8 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // JSON config set — for complex payloads like full StatusLineConfig
                 if let Some(rest) = message.strip_prefix("__config_set_json:") {
-                    if let Some((key, json_str)) = rest.split_once(':') {
-                        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if let Some((key, json_str)) = rest.split_once(':')
+                        && let Ok(json_value) = serde_json::from_str::<serde_json::Value>(json_str) {
                             let msg = LiveCli::save_anvil_ui_config_key(key, json_value);
                             let success = !msg.contains("error") && !msg.contains("Error");
                             tui.push_system(format!("[Remote Config JSON] {msg}"));
@@ -1734,13 +1722,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     message: msg,
                                 });
                             }
-                            if success && key == "status_line" {
-                                if let Ok(config) = serde_json::from_str::<runtime::theme::StatusLineConfig>(json_str) {
+                            if success && key == "status_line"
+                                && let Ok(config) = serde_json::from_str::<runtime::theme::StatusLineConfig>(json_str) {
                                     tui.set_status_line_config(config);
                                 }
-                            }
                         }
-                    }
                     continue;
                 }
                 if let Some(rest) = message.strip_prefix("__config_set:") {
@@ -1856,11 +1842,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 let turn_err_clone = turn_err.clone();
                 std::thread::scope(|s| {
                     s.spawn(move || {
-                        if let Err(e) = cli_ref.run_turn(&input_owned) {
-                            if let Ok(mut guard) = turn_err_clone.lock() {
+                        if let Err(e) = cli_ref.run_turn(&input_owned)
+                            && let Ok(mut guard) = turn_err_clone.lock() {
                                 *guard = Some(e.to_string());
                             }
-                        }
                     });
                     let _ = tui.wait_for_turn_end();
                 });
@@ -2081,11 +2066,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         let turn_err_clone = turn_err.clone();
                         std::thread::scope(|s| {
                             s.spawn(move || {
-                                if let Err(e) = cli_ref.run_turn_file_drop() {
-                                    if let Ok(mut guard) = turn_err_clone.lock() {
+                                if let Err(e) = cli_ref.run_turn_file_drop()
+                                    && let Ok(mut guard) = turn_err_clone.lock() {
                                         *guard = Some(e.to_string());
                                     }
-                                }
                             });
                             let _ = tui.wait_for_turn_end();
                         });
@@ -2114,11 +2098,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     let turn_err_clone = turn_err.clone();
                     std::thread::scope(|s| {
                         s.spawn(move || {
-                            if let Err(e) = cli_ref.run_turn(&input_owned) {
-                                if let Ok(mut guard) = turn_err_clone.lock() {
+                            if let Err(e) = cli_ref.run_turn(&input_owned)
+                                && let Ok(mut guard) = turn_err_clone.lock() {
                                     *guard = Some(e.to_string());
                                 }
-                            }
                         });
                         // Main thread: animate the TUI while the turn runs.
                         let _ = tui.wait_for_turn_end();
@@ -2128,14 +2111,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 // Update footer QMD/archive status after each turn
-                if cli.qmd.is_enabled() {
-                    if let Some(status) = cli.qmd.status() {
+                if cli.qmd.is_enabled()
+                    && let Some(status) = cli.qmd.status() {
                         tui.set_qmd_status(format!(
                             "QMD: {} docs, {} vecs",
                             status.total_docs, status.total_vectors
                         ));
                     }
-                }
                 let archives = cli.history_archiver.list_archives();
                 if !archives.is_empty() {
                     let latest = &archives[0];
@@ -2540,8 +2522,8 @@ impl LiveCli {
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
         // Inject any pinned files at the start of each turn.
-        if let Ok(pinned_path) = anvil_pinned_path() {
-            if let Ok(pinned) = load_pinned_paths(&pinned_path) {
+        if let Ok(pinned_path) = anvil_pinned_path()
+            && let Ok(pinned) = load_pinned_paths(&pinned_path) {
                 for path in &pinned {
                     if let Ok(content) = fs::read_to_string(path) {
                         let reminder = format!(
@@ -2553,7 +2535,6 @@ impl LiveCli {
                     }
                 }
             }
-        }
 
         // Build the effective input, optionally augmented with QMD context.
         // The search runs before the API call so the model sees relevant docs
@@ -3369,9 +3350,8 @@ impl LiveCli {
             let part = part.trim();
             if part.contains("insertion") {
                 if let Some(n) = part.split_whitespace().next() { ins = n.parse().unwrap_or(0); }
-            } else if part.contains("deletion") {
-                if let Some(n) = part.split_whitespace().next() { del = n.parse().unwrap_or(0); }
-            }
+            } else if part.contains("deletion")
+                && let Some(n) = part.split_whitespace().next() { del = n.parse().unwrap_or(0); }
         }
 
         let files_changed = Command::new("git")
@@ -3380,8 +3360,7 @@ impl LiveCli {
             .ok()
             .filter(|o| o.status.success())
             .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.lines().filter(|l| !l.is_empty()).count())
-            .unwrap_or(0);
+            .map_or(0, |s| s.lines().filter(|l| !l.is_empty()).count());
 
         let session = self.runtime.session();
         let total_tokens = session.messages.iter()
@@ -3881,8 +3860,8 @@ impl LiveCli {
                             .output()
                         {
                             Ok(output) if output.status.success() => {
-                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                                    if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
+                                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                                    && let Some(models) = val.get("models").and_then(|m| m.as_array()) {
                                         for m in models {
                                             let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("?");
                                             let size = m.get("size").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
@@ -3890,7 +3869,6 @@ impl LiveCli {
                                             let _ = writeln!(out, "  {name:<30} {gb:.1}GB");
                                         }
                                     }
-                                }
                             }
                             _ => {
                                 out.push_str("  (Ollama not running — start with `ollama serve`)\n");
@@ -4562,7 +4540,7 @@ impl LiveCli {
     fn run_remote_control_command(&mut self, action: Option<&str>) -> String {
         const HUB_BASE_URL: &str = "https://passage.culpur.net/viewer";
 
-        match action.map(str::trim).unwrap_or("") {
+        match action.map_or("", str::trim) {
             "stop" => {
                 if self.relay_session.is_none() {
                     return "Remote control: no active session.".to_string();
@@ -4579,8 +4557,7 @@ impl LiveCli {
                         let client_count = self
                             .relay_event_tx
                             .as_ref()
-                            .map(|tx| tx.receiver_count())
-                            .unwrap_or(0);
+                            .map_or(0, tokio::sync::broadcast::Sender::receiver_count);
                         format!(
                             "Remote control\n  URL              {}\n  Hash             {}\n  Clients          {}\n  Status           {:?}\n\nNext\n  /remote-control stop   Stop the relay session",
                             session.url,
@@ -5113,7 +5090,7 @@ impl LiveCli {
         match action {
             None => format_history_archive_list(&archiver.list_archives()),
 
-            Some("stats") | Some("summary") => {
+            Some("stats" | "summary") => {
                 let entries = archiver.list_archives();
                 let total = entries.len();
                 let total_messages: usize = entries.iter().map(|e| e.message_count).sum();
