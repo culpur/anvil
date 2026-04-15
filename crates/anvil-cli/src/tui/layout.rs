@@ -198,6 +198,15 @@ pub(super) struct StatusLineData {
     pub version: String,
     pub provider: String,
     pub token_speed: f64,
+    // Extended metrics
+    pub burn_rate_hr: f64,
+    pub cost_daily: f64,
+    pub cost_weekly: f64,
+    pub cost_monthly: f64,
+    pub cache_hit_pct: f64,
+    pub lines_added: u32,
+    pub lines_removed: u32,
+    pub mcp_server_count: u32,
     // Theme colors
     pub accent: Rgb,
     pub warning: Rgb,
@@ -401,12 +410,15 @@ fn render_widget(
         }
         StatusWidget::RemoteControl => {
             if data.remote_url.is_empty() {
-                vec![]
+                vec![Span::styled(
+                    "\u{1f6f8} RC Disconnected".to_string(),
+                    Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
+                )]
             } else {
                 let label = if data.remote_code.is_empty() {
-                    format!("RC {}", data.remote_url)
+                    format!("\u{1f6f8} RC {}", data.remote_url)
                 } else {
-                    format!("RC {}  [{}]", data.remote_url, data.remote_code)
+                    format!("\u{1f6f8} RC {}  [{}]", data.remote_url, data.remote_code)
                 };
                 vec![Span::styled(
                     label,
@@ -436,6 +448,114 @@ fn render_widget(
                     format!("📦 {}", data.archive_status),
                     Style::default().fg(Color::Rgb(0x55, 0x77, 0xAA)),
                 )]
+            }
+        }
+        StatusWidget::McpStatus => {
+            if data.mcp_server_count > 0 {
+                vec![Span::styled(
+                    format!("🔌 MCP: {}", data.mcp_server_count),
+                    Style::default().fg(Color::Rgb(0x55, 0xCC, 0xFF)),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::TimeDisplay => {
+            // Current wall-clock time
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let hours = (now % 86400) / 3600;
+            let minutes = (now % 3600) / 60;
+            vec![Span::styled(
+                format!("🕐 {hours:02}:{minutes:02}"),
+                dim,
+            )]
+        }
+        StatusWidget::BurnRate => {
+            if data.burn_rate_hr > 0.0 {
+                let color = if data.burn_rate_hr > 5.0 {
+                    Color::Red
+                } else if data.burn_rate_hr > 2.0 {
+                    Color::Yellow
+                } else {
+                    Color::Rgb(0x88, 0xcc, 0x88)
+                };
+                vec![Span::styled(
+                    format!("🔥 ${:.2}/hr", data.burn_rate_hr),
+                    Style::default().fg(color),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CostDaily => {
+            if data.cost_daily > 0.0 {
+                vec![Span::styled(
+                    format!("💰 Day: ${:.2}", data.cost_daily),
+                    Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CostWeekly => {
+            if data.cost_weekly > 0.0 {
+                vec![Span::styled(
+                    format!("💰 Week: ${:.2}", data.cost_weekly),
+                    Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CostMonthly => {
+            if data.cost_monthly > 0.0 {
+                vec![Span::styled(
+                    format!("💰 Month: ${:.2}", data.cost_monthly),
+                    Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CostProjection => {
+            if data.burn_rate_hr > 0.0 {
+                let projected = data.burn_rate_hr * (data.elapsed_secs as f64 / 3600.0) * 2.0;
+                vec![Span::styled(
+                    format!("📈 Est: ${projected:.2}"),
+                    Style::default().fg(Color::Rgb(0xCC, 0xAA, 0x55)),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CacheHitRate => {
+            if data.cache_hit_pct > 0.0 {
+                let color = if data.cache_hit_pct >= 80.0 {
+                    Color::Green
+                } else if data.cache_hit_pct >= 50.0 {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                };
+                vec![Span::styled(
+                    format!("Cache: {:.0}%", data.cache_hit_pct),
+                    Style::default().fg(color),
+                )]
+            } else {
+                vec![]
+            }
+        }
+        StatusWidget::CodeProductivity => {
+            if data.lines_added > 0 || data.lines_removed > 0 {
+                vec![Span::styled(
+                    format!("📝 +{}/-{} lines", data.lines_added, data.lines_removed),
+                    Style::default().fg(Color::Rgb(0x88, 0xAA, 0xCC)),
+                )]
+            } else {
+                vec![]
             }
         }
         StatusWidget::Text { content } => {

@@ -382,6 +382,17 @@ pub enum StatusWidget {
     RemoteControl,
     UpdateAvailable,
     ArchiveStatus,
+    McpStatus,
+    TimeDisplay,
+    // Cost breakdown
+    BurnRate,
+    CostDaily,
+    CostWeekly,
+    CostMonthly,
+    CostProjection,
+    CacheHitRate,
+    // Productivity
+    CodeProductivity,
     // Custom
     Text { content: String },
     Spacer,
@@ -417,6 +428,15 @@ impl StatusWidget {
             Self::RemoteControl => "remote_control",
             Self::UpdateAvailable => "update_available",
             Self::ArchiveStatus => "archive_status",
+            Self::McpStatus => "mcp_status",
+            Self::TimeDisplay => "time_display",
+            Self::BurnRate => "burn_rate",
+            Self::CostDaily => "cost_daily",
+            Self::CostWeekly => "cost_weekly",
+            Self::CostMonthly => "cost_monthly",
+            Self::CostProjection => "cost_projection",
+            Self::CacheHitRate => "cache_hit_rate",
+            Self::CodeProductivity => "code_productivity",
             Self::Text { .. } => "text",
             Self::Spacer => "spacer",
             Self::Separator => "separator",
@@ -451,6 +471,15 @@ impl StatusWidget {
             Self::RemoteControl => "Remote Control",
             Self::UpdateAvailable => "Update Available",
             Self::ArchiveStatus => "Archive Status",
+            Self::McpStatus => "MCP Status",
+            Self::TimeDisplay => "Time",
+            Self::BurnRate => "Burn Rate",
+            Self::CostDaily => "Cost (Daily)",
+            Self::CostWeekly => "Cost (Weekly)",
+            Self::CostMonthly => "Cost (Monthly)",
+            Self::CostProjection => "Cost Projection",
+            Self::CacheHitRate => "Cache Hit Rate",
+            Self::CodeProductivity => "Code Productivity",
             Self::Text { .. } => "Text",
             Self::Spacer => "Spacer",
             Self::Separator => "Separator",
@@ -496,22 +525,24 @@ fn default_separator() -> String {
 /// Named presets for different user demographics and workflows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusLinePreset {
-    /// Balanced — model, tokens, context, git, permissions (3 lines)
+    // ── Core presets ──
     Default,
-    /// Clean and quiet — model + context bar only (2 lines)
     Minimal,
-    /// Full git info, permissions, QMD, vim — for power users (3 lines)
     Developer,
-    /// Token counts front and center — for cost-conscious users (3 lines)
     TokenHeavy,
-    /// Git branch, status, diff prominent — for commit-heavy workflows (3 lines)
     GitHeavy,
-    /// Everything on 2 lines — maximizes content area
     Compact,
-    /// Cost and token speed prominent — for API budget tracking (3 lines)
     CostFocused,
-    /// Large model name, no cost — clean for screen sharing (2 lines)
     Streamer,
+    // ── Emoji-rich presets ──
+    Gaming,
+    Devops,
+    BudgetTracker,
+    Zen,
+    Academic,
+    Hacker,
+    NightOwl,
+    Dashboard,
 }
 
 impl StatusLinePreset {
@@ -525,6 +556,14 @@ impl StatusLinePreset {
             Self::Compact => "compact",
             Self::CostFocused => "cost-focused",
             Self::Streamer => "streamer",
+            Self::Gaming => "gaming",
+            Self::Devops => "devops",
+            Self::BudgetTracker => "budget-tracker",
+            Self::Zen => "zen",
+            Self::Academic => "academic",
+            Self::Hacker => "hacker",
+            Self::NightOwl => "night-owl",
+            Self::Dashboard => "dashboard",
         }
     }
 
@@ -538,6 +577,14 @@ impl StatusLinePreset {
             Self::Compact => "Everything on 2 lines — maximizes content area",
             Self::CostFocused => "Cost and token speed prominent — for API budget tracking",
             Self::Streamer => "Large model name, no cost — clean for screen sharing",
+            Self::Gaming => "\u{1f3ae} Emoji-rich gaming/streamer vibe with burn rate",
+            Self::Devops => "\u{1f433} DevOps/SRE — MCP, permissions, git, RC prominent",
+            Self::BudgetTracker => "\u{1f4b8} Full cost breakdown — daily/weekly/monthly + burn rate",
+            Self::Zen => "\u{1f9d8} Ultra-minimal zen — just model + context, emoji accents",
+            Self::Academic => "\u{1f4da} Learning — productivity, session time, token detail",
+            Self::Hacker => "\u{1f480} Cyberpunk hacker — permissions, RC, MCP, full access",
+            Self::NightOwl => "\u{1f319} Chill night-owl — time, session, relaxed layout",
+            Self::Dashboard => "\u{1f4ca} Maximalist — every widget, 4 lines, full dashboard",
         }
     }
 
@@ -551,6 +598,14 @@ impl StatusLinePreset {
             Self::Compact,
             Self::CostFocused,
             Self::Streamer,
+            Self::Gaming,
+            Self::Devops,
+            Self::BudgetTracker,
+            Self::Zen,
+            Self::Academic,
+            Self::Hacker,
+            Self::NightOwl,
+            Self::Dashboard,
         ]
     }
 
@@ -564,6 +619,14 @@ impl StatusLinePreset {
             "compact" => Some(Self::Compact),
             "cost-focused" => Some(Self::CostFocused),
             "streamer" => Some(Self::Streamer),
+            "gaming" => Some(Self::Gaming),
+            "devops" => Some(Self::Devops),
+            "budget-tracker" => Some(Self::BudgetTracker),
+            "zen" => Some(Self::Zen),
+            "academic" => Some(Self::Academic),
+            "hacker" => Some(Self::Hacker),
+            "night-owl" => Some(Self::NightOwl),
+            "dashboard" => Some(Self::Dashboard),
             _ => None,
         }
     }
@@ -606,6 +669,14 @@ impl StatusLineConfig {
             StatusLinePreset::Compact => Self::preset_compact(),
             StatusLinePreset::CostFocused => Self::preset_cost_focused(),
             StatusLinePreset::Streamer => Self::preset_streamer(),
+            StatusLinePreset::Gaming => Self::preset_gaming(),
+            StatusLinePreset::Devops => Self::preset_devops(),
+            StatusLinePreset::BudgetTracker => Self::preset_budget_tracker(),
+            StatusLinePreset::Zen => Self::preset_zen(),
+            StatusLinePreset::Academic => Self::preset_academic(),
+            StatusLinePreset::Hacker => Self::preset_hacker(),
+            StatusLinePreset::NightOwl => Self::preset_night_owl(),
+            StatusLinePreset::Dashboard => Self::preset_dashboard(),
         }
     }
 
@@ -858,6 +929,276 @@ impl StatusLineConfig {
             widgets: std::collections::HashMap::new(),
         }
     }
+
+    // ── Emoji-rich presets ───────────────────────────────────────────
+
+    fn preset_gaming() -> Self {
+        // 🎮 sonnet │ 🧠 Thinking: Yes │ 💰 $0.42
+        // 🔥 $1.20/hr │ ⚡ 847 t/s │ 📊 [████████░░░░] 67%
+        Self {
+            preset: "gaming".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost,
+                    ],
+                    right: vec![StatusWidget::RemoteControl],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::BurnRate, StatusWidget::Separator,
+                        StatusWidget::TokenSpeed, StatusWidget::Separator,
+                        StatusWidget::ContextBar, StatusWidget::ContextPct,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_devops() -> Self {
+        // 🐳 sonnet │ 🔧 Thinking │ 💵 $0.88 │ 🔀 main (+12,-5)
+        // 📦 Context: [██████████░░] 83% │ 🔌 MCP: 3 │ 🛡️ workspace-write │ v2.2.2
+        // 🛸 RC viewer.culpur.net [A7B3C2]
+        Self {
+            preset: "devops".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::GitBranch, StatusWidget::GitDiff,
+                    ],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator,
+                        StatusWidget::McpStatus, StatusWidget::Separator,
+                        StatusWidget::Permissions,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::RemoteControl, StatusWidget::Separator,
+                        StatusWidget::QmdStatus, StatusWidget::ArchiveStatus,
+                        StatusWidget::UpdateAvailable,
+                    ],
+                    right: vec![StatusWidget::TimeDisplay],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_budget_tracker() -> Self {
+        // 💸 $0.42 │ 🔥 $1.20/hr │ 📈 Est: $4.80 │ 🎵 sonnet │ ⚡ 12.4K in / 3.2K out
+        // 📊 [████░░░░░░░░] 33% │ 💰 Day: $2.10 │ 💰 Week: $14.30 │ 💰 Month: $89
+        // 🛡️ permissions │ 🛸 RC status
+        Self {
+            preset: "budget-tracker".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::BurnRate, StatusWidget::Separator,
+                        StatusWidget::CostProjection, StatusWidget::Separator,
+                        StatusWidget::Model,
+                    ],
+                    right: vec![
+                        StatusWidget::TokensInput, StatusWidget::Separator,
+                        StatusWidget::TokensOutput,
+                    ],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextPct,
+                        StatusWidget::Separator,
+                        StatusWidget::CostDaily, StatusWidget::Separator,
+                        StatusWidget::CostWeekly, StatusWidget::Separator,
+                        StatusWidget::CostMonthly,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::RemoteControl,
+                        StatusWidget::UpdateAvailable,
+                    ],
+                    right: vec![],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_zen() -> Self {
+        // 🎵 sonnet │ 🧘 45% │ v2.2.2
+        Self {
+            preset: "zen".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![StatusWidget::Model],
+                    right: vec![StatusWidget::ContextPct, StatusWidget::Separator, StatusWidget::Version],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: true,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_academic() -> Self {
+        // 📚 sonnet │ 🧠 Thinking │ 📝 +142/-38 lines │ ⏱️ 23m
+        // 📊 [██████░░░░░░] 50% │ 🎓 32K tokens │ 🔖 v2.2.2
+        Self {
+            preset: "academic".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::CodeProductivity, StatusWidget::Separator,
+                        StatusWidget::SessionTime,
+                    ],
+                    right: vec![StatusWidget::Cost],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator,
+                        StatusWidget::TokensTotal,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_hacker() -> Self {
+        // ⚡ sonnet │ 🔓 full-access │ 🔥 $2.10/hr │ 💀 95% ⚠️ CRITICAL
+        // 🌐 ⌐main │ 📡 MCP: 5 │ 🛸 RC viewer [A7B3C2]
+        Self {
+            preset: "hacker".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::BurnRate, StatusWidget::Separator,
+                        StatusWidget::ContextPct,
+                    ],
+                    right: vec![StatusWidget::TokenSpeed],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::GitBranch, StatusWidget::GitDiff,
+                        StatusWidget::Separator,
+                        StatusWidget::McpStatus, StatusWidget::Separator,
+                        StatusWidget::RemoteControl,
+                    ],
+                    right: vec![StatusWidget::UpdateAvailable],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_night_owl() -> Self {
+        // 🌙 sonnet │ ☕ Coding: 45m │ 🎵 $0.32
+        // 🌊 [████████░░░░] 65% │ 🦉 v2.2.2
+        Self {
+            preset: "night-owl".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::SessionTime, StatusWidget::Separator,
+                        StatusWidget::Cost,
+                    ],
+                    right: vec![StatusWidget::TimeDisplay],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::ContextBar, StatusWidget::ContextPct],
+                    right: vec![StatusWidget::Version],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
+
+    fn preset_dashboard() -> Self {
+        // 🎵 sonnet │ 🧠 Yes │ 💰 $0.88 │ 🔀 main │ 📝 (+12,-5)
+        // 📊 [████████░░░░] 67% 134K/200K │ ⏱️ 23m │ 🔥 $1.80/hr │ ⚡ 847 t/s
+        // 🛡️ workspace-write │ 📚 QMD: 42 docs │ 📦 Archive: 5 │ 🔌 MCP: 3
+        // 💰 Day: $3.20 │ 💰 Week: $18.50 │ 📈 Est: $6.40 │ 📝 +258/-94 │ 🛸 RC
+        Self {
+            preset: "dashboard".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Model, StatusWidget::Separator,
+                        StatusWidget::Thinking, StatusWidget::Separator,
+                        StatusWidget::Cost, StatusWidget::Separator,
+                        StatusWidget::GitBranch, StatusWidget::GitDiff,
+                    ],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::ContextBar, StatusWidget::ContextTokens,
+                        StatusWidget::Separator,
+                        StatusWidget::SessionTime, StatusWidget::Separator,
+                        StatusWidget::BurnRate, StatusWidget::Separator,
+                        StatusWidget::TokenSpeed,
+                    ],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::Permissions, StatusWidget::Separator,
+                        StatusWidget::QmdStatus, StatusWidget::ArchiveStatus,
+                        StatusWidget::Separator,
+                        StatusWidget::McpStatus,
+                    ],
+                    right: vec![StatusWidget::TimeDisplay],
+                },
+                StatusLine {
+                    left: vec![
+                        StatusWidget::CostDaily, StatusWidget::Separator,
+                        StatusWidget::CostWeekly, StatusWidget::Separator,
+                        StatusWidget::CostProjection, StatusWidget::Separator,
+                        StatusWidget::CodeProductivity, StatusWidget::Separator,
+                        StatusWidget::RemoteControl,
+                    ],
+                    right: vec![StatusWidget::UpdateAvailable],
+                },
+            ],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        }
+    }
 }
 
 impl Default for StatusLineConfig {
@@ -951,7 +1292,10 @@ mod tests {
             StatusWidget::GitBranch, StatusWidget::GitStatus, StatusWidget::GitDiff,
             StatusWidget::Permissions, StatusWidget::QmdStatus, StatusWidget::Version,
             StatusWidget::VimMode, StatusWidget::RemoteControl, StatusWidget::UpdateAvailable,
-            StatusWidget::ArchiveStatus, StatusWidget::Spacer, StatusWidget::Separator,
+            StatusWidget::ArchiveStatus, StatusWidget::McpStatus, StatusWidget::TimeDisplay,
+            StatusWidget::BurnRate, StatusWidget::CostDaily, StatusWidget::CostWeekly,
+            StatusWidget::CostMonthly, StatusWidget::CostProjection, StatusWidget::CacheHitRate,
+            StatusWidget::CodeProductivity, StatusWidget::Spacer, StatusWidget::Separator,
         ];
         let mut ids: Vec<&str> = widgets.iter().map(|w| w.id()).collect();
         let len_before = ids.len();
