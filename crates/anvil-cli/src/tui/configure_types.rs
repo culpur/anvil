@@ -105,6 +105,7 @@ pub enum ConfigureAction {
     ToggleAutoEnablePlugins,
     ToggleCronEnabled,
     SetPluginSearchPaths { paths: String },
+    #[allow(dead_code)]
     SetStatusLinePreset { preset: String },
     ApplyStatusLineConfig { config: Box<StatusLineConfig> },
 }

@@ -67,6 +67,7 @@ pub(crate) enum LogEntry {
     },
     /// System message / error.
     System(String),
+    #[allow(dead_code)]
     /// Inline image (rendered via iTerm2/Kitty protocol if supported).
     Image {
         path: String,
@@ -288,6 +289,7 @@ impl Tab {
     }
 
     /// List all branches with names.
+    #[allow(dead_code)]
     pub fn list_branches(&self) -> Vec<(usize, &str, bool)> {
         self.branches
             .iter()

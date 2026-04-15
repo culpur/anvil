@@ -1963,19 +1963,17 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.push_system(format!("Tab renamed to: {arg}"));
                             }
                         }
-                        n => {
-                            if let Ok(num) = n.parse::<usize>() {
-                                tui.switch_tab(num.saturating_sub(1));
-                            }
-                        }
                         "" => {
-                            // /tab with no args — show help
                             tui.push_system(
                                 "Tab commands:\n  /tab new [name]     open a new tab\n  /tab close          close current tab\n  /tab list           list all tabs\n  /tab rename <name>  rename current tab\n  /tab <N>            switch to tab N\n\nKey bindings:\n  Ctrl+T              new tab\n  Ctrl+W              close tab\n  Ctrl+Left/Right     previous / next tab\n  Alt+1..9            switch to tab N".to_string(),
                             );
                         }
-                        other => {
-                            tui.push_system(format!("Unknown /tab action: {other}. Try /tab for help."));
+                        n => {
+                            if let Ok(num) = n.parse::<usize>() {
+                                tui.switch_tab(num.saturating_sub(1));
+                            } else {
+                                tui.push_system(format!("Unknown /tab action: {n}. Try /tab for help."));
+                            }
                         }
                     }
                     continue;

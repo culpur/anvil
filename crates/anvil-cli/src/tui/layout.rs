@@ -163,7 +163,9 @@ pub(super) struct StatusLineData {
     // Theme colors
     pub accent: Rgb,
     pub warning: Rgb,
+    #[allow(dead_code)]
     pub success: Rgb,
+    #[allow(dead_code)]
     pub error: Rgb,
 }
 

@@ -263,6 +263,7 @@ impl AnvilTui {
     }
 
     /// Close a tab by its array index. Returns the name if closed, None if last tab or invalid.
+    #[allow(dead_code)]
     pub fn close_tab_by_index(&mut self, index: usize) -> Option<String> {
         if self.tabs.len() <= 1 || index >= self.tabs.len() {
             return None;
@@ -1265,6 +1266,7 @@ impl AnvilTui {
 
     /// Build a snapshot of all tabs as `relay::TabSnapshot` values for broadcast
     /// to connected web clients.
+    #[allow(dead_code)]
     pub fn build_snapshot(&self) -> Vec<runtime::relay::TabSnapshot> {
         self.tabs.iter().map(|tab| {
             let log = tab.log.iter().map(|entry| {
