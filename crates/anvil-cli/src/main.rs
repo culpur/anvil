@@ -1663,20 +1663,23 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(count_str) = message.strip_prefix("__client_connected:") {
                     let count: usize = count_str.parse().unwrap_or(1);
                     if let Some(session) = &cli.relay_session {
-                        tui.set_remote_status(&session.url, &format!("{count} client{}", if count == 1 { "" } else { "s" }));
+                        let clients = format!("{count} client{}", if count == 1 { "" } else { "s" });
+                        tui.set_remote_status(&session.pairing_code, &clients);
                     }
                     tui.push_system(format!("[Remote] Client connected ({count} active)"));
                     continue;
                 }
                 if let Some(count_str) = message.strip_prefix("__client_disconnected:") {
                     let count: usize = count_str.parse().unwrap_or(0);
-                    if count == 0 {
-                        // All clients disconnected — clear the RC widget
-                        tui.clear_remote_status();
-                        tui.push_system("[Remote] All clients disconnected".to_string());
-                    } else if let Some(session) = &cli.relay_session {
-                        tui.set_remote_status(&session.url, &format!("{count} client{}", if count == 1 { "" } else { "s" }));
-                        tui.push_system(format!("[Remote] Client disconnected ({count} remaining)"));
+                    if let Some(session) = &cli.relay_session {
+                        if count == 0 {
+                            tui.set_remote_status(&session.pairing_code, "0 clients");
+                            tui.push_system("[Remote] All clients disconnected".to_string());
+                        } else {
+                            let clients = format!("{count} client{}", if count == 1 { "" } else { "s" });
+                            tui.set_remote_status(&session.pairing_code, &clients);
+                            tui.push_system(format!("[Remote] Client disconnected ({count} remaining)"));
+                        }
                     }
                     continue;
                 }
@@ -2830,7 +2833,7 @@ impl LiveCli {
                 }
                 // Update TUI status bar — must be after all relay setup
                 if let Some(s) = &self.relay_session {
-                    tui.set_remote_status(&s.url, "waiting");
+                    tui.set_remote_status(&s.pairing_code, "waiting");
                 } else {
                     tui.clear_remote_status();
                 }
@@ -4636,6 +4639,7 @@ impl LiveCli {
                 });
 
                 session.status = runtime::relay::RelayStatus::WaitingForClient;
+                session.pairing_code = pairing_code.clone();
                 self.relay_session = Some(session);
                 self.relay_event_tx = Some(event_tx);
                 self.relay_input_rx = Some(relay_input_rx);

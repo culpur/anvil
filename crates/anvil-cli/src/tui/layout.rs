@@ -409,22 +409,26 @@ fn render_widget(
             }
         }
         StatusWidget::RemoteControl => {
+            // remote_url = pairing code, remote_code = client status
             if data.remote_url.is_empty() {
                 vec![]
             } else {
-                // remote_code carries status: "waiting", "1 client", "2 clients", or hash
-                let status = if data.remote_code.is_empty() || data.remote_code == "waiting" {
-                    "waiting".to_string()
-                } else {
-                    data.remote_code.clone()
-                };
-                let color = if status == "waiting" {
+                let code = &data.remote_url;
+                let clients = &data.remote_code;
+                let color = if clients == "waiting" || clients.is_empty() {
                     Color::Yellow
+                } else if clients == "0 clients" {
+                    Color::Rgb(0xF5, 0x9E, 0x0B) // warning amber
                 } else {
-                    Color::Rgb(0x55, 0xCC, 0xFF)
+                    Color::Rgb(0x55, 0xCC, 0xFF) // connected cyan
+                };
+                let label = if clients == "waiting" || clients.is_empty() {
+                    format!("\u{1f6f8} RC [{code}, waiting]")
+                } else {
+                    format!("\u{1f6f8} RC [{code}, {clients}]")
                 };
                 vec![Span::styled(
-                    format!("\u{1f6f8} RC [{status}]"),
+                    label,
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 )]
             }

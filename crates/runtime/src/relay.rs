@@ -240,7 +240,10 @@ pub enum RelayMessage {
 
     // ── Connection lifecycle ──
     PeerConnected,
-    PeerDisconnected,
+    PeerDisconnected {
+        #[serde(default)]
+        client_id: Option<String>,
+    },
     Error {
         message: String,
     },
@@ -289,6 +292,7 @@ pub struct RelaySession {
     pub hash: String,
     pub status: RelayStatus,
     pub url: String,
+    pub pairing_code: String,
     pub created_at: Instant,
 }
 
@@ -299,6 +303,7 @@ impl RelaySession {
             hash,
             status: RelayStatus::Connecting,
             url,
+            pairing_code: String::new(),
             created_at: Instant::now(),
         }
     }
@@ -565,9 +570,12 @@ impl RelayHost {
                                             }
                                         }
                                     }
-                                    RelayMessage::PeerDisconnected => {
-                                        // A web client disconnected — notify TUI
-                                        let st = state.lock().await;
+                                    RelayMessage::PeerDisconnected { client_id } => {
+                                        // A web client disconnected — remove from state + notify TUI
+                                        let mut st = state.lock().await;
+                                        if let Some(cid) = &client_id {
+                                            st.client_disconnected(cid);
+                                        }
                                         let count = st.paired_count();
                                         if let Some(ref sync_tx) = user_input_tx {
                                             let _ = sync_tx.send((0, format!("__client_disconnected:{count}")));
@@ -720,5 +728,29 @@ mod tests {
 
         state.client_disconnected("c1");
         assert_eq!(state.paired_count(), 0);
+    }
+
+    #[test]
+    fn peer_disconnected_deserializes_from_passage_json() {
+        // Passage sends: {"type":"peer_disconnected","client_id":"abc123"}
+        let json = r#"{"type":"peer_disconnected","client_id":"abc123"}"#;
+        let msg: Result<RelayMessage, _> = serde_json::from_str(json);
+        assert!(msg.is_ok(), "Failed to deserialize peer_disconnected: {:?}", msg.err());
+        assert!(matches!(msg.unwrap(), RelayMessage::PeerDisconnected { .. }));
+    }
+
+    #[test]
+    fn peer_disconnected_without_client_id_also_works() {
+        // In case Passage sends without client_id
+        let json = r#"{"type":"peer_disconnected"}"#;
+        let msg: Result<RelayMessage, _> = serde_json::from_str(json);
+        assert!(msg.is_ok(), "Failed to deserialize bare peer_disconnected: {:?}", msg.err());
+    }
+
+    #[test]
+    fn client_connected_deserializes() {
+        let json = r#"{"type":"client_connected","client_id":"xyz789"}"#;
+        let msg: Result<RelayMessage, _> = serde_json::from_str(json);
+        assert!(msg.is_ok(), "Failed to deserialize client_connected: {:?}", msg.err());
     }
 }
