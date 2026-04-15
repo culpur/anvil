@@ -18,14 +18,14 @@ fn relay_session_hash_is_nonempty() {
 
 #[test]
 fn remote_control_widget_metadata() {
-    use runtime::theme::StatusWidget;
+    use runtime::theme::{StatusWidget, Side};
     assert_eq!(StatusWidget::RemoteControl.id(), "remote_control");
     assert_eq!(StatusWidget::RemoteControl.category(), "system");
 }
 
 #[test]
 fn default_preset_includes_remote_control() {
-    use runtime::theme::{StatusLineConfig, StatusWidget, Side};
+    use runtime::theme::{StatusLineConfig, StatusWidget};
     let config = StatusLineConfig::default();
     // Check that RemoteControl widget exists in one of the lines
     let mut found = false;
@@ -69,11 +69,9 @@ fn simulate_full_remote_control_flow() {
     println!("rc_hash = {}", rc_hash);
 
     // Step 4: Simulate what set_remote_status does
-    let mut remote_url = String::new();
-    let mut remote_code = String::new();
     // This is what set_remote_status does:
-    remote_url = rc_url.clone();
-    remote_code = rc_hash.clone();
+    let remote_url = rc_url.clone();
+    let remote_code = rc_hash.clone();
 
     // Step 5: Verify the status line data would show connected
     assert!(!remote_url.is_empty(), "remote_url should be set after set_remote_status");

@@ -120,53 +120,6 @@ pub(super) fn build_left_right_line(
     Line::from(spans)
 }
 
-/// Build the left spans for status line 1 with model name in yellow,
-/// git branch in green, and diff stats in dim white.
-pub(super) fn build_status1_spans(
-    model: &str,
-    total_m: f64,
-    git_branch: &str,
-    git_diff: &str,
-    cost_usd: &str,
-    thinking_enabled: bool,
-) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> = vec![
-        Span::styled("Model: ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
-        Span::styled(model.to_string(), Style::default().fg(Color::Yellow)),
-        Span::styled(" | ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
-        Span::styled("Thinking: ", Style::default().fg(Color::Rgb(0x88, 0x88, 0x88))),
-        Span::styled(
-            if thinking_enabled { "Yes".to_string() } else { "No".to_string() },
-            Style::default().fg(if thinking_enabled { Color::Green } else { Color::Rgb(0x88, 0x88, 0x88) }),
-        ),
-        Span::styled(
-            format!(" | Total: {total_m:.1}M"),
-            Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
-        ),
-        Span::styled(
-            format!(" | Cost: {cost_usd}"),
-            Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88)),
-        ),
-    ];
-    if !git_branch.is_empty() {
-        spans.push(Span::styled(
-            " | ⌐".to_string(),
-            Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
-        ));
-        spans.push(Span::styled(
-            git_branch.to_string(),
-            Style::default().fg(Color::Green),
-        ));
-    }
-    if !git_diff.is_empty() {
-        spans.push(Span::styled(
-            format!(" | ({git_diff})"),
-            Style::default().fg(Color::Rgb(0x88, 0x88, 0x88)),
-        ));
-    }
-    spans
-}
-
 // ─── Dynamic status line widget system ───────────────────────────────────────
 
 /// Convert a runtime `Rgb` triple into a ratatui `Color`.

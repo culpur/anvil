@@ -2719,7 +2719,7 @@ fn render_configure_menu(
                         format!("    LEFT WIDGETS (Line {})", li + 1),
                         Style::default().fg(Color::Yellow),
                     )));
-                    for (i, w) in left_widgets.iter().enumerate() {
+                    for (_i, w) in left_widgets.iter().enumerate() {
                         lines.push(make_row(
                             &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
                             &format!("[{}]", w.category()),
@@ -2735,7 +2735,7 @@ fn render_configure_menu(
                         format!("    RIGHT WIDGETS (Line {})", li + 1),
                         Style::default().fg(Color::Cyan),
                     )));
-                    for (i, w) in right_widgets.iter().enumerate() {
+                    for (_i, w) in right_widgets.iter().enumerate() {
                         lines.push(make_row(
                             &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
                             &format!("[{}]", w.category()),

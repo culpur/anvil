@@ -6,7 +6,7 @@
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
