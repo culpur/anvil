@@ -5071,6 +5071,32 @@ impl LiveCli {
         match action {
             None => format_history_archive_list(&archiver.list_archives()),
 
+            Some("stats") | Some("summary") => {
+                let entries = archiver.list_archives();
+                let total = entries.len();
+                let total_messages: usize = entries.iter().map(|e| e.message_count).sum();
+                let models: std::collections::HashMap<String, usize> = {
+                    let mut m = std::collections::HashMap::new();
+                    for e in &entries {
+                        *m.entry(e.model.clone()).or_insert(0) += 1;
+                    }
+                    m
+                };
+                let mut model_lines: Vec<String> = models.iter().map(|(k, v)| format!("  {k}: {v} sessions")).collect();
+                model_lines.sort();
+                format!(
+                    "📊 Session History Stats\n\
+                     ─────────────────────────\n\
+                     📁 Total archived sessions: {total}\n\
+                     💬 Total messages: {total_messages}\n\
+                     🤖 Models used:\n{}\n\
+                     ─────────────────────────\n\
+                     Tip: /history-archive search <query> to search\n\
+                     Tip: /history-archive view <id> to read a session",
+                    model_lines.join("\n")
+                )
+            }
+
             Some(arg) if arg.starts_with("search ") => {
                 let query = arg["search ".len()..].trim();
                 if query.is_empty() {
