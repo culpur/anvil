@@ -89,7 +89,7 @@ impl From<JsonError> for SessionError {
 
 impl Session {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             version: 1,
             messages: Vec::new(),
@@ -165,7 +165,7 @@ impl ConversationMessage {
     /// Build a user message from an arbitrary list of content blocks.
     /// Used when the user drops an image file or a mix of text and image.
     #[must_use]
-    pub fn user_with_blocks(blocks: Vec<ContentBlock>) -> Self {
+    pub const fn user_with_blocks(blocks: Vec<ContentBlock>) -> Self {
         Self {
             role: MessageRole::User,
             blocks,
@@ -174,7 +174,7 @@ impl ConversationMessage {
     }
 
     #[must_use]
-    pub fn assistant(blocks: Vec<ContentBlock>) -> Self {
+    pub const fn assistant(blocks: Vec<ContentBlock>) -> Self {
         Self {
             role: MessageRole::Assistant,
             blocks,
@@ -183,7 +183,7 @@ impl ConversationMessage {
     }
 
     #[must_use]
-    pub fn assistant_with_usage(blocks: Vec<ContentBlock>, usage: Option<TokenUsage>) -> Self {
+    pub const fn assistant_with_usage(blocks: Vec<ContentBlock>, usage: Option<TokenUsage>) -> Self {
         Self {
             role: MessageRole::Assistant,
             blocks,

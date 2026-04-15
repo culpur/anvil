@@ -19,7 +19,7 @@ pub(super) enum EditorMode {
 }
 
 impl EditorMode {
-    pub(super) fn indicator(self, vim_enabled: bool) -> Option<&'static str> {
+    pub(super) const fn indicator(self, vim_enabled: bool) -> Option<&'static str> {
         if !vim_enabled {
             return None;
         }
@@ -60,7 +60,7 @@ pub(super) struct EditSession {
 }
 
 impl EditSession {
-    pub(super) fn new(vim_enabled: bool) -> Self {
+    pub(super) const fn new(vim_enabled: bool) -> Self {
         Self {
             text: String::new(),
             cursor: 0,
@@ -110,19 +110,19 @@ impl EditSession {
         }
     }
 
-    pub(super) fn enter_insert_mode(&mut self) {
+    pub(super) const fn enter_insert_mode(&mut self) {
         self.mode = EditorMode::Insert;
         self.pending_operator = None;
         self.visual_anchor = None;
     }
 
-    pub(super) fn enter_normal_mode(&mut self) {
+    pub(super) const fn enter_normal_mode(&mut self) {
         self.mode = EditorMode::Normal;
         self.pending_operator = None;
         self.visual_anchor = None;
     }
 
-    pub(super) fn enter_visual_mode(&mut self) {
+    pub(super) const fn enter_visual_mode(&mut self) {
         self.mode = EditorMode::Visual;
         self.pending_operator = None;
         self.visual_anchor = Some(self.cursor);

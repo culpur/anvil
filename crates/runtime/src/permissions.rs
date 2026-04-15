@@ -11,7 +11,7 @@ pub enum PermissionMode {
 
 impl PermissionMode {
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ReadOnly => "read-only",
             Self::WorkspaceWrite => "workspace-write",
@@ -57,7 +57,7 @@ pub struct PermissionPolicy {
 
 impl PermissionPolicy {
     #[must_use]
-    pub fn new(active_mode: PermissionMode) -> Self {
+    pub const fn new(active_mode: PermissionMode) -> Self {
         Self {
             active_mode,
             tool_requirements: BTreeMap::new(),
@@ -76,7 +76,7 @@ impl PermissionPolicy {
     }
 
     #[must_use]
-    pub fn active_mode(&self) -> PermissionMode {
+    pub const fn active_mode(&self) -> PermissionMode {
         self.active_mode
     }
 

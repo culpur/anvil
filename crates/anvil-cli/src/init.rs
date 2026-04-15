@@ -20,7 +20,7 @@ pub(crate) enum InitStatus {
 
 impl InitStatus {
     #[must_use]
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Created => "created",
             Self::Updated => "updated",

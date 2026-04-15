@@ -411,7 +411,7 @@ struct BundledSkill {
     prompt: &'static str,
 }
 
-fn bundled_skills() -> &'static [BundledSkill] {
+const fn bundled_skills() -> &'static [BundledSkill] {
     &[
         BundledSkill {
             name: "commit",
@@ -1471,7 +1471,7 @@ pub(crate) struct SubagentToolExecutor {
 }
 
 impl SubagentToolExecutor {
-    pub(crate) fn new(allowed_tools: BTreeSet<String>) -> Self {
+    pub(crate) const fn new(allowed_tools: BTreeSet<String>) -> Self {
         Self { allowed_tools }
     }
 }

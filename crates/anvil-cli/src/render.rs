@@ -247,7 +247,7 @@ impl TerminalRenderer {
 
     #[must_use]
     #[allow(dead_code)]
-    pub fn color_theme(&self) -> &ColorTheme {
+    pub const fn color_theme(&self) -> &ColorTheme {
         &self.color_theme
     }
 
@@ -726,7 +726,7 @@ impl ThinkingIndicator {
         }
     }
 
-    fn elapsed_color(elapsed: Duration) -> Color {
+    const fn elapsed_color(elapsed: Duration) -> Color {
         let secs = elapsed.as_secs();
         if secs < 10 {
             Color::Cyan
@@ -820,7 +820,7 @@ pub enum BlockState {
 }
 
 impl BlockState {
-    fn color(self) -> Color {
+    const fn color(self) -> Color {
         match self {
             Self::Active => Color::Cyan,
             Self::Success => Color::Green,
@@ -828,7 +828,7 @@ impl BlockState {
         }
     }
 
-    fn icon(self) -> &'static str {
+    const fn icon(self) -> &'static str {
         match self {
             Self::Active => "⋯",
             Self::Success => "✓",

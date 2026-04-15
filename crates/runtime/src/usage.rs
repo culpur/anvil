@@ -150,7 +150,7 @@ pub fn pricing_for_model(model: &str) -> Option<ModelPricing> {
 
 impl TokenUsage {
     #[must_use]
-    pub fn total_tokens(self) -> u32 {
+    pub const fn total_tokens(self) -> u32 {
         self.input_tokens
             + self.output_tokens
             + self.cache_creation_input_tokens
@@ -255,7 +255,7 @@ impl UsageTracker {
         tracker
     }
 
-    pub fn record(&mut self, usage: TokenUsage) {
+    pub const fn record(&mut self, usage: TokenUsage) {
         self.latest_turn = usage;
         self.cumulative.input_tokens += usage.input_tokens;
         self.cumulative.output_tokens += usage.output_tokens;
@@ -265,17 +265,17 @@ impl UsageTracker {
     }
 
     #[must_use]
-    pub fn current_turn_usage(&self) -> TokenUsage {
+    pub const fn current_turn_usage(&self) -> TokenUsage {
         self.latest_turn
     }
 
     #[must_use]
-    pub fn cumulative_usage(&self) -> TokenUsage {
+    pub const fn cumulative_usage(&self) -> TokenUsage {
         self.cumulative
     }
 
     #[must_use]
-    pub fn turns(&self) -> u32 {
+    pub const fn turns(&self) -> u32 {
         self.turns
     }
 }

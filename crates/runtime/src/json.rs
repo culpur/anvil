@@ -72,7 +72,7 @@ impl JsonValue {
     }
 
     #[must_use]
-    pub fn as_object(&self) -> Option<&BTreeMap<String, JsonValue>> {
+    pub const fn as_object(&self) -> Option<&BTreeMap<String, JsonValue>> {
         match self {
             Self::Object(value) => Some(value),
             _ => None,
@@ -96,7 +96,7 @@ impl JsonValue {
     }
 
     #[must_use]
-    pub fn as_bool(&self) -> Option<bool> {
+    pub const fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(value) => Some(*value),
             _ => None,
@@ -104,7 +104,7 @@ impl JsonValue {
     }
 
     #[must_use]
-    pub fn as_i64(&self) -> Option<i64> {
+    pub const fn as_i64(&self) -> Option<i64> {
         match self {
             Self::Number(value) => Some(*value),
             _ => None,
@@ -323,7 +323,7 @@ impl<'a> Parser<'a> {
         Some(ch)
     }
 
-    fn is_eof(&self) -> bool {
+    const fn is_eof(&self) -> bool {
         self.index >= self.chars.len()
     }
 }

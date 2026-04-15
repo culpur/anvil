@@ -112,7 +112,7 @@ struct ManagedMcpServer {
 }
 
 impl ManagedMcpServer {
-    fn new(bootstrap: McpClientBootstrap) -> Self {
+    const fn new(bootstrap: McpClientBootstrap) -> Self {
         Self {
             bootstrap,
             process: None,
@@ -416,7 +416,7 @@ impl McpServerManager {
             })
     }
 
-    fn take_request_id(&mut self) -> JsonRpcId {
+    const fn take_request_id(&mut self) -> JsonRpcId {
         let id = self.next_request_id;
         self.next_request_id = self.next_request_id.saturating_add(1);
         JsonRpcId::Number(id)

@@ -12,7 +12,7 @@ pub enum HookEvent {
 }
 
 impl HookEvent {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
@@ -28,7 +28,7 @@ pub struct HookRunResult {
 
 impl HookRunResult {
     #[must_use]
-    pub fn allow(messages: Vec<String>) -> Self {
+    pub const fn allow(messages: Vec<String>) -> Self {
         Self {
             denied: false,
             messages,
@@ -36,7 +36,7 @@ impl HookRunResult {
     }
 
     #[must_use]
-    pub fn is_denied(&self) -> bool {
+    pub const fn is_denied(&self) -> bool {
         self.denied
     }
 
@@ -63,7 +63,7 @@ struct HookCommandRequest<'a> {
 
 impl HookRunner {
     #[must_use]
-    pub fn new(config: RuntimeHookConfig) -> Self {
+    pub const fn new(config: RuntimeHookConfig) -> Self {
         Self { config }
     }
 
@@ -260,7 +260,7 @@ struct CommandWithStdin {
 }
 
 impl CommandWithStdin {
-    fn new(command: Command) -> Self {
+    const fn new(command: Command) -> Self {
         Self { command }
     }
 

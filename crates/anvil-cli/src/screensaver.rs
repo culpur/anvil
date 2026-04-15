@@ -72,18 +72,18 @@ const COL_STATUS:    Color = Color::DarkGray;
 struct Lcg(u64);
 
 impl Lcg {
-    fn new(seed: u64) -> Self {
+    const fn new(seed: u64) -> Self {
         Self(seed ^ 0xDEAD_BEEF_CAFE_BABE)
     }
 
-    fn next(&mut self) -> u64 {
+    const fn next(&mut self) -> u64 {
         // Knuth multiplicative LCG
         self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         self.0
     }
 
     /// Random usize in [0, n)
-    fn range(&mut self, n: usize) -> usize {
+    const fn range(&mut self, n: usize) -> usize {
         if n == 0 { return 0; }
         (self.next() as usize) % n
     }
@@ -327,7 +327,7 @@ impl FurnaceScreensaver {
     }
 
     /// Signal that the user pressed a key — begin the resume animation.
-    pub fn resume(&mut self) {
+    pub const fn resume(&mut self) {
         self.resuming = true;
         // If we haven't reached the melting loop yet, jump directly there
         // so the resume transition always plays from a defined state.

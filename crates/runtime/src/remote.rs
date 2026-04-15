@@ -120,7 +120,7 @@ impl UpstreamProxyBootstrap {
     }
 
     #[must_use]
-    pub fn should_enable(&self) -> bool {
+    pub const fn should_enable(&self) -> bool {
         self.remote.enabled
             && self.upstream_proxy_enabled
             && self.remote.session_id.is_some()

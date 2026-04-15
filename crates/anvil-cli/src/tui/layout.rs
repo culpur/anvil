@@ -124,7 +124,7 @@ pub(super) fn build_left_right_line(
 
 /// Convert a runtime `Rgb` triple into a ratatui `Color`.
 #[inline]
-fn to_color(c: Rgb) -> Color {
+const fn to_color(c: Rgb) -> Color {
     Color::Rgb(c.0, c.1, c.2)
 }
 

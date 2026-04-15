@@ -185,7 +185,7 @@ impl AnvilApiClient {
     }
 
     #[must_use]
-    pub fn with_retry_policy(
+    pub const fn with_retry_policy(
         mut self,
         max_retries: u32,
         initial_backoff: Duration,
@@ -198,7 +198,7 @@ impl AnvilApiClient {
     }
 
     #[must_use]
-    pub fn auth_source(&self) -> &AuthSource {
+    pub const fn auth_source(&self) -> &AuthSource {
         &self.auth
     }
 

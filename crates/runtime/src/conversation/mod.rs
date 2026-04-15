@@ -151,7 +151,7 @@ where
     }
 
     #[must_use]
-    pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
+    pub const fn with_max_iterations(mut self, max_iterations: usize) -> Self {
         self.max_iterations = max_iterations;
         self
     }
@@ -205,12 +205,12 @@ where
     }
 
     #[must_use]
-    pub fn usage(&self) -> &UsageTracker {
+    pub const fn usage(&self) -> &UsageTracker {
         &self.usage_tracker
     }
 
     #[must_use]
-    pub fn session(&self) -> &Session {
+    pub const fn session(&self) -> &Session {
         &self.session
     }
 

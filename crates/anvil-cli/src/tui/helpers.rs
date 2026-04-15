@@ -34,7 +34,7 @@ pub(super) fn truncate_str(s: &str, max_chars: usize) -> String {
     format!("{truncated}…")
 }
 
-pub(super) fn prev_char_boundary(s: &str, mut pos: usize) -> usize {
+pub(super) const fn prev_char_boundary(s: &str, mut pos: usize) -> usize {
     if pos == 0 {
         return 0;
     }
@@ -45,7 +45,7 @@ pub(super) fn prev_char_boundary(s: &str, mut pos: usize) -> usize {
     pos
 }
 
-pub(super) fn next_char_boundary(s: &str, mut pos: usize) -> usize {
+pub(super) const fn next_char_boundary(s: &str, mut pos: usize) -> usize {
     if pos >= s.len() {
         return s.len();
     }

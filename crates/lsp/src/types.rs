@@ -40,7 +40,7 @@ pub struct WorkspaceDiagnostics {
 
 impl WorkspaceDiagnostics {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
 
@@ -90,7 +90,7 @@ pub struct LspContextEnrichment {
 
 impl LspContextEnrichment {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.diagnostics.is_empty() && self.definitions.is_empty() && self.references.is_empty()
     }
 

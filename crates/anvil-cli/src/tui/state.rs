@@ -76,7 +76,7 @@ pub(crate) enum LogEntry {
 
 /// Convert a runtime `Rgb` triple into a ratatui `Color`.
 #[inline]
-pub(super) fn rgb(c: Rgb) -> Color {
+pub(super) const fn rgb(c: Rgb) -> Color {
     Color::Rgb(c.0, c.1, c.2)
 }
 

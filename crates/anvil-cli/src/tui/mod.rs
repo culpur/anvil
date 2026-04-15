@@ -70,7 +70,7 @@ pub enum ReadResult {
 
 /// Convert a runtime `Rgb` triple into a ratatui `Color`.
 #[inline]
-fn rgb(c: Rgb) -> Color {
+const fn rgb(c: Rgb) -> Color {
     Color::Rgb(c.0, c.1, c.2)
 }
 
@@ -318,7 +318,7 @@ impl AnvilTui {
     }
 
     /// Return the 0-based index of the currently active tab.
-    pub fn active_tab_index(&self) -> usize {
+    pub const fn active_tab_index(&self) -> usize {
         self.active_tab
     }
 
@@ -1222,7 +1222,7 @@ impl AnvilTui {
         self.update_available = msg.into();
     }
 
-    pub fn set_thinking_enabled(&mut self, enabled: bool) {
+    pub const fn set_thinking_enabled(&mut self, enabled: bool) {
         self.thinking_enabled = enabled;
     }
 
@@ -1245,7 +1245,7 @@ impl AnvilTui {
     }
 
     /// Get a reference to the current status line config.
-    pub fn status_line_config(&self) -> &StatusLineConfig {
+    pub const fn status_line_config(&self) -> &StatusLineConfig {
         &self.status_line_config
     }
 
@@ -1325,19 +1325,19 @@ impl AnvilTui {
 
     /// Toggle the agent panel visibility.
     #[allow(dead_code)]
-    pub fn toggle_agent_panel(&mut self) {
+    pub const fn toggle_agent_panel(&mut self) {
         self.agent_panel_visible = !self.agent_panel_visible;
     }
 
     /// Signal that the TUI should close on the next `read_input` loop tick.
     #[allow(dead_code)]
-    pub fn request_exit(&mut self) {
+    pub const fn request_exit(&mut self) {
         self.exiting = true;
     }
 
     /// True if `request_exit()` was called.
     #[allow(dead_code)]
-    pub fn is_exiting(&self) -> bool {
+    pub const fn is_exiting(&self) -> bool {
         self.exiting
     }
 

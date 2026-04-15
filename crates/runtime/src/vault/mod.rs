@@ -238,7 +238,7 @@ impl VaultManager {
 
     /// Returns true if the vault is currently unlocked (KEK held in memory).
     #[must_use]
-    pub fn is_unlocked(&self) -> bool {
+    pub const fn is_unlocked(&self) -> bool {
         self.kek.is_some()
     }
 

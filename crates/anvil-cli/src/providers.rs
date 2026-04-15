@@ -550,7 +550,7 @@ pub(crate) struct CliPermissionPrompter {
 }
 
 impl CliPermissionPrompter {
-    pub(crate) fn new(current_mode: PermissionMode) -> Self {
+    pub(crate) const fn new(current_mode: PermissionMode) -> Self {
         Self { current_mode }
     }
 }

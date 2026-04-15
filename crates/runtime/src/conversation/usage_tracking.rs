@@ -9,6 +9,6 @@ use crate::usage::{TokenUsage, UsageTracker};
 ///
 /// Called by the turn executor once per API response after extracting usage
 /// from the `AssistantEvent` stream.
-pub(super) fn collect_and_record(tracker: &mut UsageTracker, usage: TokenUsage) {
+pub(super) const fn collect_and_record(tracker: &mut UsageTracker, usage: TokenUsage) {
     tracker.record(usage);
 }

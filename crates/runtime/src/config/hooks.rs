@@ -11,7 +11,7 @@ pub struct RuntimeHookConfig {
 
 impl RuntimeHookConfig {
     #[must_use]
-    pub fn new(pre_tool_use: Vec<String>, post_tool_use: Vec<String>) -> Self {
+    pub const fn new(pre_tool_use: Vec<String>, post_tool_use: Vec<String>) -> Self {
         Self {
             pre_tool_use,
             post_tool_use,

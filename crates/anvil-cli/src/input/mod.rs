@@ -64,14 +64,14 @@ impl LineEditor {
     }
 
     /// Toggle vim keybindings and return the new state.
-    pub fn toggle_vim(&mut self) -> bool {
+    pub const fn toggle_vim(&mut self) -> bool {
         self.vim_enabled = !self.vim_enabled;
         self.vim_enabled
     }
 
     /// Return whether vim mode is currently enabled.
     #[must_use]
-    pub fn is_vim_enabled(&self) -> bool {
+    pub const fn is_vim_enabled(&self) -> bool {
         self.vim_enabled
     }
 

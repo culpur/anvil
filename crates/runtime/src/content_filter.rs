@@ -18,7 +18,7 @@ pub struct ContentFilterConfig {
     pub extra_secret_patterns: Vec<String>,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -49,13 +49,13 @@ pub enum FilterResult {
 impl FilterResult {
     /// Return `true` if the result is `Clean`.
     #[must_use]
-    pub fn is_clean(&self) -> bool {
+    pub const fn is_clean(&self) -> bool {
         matches!(self, Self::Clean)
     }
 
     /// Return `true` if the result should be blocked (not just warned).
     #[must_use]
-    pub fn should_block(&self) -> bool {
+    pub const fn should_block(&self) -> bool {
         matches!(self, Self::Flagged { severity: FilterSeverity::Block, .. })
     }
 }

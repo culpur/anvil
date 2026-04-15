@@ -180,12 +180,12 @@ impl FailoverClient {
 
     /// Borrow the inner chain (for status display / management commands).
     #[must_use]
-    pub fn chain(&self) -> &FailoverChain {
+    pub const fn chain(&self) -> &FailoverChain {
         &self.chain
     }
 
     /// Borrow the inner chain mutably.
-    pub fn chain_mut(&mut self) -> &mut FailoverChain {
+    pub const fn chain_mut(&mut self) -> &mut FailoverChain {
         &mut self.chain
     }
 

@@ -152,7 +152,7 @@ impl OpenAiCompatClient {
     }
 
     #[must_use]
-    pub fn with_retry_policy(
+    pub const fn with_retry_policy(
         mut self,
         max_retries: u32,
         initial_backoff: Duration,
@@ -332,7 +332,7 @@ struct StreamState {
 }
 
 impl StreamState {
-    fn new(model: String) -> Self {
+    const fn new(model: String) -> Self {
         Self {
             model,
             message_started: false,

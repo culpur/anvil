@@ -82,14 +82,14 @@ pub struct ScopedMcpServerConfig {
 
 impl ScopedMcpServerConfig {
     #[must_use]
-    pub fn transport(&self) -> McpTransport {
+    pub const fn transport(&self) -> McpTransport {
         self.config.transport()
     }
 }
 
 impl McpServerConfig {
     #[must_use]
-    pub fn transport(&self) -> McpTransport {
+    pub const fn transport(&self) -> McpTransport {
         match self {
             Self::Stdio(_) => McpTransport::Stdio,
             Self::Sse(_) => McpTransport::Sse,
@@ -103,7 +103,7 @@ impl McpServerConfig {
 
 impl McpConfigCollection {
     #[must_use]
-    pub fn servers(&self) -> &BTreeMap<String, ScopedMcpServerConfig> {
+    pub const fn servers(&self) -> &BTreeMap<String, ScopedMcpServerConfig> {
         &self.servers
     }
 

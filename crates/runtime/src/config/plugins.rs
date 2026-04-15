@@ -18,7 +18,7 @@ pub struct RuntimePluginConfig {
 
 impl RuntimePluginConfig {
     #[must_use]
-    pub fn enabled_plugins(&self) -> &BTreeMap<String, bool> {
+    pub const fn enabled_plugins(&self) -> &BTreeMap<String, bool> {
         &self.enabled_plugins
     }
 

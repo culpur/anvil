@@ -250,7 +250,7 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
 
 /// Return the display name shown in the `/model` report for a provider kind.
 #[must_use]
-pub fn provider_display_name(kind: ProviderKind) -> &'static str {
+pub const fn provider_display_name(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::AnvilApi => "Anthropic (Anvil)",
         ProviderKind::Xai => "xAI",

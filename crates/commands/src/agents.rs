@@ -16,7 +16,7 @@ pub(crate) enum DefinitionSource {
 }
 
 impl DefinitionSource {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::ProjectCodex => "Project (.codex)",
             Self::ProjectAnvil => "Project (.anvil)",
@@ -54,7 +54,7 @@ pub(crate) enum SkillOrigin {
 }
 
 impl SkillOrigin {
-    pub(crate) fn detail_label(self) -> Option<&'static str> {
+    pub(crate) const fn detail_label(self) -> Option<&'static str> {
         match self {
             Self::SkillsDir => None,
             Self::LegacyCommandsDir => Some("legacy /commands"),
@@ -312,7 +312,7 @@ struct BundledSkillDef {
     description: &'static str,
 }
 
-fn bundled_skill_defs() -> &'static [BundledSkillDef] {
+const fn bundled_skill_defs() -> &'static [BundledSkillDef] {
     &[
         BundledSkillDef {
             name: "commit",

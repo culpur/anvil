@@ -18,7 +18,7 @@ pub struct MessageRequest {
 
 impl MessageRequest {
     #[must_use]
-    pub fn with_streaming(mut self) -> Self {
+    pub const fn with_streaming(mut self) -> Self {
         self.stream = true;
         self
     }
@@ -137,7 +137,7 @@ pub struct MessageResponse {
 
 impl MessageResponse {
     #[must_use]
-    pub fn total_tokens(&self) -> u32 {
+    pub const fn total_tokens(&self) -> u32 {
         self.usage.total_tokens()
     }
 }

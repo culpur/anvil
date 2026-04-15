@@ -32,7 +32,7 @@ pub enum AgentType {
 
 impl AgentType {
     /// Short display label used in the panel.
-    pub fn label(&self) -> &str {
+    pub const fn label(&self) -> &str {
         match self {
             AgentType::General => "general",
             AgentType::Explore => "explore",
@@ -75,7 +75,7 @@ pub enum AgentStatus {
 
 impl AgentStatus {
     /// Single-character icon for TUI display.
-    pub fn icon(&self) -> &'static str {
+    pub const fn icon(&self) -> &'static str {
         match self {
             AgentStatus::Running => "⟳",
             AgentStatus::Completed => "✓",
@@ -177,7 +177,7 @@ pub struct AgentManager {
 
 #[allow(dead_code)]
 impl AgentManager {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             agents: Vec::new(),
             next_id: 1,
@@ -327,7 +327,7 @@ impl AgentManager {
     }
 
     /// Total agents ever registered.
-    pub fn total_count(&self) -> usize {
+    pub const fn total_count(&self) -> usize {
         self.agents.len()
     }
 

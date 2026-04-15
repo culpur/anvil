@@ -88,7 +88,7 @@ enum SessionEvent {
 }
 
 impl SessionEvent {
-    fn event_name(&self) -> &'static str {
+    const fn event_name(&self) -> &'static str {
         match self {
             Self::Snapshot { .. } => "snapshot",
             Self::Message { .. } => "message",
@@ -278,7 +278,7 @@ fn unix_timestamp_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn not_found(message: String) -> ApiError {
+const fn not_found(message: String) -> ApiError {
     (
         StatusCode::NOT_FOUND,
         Json(ErrorResponse { error: message }),

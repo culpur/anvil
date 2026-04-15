@@ -201,7 +201,7 @@ impl RuntimeConfig {
     }
 
     #[must_use]
-    pub fn merged(&self) -> &BTreeMap<String, JsonValue> {
+    pub const fn merged(&self) -> &BTreeMap<String, JsonValue> {
         &self.merged
     }
 
@@ -221,32 +221,32 @@ impl RuntimeConfig {
     }
 
     #[must_use]
-    pub fn feature_config(&self) -> &RuntimeFeatureConfig {
+    pub const fn feature_config(&self) -> &RuntimeFeatureConfig {
         &self.feature_config
     }
 
     #[must_use]
-    pub fn mcp(&self) -> &McpConfigCollection {
+    pub const fn mcp(&self) -> &McpConfigCollection {
         &self.feature_config.mcp
     }
 
     #[must_use]
-    pub fn lsp(&self) -> &LspConfig {
+    pub const fn lsp(&self) -> &LspConfig {
         &self.feature_config.lsp
     }
 
     #[must_use]
-    pub fn hooks(&self) -> &RuntimeHookConfig {
+    pub const fn hooks(&self) -> &RuntimeHookConfig {
         &self.feature_config.hooks
     }
 
     #[must_use]
-    pub fn plugins(&self) -> &RuntimePluginConfig {
+    pub const fn plugins(&self) -> &RuntimePluginConfig {
         &self.feature_config.plugins
     }
 
     #[must_use]
-    pub fn oauth(&self) -> Option<&OAuthConfig> {
+    pub const fn oauth(&self) -> Option<&OAuthConfig> {
         self.feature_config.oauth.as_ref()
     }
 
@@ -256,12 +256,12 @@ impl RuntimeConfig {
     }
 
     #[must_use]
-    pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
+    pub const fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.feature_config.permission_mode
     }
 
     #[must_use]
-    pub fn sandbox(&self) -> &SandboxConfig {
+    pub const fn sandbox(&self) -> &SandboxConfig {
         &self.feature_config.sandbox
     }
 }
@@ -280,27 +280,27 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
-    pub fn hooks(&self) -> &RuntimeHookConfig {
+    pub const fn hooks(&self) -> &RuntimeHookConfig {
         &self.hooks
     }
 
     #[must_use]
-    pub fn plugins(&self) -> &RuntimePluginConfig {
+    pub const fn plugins(&self) -> &RuntimePluginConfig {
         &self.plugins
     }
 
     #[must_use]
-    pub fn mcp(&self) -> &McpConfigCollection {
+    pub const fn mcp(&self) -> &McpConfigCollection {
         &self.mcp
     }
 
     #[must_use]
-    pub fn lsp(&self) -> &LspConfig {
+    pub const fn lsp(&self) -> &LspConfig {
         &self.lsp
     }
 
     #[must_use]
-    pub fn oauth(&self) -> Option<&OAuthConfig> {
+    pub const fn oauth(&self) -> Option<&OAuthConfig> {
         self.oauth.as_ref()
     }
 
@@ -310,12 +310,12 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
-    pub fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
+    pub const fn permission_mode(&self) -> Option<ResolvedPermissionMode> {
         self.permission_mode
     }
 
     #[must_use]
-    pub fn sandbox(&self) -> &SandboxConfig {
+    pub const fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
     }
 }

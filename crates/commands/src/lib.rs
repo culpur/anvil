@@ -39,7 +39,7 @@ pub struct CommandRegistry {
 
 impl CommandRegistry {
     #[must_use]
-    pub fn new(entries: Vec<CommandManifestEntry>) -> Self {
+    pub const fn new(entries: Vec<CommandManifestEntry>) -> Self {
         Self { entries }
     }
 

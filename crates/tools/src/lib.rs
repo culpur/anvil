@@ -39,7 +39,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     #[must_use]
-    pub fn new(entries: Vec<ToolManifestEntry>) -> Self {
+    pub const fn new(entries: Vec<ToolManifestEntry>) -> Self {
         Self { entries }
     }
 
@@ -72,7 +72,7 @@ pub struct GlobalToolRegistry {
 
 impl GlobalToolRegistry {
     #[must_use]
-    pub fn builtin() -> Self {
+    pub const fn builtin() -> Self {
         Self {
             plugin_tools: Vec::new(),
             mcp_tools: Vec::new(),

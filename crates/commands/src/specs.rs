@@ -1051,7 +1051,7 @@ Examples:
 ];
 
 #[must_use]
-pub fn slash_command_specs() -> &'static [SlashCommandSpec] {
+pub const fn slash_command_specs() -> &'static [SlashCommandSpec] {
     SLASH_COMMAND_SPECS
 }
 

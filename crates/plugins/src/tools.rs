@@ -54,7 +54,7 @@ impl PluginTool {
     }
 
     #[must_use]
-    pub fn required_permission(&self) -> &str {
+    pub const fn required_permission(&self) -> &str {
         self.required_permission.as_str()
     }
 

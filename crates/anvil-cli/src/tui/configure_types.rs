@@ -230,7 +230,7 @@ pub(super) fn configure_breadcrumb(state: &ConfigureState) -> String {
 }
 
 /// Return the current selected index for a configure state.
-pub(super) fn configure_selected(state: &ConfigureState) -> usize {
+pub(super) const fn configure_selected(state: &ConfigureState) -> usize {
     match state {
         ConfigureState::MainMenu { selected }
         | ConfigureState::Providers { selected }
@@ -256,7 +256,7 @@ pub(super) fn configure_selected(state: &ConfigureState) -> usize {
 }
 
 /// Update the selected index in a configure state.
-pub(super) fn configure_set_selected(state: &mut ConfigureState, new: usize) {
+pub(super) const fn configure_set_selected(state: &mut ConfigureState, new: usize) {
     match state {
         ConfigureState::MainMenu { selected }
         | ConfigureState::Providers { selected }
