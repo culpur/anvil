@@ -485,17 +485,105 @@ impl StatusWidget {
             Self::Separator => "Separator",
         }
     }
+
+    /// Widget category for color-coding in the editor UI.
+    pub fn category(&self) -> &str {
+        match self {
+            Self::Model | Self::Thinking | Self::Effort | Self::Provider => "model",
+            Self::TokensTotal | Self::TokensInput | Self::TokensOutput
+            | Self::Cost | Self::TokenSpeed => "tokens",
+            Self::ContextBar | Self::ContextPct | Self::ContextTokens => "context",
+            Self::SessionTime | Self::SessionPct | Self::BlockTime => "session",
+            Self::GitBranch | Self::GitStatus | Self::GitDiff => "git",
+            Self::Permissions | Self::QmdStatus | Self::Version | Self::VimMode
+            | Self::RemoteControl | Self::UpdateAvailable | Self::ArchiveStatus
+            | Self::McpStatus | Self::TimeDisplay => "system",
+            Self::BurnRate | Self::CostDaily | Self::CostWeekly | Self::CostMonthly
+            | Self::CostProjection | Self::CacheHitRate => "cost_detail",
+            Self::CodeProductivity => "productivity",
+            Self::Text { .. } | Self::Spacer | Self::Separator => "layout",
+        }
+    }
+
+    /// All concrete widget variants (excludes `Text { content }` which needs special handling).
+    pub fn all_widgets() -> Vec<StatusWidget> {
+        vec![
+            Self::Model, Self::Thinking, Self::Effort, Self::Provider,
+            Self::TokensTotal, Self::TokensInput, Self::TokensOutput, Self::Cost, Self::TokenSpeed,
+            Self::ContextBar, Self::ContextPct, Self::ContextTokens,
+            Self::SessionTime, Self::SessionPct, Self::BlockTime,
+            Self::GitBranch, Self::GitStatus, Self::GitDiff,
+            Self::Permissions, Self::QmdStatus, Self::Version, Self::VimMode,
+            Self::RemoteControl, Self::UpdateAvailable, Self::ArchiveStatus,
+            Self::McpStatus, Self::TimeDisplay,
+            Self::BurnRate, Self::CostDaily, Self::CostWeekly, Self::CostMonthly,
+            Self::CostProjection, Self::CacheHitRate,
+            Self::CodeProductivity,
+            Self::Spacer, Self::Separator,
+        ]
+    }
+
+    /// Parse a widget from its ID string (inverse of `id()`).
+    pub fn from_id(id: &str) -> Option<StatusWidget> {
+        match id {
+            "model" => Some(Self::Model),
+            "thinking" => Some(Self::Thinking),
+            "effort" => Some(Self::Effort),
+            "provider" => Some(Self::Provider),
+            "tokens_total" => Some(Self::TokensTotal),
+            "tokens_input" => Some(Self::TokensInput),
+            "tokens_output" => Some(Self::TokensOutput),
+            "cost" => Some(Self::Cost),
+            "token_speed" => Some(Self::TokenSpeed),
+            "context_bar" => Some(Self::ContextBar),
+            "context_pct" => Some(Self::ContextPct),
+            "context_tokens" => Some(Self::ContextTokens),
+            "session_time" => Some(Self::SessionTime),
+            "session_pct" => Some(Self::SessionPct),
+            "block_time" => Some(Self::BlockTime),
+            "git_branch" => Some(Self::GitBranch),
+            "git_status" => Some(Self::GitStatus),
+            "git_diff" => Some(Self::GitDiff),
+            "permissions" => Some(Self::Permissions),
+            "qmd_status" => Some(Self::QmdStatus),
+            "version" => Some(Self::Version),
+            "vim_mode" => Some(Self::VimMode),
+            "remote_control" => Some(Self::RemoteControl),
+            "update_available" => Some(Self::UpdateAvailable),
+            "archive_status" => Some(Self::ArchiveStatus),
+            "mcp_status" => Some(Self::McpStatus),
+            "time_display" => Some(Self::TimeDisplay),
+            "burn_rate" => Some(Self::BurnRate),
+            "cost_daily" => Some(Self::CostDaily),
+            "cost_weekly" => Some(Self::CostWeekly),
+            "cost_monthly" => Some(Self::CostMonthly),
+            "cost_projection" => Some(Self::CostProjection),
+            "cache_hit_rate" => Some(Self::CacheHitRate),
+            "code_productivity" => Some(Self::CodeProductivity),
+            "spacer" => Some(Self::Spacer),
+            "separator" => Some(Self::Separator),
+            _ => None,
+        }
+    }
+}
+
+/// Which side of a status line (left-aligned or right-aligned).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    Left,
+    Right,
 }
 
 /// One horizontal line in the status bar, with left-aligned and right-aligned widgets.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusLine {
     pub left: Vec<StatusWidget>,
     pub right: Vec<StatusWidget>,
 }
 
 /// Per-widget style overrides.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WidgetStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
@@ -506,7 +594,7 @@ pub struct WidgetStyle {
 }
 
 /// Full status line configuration: lines + style settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusLineConfig {
     pub preset: String,
     pub lines: Vec<StatusLine>,
@@ -656,6 +744,76 @@ impl StatusLineConfig {
     /// Number of status lines this config renders.
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    // ── Mutation methods for the editor ─────────────────────────────
+
+    /// Append a new empty status line.
+    pub fn add_line(&mut self) {
+        self.lines.push(StatusLine { left: vec![], right: vec![] });
+        self.preset = "custom".into();
+    }
+
+    /// Remove a status line (no-op if only 1 line remains).
+    pub fn remove_line(&mut self, idx: usize) {
+        if self.lines.len() > 1 && idx < self.lines.len() {
+            self.lines.remove(idx);
+            self.preset = "custom".into();
+        }
+    }
+
+    /// Add a widget to a line's left or right side.
+    pub fn add_widget(&mut self, line_idx: usize, side: Side, widget: StatusWidget) {
+        if let Some(line) = self.lines.get_mut(line_idx) {
+            match side {
+                Side::Left => line.left.push(widget),
+                Side::Right => line.right.push(widget),
+            }
+            self.preset = "custom".into();
+        }
+    }
+
+    /// Remove a widget from a line's left or right side.
+    pub fn remove_widget(&mut self, line_idx: usize, side: Side, widget_idx: usize) {
+        if let Some(line) = self.lines.get_mut(line_idx) {
+            let vec = match side { Side::Left => &mut line.left, Side::Right => &mut line.right };
+            if widget_idx < vec.len() {
+                vec.remove(widget_idx);
+                self.preset = "custom".into();
+            }
+        }
+    }
+
+    /// Move a widget within its side by `delta` positions (-1 = left, +1 = right).
+    pub fn move_widget(&mut self, line_idx: usize, side: Side, widget_idx: usize, delta: i32) {
+        if let Some(line) = self.lines.get_mut(line_idx) {
+            let vec = match side { Side::Left => &mut line.left, Side::Right => &mut line.right };
+            let new_idx = (widget_idx as i32 + delta).clamp(0, vec.len().saturating_sub(1) as i32) as usize;
+            if new_idx != widget_idx && widget_idx < vec.len() {
+                vec.swap(widget_idx, new_idx);
+                self.preset = "custom".into();
+            }
+        }
+    }
+
+    /// Get the widgets on a given side of a line.
+    pub fn widgets_on_side(&self, line_idx: usize, side: Side) -> &[StatusWidget] {
+        self.lines.get(line_idx).map_or(&[], |line| match side {
+            Side::Left => &line.left,
+            Side::Right => &line.right,
+        })
+    }
+
+    /// Set the separator character.
+    pub fn set_separator(&mut self, sep: String) {
+        self.separator_char = sep;
+        self.preset = "custom".into();
+    }
+
+    /// Set compact mode.
+    pub fn set_compact(&mut self, compact: bool) {
+        self.compact = compact;
+        self.preset = "custom".into();
     }
 
     /// Build a config from a named preset.
@@ -1302,5 +1460,65 @@ mod tests {
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), len_before, "widget IDs must be unique");
+    }
+
+    #[test]
+    fn all_widgets_count() {
+        let all = StatusWidget::all_widgets();
+        assert_eq!(all.len(), 36, "expected 36 concrete widget variants (excluding Text)");
+    }
+
+    #[test]
+    fn from_id_round_trip() {
+        for w in StatusWidget::all_widgets() {
+            let id = w.id();
+            let parsed = StatusWidget::from_id(id);
+            assert!(parsed.is_some(), "from_id failed for: {id}");
+            assert_eq!(parsed.unwrap().id(), id, "round-trip failed for: {id}");
+        }
+    }
+
+    #[test]
+    fn category_returns_known_values() {
+        let known = ["model", "tokens", "context", "session", "git", "system", "cost_detail", "productivity", "layout"];
+        for w in StatusWidget::all_widgets() {
+            assert!(known.contains(&w.category()), "unknown category '{}' for widget '{}'", w.category(), w.id());
+        }
+    }
+
+    #[test]
+    fn mutation_add_remove_widget() {
+        let mut cfg = StatusLineConfig::default();
+        let original_count = cfg.widgets_on_side(0, Side::Left).len();
+        cfg.add_widget(0, Side::Left, StatusWidget::TimeDisplay);
+        assert_eq!(cfg.widgets_on_side(0, Side::Left).len(), original_count + 1);
+        assert_eq!(cfg.preset, "custom");
+        cfg.remove_widget(0, Side::Left, original_count);
+        assert_eq!(cfg.widgets_on_side(0, Side::Left).len(), original_count);
+    }
+
+    #[test]
+    fn mutation_move_widget() {
+        let mut cfg = StatusLineConfig::from_preset(StatusLinePreset::Default);
+        let first = cfg.widgets_on_side(0, Side::Left)[0].id().to_string();
+        let second = cfg.widgets_on_side(0, Side::Left)[1].id().to_string();
+        cfg.move_widget(0, Side::Left, 0, 1);
+        assert_eq!(cfg.widgets_on_side(0, Side::Left)[0].id(), second);
+        assert_eq!(cfg.widgets_on_side(0, Side::Left)[1].id(), first);
+    }
+
+    #[test]
+    fn mutation_add_remove_line() {
+        let mut cfg = StatusLineConfig::default();
+        let original = cfg.line_count();
+        cfg.add_line();
+        assert_eq!(cfg.line_count(), original + 1);
+        cfg.remove_line(original);
+        assert_eq!(cfg.line_count(), original);
+        // Cannot remove last line
+        let mut single = StatusLineConfig::from_preset(StatusLinePreset::Zen);
+        assert_eq!(single.line_count(), 1);
+        single.remove_line(0);
+        assert_eq!(single.line_count(), 1, "should not remove the last line");
     }
 }

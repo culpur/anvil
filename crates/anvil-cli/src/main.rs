@@ -1836,6 +1836,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let ConfigureAction::SetStatusLinePreset { ref preset } = action {
                     tui.set_status_line_preset(preset);
                 }
+                if let ConfigureAction::ApplyStatusLineConfig { ref config } = action {
+                    tui.set_status_line_config(*config.clone());
+                }
                 let msg = cli.apply_configure_action(action);
                 // Rebuild a fresh ConfigureData snapshot and re-enter configure mode
                 // so the menu immediately reflects the change.

@@ -1,6 +1,7 @@
 //! Configure mode types: `ConfigureState`, `ConfigureAction`, `ConfigureData`,
 //! and helper functions for state navigation.
 use super::helpers::{next_char_boundary, prev_char_boundary};
+use runtime::theme::{Side, StatusLineConfig};
 
 // ─── ConfigureState ───────────────────────────────────────────────────────────
 
@@ -28,6 +29,12 @@ pub(crate) enum ConfigureState {
     Database { selected: usize },
     MemoryArchive { selected: usize },
     PluginsCron { selected: usize },
+    /// Interactive status line editor with draft config.
+    StatusLineEditor {
+        sub: StatusLineEditorSub,
+        selected: usize,
+        draft: Box<StatusLineConfig>,
+    },
     /// Inline text input for editing a single value.
     EditingValue {
         section: String,
@@ -35,6 +42,23 @@ pub(crate) enum ConfigureState {
         value: String,
         cursor: usize,
     },
+}
+
+/// Sub-states for the interactive status line editor.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StatusLineEditorSub {
+    /// Top-level: preset, edit lines, separator, compact, save, reset
+    Overview,
+    /// Choosing from 16 presets
+    PresetPicker,
+    /// Viewing lines, selecting which to edit (+ Add Line)
+    LineList,
+    /// Editing widgets on a specific line
+    LineDetail { line_idx: usize },
+    /// Picking a widget to add to a line/side
+    WidgetPicker { line_idx: usize, side: Side },
+    /// Editing the separator character inline
+    SeparatorEdit { value: String, cursor: usize },
 }
 
 // ─── ConfigureAction ──────────────────────────────────────────────────────────
@@ -82,6 +106,7 @@ pub enum ConfigureAction {
     ToggleCronEnabled,
     SetPluginSearchPaths { paths: String },
     SetStatusLinePreset { preset: String },
+    ApplyStatusLineConfig { config: Box<StatusLineConfig> },
 }
 
 // ─── ConfigureData ────────────────────────────────────────────────────────────
@@ -186,6 +211,17 @@ pub(super) fn configure_breadcrumb(state: &ConfigureState) -> String {
         ConfigureState::Database { .. } => "Configure > Database".to_string(),
         ConfigureState::MemoryArchive { .. } => "Configure > Memory & Archive".to_string(),
         ConfigureState::PluginsCron { .. } => "Configure > Plugins & Cron".to_string(),
+        ConfigureState::StatusLineEditor { sub, .. } => match sub {
+            StatusLineEditorSub::Overview => "Configure > Status Line Editor".to_string(),
+            StatusLineEditorSub::PresetPicker => "Configure > Status Line > Presets".to_string(),
+            StatusLineEditorSub::LineList => "Configure > Status Line > Lines".to_string(),
+            StatusLineEditorSub::LineDetail { line_idx } => format!("Configure > Status Line > Line {}", line_idx + 1),
+            StatusLineEditorSub::WidgetPicker { line_idx, side } => {
+                let s = match side { Side::Left => "Left", Side::Right => "Right" };
+                format!("Configure > Status Line > Line {} > Add {s}", line_idx + 1)
+            }
+            StatusLineEditorSub::SeparatorEdit { .. } => "Configure > Status Line > Separator".to_string(),
+        },
         ConfigureState::EditingValue { section, key, .. } => {
             format!("Configure > {section} > edit:{key}")
         }
@@ -212,7 +248,8 @@ pub(super) fn configure_selected(state: &ConfigureState) -> usize {
         | ConfigureState::Database { selected }
         | ConfigureState::MemoryArchive { selected }
         | ConfigureState::PluginsCron { selected }
-        | ConfigureState::ProviderDetail { selected, .. } => *selected,
+        | ConfigureState::ProviderDetail { selected, .. }
+        | ConfigureState::StatusLineEditor { selected, .. } => *selected,
         _ => 0,
     }
 }
@@ -237,7 +274,8 @@ pub(super) fn configure_set_selected(state: &mut ConfigureState, new: usize) {
         | ConfigureState::Database { selected }
         | ConfigureState::MemoryArchive { selected }
         | ConfigureState::PluginsCron { selected }
-        | ConfigureState::ProviderDetail { selected, .. } => *selected = new,
+        | ConfigureState::ProviderDetail { selected, .. }
+        | ConfigureState::StatusLineEditor { selected, .. } => *selected = new,
         _ => {}
     }
 }
@@ -245,7 +283,7 @@ pub(super) fn configure_set_selected(state: &mut ConfigureState, new: usize) {
 /// Return the number of navigable items for a given configure state.
 pub(super) fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
     match state {
-        ConfigureState::MainMenu { .. } => 16,
+        ConfigureState::MainMenu { .. } => 17,
         ConfigureState::Providers { .. }
         | ConfigureState::DockerK8s { .. }
         | ConfigureState::MemoryArchive { .. } => 4,
@@ -267,6 +305,18 @@ pub(super) fn configure_item_count(state: &ConfigureState, data: &ConfigureData)
         ConfigureState::Search { .. } => 1 + data.search_providers.len(),
         ConfigureState::Notifications { .. } => 10,
         ConfigureState::PluginsCron { .. } => 3 + data.active_cron_jobs.len(),
+        ConfigureState::StatusLineEditor { sub, draft, .. } => match sub {
+            StatusLineEditorSub::Overview => 6,
+            StatusLineEditorSub::PresetPicker => runtime::theme::StatusLinePreset::all().len(),
+            StatusLineEditorSub::LineList => draft.line_count() + 1, // N lines + "Add Line"
+            StatusLineEditorSub::LineDetail { line_idx } => {
+                let left_len = draft.widgets_on_side(*line_idx, Side::Left).len();
+                let right_len = draft.widgets_on_side(*line_idx, Side::Right).len();
+                left_len + 1 + right_len + 1 + 1 // left widgets + "Add Left" + right widgets + "Add Right" + "Delete Line"
+            }
+            StatusLineEditorSub::WidgetPicker { .. } => runtime::theme::StatusWidget::all_widgets().len(),
+            StatusLineEditorSub::SeparatorEdit { .. } => 0, // inline text editing
+        },
         _ => 0,
     }
 }
@@ -290,6 +340,7 @@ pub(super) fn section_state_from_name(section: &str, selected: usize) -> Configu
         "Database" => ConfigureState::Database { selected },
         "MemoryArchive" | "Memory & Archive" => ConfigureState::MemoryArchive { selected },
         "PluginsCron" | "Plugins & Cron" => ConfigureState::PluginsCron { selected },
+        // StatusLineEditor cannot be reached from section_state_from_name — it carries draft state
         _ => ConfigureState::MainMenu { selected },
     }
 }

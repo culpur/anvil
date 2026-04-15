@@ -1227,6 +1227,14 @@ impl LiveCli {
                 Self::save_anvil_ui_config_key("cron_enabled", serde_json::Value::Bool(!current))
             }
             // ── Section 16: Status Line ──────────────────────────────────
+            ConfigureAction::ApplyStatusLineConfig { config } => {
+                let saved = Self::save_anvil_ui_config_key("status_line", config.to_json());
+                let _ = Self::save_anvil_ui_config_key(
+                    "status_line_preset",
+                    serde_json::Value::String(config.preset.clone()),
+                );
+                saved
+            }
             ConfigureAction::SetStatusLinePreset { preset } => {
                 let saved = Self::save_anvil_ui_config_key(
                     "status_line_preset",

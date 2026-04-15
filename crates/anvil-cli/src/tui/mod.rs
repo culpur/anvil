@@ -1403,6 +1403,92 @@ impl AnvilTui {
             return Ok(ReadResult::Continue);
         }
 
+        // StatusLineEditor::SeparatorEdit has its own character-level handler.
+        if let ConfigureState::StatusLineEditor {
+            sub: configure_types::StatusLineEditorSub::SeparatorEdit { value, cursor },
+            draft,
+            ..
+        } = &mut self.configure_state
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    // Cancel — revert to Overview
+                    self.configure_state = ConfigureState::StatusLineEditor {
+                        sub: configure_types::StatusLineEditorSub::Overview,
+                        selected: 2,
+                        draft: draft.clone(),
+                    };
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Enter => {
+                    // Apply separator to draft
+                    let new_sep = value.clone();
+                    let mut new_draft = draft.clone();
+                    new_draft.set_separator(new_sep);
+                    self.configure_state = ConfigureState::StatusLineEditor {
+                        sub: configure_types::StatusLineEditorSub::Overview,
+                        selected: 2,
+                        draft: new_draft,
+                    };
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Char(ch) => { value.insert(*cursor, ch); *cursor += ch.len_utf8(); }
+                KeyCode::Backspace => {
+                    if *cursor > 0 {
+                        let prev = prev_char_boundary(value, *cursor);
+                        value.drain(prev..*cursor);
+                        *cursor = prev;
+                    }
+                }
+                KeyCode::Left => { if *cursor > 0 { *cursor = prev_char_boundary(value, *cursor); } }
+                KeyCode::Right => { if *cursor < value.len() { *cursor = next_char_boundary(value, *cursor); } }
+                KeyCode::Home => *cursor = 0,
+                KeyCode::End => *cursor = value.len(),
+                _ => {}
+            }
+            return Ok(ReadResult::Continue);
+        }
+
+        // StatusLineEditor::LineDetail — Left/Right to reorder widgets.
+        if let ConfigureState::StatusLineEditor {
+            sub: configure_types::StatusLineEditorSub::LineDetail { line_idx },
+            draft,
+            selected,
+            ..
+        } = &mut self.configure_state
+        {
+            use runtime::theme::Side;
+            let left_len = draft.widgets_on_side(*line_idx, Side::Left).len();
+            let right_start = left_len + 1;
+            let right_len = draft.widgets_on_side(*line_idx, Side::Right).len();
+
+            match key.code {
+                KeyCode::Left if *selected < left_len => {
+                    draft.move_widget(*line_idx, Side::Left, *selected, -1);
+                    if *selected > 0 { *selected -= 1; }
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Right if *selected < left_len => {
+                    draft.move_widget(*line_idx, Side::Left, *selected, 1);
+                    if *selected + 1 < left_len { *selected += 1; }
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Left if *selected >= right_start && *selected < right_start + right_len => {
+                    let idx = *selected - right_start;
+                    draft.move_widget(*line_idx, Side::Right, idx, -1);
+                    if idx > 0 { *selected -= 1; }
+                    return Ok(ReadResult::Continue);
+                }
+                KeyCode::Right if *selected >= right_start && *selected < right_start + right_len => {
+                    let idx = *selected - right_start;
+                    draft.move_widget(*line_idx, Side::Right, idx, 1);
+                    if idx + 1 < right_len { *selected += 1; }
+                    return Ok(ReadResult::Continue);
+                }
+                _ => { /* fall through to standard navigation */ }
+            }
+        }
+
         // Navigation / selection for all other states.
         match key.code {
             KeyCode::Up => {
@@ -1460,6 +1546,11 @@ impl AnvilTui {
                     13 => ConfigureState::Database { selected: 0 },
                     14 => ConfigureState::MemoryArchive { selected: 0 },
                     15 => ConfigureState::PluginsCron { selected: 0 },
+                    16 => ConfigureState::StatusLineEditor {
+                        sub: configure_types::StatusLineEditorSub::Overview,
+                        selected: 0,
+                        draft: Box::new(self.status_line_config.clone()),
+                    },
                     _ => ConfigureState::MainMenu { selected },
                 };
             }
@@ -1842,6 +1933,156 @@ impl AnvilTui {
                     _ => {}
                 }
             }
+            ConfigureState::StatusLineEditor { sub, mut draft, .. } => {
+                use configure_types::StatusLineEditorSub;
+                use runtime::theme::{StatusLinePreset, StatusWidget as SW, Side};
+                match sub {
+                    StatusLineEditorSub::Overview => match selected {
+                        0 => {
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::PresetPicker,
+                                selected: 0,
+                                draft,
+                            };
+                        }
+                        1 => {
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineList,
+                                selected: 0,
+                                draft,
+                            };
+                        }
+                        2 => {
+                            let current = draft.separator_char.clone();
+                            let len = current.len();
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::SeparatorEdit { value: current, cursor: len },
+                                selected: 0,
+                                draft,
+                            };
+                        }
+                        3 => {
+                            let c = !draft.compact;
+                            draft.set_compact(c);
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::Overview,
+                                selected: 3,
+                                draft,
+                            };
+                        }
+                        4 => {
+                            // Save & Apply
+                            self.configure_state = ConfigureState::Inactive;
+                            return Ok(ReadResult::ConfigureAction(ConfigureAction::ApplyStatusLineConfig { config: draft }));
+                        }
+                        5 => {
+                            // Reset to default
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::Overview,
+                                selected: 0,
+                                draft: Box::new(runtime::theme::StatusLineConfig::default()),
+                            };
+                        }
+                        _ => {}
+                    }
+                    StatusLineEditorSub::PresetPicker => {
+                        let all = StatusLinePreset::all();
+                        if selected < all.len() {
+                            let new_config = runtime::theme::StatusLineConfig::from_preset(all[selected]);
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::Overview,
+                                selected: 0,
+                                draft: Box::new(new_config),
+                            };
+                        }
+                    }
+                    StatusLineEditorSub::LineList => {
+                        if selected < draft.line_count() {
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineDetail { line_idx: selected },
+                                selected: 0,
+                                draft,
+                            };
+                        } else {
+                            // "Add New Line"
+                            draft.add_line();
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineList,
+                                selected: draft.line_count().saturating_sub(1),
+                                draft,
+                            };
+                        }
+                    }
+                    StatusLineEditorSub::LineDetail { line_idx } => {
+                        let left_len = draft.widgets_on_side(line_idx, Side::Left).len();
+                        let right_len = draft.widgets_on_side(line_idx, Side::Right).len();
+                        let add_left_row = left_len;
+                        let right_start = add_left_row + 1;
+                        let add_right_row = right_start + right_len;
+                        let delete_row = add_right_row + 1;
+
+                        if selected < left_len {
+                            // Remove left widget
+                            draft.remove_widget(line_idx, Side::Left, selected);
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineDetail { line_idx },
+                                selected: selected.min(draft.widgets_on_side(line_idx, Side::Left).len().saturating_sub(1)),
+                                draft,
+                            };
+                        } else if selected == add_left_row {
+                            // Add widget to left
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::WidgetPicker { line_idx, side: Side::Left },
+                                selected: 0,
+                                draft,
+                            };
+                        } else if selected > right_start.saturating_sub(1) && selected < add_right_row {
+                            // Remove right widget
+                            let widget_idx = selected - right_start;
+                            draft.remove_widget(line_idx, Side::Right, widget_idx);
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineDetail { line_idx },
+                                selected,
+                                draft,
+                            };
+                        } else if selected == add_right_row {
+                            // Add widget to right
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::WidgetPicker { line_idx, side: Side::Right },
+                                selected: 0,
+                                draft,
+                            };
+                        } else if selected == delete_row {
+                            // Delete this line
+                            draft.remove_line(line_idx);
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineList,
+                                selected: 0,
+                                draft,
+                            };
+                        }
+                    }
+                    StatusLineEditorSub::WidgetPicker { line_idx, side } => {
+                        let all = SW::all_widgets();
+                        if selected < all.len() {
+                            draft.add_widget(line_idx, side, all[selected].clone());
+                            self.configure_state = ConfigureState::StatusLineEditor {
+                                sub: StatusLineEditorSub::LineDetail { line_idx },
+                                selected: 0,
+                                draft,
+                            };
+                        }
+                    }
+                    StatusLineEditorSub::SeparatorEdit { value, .. } => {
+                        draft.set_separator(value);
+                        self.configure_state = ConfigureState::StatusLineEditor {
+                            sub: StatusLineEditorSub::Overview,
+                            selected: 2,
+                            draft,
+                        };
+                    }
+                }
+            }
             _ => {}
         }
         Ok(ReadResult::Continue)
@@ -1868,6 +2109,29 @@ impl AnvilTui {
             | ConfigureState::MemoryArchive { .. }
             | ConfigureState::PluginsCron { .. } => ConfigureState::MainMenu { selected: 0 },
             ConfigureState::ProviderDetail { .. } => ConfigureState::Providers { selected: 0 },
+            ConfigureState::StatusLineEditor { sub, draft, .. } => {
+                use configure_types::StatusLineEditorSub;
+                match sub {
+                    StatusLineEditorSub::Overview => ConfigureState::MainMenu { selected: 16 },
+                    StatusLineEditorSub::PresetPicker
+                    | StatusLineEditorSub::LineList
+                    | StatusLineEditorSub::SeparatorEdit { .. } => ConfigureState::StatusLineEditor {
+                        sub: StatusLineEditorSub::Overview,
+                        selected: 0,
+                        draft: draft.clone(),
+                    },
+                    StatusLineEditorSub::LineDetail { .. } => ConfigureState::StatusLineEditor {
+                        sub: StatusLineEditorSub::LineList,
+                        selected: 0,
+                        draft: draft.clone(),
+                    },
+                    StatusLineEditorSub::WidgetPicker { line_idx, .. } => ConfigureState::StatusLineEditor {
+                        sub: StatusLineEditorSub::LineDetail { line_idx: *line_idx },
+                        selected: 0,
+                        draft: draft.clone(),
+                    },
+                }
+            }
             ConfigureState::EditingValue { section, .. } => {
                 section_state_from_name(section, 0)
             }
@@ -2059,6 +2323,7 @@ fn render_configure_menu(
                 }),
                 ("Memory & Archive", format!("[auto-save:{}, retention:{}d]", if data.auto_save_memory { "on" } else { "off" }, data.archive_retention_days)),
                 ("Plugins & Cron", format!("[cron:{}, {} active jobs]", if data.cron_enabled { "on" } else { "off" }, data.active_cron_jobs.len())),
+                ("Status Line Editor", format!("[{}]", data.status_line_preset)),
             ];
             for (i, (label, value)) in items.iter().enumerate() {
                 lines.push(make_row(label, value, i == sel));
@@ -2390,6 +2655,123 @@ fn render_configure_menu(
                 )));
                 for (i, job) in data.active_cron_jobs.iter().enumerate() {
                     lines.push(make_row(job, "", sel == 3 + i));
+                }
+            }
+        }
+
+        ConfigureState::StatusLineEditor { sub, draft, .. } => {
+            use configure_types::StatusLineEditorSub;
+            use runtime::theme::{StatusLinePreset, StatusWidget as SW, Side};
+            match sub {
+                StatusLineEditorSub::Overview => {
+                    lines.push(make_row("Apply Preset", &format!("[{}]", draft.preset), sel == 0));
+                    lines.push(make_row("Edit Lines", &format!("[{} lines]", draft.line_count()), sel == 1));
+                    lines.push(make_row("Separator Character", &format!("[{}]", draft.separator_char.trim()), sel == 2));
+                    lines.push(make_row("Compact Mode", if draft.compact { "[on]" } else { "[off]" }, sel == 3));
+                    lines.push(Line::from(""));
+                    lines.push(make_row("\u{2500}\u{2500}\u{2500} Save & Apply \u{2500}\u{2500}\u{2500}", "", sel == 4));
+                    lines.push(make_row("\u{2500}\u{2500}\u{2500} Reset to Default \u{2500}\u{2500}\u{2500}", "", sel == 5));
+                }
+                StatusLineEditorSub::PresetPicker => {
+                    for (i, preset) in StatusLinePreset::all().iter().enumerate() {
+                        let marker = if preset.name() == draft.preset { "\u{25ba} " } else { "  " };
+                        lines.push(make_row(
+                            &format!("{marker}{}", preset.name()),
+                            preset.description(),
+                            sel == i,
+                        ));
+                    }
+                }
+                StatusLineEditorSub::LineList => {
+                    for i in 0..draft.line_count() {
+                        let left_summary: Vec<&str> = draft.widgets_on_side(i, Side::Left).iter().map(|w| w.id()).collect();
+                        let right_summary: Vec<&str> = draft.widgets_on_side(i, Side::Right).iter().map(|w| w.id()).collect();
+                        let desc = format!("[{}] \u{2192} [{}]", left_summary.join(", "), right_summary.join(", "));
+                        lines.push(make_row(&format!("Line {}", i + 1), &desc, sel == i));
+                    }
+                    lines.push(Line::from(""));
+                    lines.push(make_row("\u{2795} Add New Line", "", sel == draft.line_count()));
+                }
+                StatusLineEditorSub::LineDetail { line_idx } => {
+                    let li = *line_idx;
+                    let left_widgets = draft.widgets_on_side(li, Side::Left).to_vec();
+                    let right_widgets = draft.widgets_on_side(li, Side::Right).to_vec();
+                    let mut row = 0usize;
+                    // LEFT header
+                    lines.push(Line::from(Span::styled(
+                        format!("    LEFT WIDGETS (Line {})", li + 1),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                    for (i, w) in left_widgets.iter().enumerate() {
+                        lines.push(make_row(
+                            &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
+                            &format!("[{}]", w.category()),
+                            sel == row,
+                        ));
+                        row += 1;
+                    }
+                    lines.push(make_row("  \u{2795} Add Widget (Left)", "", sel == row));
+                    row += 1;
+                    lines.push(Line::from(""));
+                    // RIGHT header
+                    lines.push(Line::from(Span::styled(
+                        format!("    RIGHT WIDGETS (Line {})", li + 1),
+                        Style::default().fg(Color::Cyan),
+                    )));
+                    for (i, w) in right_widgets.iter().enumerate() {
+                        lines.push(make_row(
+                            &format!("  {} {}", w.display_name(), if sel == row { "\u{2190}\u{2192} reorder" } else { "" }),
+                            &format!("[{}]", w.category()),
+                            sel == row,
+                        ));
+                        row += 1;
+                    }
+                    lines.push(make_row("  \u{2795} Add Widget (Right)", "", sel == row));
+                    row += 1;
+                    lines.push(Line::from(""));
+                    lines.push(make_row("\u{274c} Delete This Line", "", sel == row));
+                }
+                StatusLineEditorSub::WidgetPicker { .. } => {
+                    let all = SW::all_widgets();
+                    let mut current_cat = "";
+                    let mut idx = 0;
+                    for w in &all {
+                        if w.category() != current_cat {
+                            current_cat = w.category();
+                            lines.push(Line::from(""));
+                            lines.push(Line::from(Span::styled(
+                                format!("    \u{2500} {} \u{2500}", current_cat.to_uppercase()),
+                                Style::default().fg(Color::Yellow),
+                            )));
+                        }
+                        lines.push(make_row(
+                            &format!("  {}", w.display_name()),
+                            w.id(),
+                            sel == idx,
+                        ));
+                        idx += 1;
+                    }
+                }
+                StatusLineEditorSub::SeparatorEdit { value, cursor } => {
+                    lines.push(Line::from(Span::styled(
+                        "    Edit separator character:".to_string(),
+                        Style::default().fg(Color::Yellow),
+                    )));
+                    lines.push(Line::from(""));
+                    let before: String = value.chars().take(*cursor).collect();
+                    let cursor_char = value.chars().nth(*cursor).map_or(" ".to_string(), |c| c.to_string());
+                    let after: String = value.chars().skip(*cursor + 1).collect();
+                    lines.push(Line::from(vec![
+                        Span::raw("    \u{276f} "),
+                        Span::styled(before, Style::default().fg(Color::White)),
+                        Span::styled(cursor_char, Style::default().fg(Color::Rgb(0x1a, 0x1a, 0x1a)).bg(Color::White)),
+                        Span::styled(after, Style::default().fg(Color::White)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "    Enter to confirm  Esc to cancel",
+                        Style::default().fg(Color::Rgb(0x44, 0x44, 0x55)),
+                    )));
                 }
             }
         }
