@@ -489,7 +489,11 @@ impl PluginManager {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, serde_json::to_string_pretty(registry)?)?;
+        // Write to a sibling temp file then atomically rename to avoid partial writes
+        // corrupting the registry if the process is interrupted mid-write.
+        let tmp_path = path.with_extension("json.tmp");
+        fs::write(&tmp_path, serde_json::to_string_pretty(registry)?)?;
+        fs::rename(&tmp_path, &path)?;
         Ok(())
     }
 

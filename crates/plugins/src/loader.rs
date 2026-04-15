@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::hooks::sanitize_hook_command;
 use crate::manifest::{
     is_literal_command, plugin_manifest_path, PluginHooks, PluginLifecycle, PluginToolDefinition,
     PluginToolManifest, load_plugin_from_directory,
@@ -144,15 +145,36 @@ fn validate_command_path(root: &Path, entry: &str, kind: &str) -> Result<(), Plu
     if is_literal_command(entry) {
         return Ok(());
     }
-    let path = if Path::new(entry).is_absolute() {
+    let raw_path = if Path::new(entry).is_absolute() {
         PathBuf::from(entry)
     } else {
         root.join(entry)
     };
-    if !path.exists() {
+    if !raw_path.exists() {
         return Err(PluginError::InvalidManifest(format!(
             "{kind} path `{}` does not exist",
-            path.display()
+            raw_path.display()
+        )));
+    }
+    // Resolve symlinks and any embedded `..` components, then verify the
+    // canonical path still lives within the plugin root.  This prevents both
+    // path-traversal attacks (hooks/../../sensitive) and symlink escapes.
+    let canonical = raw_path.canonicalize().map_err(|e| {
+        PluginError::InvalidManifest(format!(
+            "could not canonicalize {kind} path `{}`: {e}",
+            raw_path.display()
+        ))
+    })?;
+    let canonical_root = root.canonicalize().map_err(|e| {
+        PluginError::InvalidManifest(format!(
+            "could not canonicalize plugin root `{}`: {e}",
+            root.display()
+        ))
+    })?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(PluginError::InvalidManifest(format!(
+            "{kind} path `{}` escapes the plugin root directory",
+            raw_path.display()
         )));
     }
     Ok(())
@@ -175,19 +197,37 @@ pub(crate) fn run_lifecycle_commands(
     for command in commands {
         let mut process = if Path::new(command).exists() {
             if cfg!(windows) {
+                // Direct execution on Windows via cmd /C with a resolved path.
                 let mut process = Command::new("cmd");
                 process.arg("/C").arg(command);
                 process
             } else {
+                // Pass the path as a positional argument to `sh` — injection-safe
+                // because the path is not shell-evaluated, and works for scripts
+                // without the executable bit set.
                 let mut process = Command::new("sh");
                 process.arg(command);
                 process
             }
         } else if cfg!(windows) {
+            // Non-path shell command on Windows: validate before passing to cmd.
+            sanitize_hook_command(command).map_err(|reason| {
+                PluginError::CommandFailed(format!(
+                    "plugin `{}` lifecycle command rejected: {reason}",
+                    metadata.id
+                ))
+            })?;
             let mut process = Command::new("cmd");
             process.arg("/C").arg(command);
             process
         } else {
+            // Non-path shell command on POSIX: validate before passing to sh -lc.
+            sanitize_hook_command(command).map_err(|reason| {
+                PluginError::CommandFailed(format!(
+                    "plugin `{}` lifecycle command rejected: {reason}",
+                    metadata.id
+                ))
+            })?;
             let mut process = Command::new("sh");
             process.arg("-lc").arg(command);
             process

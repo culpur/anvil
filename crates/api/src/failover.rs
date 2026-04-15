@@ -515,7 +515,7 @@ mod tests {
     fn rate_limit_skips_to_next() {
         let mut chain = make_chain(&[("model-a", 1), ("model-b", 2)]);
         // Pre-select so active is 0.
-        chain.select_provider();
+        let _ = chain.select_provider();
         let event = chain.on_rate_limited(0, Some(10)).unwrap();
         assert_eq!(event.kind, FailoverEventKind::RateLimited);
         assert_eq!(event.from_model, "model-a");
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn budget_exceeded_skips_to_next() {
         let mut chain = make_chain(&[("model-a", 1), ("model-b", 2)]);
-        chain.select_provider();
+        let _ = chain.select_provider();
         let event = chain.on_budget_exceeded(0).unwrap();
         assert_eq!(event.kind, FailoverEventKind::BudgetExceeded);
         assert_eq!(chain.active_index, 1);

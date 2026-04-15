@@ -299,8 +299,21 @@ impl LspClient {
     {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
-            let mut sink = Vec::new();
-            let _ = reader.read_to_end(&mut sink).await;
+            let mut line = String::new();
+            let mut total_bytes: usize = 0;
+            const STDERR_BYTE_LIMIT: usize = 1024 * 1024; // 1 MB
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        total_bytes = total_bytes.saturating_add(n);
+                        if total_bytes >= STDERR_BYTE_LIMIT {
+                            break;
+                        }
+                    }
+                }
+            }
         });
     }
 

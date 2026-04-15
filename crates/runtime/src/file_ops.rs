@@ -211,7 +211,7 @@ pub struct EditFileOutput {
     pub git_diff: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GlobSearchOutput {
     #[serde(rename = "durationMs")]
     pub duration_ms: u128,

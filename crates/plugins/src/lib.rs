@@ -90,7 +90,7 @@ pub trait Plugin {
     fn shutdown(&self) -> Result<(), PluginError>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuiltinPlugin {
     pub(crate) metadata: PluginMetadata,
     pub(crate) hooks: PluginHooks,
@@ -98,7 +98,7 @@ pub struct BuiltinPlugin {
     pub(crate) tools: Vec<PluginTool>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundledPlugin {
     pub(crate) metadata: PluginMetadata,
     pub(crate) hooks: PluginHooks,
@@ -106,7 +106,7 @@ pub struct BundledPlugin {
     pub(crate) tools: Vec<PluginTool>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalPlugin {
     pub(crate) metadata: PluginMetadata,
     pub(crate) hooks: PluginHooks,

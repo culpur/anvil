@@ -9,7 +9,7 @@ pub enum JsonRpcId {
     Null,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JsonRpcRequest<T = JsonValue> {
     pub jsonrpc: String,
     pub id: JsonRpcId,
@@ -30,7 +30,7 @@ impl<T> JsonRpcRequest<T> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
@@ -38,7 +38,7 @@ pub struct JsonRpcError {
     pub data: Option<JsonValue>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JsonRpcResponse<T = JsonValue> {
     pub jsonrpc: String,
     pub id: JsonRpcId,

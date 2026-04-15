@@ -128,7 +128,7 @@ impl PluginToolPermission {
 // Manifest types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub name: String,
     pub version: String,
@@ -146,7 +146,7 @@ pub struct PluginManifest {
     pub commands: Vec<PluginCommandManifest>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginToolManifest {
     pub name: String,
     pub description: String,
@@ -158,7 +158,7 @@ pub struct PluginToolManifest {
     pub required_permission: PluginToolPermission,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginToolDefinition {
     pub name: String,
     pub description: Option<String>,
@@ -243,6 +243,10 @@ pub enum PluginManifestValidationError {
         kind: &'static str,
         path: PathBuf,
     },
+    PathTraversal {
+        kind: &'static str,
+        path: PathBuf,
+    },
     InvalidToolInputSchema {
         tool_name: String,
     },
@@ -278,6 +282,13 @@ impl Display for PluginManifestValidationError {
             }
             Self::MissingPath { kind, path } => {
                 write!(f, "{kind} path `{}` does not exist", path.display())
+            }
+            Self::PathTraversal { kind, path } => {
+                write!(
+                    f,
+                    "{kind} path `{}` escapes the plugin root directory",
+                    path.display()
+                )
             }
             Self::InvalidToolInputSchema { tool_name } => {
                 write!(
@@ -584,9 +595,45 @@ pub(crate) fn validate_command_entry(
     };
     if !path.exists() {
         errors.push(PluginManifestValidationError::MissingPath { kind, path });
+        return;
+    }
+    // After confirming existence, canonicalize both sides and verify that the
+    // resolved path is still within the plugin root.  This catches embedded
+    // traversal (`hooks/../../etc/passwd`) and symlink escapes at manifest-parse
+    // time, before any file is executed.
+    if !validate_path_within_root(root, entry) {
+        errors.push(PluginManifestValidationError::PathTraversal {
+            kind,
+            path: path.clone(),
+        });
     }
 }
 
 pub(crate) fn is_literal_command(entry: &str) -> bool {
     !entry.starts_with("./") && !entry.starts_with("../") && !Path::new(entry).is_absolute()
+}
+
+/// Verify that `entry` (relative path as written in the manifest) resolves to a
+/// real path that lives inside `root` after canonicalizing both sides.
+///
+/// This prevents embedded traversal attacks such as `hooks/../../etc/passwd` and
+/// symlink escapes where a plugin-controlled symlink points outside the plugin
+/// directory.
+///
+/// Returns `true` when the path is safe, `false` when it escapes the root.
+/// Also returns `false` when either path cannot be canonicalized (e.g. the file
+/// does not exist yet — callers should check `.exists()` first).
+pub(crate) fn validate_path_within_root(root: &Path, entry: &str) -> bool {
+    let joined = if Path::new(entry).is_absolute() {
+        PathBuf::from(entry)
+    } else {
+        root.join(entry)
+    };
+    let Ok(canonical_path) = joined.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_root) = root.canonicalize() else {
+        return false;
+    };
+    canonical_path.starts_with(&canonical_root)
 }

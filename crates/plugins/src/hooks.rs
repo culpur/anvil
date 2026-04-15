@@ -159,7 +159,17 @@ impl HookRunner {
         is_error: bool,
         payload: &str,
     ) -> HookCommandOutcome {
-        let mut child = shell_command(command);
+        let mut child = match shell_command(command) {
+            Ok(c) => c,
+            Err(reason) => {
+                return HookCommandOutcome::Warn {
+                    message: format!(
+                        "{} hook `{command}` rejected for `{tool_name}`: {reason}",
+                        event.as_str()
+                    ),
+                };
+            }
+        };
         child.stdin(std::process::Stdio::piped());
         child.stdout(std::process::Stdio::piped());
         child.stderr(std::process::Stdio::piped());
@@ -228,26 +238,60 @@ fn format_hook_warning(command: &str, code: i32, stdout: Option<&str>, stderr: &
     message
 }
 
-fn shell_command(command: &str) -> CommandWithStdin {
+/// Validate a hook command string before it is passed to the shell.
+///
+/// Allowed characters: alphanumerics, spaces, hyphens, underscores, dots, forward
+/// slashes, equals signs (for env-style args), and the at-sign.  Shell metacharacters
+/// that enable injection (`$`, `` ` ``, `|`, `;`, `&`, `<`, `>`, `(`, `)`, `{`, `}`,
+/// `\`, `'`, `"`, `!`, `*`, `?`, `[`, `]`, `#`, `~`, `%`, `^`) are rejected.
+///
+/// Returns `Ok(())` when the command is safe to forward to the shell, or an `Err`
+/// with a human-readable rejection reason.
+pub(crate) fn sanitize_hook_command(command: &str) -> Result<(), String> {
+    if command.trim().is_empty() {
+        return Err("hook command must not be empty".to_string());
+    }
+    for ch in command.chars() {
+        if !matches!(ch,
+            'a'..='z' | 'A'..='Z' | '0'..='9'
+            | ' ' | '-' | '_' | '.' | '/' | '=' | '@'
+        ) {
+            return Err(format!(
+                "hook command contains disallowed character `{ch}`; use a script file for complex commands"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn shell_command(command: &str) -> Result<CommandWithStdin, String> {
     #[cfg(windows)]
-    let command_builder = {
+    {
+        sanitize_hook_command(command)?;
         let mut command_builder = Command::new("cmd");
         command_builder.arg("/C").arg(command);
-        CommandWithStdin::new(command_builder)
-    };
+        Ok(CommandWithStdin::new(command_builder))
+    }
 
     #[cfg(not(windows))]
-    let command_builder = if Path::new(command).exists() {
-        let mut command_builder = Command::new("sh");
-        command_builder.arg(command);
-        CommandWithStdin::new(command_builder)
-    } else {
-        let mut command_builder = Command::new("sh");
-        command_builder.arg("-lc").arg(command);
-        CommandWithStdin::new(command_builder)
-    };
-
-    command_builder
+    {
+        let path = Path::new(command);
+        if path.exists() {
+            // Pass the path as a positional argument to `sh` rather than
+            // interpolating it into `-c` string.  This is injection-safe
+            // because the path is never shell-evaluated, and it works even
+            // when the script file does not have the executable bit set.
+            let mut command_builder = Command::new("sh");
+            command_builder.arg(path);
+            Ok(CommandWithStdin::new(command_builder))
+        } else {
+            // Shell execution path: validate the command string first.
+            sanitize_hook_command(command)?;
+            let mut command_builder = Command::new("sh");
+            command_builder.arg("-lc").arg(command);
+            Ok(CommandWithStdin::new(command_builder))
+        }
+    }
 }
 
 struct CommandWithStdin {
@@ -382,14 +426,45 @@ mod tests {
 
     #[test]
     fn pre_tool_use_denies_when_plugin_hook_exits_two() {
+        // Build a real script file so the command goes through the direct-exec
+        // path rather than the shell interpolation path (which sanitize_hook_command
+        // would block for raw shell metacharacters).
+        let dir = temp_dir("deny-hook");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let script = dir.join("deny.sh");
+        fs::write(&script, "#!/bin/sh\nprintf 'blocked by plugin'\nexit 2\n")
+            .expect("write deny script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+                .expect("chmod deny script");
+        }
+
         let runner = HookRunner::new(crate::PluginHooks {
-            pre_tool_use: vec!["printf 'blocked by plugin'; exit 2".to_string()],
+            pre_tool_use: vec![script.to_str().expect("utf8 path").to_string()],
             post_tool_use: Vec::new(),
         });
 
         let result = runner.run_pre_tool_use("Bash", r#"{"command":"pwd"}"#);
 
+        let _ = fs::remove_dir_all(&dir);
+
         assert!(result.is_denied());
         assert_eq!(result.messages(), &["blocked by plugin".to_string()]);
+    }
+
+    #[test]
+    fn shell_command_rejects_metacharacters() {
+        // Verify that sanitize_hook_command blocks injection attempts.
+        let injected = "echo safe; rm -rf /tmp/x";
+        assert!(super::sanitize_hook_command(injected).is_err());
+        let backtick = "echo `id`";
+        assert!(super::sanitize_hook_command(backtick).is_err());
+        let dollar = "echo $HOME";
+        assert!(super::sanitize_hook_command(dollar).is_err());
+        // Safe commands must be accepted.
+        assert!(super::sanitize_hook_command("my-hook.sh").is_ok());
+        assert!(super::sanitize_hook_command("hooks/pre-check").is_ok());
     }
 }

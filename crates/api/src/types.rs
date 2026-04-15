@@ -24,7 +24,7 @@ impl MessageRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputMessage {
     pub role: String,
     pub content: Vec<InputContentBlock>,
@@ -58,7 +58,7 @@ impl InputMessage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputContentBlock {
     Text {
@@ -95,7 +95,7 @@ pub enum ImageSourceKind {
     Base64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResultContentBlock {
     Text { text: String },
@@ -118,7 +118,7 @@ pub enum ToolChoice {
     Tool { name: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageResponse {
     pub id: String,
     #[serde(rename = "type")]
@@ -142,7 +142,7 @@ impl MessageResponse {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OutputContentBlock {
     Text {
@@ -181,12 +181,12 @@ impl Usage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageStartEvent {
     pub message: MessageResponse,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageDeltaEvent {
     pub delta: MessageDelta,
     pub usage: Usage,
@@ -200,13 +200,13 @@ pub struct MessageDelta {
     pub stop_sequence: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentBlockStartEvent {
     pub index: u32,
     pub content_block: OutputContentBlock,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentBlockDeltaEvent {
     pub index: u32,
     pub delta: ContentBlockDelta,

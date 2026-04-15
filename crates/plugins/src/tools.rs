@@ -10,7 +10,7 @@ use crate::PluginError;
 // PluginTool — executable tool provided by a plugin
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTool {
     pub(crate) plugin_id: String,
     pub(crate) plugin_name: String,

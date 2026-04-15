@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 async-stream = "0.3"
 axum = "0.8"
+rand = { version = "0.8", features = ["std"] }
 runtime = { path = "../runtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true

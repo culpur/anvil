@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -23,7 +22,6 @@ const BROADCAST_CAPACITY: usize = 64;
 #[derive(Clone)]
 pub struct AppState {
     sessions: SessionStore,
-    next_session_id: Arc<AtomicU64>,
 }
 
 impl AppState {
@@ -31,13 +29,18 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            next_session_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
     fn allocate_session_id(&self) -> SessionId {
-        let id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
-        format!("session-{id}")
+        use rand::RngCore;
+        let mut bytes = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut bytes);
+        bytes.iter().fold(String::with_capacity(32), |mut acc, b| {
+            use std::fmt::Write;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
     }
 }
 
@@ -388,12 +391,17 @@ mod tests {
             .await
             .expect("details response should parse");
 
-        // then
-        assert_eq!(created.session_id, "session-1");
+        // then: session IDs are 32-character lowercase hex strings (16 random bytes)
+        assert_eq!(created.session_id.len(), 32, "session ID should be 32 hex chars");
+        assert!(
+            created.session_id.chars().all(|c| c.is_ascii_hexdigit()),
+            "session ID should be hex: {}",
+            created.session_id
+        );
         assert_eq!(sessions.sessions.len(), 1);
         assert_eq!(sessions.sessions[0].id, created.session_id);
         assert_eq!(sessions.sessions[0].message_count, 0);
-        assert_eq!(details.id, "session-1");
+        assert_eq!(details.id, created.session_id);
         assert!(details.session.messages.is_empty());
     }
 
@@ -439,7 +447,10 @@ mod tests {
         // then
         assert_eq!(send_status, reqwest::StatusCode::NO_CONTENT);
         assert!(snapshot_frame.contains("event: snapshot"));
-        assert!(snapshot_frame.contains("\"session_id\":\"session-1\""));
+        assert!(
+            snapshot_frame.contains(&format!("\"session_id\":\"{}\"", created.session_id)),
+            "snapshot frame should contain the session ID"
+        );
         assert!(message_frame.contains("event: message"));
         assert!(message_frame.contains("hello from test"));
         assert_eq!(details.session.messages.len(), 1);

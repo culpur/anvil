@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 
 use api::ToolDefinition;
 use plugins::PluginTool;
@@ -58,14 +57,14 @@ pub struct ToolSpec {
     pub required_permission: PermissionMode,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpToolDefinition {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Option<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalToolRegistry {
     plugin_tools: Vec<PluginTool>,
     mcp_tools: Vec<McpToolDefinition>,
@@ -252,7 +251,10 @@ fn permission_mode_from_plugin(value: &str) -> PermissionMode {
         "read-only" => PermissionMode::ReadOnly,
         "workspace-write" => PermissionMode::WorkspaceWrite,
         "danger-full-access" => PermissionMode::DangerFullAccess,
-        other => panic!("unsupported plugin permission: {other}"),
+        other => {
+            eprintln!("warning: unsupported plugin permission '{other}'; defaulting to read-only");
+            PermissionMode::ReadOnly
+        }
     }
 }
 
@@ -1031,7 +1033,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     // If plan mode is active, block every tool that is not ReadOnly — except
     // ExitPlanMode itself which is always permitted.
-    if config_ops::PLAN_MODE.load(Ordering::SeqCst) && name != "ExitPlanMode" {
+    if *config_ops::PLAN_MODE.lock().unwrap() && name != "ExitPlanMode" {
         let required = mvp_tool_specs()
             .into_iter()
             .find(|s| s.name == name)
@@ -1198,6 +1200,9 @@ mod tests {
 
     #[test]
     fn web_fetch_returns_prompt_aware_summary() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1"); }
         let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::html(
@@ -1238,6 +1243,9 @@ mod tests {
 
     #[test]
     fn web_fetch_supports_plain_text_and_rejects_invalid_url() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::set_var("ANVIL_ALLOW_LOOPBACK_FETCH", "1"); }
         let server = TestServer::spawn(Arc::new(|_request_line: &str| {
             HttpResponse::text(200, "OK", "plain text response")
@@ -1272,6 +1280,9 @@ mod tests {
 
     #[test]
     fn web_search_extracts_and_filters_results() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.contains("GET /search?q=rust+web+search "));
             HttpResponse::html(

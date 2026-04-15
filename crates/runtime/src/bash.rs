@@ -33,7 +33,7 @@ pub struct BashCommandInput {
     pub allowed_mounts: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BashCommandOutput {
     pub stdout: String,
     pub stderr: String,

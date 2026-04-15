@@ -26,14 +26,14 @@ impl LspServerConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDiagnostics {
     pub path: PathBuf,
     pub uri: String,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceDiagnostics {
     pub files: Vec<FileDiagnostics>,
 }
@@ -80,7 +80,7 @@ impl Display for SymbolLocation {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LspContextEnrichment {
     pub file_path: PathBuf,
     pub diagnostics: WorkspaceDiagnostics,

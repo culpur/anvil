@@ -581,14 +581,14 @@ pub enum Side {
 }
 
 /// One horizontal line in the status bar, with left-aligned and right-aligned widgets.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusLine {
     pub left: Vec<StatusWidget>,
     pub right: Vec<StatusWidget>,
 }
 
 /// Per-widget style overrides.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WidgetStyle {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
@@ -599,7 +599,7 @@ pub struct WidgetStyle {
 }
 
 /// Full status line configuration: lines + style settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusLineConfig {
     pub preset: String,
     pub lines: Vec<StatusLine>,

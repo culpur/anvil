@@ -1086,75 +1086,58 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_or_runtime_bound_slash_commands() {
+    fn unimplemented_slash_commands_return_helpful_messages() {
         let session = Session::new();
-        assert!(handle_slash_command("/unknown", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command("/status", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/branch list", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(
-            handle_slash_command("/bughunter", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(
-            handle_slash_command("/worktree list", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(handle_slash_command("/commit", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command(
+
+        // Unknown commands return a "not recognized" message
+        let unknown =
+            handle_slash_command("/unknown", &session, CompactionConfig::default())
+                .expect("unknown command should return a message");
+        assert!(unknown.message.contains("not a recognized command"));
+        assert!(unknown.message.contains("/help"));
+        assert_eq!(unknown.session, session);
+
+        // All commands that are parsed but not yet implemented return Some with a
+        // helpful message and leave the session unchanged.
+        let cases: &[&str] = &[
+            "/status",
+            "/branch list",
+            "/bughunter",
+            "/worktree list",
+            "/commit",
             "/commit-push-pr review notes",
-            &session,
-            CompactionConfig::default()
-        )
-        .is_none());
-        assert!(handle_slash_command("/pr", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command("/issue", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/ultraplan", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(
-            handle_slash_command("/teleport foo", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(
-            handle_slash_command("/debug-tool-call", &session, CompactionConfig::default())
-                .is_none()
-        );
-        assert!(
-            handle_slash_command("/model sonnet", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(handle_slash_command(
+            "/pr",
+            "/issue",
+            "/ultraplan",
+            "/teleport foo",
+            "/debug-tool-call",
+            "/model sonnet",
             "/permissions read-only",
-            &session,
-            CompactionConfig::default()
-        )
-        .is_none());
-        assert!(handle_slash_command("/clear", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/clear --confirm", &session, CompactionConfig::default())
-                .is_none()
-        );
-        assert!(handle_slash_command("/cost", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command(
+            "/clear",
+            "/clear --confirm",
+            "/cost",
             "/resume session.json",
-            &session,
-            CompactionConfig::default()
-        )
-        .is_none());
-        assert!(handle_slash_command("/config", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/config env", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(handle_slash_command("/diff", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command("/version", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/export note.txt", &session, CompactionConfig::default())
-                .is_none()
-        );
-        assert!(
-            handle_slash_command("/session list", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(
-            handle_slash_command("/plugins list", &session, CompactionConfig::default()).is_none()
-        );
+            "/config",
+            "/config env",
+            "/diff",
+            "/version",
+            "/export note.txt",
+            "/session list",
+            "/plugins list",
+        ];
+
+        for input in cases {
+            let result = handle_slash_command(input, &session, CompactionConfig::default())
+                .unwrap_or_else(|| panic!("{input} should return a message, not None"));
+            assert!(
+                !result.message.is_empty(),
+                "{input} returned an empty message"
+            );
+            assert_eq!(
+                result.session, session,
+                "{input} should not mutate the session"
+            );
+        }
     }
 
     #[test]

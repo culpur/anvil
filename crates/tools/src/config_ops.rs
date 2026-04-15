@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -710,10 +710,12 @@ pub(crate) fn run_tool_search(input: ToolSearchInput) -> Result<String, String> 
 
 /// Process-global plan-mode flag.  When `true`, only `ReadOnly` tools are
 /// permitted inside `execute_tool`.
-pub(crate) static PLAN_MODE: AtomicBool = AtomicBool::new(false);
+pub(crate) static PLAN_MODE: Mutex<bool> = Mutex::new(false);
 
 pub(crate) fn run_enter_plan_mode() -> Result<String, String> {
-    let was_active = PLAN_MODE.swap(true, Ordering::SeqCst);
+    let mut guard = PLAN_MODE.lock().unwrap();
+    let was_active = *guard;
+    *guard = true;
     if was_active {
         to_pretty_json(json!({
             "status": "already_in_plan_mode",
@@ -729,7 +731,9 @@ pub(crate) fn run_enter_plan_mode() -> Result<String, String> {
 }
 
 pub(crate) fn run_exit_plan_mode() -> Result<String, String> {
-    let was_active = PLAN_MODE.swap(false, Ordering::SeqCst);
+    let mut guard = PLAN_MODE.lock().unwrap();
+    let was_active = *guard;
+    *guard = false;
     if was_active {
         to_pretty_json(json!({
             "status": "exited_plan_mode",
@@ -1516,7 +1520,10 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                         id: id.clone(),
                         name: name.clone(),
                         input: serde_json::from_str(input)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": input })),
+                            .unwrap_or_else(|e| {
+                                eprintln!("JSON parse warning: {e}");
+                                serde_json::json!({ "raw": input })
+                            }),
                     },
                     ContentBlock::ToolResult {
                         tool_use_id,

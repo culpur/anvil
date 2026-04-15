@@ -15,7 +15,7 @@ use super::types::{
     McpToolCallResult,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedMcpTool {
     pub server_name: String,
     pub qualified_name: String,
