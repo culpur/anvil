@@ -555,8 +555,7 @@ fn permission_mode_from_label(mode: &str) -> PermissionMode {
     match mode {
         "read-only" => PermissionMode::ReadOnly,
         "workspace-write" => PermissionMode::WorkspaceWrite,
-        "danger-full-access" => PermissionMode::DangerFullAccess,
-        other => panic!("unsupported permission mode label: {other}"),
+        "danger-full-access" | "default" | _ => PermissionMode::DangerFullAccess,
     }
 }
 
@@ -1976,9 +1975,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.push_system(format!("Tab renamed to: {arg}"));
                             }
                         }
-                        n if n.parse::<usize>().is_ok() => {
-                            let idx = n.parse::<usize>().unwrap().saturating_sub(1);
-                            tui.switch_tab(idx);
+                        n => {
+                            if let Ok(num) = n.parse::<usize>() {
+                                tui.switch_tab(num.saturating_sub(1));
+                            }
                         }
                         "" => {
                             // /tab with no args — show help
@@ -4624,10 +4624,13 @@ impl LiveCli {
                 // Create a sync channel for receiving user messages from web clients
                 let (relay_input_tx, relay_input_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .expect("relay tokio runtime");
+                    else {
+                        eprintln!("Failed to create relay tokio runtime");
+                        return;
+                    };
                     // Set the fixed pairing code BEFORE running the relay
                     rt.block_on(relay_host.set_pairing_code(pairing_code_for_relay));
                     let snapshot_fn = std::sync::Arc::new(tokio::sync::Mutex::new(
@@ -4674,7 +4677,13 @@ impl LiveCli {
                     estimated_tokens: self.runtime.estimated_tokens(),
                 },
                 self.permission_mode.as_str(),
-                &status_context(Some(&self.session.path)).expect("status context should load"),
+                &match status_context(Some(&self.session.path)) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        eprintln!("status context error: {e}");
+                        return;
+                    }
+                },
             )
         );
     }

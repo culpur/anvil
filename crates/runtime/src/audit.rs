@@ -24,11 +24,14 @@ pub fn sign_transcript(content: &str, key: &[u8; 32]) -> String {
     hex::encode(result.into_bytes())
 }
 
-/// Verify an HMAC-SHA256 signature.
+/// Verify an HMAC-SHA256 signature using constant-time comparison.
 pub fn verify_signature(content: &str, signature: &str, key: &[u8; 32]) -> bool {
-    let expected = sign_transcript(content, key);
-    // Constant-time comparison
-    expected == signature
+    let Ok(sig_bytes) = hex::decode(signature) else {
+        return false;
+    };
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key");
+    mac.update(content.as_bytes());
+    mac.verify_slice(&sig_bytes).is_ok()
 }
 
 /// Save a signed audit record for a session.
