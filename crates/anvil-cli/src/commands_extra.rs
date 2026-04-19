@@ -203,4 +203,92 @@ impl LiveCli {
             ),
         }
     }
+
+    /// `/knowledge [review|accept <N>|reject <N>|list]` — manage knowledge nominations.
+    pub(crate) fn run_knowledge_command(&self, action: Option<&str>) -> String {
+        let store = runtime::nominations::NominationStore::new();
+
+        match action.map(str::trim).unwrap_or("review") {
+            "review" | "list" | "" => store.format_pending(),
+
+            arg if arg.starts_with("accept ") => {
+                let n_str = arg["accept ".len()..].trim();
+                let Ok(n) = n_str.parse::<usize>() else {
+                    return "Usage: /knowledge accept <number>".to_string();
+                };
+                let pending = store.list(Some(runtime::nominations::NominationStatus::Pending));
+                if n == 0 || n > pending.len() {
+                    return format!("Invalid nomination number. {} pending.", pending.len());
+                }
+                let nom = &pending[n - 1];
+                match store.accept(&nom.id, "CLAUDE.md") {
+                    Ok(()) => {
+                        // Append to CLAUDE.md in current directory
+                        let claude_md = std::env::current_dir()
+                            .unwrap_or_default()
+                            .join("CLAUDE.md");
+                        let entry = format!("\n- {}\n", nom.content);
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&claude_md)
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                f.write_all(entry.as_bytes())
+                            });
+                        format!(
+                            "✓ Accepted: {}\n  Promoted to CLAUDE.md",
+                            nom.content
+                        )
+                    }
+                    Err(e) => format!("Error accepting nomination: {e}"),
+                }
+            }
+
+            arg if arg.starts_with("reject ") => {
+                let n_str = arg["reject ".len()..].trim();
+                let Ok(n) = n_str.parse::<usize>() else {
+                    return "Usage: /knowledge reject <number>".to_string();
+                };
+                let pending = store.list(Some(runtime::nominations::NominationStatus::Pending));
+                if n == 0 || n > pending.len() {
+                    return format!("Invalid nomination number. {} pending.", pending.len());
+                }
+                let nom = &pending[n - 1];
+                match store.reject(&nom.id) {
+                    Ok(()) => format!("✗ Rejected: {}", nom.content),
+                    Err(e) => format!("Error rejecting nomination: {e}"),
+                }
+            }
+
+            other => format!(
+                "Unknown action: {other}\nUsage: /knowledge [review|accept <N>|reject <N>]"
+            ),
+        }
+    }
+
+    /// `/daily [date]` — view daily summary.
+    pub(crate) fn run_daily_command(&self, _date: Option<&str>) -> String {
+        // Phase 4 will implement full daily summaries
+        // For now, show nominations count and basic session info
+        let store = runtime::nominations::NominationStore::new();
+        let pending = store.pending_count();
+        let session = self.runtime.session();
+        let msg_count = session.messages.len();
+        let total_tokens: u32 = session.messages.iter()
+            .filter_map(|m| m.usage.as_ref())
+            .map(|u| u.input_tokens + u.output_tokens)
+            .sum();
+
+        format!(
+            "📊 Daily Summary\n\
+             ─────────────────────────\n\
+             📝 Messages this session: {msg_count}\n\
+             💬 Tokens used: {total_tokens}\n\
+             📋 Pending nominations: {pending}\n\
+             ─────────────────────────\n\
+             Full daily summaries with task reconciliation coming in v2.2.5.\n\
+             Use /knowledge review to review pending nominations."
+        )
+    }
 }

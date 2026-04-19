@@ -356,6 +356,14 @@ pub enum SlashCommand {
     },
     /// `/productivity` — show session productivity stats
     Productivity,
+    /// `/knowledge [review|accept <N>|reject <N>|list]` — manage knowledge nominations
+    Knowledge {
+        action: Option<String>,
+    },
+    /// `/daily [date]` — view daily summary and task reconciliation
+    Daily {
+        date: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -643,6 +651,12 @@ impl SlashCommand {
                 action: remainder_after_command(trimmed, command),
             },
             "productivity" => Self::Productivity,
+            "knowledge" | "nominations" => Self::Knowledge {
+                action: remainder_after_command(trimmed, command),
+            },
+            "daily" | "summary" => Self::Daily {
+                date: remainder_after_command(trimmed, command),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }

@@ -5,6 +5,7 @@ pub mod theme;
 pub mod cron;
 pub mod history;
 pub mod memory;
+pub mod nominations;
 pub mod qmd;
 pub mod search;
 pub mod task;

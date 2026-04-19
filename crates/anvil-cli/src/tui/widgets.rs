@@ -48,6 +48,8 @@ pub(super) fn all_slash_commands() -> Vec<CompletionItem> {
         CompletionItem { insert: "/debug-tool-call".into(), hint: "Replay last tool call".into() },
         CompletionItem { insert: "/mcp".into(), hint: "MCP server management".into() },
         CompletionItem { insert: "/productivity".into(), hint: "Session productivity stats".into() },
+        CompletionItem { insert: "/knowledge".into(), hint: "Manage knowledge nominations".into() },
+        CompletionItem { insert: "/daily".into(), hint: "Daily summary + task reconciliation".into() },
         CompletionItem { insert: "/configure".into(), hint: "Interactive configuration menu".into() },
         CompletionItem { insert: "/theme".into(), hint: "Switch terminal color theme".into() },
         CompletionItem { insert: "/search".into(), hint: "Multi-provider web search".into() },
@@ -175,6 +177,12 @@ pub(super) fn subcommands_for(command: &str) -> Vec<CompletionItem> {
         "/mcp" => vec![
             CompletionItem { insert: "list".into(), hint: "List configured MCP servers".into() },
             CompletionItem { insert: "status".into(), hint: "Show server connection status".into() },
+        ],
+        "/knowledge" | "/nominations" => vec![
+            CompletionItem { insert: "review".into(), hint: "Review pending nominations".into() },
+            CompletionItem { insert: "accept".into(), hint: "Accept nomination: /knowledge accept <N>".into() },
+            CompletionItem { insert: "reject".into(), hint: "Reject nomination: /knowledge reject <N>".into() },
+            CompletionItem { insert: "list".into(), hint: "List all nominations".into() },
         ],
         "/configure" | "/settings" => vec![
             CompletionItem { insert: "providers".into(), hint: "Provider & auth settings".into() },

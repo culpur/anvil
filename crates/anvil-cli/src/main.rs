@@ -1186,6 +1186,8 @@ fn run_resume_command(
         | SlashCommand::Focus
         | SlashCommand::Mcp { .. }
         | SlashCommand::Productivity
+        | SlashCommand::Knowledge { .. }
+        | SlashCommand::Daily { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -4068,6 +4070,14 @@ impl LiveCli {
             }
             SlashCommand::Productivity => {
                 println!("{}", self.run_productivity_command());
+                false
+            }
+            SlashCommand::Knowledge { action } => {
+                println!("{}", self.run_knowledge_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Daily { date } => {
+                println!("{}", self.run_daily_command(date.as_deref()));
                 false
             }
             SlashCommand::Context { path } => {

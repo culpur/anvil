@@ -412,6 +412,14 @@ pub fn handle_slash_command(
             message: "/productivity is not yet implemented. Productivity metrics and session summaries are not yet available.".to_string(),
             session: session.clone(),
         }),
+        SlashCommand::Knowledge { .. } => Some(SlashCommandResult {
+            message: "/knowledge is handled by the runtime. Use /knowledge review, /knowledge accept <N>, or /knowledge reject <N>.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Daily { .. } => Some(SlashCommandResult {
+            message: "/daily is handled by the runtime. Use /daily to view today's summary or /daily <date> for a specific day.".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),
