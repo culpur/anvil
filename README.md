@@ -146,7 +146,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ## Changelog
 
-### v2.2.5 &mdash; April 15, 2026
+### v2.2.5 &mdash; April 19, 2026
 
 **Six Major Features** &mdash; interactive editor, productivity, MCP, history, plugins, agents.
 
@@ -157,6 +157,23 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Session History Browser &mdash; `/history-archive stats` with model breakdown
 - &#10003; Plugin System UI &mdash; web viewer management panel with config toggles
 - &#10003; Agent Panel Expansion &mdash; web viewer agent management buttons
+
+### v2.2.4 &mdash; April 16, 2026
+
+**Security Hardening + Optimization** &mdash; 17 audit findings fixed.
+
+- &#10003; Constant-time HMAC verification, plugin command injection prevention
+- &#10003; Path traversal protection, cryptographic session IDs
+- &#10003; 110 functions made const fn, zero compiler warnings
+- &#10003; RC widget: live client count with connect/disconnect signals
+
+### v2.2.3 &mdash; April 15, 2026
+
+**Six Major Features** &mdash; interactive editor, productivity, MCP, history, plugins, agents.
+
+- &#10003; Interactive Status Line Editor &mdash; 37 widgets, 16 presets, visual editor
+- &#10003; Code Productivity Dashboard &mdash; live git diff tracking
+- &#10003; MCP Server Manager, Session History Browser, Plugin UI, Agent Panel
 
 ### v2.2.2 &mdash; April 14, 2026
 
