@@ -6,7 +6,7 @@
 
 ### The AI coding assistant that gives you **live remote control**.
 
-[![Version](https://img.shields.io/badge/version-2.2.4-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.5-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -146,7 +146,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ## Changelog
 
-### v2.2.4 &mdash; April 15, 2026
+### v2.2.5 &mdash; April 15, 2026
 
 **Six Major Features** &mdash; interactive editor, productivity, MCP, history, plugins, agents.
 
