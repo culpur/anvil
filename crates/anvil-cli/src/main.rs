@@ -2338,6 +2338,10 @@ struct LiveCli {
     relay_event_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Receiver for messages from remote control web clients.
     relay_input_rx: Option<std::sync::mpsc::Receiver<(usize, String)>>,
+    /// Wall-clock start time of this session (used by daily summaries).
+    session_start: Instant,
+    /// Unix epoch seconds at session start (used to compute duration in `record_daily`).
+    session_start_epoch: u64,
 }
 
 impl LiveCli {
@@ -2395,6 +2399,11 @@ impl LiveCli {
             relay_session: None,
             relay_event_tx: None,
             relay_input_rx: None,
+            session_start: Instant::now(),
+            session_start_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
         };
         cli.persist_session()?;
         Ok(cli)

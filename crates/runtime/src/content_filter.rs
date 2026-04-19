@@ -84,6 +84,26 @@ static BUILTIN_INJECTION_PATTERNS: &[&str] = &[
     r"(?i)<\|im_start\|>",
 ];
 
+// ─── Infrastructure-detail protection note ────────────────────────────────────
+//
+// The `scan_for_secrets` method below blocks credentials (API keys, private
+// keys, bearer tokens) from reaching the model or being written to output.
+//
+// Infrastructure details — internal hostnames, IP addresses, deploy paths, port
+// numbers, bastion usernames — are handled by a separate encrypted tier:
+// `crates/runtime/src/private_memory.rs` (`PrivateProjectMemory`).
+//
+// CLAUDE.md write operations (and any other plaintext persistence of project
+// context) MUST NOT include values decrypted from `PrivateProjectMemory`.  The
+// `format_for_context()` method on that type appends a "Do not echo these values
+// to plaintext files" reminder which the model is instructed to observe.
+//
+// If you extend this filter with infrastructure-pattern detection (e.g. RFC-1918
+// addresses, internal FQDN suffixes), add them here as `Warning`-severity
+// `extra_secret_patterns` rather than hard-coded `Block` patterns, because
+// these values legitimately appear in tool outputs and bash results — they
+// should trigger a log warning, not a hard block.
+
 // Built-in secret / credential detection patterns.
 static BUILTIN_SECRET_PATTERNS: &[&str] = &[
     // AWS Access Key

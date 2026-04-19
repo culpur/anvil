@@ -3,9 +3,11 @@ mod bootstrap;
 pub mod hub;
 pub mod theme;
 pub mod cron;
+pub mod daily;
 pub mod history;
 pub mod memory;
 pub mod nominations;
+pub mod private_memory;
 pub mod qmd;
 pub mod search;
 pub mod task;
@@ -104,11 +106,15 @@ pub use remote::{
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use cron::{next_run_time, CronDaemon, CronEntry, CronManager};
+pub use daily::{
+    extract_tasks, today_date, DailySummary, DailyStore, SessionSummary,
+};
 pub use task::{CompletedTaskInfo, TaskManager, TaskStatus};
 pub use team::{
     DelegationRecord, MemberStatus, TaskSnapshot, TeamManager, TeamMember, TeamStatus,
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
+pub use private_memory::{private_memory_project_hash, PrivateProjectMemory};
 pub use history::{ArchiveEntry, HistoryArchiver, MIN_ARCHIVE_MESSAGES};
 pub use qmd::{render_history_context, render_qmd_context, QmdClient, QmdResult, QmdStatus};
 pub use search::{
