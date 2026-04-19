@@ -276,7 +276,7 @@ const COMPLETION_INDICATORS: &[&str] = &[
 pub fn extract_tasks(
     messages: &[crate::session::ConversationMessage],
 ) -> (Vec<String>, Vec<String>) {
-    use crate::session::{ContentBlock, MessageRole};
+    use crate::session::MessageRole;
 
     let mut completed: Vec<String> = Vec::new();
     let mut open: Vec<String> = Vec::new();
@@ -451,7 +451,6 @@ fn looks_like_date(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

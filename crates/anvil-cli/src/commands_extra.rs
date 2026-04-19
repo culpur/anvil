@@ -267,28 +267,93 @@ impl LiveCli {
         }
     }
 
-    /// `/daily [date]` — view daily summary.
-    pub(crate) fn run_daily_command(&self, _date: Option<&str>) -> String {
-        // Phase 4 will implement full daily summaries
-        // For now, show nominations count and basic session info
-        let store = runtime::nominations::NominationStore::new();
-        let pending = store.pending_count();
-        let session = self.runtime.session();
-        let msg_count = session.messages.len();
-        let total_tokens: u32 = session.messages.iter()
-            .filter_map(|m| m.usage.as_ref())
-            .map(|u| u.input_tokens + u.output_tokens)
-            .sum();
+    /// `/daily [YYYY-MM-DD | recent]` — view daily summary with task reconciliation.
+    ///
+    /// - `/daily`            — today's summary
+    /// - `/daily YYYY-MM-DD` — specific day
+    /// - `/daily recent`     — last 7 days overview
+    pub(crate) fn run_daily_command(&self, date: Option<&str>) -> String {
+        let store = runtime::DailyStore::new();
 
-        format!(
-            "📊 Daily Summary\n\
-             ─────────────────────────\n\
-             📝 Messages this session: {msg_count}\n\
-             💬 Tokens used: {total_tokens}\n\
-             📋 Pending nominations: {pending}\n\
-             ─────────────────────────\n\
-             Full daily summaries with task reconciliation coming in v2.2.5.\n\
-             Use /knowledge review to review pending nominations."
-        )
+        match date.map(str::trim).unwrap_or("") {
+            "" => {
+                let summary = store.today();
+                if summary.sessions.is_empty() {
+                    // No sessions recorded yet today — show live session stats.
+                    let session = self.runtime.session();
+                    let total_tokens: u32 = session.messages.iter()
+                        .filter_map(|m| m.usage.as_ref())
+                        .map(|u| u.input_tokens + u.output_tokens)
+                        .sum();
+                    format!(
+                        "Daily Summary - {}\n\
+                         {}\n\
+                         No completed sessions recorded today.\n\
+                         Current session: {} messages, {} tokens.\n\
+                         (Summary is written at session exit.)",
+                        runtime::today_date(),
+                        "─".repeat(45),
+                        session.messages.len(),
+                        total_tokens,
+                    )
+                } else {
+                    store.format_summary(&summary)
+                }
+            }
+
+            "recent" => {
+                let days = store.recent(7);
+                if days.is_empty() {
+                    return "No daily summaries found in ~/.anvil/daily/".to_string();
+                }
+                let mut lines = vec![
+                    "Recent Sessions (last 7 days)".to_string(),
+                    "─".repeat(45),
+                ];
+                for summary in &days {
+                    let session_count = summary.sessions.len();
+                    let open_count = store.reconcile(summary).len();
+                    let open_str = if open_count > 0 {
+                        format!(", {open_count} open")
+                    } else {
+                        String::new()
+                    };
+                    lines.push(format!(
+                        "  {}  {} session(s), {} tokens{}",
+                        summary.date,
+                        session_count,
+                        format_token_count(summary.total_tokens),
+                        open_str,
+                    ));
+                }
+                lines.push("─".repeat(45));
+                lines.push("Use /daily YYYY-MM-DD for full detail.".to_string());
+                lines.join("\n")
+            }
+
+            date_str => {
+                match store.get(date_str) {
+                    Some(summary) => store.format_summary(&summary),
+                    None => format!(
+                        "No daily summary found for {}.\n\
+                         Summaries are stored in ~/.anvil/daily/",
+                        date_str
+                    ),
+                }
+            }
+        }
     }
+}
+
+/// Format a token count with thousands separators for display.
+fn format_token_count(n: u32) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }

@@ -354,15 +354,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn compact_threshold_defaults_to_85() {
-        // Ensure the env var is not set before checking.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::remove_var(COMPACT_THRESHOLD_ENV); }
         assert_eq!(HistoryArchiver::compact_threshold_pct(), 85);
     }
 
     #[test]
     fn compact_threshold_reads_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe { std::env::set_var(COMPACT_THRESHOLD_ENV, "70"); }
         assert_eq!(HistoryArchiver::compact_threshold_pct(), 70);
         unsafe { std::env::remove_var(COMPACT_THRESHOLD_ENV); }

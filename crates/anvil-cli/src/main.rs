@@ -917,6 +917,42 @@ fn extract_summary_from_archive(content: &str) -> Option<String> {
     }
 }
 
+/// Scan tool-result blocks for file paths that appear to have been modified.
+///
+/// Heuristic: any line in a tool-result output that looks like an absolute or
+/// relative file path (contains `/` or `\` and a `.` extension) is collected.
+fn collect_modified_files(messages: &[runtime::ConversationMessage]) -> Vec<String> {
+    use runtime::{ContentBlock, MessageRole};
+    use std::collections::BTreeSet;
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for msg in messages {
+        if msg.role != MessageRole::Tool {
+            continue;
+        }
+        for block in &msg.blocks {
+            if let ContentBlock::ToolResult { output, .. } = block {
+                for line in output.lines() {
+                    let trimmed = line.trim();
+                    // Accept lines that look like file paths but not URLs.
+                    if trimmed.len() > 3
+                        && (trimmed.contains('/') || trimmed.contains('\\'))
+                        && trimmed.contains('.')
+                        && !trimmed.starts_with("http")
+                    {
+                        // Take only the first token so we don't pick up prose.
+                        let candidate = trimmed.split_whitespace().next().unwrap_or(trimmed);
+                        if candidate.len() < 256 {
+                            seen.insert(candidate.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    seen.into_iter().take(50).collect()
+}
+
 /// Convert a Unix timestamp (seconds) to a human-readable date string.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
 fn format_unix_timestamp(secs: u64) -> String {
@@ -1635,6 +1671,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             match result {
                 tui::ReadResult::Exit => {
                     cli.persist_session()?;
+                    cli.record_daily();
                     break 'outer;
                 }
                 _ => continue,
@@ -1867,6 +1904,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             }
             ReadResult::Exit => {
                 cli.persist_session()?;
+                cli.record_daily();
                 break 'outer;
             }
             ReadResult::ConfigureAction(action) => {
@@ -1907,6 +1945,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if matches!(trimmed, "/exit" | "/quit") {
                     cli.persist_session()?;
+                    cli.record_daily();
                     break 'outer;
                 }
 
@@ -2175,6 +2214,7 @@ fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if matches!(trimmed, "/exit" | "/quit") {
                     cli.persist_session()?;
+                    cli.record_daily();
                     break;
                 }
                 if let Some(command) = SlashCommand::parse(trimmed) {
@@ -2212,6 +2252,7 @@ fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             input::ReadOutcome::Cancel => {}
             input::ReadOutcome::Exit => {
                 cli.persist_session()?;
+                cli.record_daily();
                 break;
             }
         }
@@ -2340,8 +2381,6 @@ struct LiveCli {
     relay_input_rx: Option<std::sync::mpsc::Receiver<(usize, String)>>,
     /// Wall-clock start time of this session (used by daily summaries).
     session_start: Instant,
-    /// Unix epoch seconds at session start (used to compute duration in `record_daily`).
-    session_start_epoch: u64,
 }
 
 impl LiveCli {
@@ -2400,10 +2439,6 @@ impl LiveCli {
             relay_event_tx: None,
             relay_input_rx: None,
             session_start: Instant::now(),
-            session_start_epoch: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
         };
         cli.persist_session()?;
         Ok(cli)
@@ -4395,6 +4430,64 @@ impl LiveCli {
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime.session().save_to_path(&self.session.path)?;
         Ok(())
+    }
+
+    /// Record this session in the daily summary store and print any open items.
+    ///
+    /// Called once at normal session exit (from both TUI and non-TUI paths).
+    /// Failures are swallowed so a write error never prevents Anvil from exiting.
+    fn record_daily(&self) {
+        use runtime::{DailyStore, SessionSummary, extract_tasks};
+
+        let session_data = self.runtime.session();
+        let messages = &session_data.messages;
+
+        // Extract tasks from the conversation history.
+        let (tasks_completed, tasks_open) = extract_tasks(messages);
+
+        // Collect modified files from ToolResult outputs that mention a path.
+        let files_modified = collect_modified_files(messages);
+
+        // Count nominations generated this session.
+        let nominations_generated = {
+            let store = runtime::nominations::NominationStore::new();
+            store.list(Some(runtime::nominations::NominationStatus::Pending)).len()
+        };
+
+        let tokens_used = self.runtime.usage().cumulative_usage().total_tokens();
+        let duration_secs = self.session_start.elapsed().as_secs();
+        let messages_count = messages.len();
+
+        let summary = SessionSummary {
+            session_id: self.session.id.clone(),
+            model: self.model.clone(),
+            duration_secs,
+            tokens_used,
+            messages_count,
+            tasks_completed,
+            tasks_open,
+            files_modified,
+            nominations_generated,
+            credentials_auto_vaulted: 0,
+        };
+
+        let store = DailyStore::new();
+        if let Err(e) = store.record_session(summary) {
+            // Non-fatal: daily summaries are best-effort.
+            eprintln!("[daily] failed to record session: {e}");
+            return;
+        }
+
+        // Print open items as a reminder.
+        let updated = store.today();
+        let open = store.reconcile(&updated);
+        if !open.is_empty() {
+            eprintln!();
+            eprintln!("Open items from today ({}):", updated.date);
+            for (i, item) in open.iter().enumerate() {
+                eprintln!("  {}. {item}", i + 1);
+            }
+        }
     }
 
     fn print_status(&self) {
