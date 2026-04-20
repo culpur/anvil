@@ -4,15 +4,15 @@
 
 # &#9874; Anvil
 
-### The AI coding assistant that gives you **live remote control**.
+### The only AI coding assistant that doesn't lock you in.
 
 [![Version](https://img.shields.io/badge/version-2.2.6-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
-[![Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![5 Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
 
-**15 MB binary. Zero dependencies. Five AI providers. Typed credential vault. 90+ commands.**<br>
-**The only AI coding assistant you can hand to any browser &mdash; in real-time.**
+**Your providers. Your credentials. Your data. Your cost.**<br>
+**Five AI providers, one terminal. Switch freely. Own your workflow.**
 
 [**Download**](https://github.com/culpur/anvil/releases/latest) &#8226; [**AnvilHub**](https://anvilhub.culpur.net) &#8226; [**Changelog**](#changelog) &#8226; [**Product Page**](https://culpur.net/anvil/)
 
@@ -23,17 +23,33 @@
 
 ## Why Anvil?
 
-Most AI coding tools are chat windows with a terminal attached. Anvil is the opposite &mdash; a **full-screen development environment** built for professionals who need power, security, and flexibility.
+Every other AI coding assistant comes with a leash. Claude Code locks you to Anthropic. Copilot locks you to GitHub. Cursor locks you to their wrapper and their pricing. Your code, your data, your costs &mdash; all flow through one vendor's pipes.
 
-| | What you get |
+**Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between Claude, GPT, Gemini, Grok, and local models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
+
+No account required. No telemetry. No lock-in. One 15 MB binary, zero dependencies, five providers.
+
+---
+
+## What you keep control of
+
+| | |
 |---|---|
-| &#128640; **Never interrupted** | Five providers with automatic failover. When one hits a rate limit, Anvil switches seamlessly &mdash; your context and conversation survive. |
-| &#128225; **Live Remote Control** | Type `/remote-control` and hand your session to any browser. Not a transcript &mdash; a live, bidirectional terminal-to-browser bridge with real-time streaming and 6-digit secure pairing. |
-| &#128274; **Typed Credential Vault** | 21 credential types. API keys, SSH keys, TLS certs, TOTP codes, database URLs &mdash; AES-256-GCM encrypted with Argon2id. Nothing touches disk unencrypted. |
-| &#127912; **Customizable Status Line** | 37 widgets, 16 presets, interactive visual editor. From minimalist zen to maximalist dashboard. Build your perfect status bar. |
-| &#129302; **Multi-Agent System** | 7 agent types with task orchestration. Spawn background agents, track progress, review output. |
-| &#128230; **AnvilHub Marketplace** | 64+ packages &mdash; Skills, Plugins, Agents, Themes. Install with one command. |
-| &#128737; **Air-gap Ready** | Single binary, zero telemetry, local Ollama support. Your data never leaves your machine. |
+| &#128273; **Your providers** | Anthropic, OpenAI, Google, xAI, or local Ollama. Configure priority chains. Automatic failover when one throttles. Never locked in. |
+| &#128274; **Your credentials** | Typed credential vault &mdash; AES-256-GCM encrypted with Argon2id. API keys, SSH keys, TLS certs, TOTP codes, DB URLs. Nothing touches disk unencrypted. |
+| &#128737; **Your data** | Single binary, zero telemetry, local Ollama support. Run air-gapped. Your prompts and code never leave your machine unless you send them. |
+| &#128176; **Your cost** | Per-provider budgets. Per-session cost tracking. Hard caps. See what every token costs before you spend it. Run Ollama for zero-cost inference. |
+| &#128225; **Your access** | Type `/remote-control` and hand any session to any browser. Pair with a 6-digit code. Full bidirectional control. Code from your phone. |
+| &#127969; **Your deployment** | Run on your laptop. Run on a server. Share a session across devices. Nothing to install on the browser side. |
+
+---
+
+## Who this is for
+
+- **Privacy-conscious developers** who don't want every prompt going to OpenAI or Anthropic &mdash; and can't afford a $50K local-inference stack
+- **Consultants and contractors** juggling credentials across clients, needing isolation between projects
+- **Open-source maintainers** tired of single-provider lock-in
+- **Teams** who want deployment choice &mdash; cloud providers, local Ollama, or a mix
 
 ---
 
@@ -51,12 +67,11 @@ you@workstation:~$ anvil
 
 Open that URL on your phone, your tablet, a colleague's laptop, or a monitor across the room. Enter the 6-digit code. You're connected.
 
-- **Both sides have full control** &mdash; type messages, run commands, manage tabs
+- **Full bidirectional control** &mdash; type messages, run commands, manage tabs from any device
 - **Real-time streaming** &mdash; see AI responses token-by-token in the browser
-- **98-command autocomplete** &mdash; same slash commands as the TUI
-- **Configuration panel** &mdash; change models, providers, API keys, status line from the browser
-- **Credential vault access** &mdash; unlock, browse, store credentials from the web viewer
-- **Encrypted connection** &mdash; secure WebSocket relay with automatic reconnection
+- **Same 98 slash commands** as the terminal, with deep autocomplete
+- **Configure from the browser** &mdash; swap providers, change models, manage credentials
+- **Encrypted** &mdash; secure WebSocket relay with automatic reconnection
 
 *Perfect for pair programming, teaching, demos, monitoring long-running tasks, or coding from your phone while your workstation does the heavy lifting.*
 
@@ -81,32 +96,21 @@ chmod +x anvil-* && sudo mv anvil-* /usr/local/bin/anvil
 | **Linux ARM64** | [`anvil-aarch64-unknown-linux-gnu`](https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-unknown-linux-gnu) |
 | **Windows x86_64** | [`anvil-x86_64-pc-windows-gnu.exe`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-pc-windows-gnu.exe) |
 
+No account. No sign-in. Download, run, configure your providers.
+
 ---
 
-## AI Providers
+## Five providers, one terminal
 
 | Provider | Models | Auth |
 |----------|--------|------|
 | **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | OAuth or API Key |
 | **OpenAI** | GPT-5, o3, o4-mini | API Key |
-| **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma | Local &mdash; no key needed |
-| **xAI** | Grok-3, Grok-3-mini | API Key |
 | **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash | API Key |
+| **xAI** | Grok-3, Grok-3-mini | API Key |
+| **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma | Local &mdash; no key needed |
 
-Automatic failover between providers. Configure priority chains. Zero-cost local inference with Ollama.
-
----
-
-## Features at a Glance
-
-| | | |
-|:---|:---|:---|
-| &#128268; **MCP Integration** | &#128065; **Live Remote Control** | &#128274; **Typed Credential Vault** |
-| &#127912; **37 Status Widgets** | &#128202; **Code Productivity** | &#129302; **7 Agent Types** |
-| &#128736; **90+ Slash Commands** | &#128195; **45 Built-in Tools** | &#128230; **AnvilHub Marketplace** |
-| &#128064; **Focus View** | &#128218; **Smart Compaction** | &#128737; **File Sandbox** |
-| &#127760; **Multi-Tab Sessions** | &#127912; **16 Theme Presets** | &#128241; **Browser Access** |
-| &#127757; **7 Languages** | &#128466; **Vim Keybindings** | &#128202; **Cost Tracking** |
+Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Cost tracking per session. Zero-cost local inference with Ollama.
 
 ---
 
@@ -116,7 +120,7 @@ Automatic failover between providers. Configure priority chains. Zero-cost local
 anvil                               # Start interactive session
 /remote-control                     # Share via browser
 /model claude-opus-4-6              # Switch model
-/configure statusline gaming        # Emoji-rich status bar
+/provider anthropic                 # Switch provider
 /vault add                          # Store a credential
 /productivity                       # Session stats
 /mcp list                           # MCP server status
@@ -124,6 +128,14 @@ anvil                               # Start interactive session
 /focus                              # Distraction-free mode
 /export md                          # Export as Markdown
 ```
+
+---
+
+## Also in the box
+
+**98 slash commands.** 45 built-in tools. MCP integration. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. All of it optional. None of it required.
+
+Feature list is in [the changelog below](#changelog) and [anvilhub.culpur.net/about](https://anvilhub.culpur.net/about). The feature list isn't the story. The freedom is.
 
 ---
 
