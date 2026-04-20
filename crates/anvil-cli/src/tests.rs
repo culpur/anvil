@@ -418,12 +418,14 @@ fn resume_supported_command_list_matches_expected_surface() {
         .into_iter()
         .map(|spec| spec.name)
         .collect::<Vec<_>>();
+    // v2.2.6: productivity, knowledge, daily added as resume-supported
     assert_eq!(
         names,
         vec![
             "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
             "version", "export", "agents", "skills", "qmd", "history", "doctor", "tokens",
-            "history-archive", "configure", "language", "sleep",
+            "history-archive", "configure", "language", "sleep", "productivity", "knowledge",
+            "daily",
         ]
     );
 }

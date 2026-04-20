@@ -12,7 +12,7 @@ use super::AnvilTui;
 use super::ReadResult;
 use super::helpers::{next_char_boundary, prev_char_boundary};
 use super::state::CompletionPopup;
-use super::widgets::{check_clipboard_for_image, update_completions};
+use super::widgets::{check_clipboard_for_image, has_further_completions, update_completions};
 
 impl AnvilTui {
     // ─── Main input loop ─────────────────────────────────────────────────────
@@ -402,49 +402,40 @@ impl AnvilTui {
             return;
         }
 
-        let (insert, first_part) = {
-            let tab = &self.active_tab().completion;
-            let selected = tab.matches[tab.selected].insert.clone();
-            let input = self.active_tab().input.clone();
-            let first = input.split(' ').next().unwrap_or("").to_string();
-            (selected, first)
+        // Determine which item is selected, skipping header rows and
+        // free-text placeholder rows (free-text placeholders show a hint but
+        // are not inserted verbatim).
+        let selected_item = {
+            let c = &self.active_tab().completion;
+            let item = &c.matches[c.selected];
+            if item.is_header || item.is_free_text {
+                return; // Nothing to insert for headers or free-text hints.
+            }
+            item.insert.clone()
         };
+
+        // Build the new input by replacing the partial token that the user was
+        // typing with the selected completion text.
+        // Strategy: strip off everything after the last space (or the entire
+        // input if no space yet), then append the completion.
         let input_clone = self.active_tab().input.clone();
-        let word_count = input_clone.split_whitespace().count();
-        let trailing_space = input_clone.ends_with(' ');
-        let new_input = if word_count <= 1 && !trailing_space {
-            format!("{insert} ")
-        } else if word_count == 1 && trailing_space {
-            let base = input_clone.trim_end();
-            format!("{base} {insert} ")
-        } else if word_count == 2 && trailing_space {
-            let base = input_clone.trim_end();
-            let cmd = input_clone.split_whitespace().next().unwrap_or("");
-            let fourth = super::widgets::third_level_completions(cmd, &insert);
-            if fourth.is_empty() {
-                format!("{base} {insert}")
-            } else {
-                format!("{base} {insert} ")
-            }
-        } else if word_count == 2 && !trailing_space {
-            let base = input_clone.split_whitespace().next().unwrap_or("");
-            let cmd = base;
-            let fourth = super::widgets::third_level_completions(cmd, &insert);
-            if fourth.is_empty() {
-                format!("{base} {insert}")
-            } else {
-                format!("{base} {insert} ")
-            }
-        } else if word_count == 3 && trailing_space {
-            let base = input_clone.trim_end();
-            format!("{base} {insert}")
-        } else if word_count >= 3 {
-            let parts: Vec<&str> = input_clone.split_whitespace().collect();
-            let base = parts[..parts.len()-1].join(" ");
-            format!("{base} {insert}")
+        let base = if let Some(last_space) = input_clone.rfind(' ') {
+            &input_clone[..=last_space]
         } else {
-            format!("{first_part} {insert}")
+            // No space yet — the user is still typing the root command.
+            ""
         };
+        // Candidate new input (without trailing space added yet).
+        let candidate = format!("{base}{selected_item}");
+
+        // Probe whether the accepted token leads to further completions.
+        // If so, add a trailing space to prime the next completion level.
+        let new_input = if has_further_completions(&candidate) {
+            format!("{candidate} ")
+        } else {
+            candidate
+        };
+
         let new_len = new_input.len();
         let completion = update_completions(&new_input);
         let tab = self.active_tab_mut();
@@ -455,24 +446,44 @@ impl AnvilTui {
 
     pub(super) fn completion_up(&mut self) {
         let tab = self.active_tab_mut();
-        if tab.completion.visible && !tab.completion.matches.is_empty() {
-            if tab.completion.selected > 0 {
-                tab.completion.selected -= 1;
-            } else {
-                tab.completion.selected = tab.completion.matches.len() - 1;
-            }
+        if !tab.completion.visible || tab.completion.matches.is_empty() {
+            return;
         }
+        let len = tab.completion.matches.len();
+        // Step backwards, skipping header rows.
+        let mut next = if tab.completion.selected > 0 {
+            tab.completion.selected - 1
+        } else {
+            len - 1
+        };
+        // Wrap until we land on a non-header row (up to len iterations).
+        for _ in 0..len {
+            if !tab.completion.matches[next].is_header {
+                break;
+            }
+            next = if next > 0 { next - 1 } else { len - 1 };
+        }
+        tab.completion.selected = next;
     }
 
     pub(super) fn completion_down(&mut self) {
         let tab = self.active_tab_mut();
-        if tab.completion.visible && !tab.completion.matches.is_empty() {
-            if tab.completion.selected + 1 < tab.completion.matches.len() {
-                tab.completion.selected += 1;
-            } else {
-                tab.completion.selected = 0;
-            }
+        if !tab.completion.visible || tab.completion.matches.is_empty() {
+            return;
         }
+        let len = tab.completion.matches.len();
+        let mut next = if tab.completion.selected + 1 < len {
+            tab.completion.selected + 1
+        } else {
+            0
+        };
+        for _ in 0..len {
+            if !tab.completion.matches[next].is_header {
+                break;
+            }
+            next = if next + 1 < len { next + 1 } else { 0 };
+        }
+        tab.completion.selected = next;
     }
 
     pub(super) fn refresh_completion(&mut self) {

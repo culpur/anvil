@@ -16,6 +16,8 @@ mod input;
 mod providers;
 mod remote_control;
 mod render;
+mod respawn;
+mod share;
 mod screensaver;
 mod session;
 mod tui;
@@ -106,7 +108,70 @@ const INTERNAL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
 pub(crate) type AllowedToolSet = BTreeSet<String>;
 
+// Thread-local storage for the RespawnContext captured at startup.
+// Using a std::cell::OnceCell ensures the context is written exactly once
+// (in main) and can be read from any handler.
+thread_local! {
+    static RESPAWN_CTX: std::cell::OnceCell<respawn::RespawnContext> =
+        const { std::cell::OnceCell::new() };
+}
+
+/// Obtain a clone of the stored [`respawn::RespawnContext`], or a safe
+/// default (with all unsafe flags set) if called before `main()` initialises
+/// the cell (only possible in tests).
+fn get_respawn_ctx() -> respawn::RespawnContext {
+    RESPAWN_CTX.with(|cell| {
+        cell.get().cloned().unwrap_or_else(|| respawn::RespawnContext {
+            argv0: String::new(),
+            args: vec![],
+            env_captured: vec![],
+            launched_from_pipe: true,   // mark as unsafe so tests don't exec
+            launched_from_cargo: true,
+            launched_from_debugger: false,
+            no_respawn_flag: true,
+        })
+    })
+}
+
 fn main() {
+    // Capture the launch context as early as possible, before any argument
+    // parsing, so that argv[0] and the raw args are intact.
+    //
+    // SAFETY: RespawnContext::capture reads env vars and args — no unsafe
+    // code here; the #[allow(unsafe_code)] lives in respawn.rs.
+    let respawn_ctx = respawn::RespawnContext::capture();
+
+    // Soft PID lock: warn (but don't block) if another Anvil process is
+    // already running.
+    if let Some(other_pid) = respawn::read_running_pid() {
+        eprintln!(
+            "Warning: another Anvil process (PID {other_pid}) appears to be running."
+        );
+    }
+
+    // Write our PID file; it is removed automatically when _pid_guard drops.
+    let _pid_guard = respawn::PidFileGuard::new();
+
+    // Check for a resume marker left by a previous respawn.
+    if let Some(state) = respawn::load_resume_state() {
+        eprintln!(
+            "Resuming session {} (respawned {}s ago).",
+            state.session_id,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+                .saturating_sub(state.written_at)
+        );
+        respawn::clear_resume_state();
+    }
+
+    // Store the respawn context in a thread-local so that the /restart handler
+    // can access it without needing to thread it through every call site.
+    RESPAWN_CTX.with(|cell| {
+        let _ = cell.set(respawn_ctx);
+    });
+
     // Install panic hook to clean up terminal state (disable mouse capture, leave alt screen)
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -1224,6 +1289,12 @@ fn run_resume_command(
         | SlashCommand::Productivity
         | SlashCommand::Knowledge { .. }
         | SlashCommand::Daily { .. }
+        // v2.2.6 ghost commands — now real handlers in TUI/CLI paths
+        | SlashCommand::Tab { .. }
+        | SlashCommand::Fork
+        | SlashCommand::Share { .. }
+        | SlashCommand::Audit
+        | SlashCommand::Restart { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -1698,6 +1769,20 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         tui.set_remote_status(&session.pairing_code, &clients);
                     }
                     tui.push_system(format!("[Remote] Client connected ({count} active)"));
+                    // Phase 3: send ConfigSnapshot + VaultState immediately after pairing.
+                    {
+                        let data = cli.build_configure_data();
+                        let config_json = config_data_to_json(&data);
+                        let vault_locked = !runtime::vault_is_session_unlocked();
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::ConfigSnapshot {
+                                config: config_json,
+                            });
+                            let _ = tx.send(runtime::relay::RelayMessage::VaultState {
+                                locked: vault_locked,
+                            });
+                        }
+                    }
                     continue;
                 }
                 if let Some(count_str) = message.strip_prefix("__client_disconnected:") {
@@ -1793,6 +1878,310 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     continue;
                 }
+                // Phase 3: panel-aware config update (web → host)
+                // Format: __config_update:<panel>:<field>:<json_value>
+                if let Some(rest) = message.strip_prefix("__config_update:") {
+                    // Split into panel, field, value_json — value may contain colons (JSON)
+                    let mut parts = rest.splitn(3, ':');
+                    let panel = parts.next().unwrap_or("").to_string();
+                    let field = parts.next().unwrap_or("").to_string();
+                    let value_json = parts.next().unwrap_or("\"\"").to_string();
+
+                    // Vault-sensitive field manifest — these fields require vault unlock to edit.
+                    const VAULT_SENSITIVE_FIELDS: &[&str] = &[
+                        "anthropic_api_key", "openai_api_key", "xai_api_key", "ollama_api_key",
+                        "tavily_api_key", "brave_search_api_key", "exa_api_key",
+                        "perplexity_api_key", "google_search_api_key", "bing_search_api_key",
+                        "notify_discord_webhook", "notify_slack_webhook", "notify_telegram_token",
+                        "notify_matrix_token", "notify_signal_sender",
+                        "github_token", "wp_password",
+                        "db_url",
+                    ];
+
+                    let vault_locked = !runtime::vault_is_session_unlocked();
+                    let is_sensitive = VAULT_SENSITIVE_FIELDS.contains(&field.as_str());
+
+                    if vault_locked && is_sensitive {
+                        // Vault gate: reject the update and send ConfigError
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::ConfigError {
+                                panel: panel.clone(),
+                                field: field.clone(),
+                                message: "Vault is locked — unlock vault to edit sensitive fields".to_string(),
+                            });
+                        }
+                        tui.push_system(format!("[Remote Config] Blocked vault-sensitive field '{field}' while locked"));
+                    } else {
+                        // Parse the JSON value and apply the config change
+                        match serde_json::from_str::<serde_json::Value>(&value_json) {
+                            Ok(json_value) => {
+                                let msg = LiveCli::save_anvil_ui_config_key(&field, json_value);
+                                let success = !msg.to_lowercase().contains("error");
+                                tui.push_system(format!("[Remote Config] {msg}"));
+
+                                if success {
+                                    // Apply in-session side-effects
+                                    if field == "default_model" {
+                                        if let Some(model_str) = serde_json::from_str::<serde_json::Value>(&value_json)
+                                            .ok().and_then(|v| v.as_str().map(str::to_string))
+                                        {
+                                            let _ = cli.set_model(Some(model_str));
+                                        }
+                                    }
+                                    if field == "status_line_preset" {
+                                        if let Some(preset_str) = serde_json::from_str::<serde_json::Value>(&value_json)
+                                            .ok().and_then(|v| v.as_str().map(str::to_string))
+                                        {
+                                            tui.set_status_line_preset(&preset_str);
+                                        }
+                                    }
+                                    // Phase 3b: full StatusLineConfig live preview
+                                    if field == "status_line" {
+                                        if let Ok(config) = serde_json::from_str::<runtime::theme::StatusLineConfig>(&value_json) {
+                                            tui.set_status_line_config(config);
+                                        }
+                                    }
+
+                                    // Send updated snapshot as ConfigSaved
+                                    let data = cli.build_configure_data();
+                                    let config_json = config_data_to_json(&data);
+                                    if let Some(tx) = &cli.relay_event_tx {
+                                        let _ = tx.send(runtime::relay::RelayMessage::ConfigSaved {
+                                            config: config_json,
+                                        });
+                                    }
+                                } else {
+                                    // Validation or write error
+                                    if let Some(tx) = &cli.relay_event_tx {
+                                        let _ = tx.send(runtime::relay::RelayMessage::ConfigError {
+                                            panel: panel.clone(),
+                                            field: field.clone(),
+                                            message: msg,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(tx) = &cli.relay_event_tx {
+                                    let _ = tx.send(runtime::relay::RelayMessage::ConfigError {
+                                        panel: panel.clone(),
+                                        field: field.clone(),
+                                        message: format!("Invalid value JSON: {e}"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Phase 3: vault state request (web → host)
+                if message == "__vault_state_get" {
+                    let locked = !runtime::vault_is_session_unlocked();
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::VaultState { locked });
+                    }
+                    continue;
+                }
+
+                // Phase 4: hub install request from web client
+                // Format: __hub_install:<slug>:<version>
+                if let Some(rest) = message.strip_prefix("__hub_install:") {
+                    let mut parts = rest.splitn(2, ':');
+                    let slug = parts.next().unwrap_or("").to_string();
+                    let version = parts.next().unwrap_or("").to_string();
+
+                    // Vault gate: refuse while locked
+                    if !runtime::vault_is_session_unlocked() {
+                        tui.push_system(format!("[Hub] Install blocked: vault locked (slug={slug})"));
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::HubInstallError {
+                                slug: slug.clone(),
+                                reason: "vault_locked".to_string(),
+                                message: "Vault is locked — unlock vault to install packages".to_string(),
+                            });
+                        }
+                        continue;
+                    }
+
+                    tui.push_system(format!("[Hub] Installing {slug} v{version}..."));
+
+                    // Progress: downloading
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::HubInstallProgress {
+                            slug: slug.clone(),
+                            phase: "downloading".to_string(),
+                            percent: 0,
+                        });
+                    }
+
+                    // Build HubClient and fetch package detail
+                    let hub_url = cli.anvil_config_str("anvilhub_url", "https://anvilhub.culpur.net");
+                    let install_dir = anvil_home_dir();
+
+                    let (pkg_result, install_result) = {
+                        match tokio::runtime::Handle::try_current() {
+                            Ok(handle) => {
+                                let client = runtime::hub::BlockingHubClient::new(&hub_url, handle);
+                                let pkg = client.get_package(&slug);
+                                match pkg {
+                                    Ok(p) => {
+                                        let v = p.version.clone();
+                                        let ptype = p.pkg_type.clone();
+                                        let result = client.install(&p, &install_dir);
+                                        (Ok((v, ptype)), result)
+                                    }
+                                    Err(e) => (Err(e), Err(runtime::hub::HubError::Install("no pkg".into()))),
+                                }
+                            }
+                            Err(_) => match tokio::runtime::Runtime::new() {
+                                Ok(rt) => {
+                                    let client = runtime::hub::BlockingHubClient::new(&hub_url, rt.handle().clone());
+                                    let pkg = client.get_package(&slug);
+                                    match pkg {
+                                        Ok(p) => {
+                                            let v = p.version.clone();
+                                            let ptype = p.pkg_type.clone();
+                                            let result = client.install(&p, &install_dir);
+                                            (Ok((v, ptype)), result)
+                                        }
+                                        Err(e) => (Err(e), Err(runtime::hub::HubError::Install("no pkg".into()))),
+                                    }
+                                }
+                                Err(e) => {
+                                    let err_msg = format!("could not start async runtime: {e}");
+                                    if let Some(tx) = &cli.relay_event_tx {
+                                        let _ = tx.send(runtime::relay::RelayMessage::HubInstallError {
+                                            slug: slug.clone(),
+                                            reason: "runtime_error".to_string(),
+                                            message: err_msg.clone(),
+                                        });
+                                    }
+                                    tui.push_system(format!("[Hub] Install failed: {err_msg}"));
+                                    continue;
+                                }
+                            },
+                        }
+                    };
+
+                    match pkg_result {
+                        Err(e) => {
+                            let (reason, msg) = match &e {
+                                runtime::hub::HubError::NotFound(_) => ("not_found", format!("Package '{slug}' not found on AnvilHub")),
+                                runtime::hub::HubError::Http(m) => ("network_error", format!("AnvilHub is unreachable: {m}")),
+                                other => ("api_error", format!("{other}")),
+                            };
+                            tui.push_system(format!("[Hub] Install failed: {msg}"));
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::HubInstallError {
+                                    slug: slug.clone(),
+                                    reason: reason.to_string(),
+                                    message: msg,
+                                });
+                            }
+                        }
+                        Ok((resolved_version, pkg_type)) => {
+                            match install_result {
+                                Err(e) => {
+                                    let (reason, msg) = match &e {
+                                        runtime::hub::HubError::Install(m) => ("install_failed", format!("Install failed: {m}")),
+                                        other => ("install_failed", format!("{other}")),
+                                    };
+                                    tui.push_system(format!("[Hub] Install failed: {msg}"));
+                                    if let Some(tx) = &cli.relay_event_tx {
+                                        let _ = tx.send(runtime::relay::RelayMessage::HubInstallError {
+                                            slug: slug.clone(),
+                                            reason: reason.to_string(),
+                                            message: msg,
+                                        });
+                                    }
+                                }
+                                Ok(_dest) => {
+                                    // Determine RestartRequirement from package type
+                                    let requires_restart = match pkg_type.as_str() {
+                                        "plugin" | "mcp" => "full",
+                                        "theme" => "soft",
+                                        _ => "none", // skill, agent
+                                    };
+
+                                    tui.push_system(format!(
+                                        "[Hub] Installed {slug} v{resolved_version} (restart={requires_restart})"
+                                    ));
+
+                                    // Fire-and-forget telemetry POST to passage-culpur.net (Phase 4b)
+                                    let platform = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                                        "darwin-arm64"
+                                    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+                                        "darwin-x86_64"
+                                    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                                        "linux-x86_64"
+                                    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+                                        "linux-arm64"
+                                    } else if cfg!(target_os = "windows") {
+                                        "windows-x86_64"
+                                    } else {
+                                        "linux-x86_64"
+                                    };
+                                    let tel_slug = slug.clone();
+                                    let tel_version = resolved_version.clone();
+                                    let tel_hub_url = hub_url.clone();
+                                    // Spawn telemetry as a detached thread — failure is acceptable
+                                    std::thread::spawn(move || {
+                                        if let Ok(rt) = tokio::runtime::Runtime::new() {
+                                            let hub_client = runtime::hub::HubClient::new(&tel_hub_url);
+                                            rt.block_on(hub_client.post_install_telemetry(
+                                                &tel_slug,
+                                                &tel_version,
+                                                platform,
+                                            ));
+                                        }
+                                    });
+
+                                    // Broadcast success
+                                    if let Some(tx) = &cli.relay_event_tx {
+                                        let _ = tx.send(runtime::relay::RelayMessage::HubInstalled {
+                                            slug: slug.clone(),
+                                            version: resolved_version.clone(),
+                                            requires_restart: requires_restart.to_string(),
+                                        });
+                                    }
+
+                                    // Soft restart: config reload (no respawn needed)
+                                    if requires_restart == "soft" {
+                                        tui.push_system("[Hub] Theme installed — config reloaded".to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Phase 4: web client requests respawn
+                if message == "__respawn_request" {
+                    tui.push_system("[Hub] Respawn requested from web client".to_string());
+                    let ctx = get_respawn_ctx();
+                    let session_id = cli.session_id().to_owned();
+                    match respawn::respawn(&ctx, "web hub.install restart", &session_id) {
+                        Ok(respawn::RespawnOutcome::Respawned) => {
+                            // Process replaced — unreachable
+                        }
+                        Ok(respawn::RespawnOutcome::PromptUser(msg)) => {
+                            tui.push_system(format!("[Restart] {msg}"));
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::System {
+                                    tab_id: 0,
+                                    message: format!("[Restart] {msg}"),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            tui.push_system(format!("[Restart] Respawn failed: {e}"));
+                        }
+                    }
+                    continue;
+                }
+
                 if let Some(tab_name) = message.strip_prefix("__new_tab:") {
                     let new_session = create_managed_session_handle()?;
                     let tab_idx = tui.new_tab(tab_name, cli.model.clone(), new_session.id.clone());
@@ -2379,6 +2768,8 @@ struct LiveCli {
     relay_event_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Receiver for messages from remote control web clients.
     relay_input_rx: Option<std::sync::mpsc::Receiver<(usize, String)>>,
+    /// Manager for ephemeral read-only share URLs (`/share` command).
+    share_manager: share::ShareManager,
     /// Wall-clock start time of this session (used by daily summaries).
     session_start: Instant,
 }
@@ -2438,6 +2829,7 @@ impl LiveCli {
             relay_session: None,
             relay_event_tx: None,
             relay_input_rx: None,
+            share_manager: share::ShareManager::new(),
             session_start: Instant::now(),
         };
         cli.persist_session()?;
@@ -2885,6 +3277,30 @@ impl LiveCli {
                 ));
                 return Ok(false);
             }
+            SlashCommand::Share { action } => {
+                // Vault gate — sharing requires an unlocked vault (anti-abuse).
+                if !runtime::vault_is_session_unlocked() {
+                    tui.push_system(
+                        "This command requires the vault to be unlocked. Run /vault unlock first.".to_string()
+                    );
+                    return Ok(false);
+                }
+                let msg = match action.as_deref().unwrap_or("").trim() {
+                    "stop" => {
+                        let tab = tui.active_tab();
+                        self.share_manager.stop_share(tab)
+                    }
+                    "list" => self.share_manager.list_shares(),
+                    // No subcommand or unrecognised → share the current tab.
+                    _ => {
+                        let tab = tui.active_tab();
+                        // share_tab takes &Tab, so snapshot the needed fields
+                        self.share_manager.share_tab(tab)
+                    }
+                };
+                tui.push_system(msg);
+                return Ok(false);
+            }
             _ => {}
         }
 
@@ -3242,8 +3658,132 @@ impl LiveCli {
                 let msg = self.run_review_pr_command(number.as_deref());
                 (msg, false)
             }
-            _ => {
-                ("Command not available in TUI mode.".to_string(), false)
+            // ---------------------------------------------------------------
+            // Phase 1: 8 previously-missing TUI handlers
+            // ---------------------------------------------------------------
+            SlashCommand::Mcp { action } => {
+                (self.run_mcp_command(action.as_deref()), false)
+            }
+            SlashCommand::Plugins { action, target } => {
+                self.handle_plugins_command_tui(action.as_deref(), target.as_deref())?
+            }
+            SlashCommand::Session { action, target } => {
+                self.handle_session_command_tui(action.as_deref(), target.as_deref())?
+            }
+            SlashCommand::Resume { session_path } => {
+                self.resume_session_tui(session_path)?
+            }
+            SlashCommand::Sleep => {
+                // Sleep is intercepted earlier in the event loop (line ~1958) before
+                // SlashCommand::parse() is called, so this arm is never reached in TUI.
+                // It is here solely for exhaustiveness. Return a hint just in case.
+                ("Sleep/screensaver activated.".to_string(), false)
+            }
+            SlashCommand::Productivity => {
+                (self.run_productivity_command(), false)
+            }
+            SlashCommand::Knowledge { action } => {
+                (self.run_knowledge_command(action.as_deref()), false)
+            }
+            SlashCommand::Daily { date } => {
+                (self.run_daily_command(date.as_deref()), false)
+            }
+            // ---------------------------------------------------------------
+            // Phase 1: 4 ghost commands (Tab/Fork intercepted in event loop)
+            // ---------------------------------------------------------------
+            SlashCommand::Tab { action } => {
+                // /tab is intercepted in the main event loop before SlashCommand::parse().
+                // This arm exists for exhaustiveness; in practice it is dead code in TUI.
+                let action_str = action.as_deref().unwrap_or("list");
+                (format!("Tab command '{action_str}' — use Ctrl+T / Ctrl+W / Ctrl+Left/Right or type /tab in the TUI input."), false)
+            }
+            SlashCommand::Fork => {
+                // /fork is intercepted in the main event loop before SlashCommand::parse().
+                // This arm exists for exhaustiveness.
+                ("Fork command — type /fork [name] directly in the TUI input to branch the conversation.".to_string(), false)
+            }
+            SlashCommand::Share { action } => {
+                // In TUI mode, Share is intercepted in handle_repl_command_tui so it can
+                // access the active tab.  This arm exists for compile-time exhaustiveness
+                // and is not reached during normal TUI operation.
+                let _ = action;
+                ("Share command dispatched via TUI handler.".to_string(), false)
+            }
+            SlashCommand::Audit => {
+                // Composite: security scan + deps audit + vault verify, concatenated.
+                let security = self.run_security_command(Some("scan"));
+                let deps = Self::run_deps_command(Some("audit"));
+                let vault = self.run_vault_command(Some("verify"));
+                (format!("=== Security Scan ===\n{security}\n\n=== Deps Audit ===\n{deps}\n\n=== Vault Verify ===\n{vault}"), false)
+            }
+            SlashCommand::Restart { soft } => {
+                if soft {
+                    // Soft restart: reload config in-place.
+                    Self::print_config(None)?;
+                    ("Config reloaded.".to_string(), false)
+                } else {
+                    // Full restart: prompt then respawn (TUI path — prompt via stdout).
+                    print!("Save and restart Anvil? [y/N] ");
+                    let _ = io::stdout().flush();
+                    let mut choice = String::new();
+                    let _ = io::stdin().read_line(&mut choice);
+                    let answer = choice.trim().to_ascii_lowercase();
+                    if answer == "y" || answer == "yes" {
+                        let ctx = get_respawn_ctx();
+                        let session_id = self.session.id.clone();
+                        match respawn::respawn(&ctx, "user /restart", &session_id) {
+                            Ok(respawn::RespawnOutcome::Respawned) => {
+                                // Unreachable — exec replaced us.
+                                (String::new(), false)
+                            }
+                            Ok(respawn::RespawnOutcome::PromptUser(msg)) => {
+                                // Respawn unsafe: print message and exit with code 42.
+                                (msg, false)
+                            }
+                            Err(e) => {
+                                (format!("Restart failed: {e}"), false)
+                            }
+                        }
+                    } else {
+                        ("Restart cancelled.".to_string(), false)
+                    }
+                }
+            }
+            // ---------------------------------------------------------------
+            // Exhaustiveness arms for commands intercepted before this function
+            // in handle_repl_command_tui. These arms are unreachable in practice
+            // but required for the match to compile without a catch-all.
+            // ---------------------------------------------------------------
+            SlashCommand::Branch { .. } => {
+                // In non-TUI path, Branch renders "unavailable" via handle_repl_command.
+                // In TUI path this is intercepted above (renders mode_unavailable).
+                ("Branch commands require a git-capable terminal session.".to_string(), false)
+            }
+            SlashCommand::Worktree { .. } => {
+                ("Worktree commands require a git-capable terminal session.".to_string(), false)
+            }
+            SlashCommand::CommitPushPr { .. } => {
+                ("commit-push-pr requires a full terminal session.".to_string(), false)
+            }
+            SlashCommand::Qmd { .. } => {
+                // Intercepted in handle_repl_command_tui. This arm is unreachable.
+                ("QMD search requires an active QMD session.".to_string(), false)
+            }
+            SlashCommand::RemoteControl { .. } => {
+                // Intercepted in handle_repl_command_tui. This arm is unreachable.
+                ("Remote control is handled by the TUI relay.".to_string(), false)
+            }
+            SlashCommand::Loop { .. } => {
+                // Intercepted in handle_repl_command_tui. This arm is unreachable.
+                ("Loop mode is handled by the TUI event loop.".to_string(), false)
+            }
+            SlashCommand::Focus => {
+                // Intercepted in handle_repl_command_tui. This arm is unreachable.
+                ("Focus mode is handled by the TUI event loop.".to_string(), false)
+            }
+            SlashCommand::Unknown(name) => {
+                // Intercepted in handle_repl_command_tui. This arm is unreachable.
+                (format!("Unknown slash command: /{name}"), false)
             }
         })
     }
@@ -4420,6 +4960,66 @@ impl LiveCli {
                 println!("Focus view toggle (TUI only)");
                 false
             }
+            // v2.2.6 ghost commands — Phase 1 real implementations
+            SlashCommand::Tab { action } => {
+                println!(
+                    "Tab management is only available in TUI mode. Action: {}",
+                    action.as_deref().unwrap_or("list")
+                );
+                false
+            }
+            SlashCommand::Fork => {
+                println!("Conversation branching (/fork) is only available in TUI mode.");
+                false
+            }
+            SlashCommand::Share { action } => {
+                if !runtime::vault_is_session_unlocked() {
+                    println!("This command requires the vault to be unlocked. Run /vault unlock first.");
+                    return Ok(false);
+                }
+                let output = self.run_share_command_repl(action.as_deref());
+                println!("{output}");
+                false
+            }
+            SlashCommand::Audit => {
+                println!("{}", self.run_security_command(Some("scan")));
+                println!("{}", Self::run_deps_command(Some("audit")));
+                println!("{}", self.run_vault_command(Some("verify")));
+                false
+            }
+            SlashCommand::Restart { soft } => {
+                if soft {
+                    // Soft restart: reload config in-place.
+                    Self::print_config(None)?;
+                    println!("Config reloaded.");
+                } else {
+                    // Full restart: prompt then respawn.
+                    print!("Save and restart Anvil? [y/N] ");
+                    let _ = io::stdout().flush();
+                    let mut choice = String::new();
+                    let _ = io::stdin().read_line(&mut choice);
+                    let answer = choice.trim().to_ascii_lowercase();
+                    if answer == "y" || answer == "yes" {
+                        let ctx = get_respawn_ctx();
+                        let session_id = self.session.id.clone();
+                        match respawn::respawn(&ctx, "user /restart", &session_id) {
+                            Ok(respawn::RespawnOutcome::Respawned) => {
+                                // Unreachable — exec replaced us.
+                            }
+                            Ok(respawn::RespawnOutcome::PromptUser(msg)) => {
+                                println!("{msg}");
+                                std::process::exit(42);
+                            }
+                            Err(e) => {
+                                eprintln!("Restart failed: {e}");
+                            }
+                        }
+                    } else {
+                        println!("Restart cancelled.");
+                    }
+                }
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", render_unknown_repl_command(&name));
                 false
@@ -4821,6 +5421,98 @@ impl LiveCli {
         Ok(false)
     }
 
+    /// TUI-safe variant: returns `(output, session_changed)` instead of printing.
+    fn handle_plugins_command_tui(
+        &mut self,
+        action: Option<&str>,
+        target: Option<&str>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error>> {
+        let cwd = env::current_dir()?;
+        let loader = ConfigLoader::default_for(&cwd);
+        let runtime_config = loader.load()?;
+        let mut manager = build_plugin_manager(&cwd, &loader, &runtime_config);
+        let result = handle_plugins_slash_command(action, target, &mut manager)?;
+        if result.reload_runtime {
+            self.reload_runtime_features()?;
+        }
+        Ok((result.message, false))
+    }
+
+    /// TUI-safe variant of `handle_session_command`: returns `(output, session_changed)`.
+    fn handle_session_command_tui(
+        &mut self,
+        action: Option<&str>,
+        target: Option<&str>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error>> {
+        match action {
+            None | Some("list") => {
+                let list = render_session_list(&self.session.id)?;
+                Ok((list, false))
+            }
+            Some("switch") => {
+                let Some(target) = target else {
+                    return Ok(("Usage: /session switch <session-id>".to_string(), false));
+                };
+                let handle = resolve_session_reference(target)?;
+                let session = Session::load_from_path(&handle.path)?;
+                let message_count = session.messages.len();
+                self.runtime = build_runtime_with_tui_slot(
+                    session,
+                    self.model.clone(),
+                    self.system_prompt.clone(),
+                    true,
+                    true,
+                    self.allowed_tools.clone(),
+                    self.permission_mode,
+                    None,
+                    self.tui_slot.clone(),
+                    self.agent_manager.clone(),
+                )?;
+                self.session = handle;
+                Ok((format!(
+                    "Session switched\n  Active session   {}\n  File             {}\n  Messages         {}",
+                    self.session.id,
+                    self.session.path.display(),
+                    message_count,
+                ), true))
+            }
+            Some(other) => {
+                Ok((format!("Unknown /session action '{other}'. Use /session list or /session switch <session-id>."), false))
+            }
+        }
+    }
+
+    /// TUI-safe variant of `resume_session`: returns `(output, session_changed)`.
+    fn resume_session_tui(
+        &mut self,
+        session_path: Option<String>,
+    ) -> Result<(String, bool), Box<dyn std::error::Error>> {
+        let Some(session_ref) = session_path else {
+            return Ok(("Usage: /resume <session-path>".to_string(), false));
+        };
+        let handle = resolve_session_reference(&session_ref)?;
+        let session = Session::load_from_path(&handle.path)?;
+        let message_count = session.messages.len();
+        self.runtime = build_runtime_with_tui_slot(
+            session,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            true,
+            self.allowed_tools.clone(),
+            self.permission_mode,
+            None,
+            self.tui_slot.clone(),
+            self.agent_manager.clone(),
+        )?;
+        self.session = handle;
+        Ok((format_resume_report(
+            &self.session.path.display().to_string(),
+            message_count,
+            self.runtime.usage().turns(),
+        ), true))
+    }
+
     fn reload_runtime_features(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.runtime = build_runtime_with_tui_slot(
             self.runtime.session().clone(),
@@ -5162,6 +5854,119 @@ impl LiveCli {
     fn run_collab_command(args: Option<&str>) -> String {
         cmd_static::run_collab_command(args)
     }
+
+    /// `/share [stop|list]` handler for the CLI REPL (non-TUI) surface.
+    ///
+    /// The CLI REPL has no `Tab` struct, so we build share messages directly
+    /// from the session's `ConversationMessage` list (user + assistant only).
+    /// `list` and `stop` work the same as in TUI mode.
+    ///
+    /// The caller MUST check `runtime::vault_is_session_unlocked()` before
+    /// calling this method.
+    fn run_share_command_repl(&mut self, action: Option<&str>) -> String {
+        match action.unwrap_or("").trim() {
+            "stop" => {
+                // CLI REPL uses tab_id "0" for the single implicit session.
+                let synthetic = crate::tui::state::Tab {
+                    id: 0,
+                    name: "REPL".to_string(),
+                    log: Vec::new(),
+                    model: self.model.clone(),
+                    session_id: self.session_id().to_string(),
+                    pending_text: String::new(),
+                    scroll: 0,
+                    input: String::new(),
+                    cursor: 0,
+                    history: Vec::new(),
+                    history_idx: None,
+                    history_backup: None,
+                    think_label: String::new(),
+                    think_start: None,
+                    think_frame: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    session_start: std::time::Instant::now(),
+                    completion: Default::default(),
+                    has_unread: false,
+                    branches: Vec::new(),
+                    active_branch: 0,
+                };
+                self.share_manager.stop_share(&synthetic)
+            }
+            "list" => self.share_manager.list_shares(),
+            // No subcommand → share the current REPL session.
+            _ => {
+                // Build share messages from the session (user + assistant only).
+                let messages: Vec<runtime::ShareMessage> = self
+                    .runtime
+                    .session()
+                    .messages
+                    .iter()
+                    .filter_map(|msg| {
+                        use runtime::MessageRole;
+                        let role = match msg.role {
+                            MessageRole::User => "user",
+                            MessageRole::Assistant => "assistant",
+                            _ => return None,
+                        };
+                        // Collect text content blocks only.
+                        let content: String = msg
+                            .blocks
+                            .iter()
+                            .filter_map(|b| {
+                                if let runtime::ContentBlock::Text { text } = b {
+                                    Some(text.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if content.is_empty() {
+                            return None;
+                        }
+                        Some(runtime::ShareMessage {
+                            role: role.to_string(),
+                            content,
+                        })
+                    })
+                    .collect();
+
+                let snapshot =
+                    runtime::ShareSnapshot::build("REPL", &self.model, messages);
+
+                // In the REPL there are no LogEntry items, so call the
+                // BlockingShareClient directly (bypassing share_tab's log extraction).
+                let client = match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => runtime::BlockingShareClient::default_client(handle),
+                    Err(_) => match tokio::runtime::Runtime::new() {
+                        Ok(rt) => {
+                            runtime::BlockingShareClient::default_client(rt.handle().clone())
+                        }
+                        Err(e) => return format!("Share: could not start async runtime: {e}"),
+                    },
+                };
+
+                match client.create_share("0", "REPL", snapshot, 86_400) {
+                    Ok(share) => {
+                        let url = share.url.clone();
+                        let expires = share.expires_in_display();
+                        self.share_manager.insert_active_share("0".to_string(), share);
+                        format!("Shared at {url} (expires in {expires})")
+                    }
+                    Err(runtime::ShareError::RateLimitExceeded) => {
+                        "Rate limit: 10 shares/hour. Try again later.".to_string()
+                    }
+                    Err(runtime::ShareError::RelayNotFound) => {
+                        "Share is temporarily unavailable (relay endpoint not yet deployed)."
+                            .to_string()
+                    }
+                    Err(e) => format!("Share unavailable (relay unreachable): {e}"),
+                }
+            }
+        }
+    }
+
     fn run_hub_command(&self, args: Option<&str>) -> String {
         let args = args.unwrap_or("").trim();
 

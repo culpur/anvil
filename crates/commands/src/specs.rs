@@ -1,3 +1,5 @@
+use crate::subcommands::{RestartRequirement, SubcommandSpec};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommandCategory {
     Core,
@@ -8,7 +10,7 @@ pub enum SlashCommandCategory {
 }
 
 impl SlashCommandCategory {
-    pub(crate) const fn title(self) -> &'static str {
+    pub const fn title(self) -> &'static str {
         match self {
             Self::Core => "Core flow",
             Self::Workspace => "Workspace & memory",
@@ -30,6 +32,17 @@ pub struct SlashCommandSpec {
     /// Multi-line detailed help shown when the user types `/help <command>`.
     /// An empty string means no detailed help is available for this command.
     pub detailed_help: &'static str,
+    // ── v2.2.6 additions ─────────────────────────────────────────────────────
+    /// Hierarchical subcommand tree. Empty slice for leaf commands.
+    pub subcommands: &'static [SubcommandSpec],
+    /// Whether this command is implemented in TUI mode.
+    pub tui_available: bool,
+    /// Whether this command is invokable via the web viewer.
+    pub web_available: bool,
+    /// Whether the vault must be unlocked before this command can run.
+    pub requires_vault: bool,
+    /// How much restart is needed after the command completes.
+    pub requires_restart: RestartRequirement,
 }
 
 const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
@@ -41,6 +54,11 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "status",
@@ -50,6 +68,12 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "compact",
@@ -59,6 +83,12 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "model",
@@ -83,6 +113,11 @@ Examples:
   /model
   /model opus
   /model claude-sonnet-4-5",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "permissions",
@@ -92,6 +127,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "clear",
@@ -101,6 +142,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "cost",
@@ -110,6 +157,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "provider",
@@ -134,6 +187,11 @@ Examples:
   /provider list
   /provider openai
   /provider login",
+        subcommands: crate::subcommands::PROVIDER_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "login",
@@ -143,6 +201,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::LOGIN_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "resume",
@@ -152,6 +216,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "config",
@@ -161,6 +231,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "memory",
@@ -170,6 +246,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "init",
@@ -179,6 +261,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "diff",
@@ -188,6 +276,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "version",
@@ -197,6 +291,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "bughunter",
@@ -206,6 +306,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "branch",
@@ -215,6 +321,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: crate::subcommands::BRANCH_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "worktree",
@@ -224,6 +336,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: crate::subcommands::WORKTREE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "commit",
@@ -233,6 +351,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "commit-push-pr",
@@ -242,6 +366,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "pr",
@@ -251,6 +381,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "issue",
@@ -260,6 +396,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "ultraplan",
@@ -269,6 +411,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "teleport",
@@ -278,6 +426,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "debug-tool-call",
@@ -287,6 +441,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "export",
@@ -296,6 +456,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "session",
@@ -305,6 +471,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: crate::subcommands::SESSION_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "plugin",
@@ -316,6 +488,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::PLUGINS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "agents",
@@ -325,6 +503,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::AGENTS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "skills",
@@ -334,6 +518,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::SKILLS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "qmd",
@@ -343,6 +533,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "undo",
@@ -352,6 +548,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "history",
@@ -361,6 +563,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "context",
@@ -370,6 +578,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "pin",
@@ -379,6 +593,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "unpin",
@@ -388,6 +608,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "chat",
@@ -397,6 +623,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "vim",
@@ -406,6 +638,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "web",
@@ -415,6 +653,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "doctor",
@@ -424,6 +668,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "tokens",
@@ -433,6 +683,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "search",
@@ -442,6 +698,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "failover",
@@ -451,6 +713,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::FAILOVER_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "generate-image",
@@ -460,6 +728,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "history-archive",
@@ -469,6 +743,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: crate::subcommands::HISTORY_ARCHIVE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "configure",
@@ -478,6 +758,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::CONFIGURE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
         name: "theme",
@@ -487,6 +773,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::THEME_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 3 — semantic code search
     SlashCommandSpec {
@@ -497,6 +789,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 4 — Docker / container awareness
     SlashCommandSpec {
@@ -520,6 +818,11 @@ Examples:
   /docker logs api-server
   /docker compose
   /docker build",
+        subcommands: crate::subcommands::DOCKER_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 5 — test generation
     SlashCommandSpec {
@@ -541,6 +844,11 @@ Examples:
   /test generate src/api/routes.rs
   /test run
   /test coverage",
+        subcommands: crate::subcommands::TEST_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 6 — advanced git
     SlashCommandSpec {
@@ -551,6 +859,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: crate::subcommands::GIT_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 7 — refactoring tools
     SlashCommandSpec {
@@ -561,6 +875,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::REFACTOR_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 8 — screenshot / clipboard image input
     SlashCommandSpec {
@@ -571,6 +891,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 9 — database tools
     SlashCommandSpec {
@@ -581,6 +907,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::DB_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 10 — security scanning
     SlashCommandSpec {
@@ -604,6 +936,11 @@ Examples:
   /security secrets
   /security deps
   /security report",
+        subcommands: crate::subcommands::SECURITY_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 11 — API development helpers
     SlashCommandSpec {
@@ -614,6 +951,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::API_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 12 — documentation generation
     SlashCommandSpec {
@@ -624,6 +967,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::DOCS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 13 — project scaffolding
     SlashCommandSpec {
@@ -634,6 +983,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::SCAFFOLD_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 14 — performance profiling
     SlashCommandSpec {
@@ -644,6 +999,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::PERF_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 15 — debugging integration
     SlashCommandSpec {
@@ -654,6 +1015,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::DEBUG_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 16 — voice input (placeholder)
     SlashCommandSpec {
@@ -664,6 +1031,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::VOICE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 17 — collaboration (placeholder)
     SlashCommandSpec {
@@ -674,6 +1047,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Session,
         detailed_help: "",
+
+        subcommands: crate::subcommands::COLLAB_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 19 — changelog generator
     SlashCommandSpec {
@@ -684,6 +1063,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Git,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 20 — environment manager
     SlashCommandSpec {
@@ -694,6 +1079,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::ENV_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // AnvilHub marketplace
     SlashCommandSpec {
@@ -720,6 +1111,11 @@ Examples:
   /hub skills
   /hub install devops-expert
   /hub info security-scanner",
+        subcommands: crate::subcommands::HUB_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: true, // install action requires unlocked vault
+        requires_restart: RestartRequirement::Full, // installing plugins/MCP servers needs restart
     },
     // i18n language switcher
     SlashCommandSpec {
@@ -730,6 +1126,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: crate::subcommands::LANGUAGE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature A — LSP autocomplete
     SlashCommandSpec {
@@ -740,6 +1142,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::LSP_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature B — Jupyter notebook support
     SlashCommandSpec {
@@ -750,6 +1158,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::NOTEBOOK_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature C — Kubernetes management
     SlashCommandSpec {
@@ -773,6 +1187,11 @@ Examples:
   /k8s logs api-pod-7d9f8b-xyz
   /k8s apply k8s/deployment.yaml
   /k8s describe deployment/api",
+        subcommands: crate::subcommands::K8S_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature D — Terraform/IaC
     SlashCommandSpec {
@@ -783,6 +1202,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::IAC_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature E — CI/CD pipeline builder
     SlashCommandSpec {
@@ -793,6 +1218,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::PIPELINE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature F — Code review
     SlashCommandSpec {
@@ -817,6 +1248,11 @@ Examples:
   /review src/main.rs
   /review staged
   /review pr",
+        subcommands: crate::subcommands::REVIEW_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature G — Dependency graph
     SlashCommandSpec {
@@ -827,6 +1263,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::DEPS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature H — Monorepo awareness
     SlashCommandSpec {
@@ -837,6 +1279,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::MONO_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature I — Browser automation
     SlashCommandSpec {
@@ -847,6 +1295,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::BROWSER_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature J — Desktop & webhook notifications
     SlashCommandSpec {
@@ -868,6 +1322,11 @@ Examples:
   /notify send \"Build complete\"
   /notify webhook https://hooks.example.com/abc \"Deploy done\"
   /notify matrix !room:server.org \"Agent finished\"",
+        subcommands: crate::subcommands::NOTIFY_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 21 — Credential Vault
     SlashCommandSpec {
@@ -900,6 +1359,11 @@ Examples:
   /vault store github-token
   /vault get github-token
   /vault totp add aws-mfa",
+        subcommands: crate::subcommands::VAULT_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false, // setup/unlock don't need vault, others checked at runtime
+        requires_restart: RestartRequirement::None,
     },
     // Feature 11 — codebase migration
     SlashCommandSpec {
@@ -910,6 +1374,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::MIGRATE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 12 — regex builder / tester
     SlashCommandSpec {
@@ -920,6 +1390,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::REGEX_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 13 — SSH session manager
     SlashCommandSpec {
@@ -930,6 +1406,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::SSH_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 14 — log analysis
     SlashCommandSpec {
@@ -940,6 +1422,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::LOGS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 15 — markdown preview
     SlashCommandSpec {
@@ -950,6 +1438,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::MARKDOWN_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 16 — snippet library
     SlashCommandSpec {
@@ -960,6 +1454,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
+
+        subcommands: crate::subcommands::SNIPPETS_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 17 — AI fine-tuning assistant
     SlashCommandSpec {
@@ -970,6 +1470,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::FINETUNE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 18 — webhook manager
     SlashCommandSpec {
@@ -980,6 +1486,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::WEBHOOK_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Feature 20 — plugin SDK
     SlashCommandSpec {
@@ -990,6 +1502,12 @@ Examples:
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
+
+        subcommands: crate::subcommands::PLUGIN_SDK_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Screensaver / burn-in protection
     SlashCommandSpec {
@@ -1000,6 +1518,12 @@ Examples:
         resume_supported: true,
         category: SlashCommandCategory::Core,
         detailed_help: "",
+
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // Fast mode toggle
     SlashCommandSpec {
@@ -1018,6 +1542,11 @@ When fast mode is ON:
 
 Useful for quick questions and lookups where a brief answer is preferred.
 Toggle again to restore normal mode.",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
     },
     // GitHub PR review
     SlashCommandSpec {
@@ -1047,6 +1576,234 @@ Requires the `gh` CLI to be installed and authenticated.
 Examples:
   /review-pr
   /review-pr 42",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    // ── Commands present in the enum but previously missing from specs ────────
+    SlashCommandSpec {
+        name: "mcp",
+        aliases: &[],
+        summary: "MCP server management — list, status, tools",
+        argument_hint: Some("[list|status|tools <server>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "",
+        subcommands: crate::subcommands::MCP_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "productivity",
+        aliases: &[],
+        summary: "Show session productivity statistics",
+        argument_hint: None,
+        resume_supported: true,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "knowledge",
+        aliases: &["nominations"],
+        summary: "Manage knowledge nominations — review, accept, reject, list",
+        argument_hint: Some("[review|accept <N>|reject <N>|list]"),
+        resume_supported: true,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "",
+        subcommands: crate::subcommands::KNOWLEDGE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "daily",
+        aliases: &["summary"],
+        summary: "View daily summary and task reconciliation",
+        argument_hint: Some("[date]"),
+        resume_supported: true,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "think",
+        aliases: &["thinking", "nothink"],
+        summary: "Toggle thinking/reasoning mode (for models that support it)",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "focus",
+        aliases: &[],
+        summary: "Toggle focus view (prompt + tool summary + final response only)",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "loop",
+        aliases: &["proactive"],
+        summary: "Autonomous loop mode — run a prompt repeatedly until done",
+        argument_hint: Some("[prompt]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "remote-control",
+        aliases: &["rc"],
+        summary: "Start (or stop/query) a web viewer relay session",
+        argument_hint: Some("[stop|status]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Session,
+        detailed_help: "",
+        subcommands: crate::subcommands::REMOTE_CONTROL_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    // ── Ghost commands promoted to real variants (v2.2.6 Phase 0) ────────────
+    SlashCommandSpec {
+        name: "tab",
+        aliases: &[],
+        summary: "Tab management — new, close, switch, list",
+        argument_hint: Some("[new|close|switch <id>|list]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/tab — Manage TUI tabs
+
+Subcommands:
+  /tab new            Open a new tab
+  /tab close          Close the current tab
+  /tab switch <id>    Switch to a tab by index or ID
+  /tab list           List all open tabs",
+        subcommands: crate::subcommands::TAB_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "fork",
+        aliases: &[],
+        summary: "Duplicate the current tab with the same conversation context",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "share",
+        aliases: &[],
+        summary: "Share the current tab as a read-only link (24h expiry)",
+        argument_hint: Some("[stop|list]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Session,
+        detailed_help: "\
+/share — Share the current tab's conversation as a read-only link
+
+Usage:
+  /share         Generate a read-only share URL for the current tab
+  /share stop    Revoke the active share
+  /share list    List active shares
+
+Notes:
+  - Requires vault to be unlocked (anti-abuse)
+  - Shares expire after 24 hours by default
+  - Viewers see messages only — they cannot send input
+  - Distinct from /remote-control (which shares full Anvil control)",
+        subcommands: crate::subcommands::SHARE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: true,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "audit",
+        aliases: &[],
+        summary: "Composite security audit: /security scan + /deps audit + /vault verify",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/audit — Composite security audit
+
+Runs the following in sequence:
+  1. /security scan   — Static analysis for vulnerabilities
+  2. /deps audit      — Dependency CVE scan
+  3. /vault verify    — Vault integrity check
+
+Results are combined into a single report.",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    // ── Respawn mechanism (v2.2.6 Phase 5) ─────────────────────────────────
+    SlashCommandSpec {
+        name: "restart",
+        aliases: &[],
+        summary: "Restart Anvil — full respawn or soft config reload",
+        argument_hint: Some("[--soft]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/restart — Restart Anvil
+
+Usage:
+  /restart          Full process restart (prompts for confirmation)
+  /restart --soft   Reload configuration without restarting the process
+
+Notes:
+  - Full restart uses execvp(2) on macOS/Linux to replace the current process in-place.
+  - On Windows or when launched via pipe/cargo/debugger, /restart prints the command
+    to run manually and exits with code 42.
+  - /restart --soft is safe in all environments and only reloads config.",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::Full,
     },
 ];
 
@@ -1205,4 +1962,203 @@ pub fn suggest_slash_commands(input: &str, limit: usize) -> Vec<String> {
         .take(limit)
         .map(|(_, _, display)| display)
         .collect()
+}
+
+// ── Deep hierarchical completion (v2.2.6 Phase 0) ────────────────────────────
+
+/// Walk the spec tree for `input` and return the next-level completions.
+///
+/// # Behaviour
+/// - `input` may or may not have a leading `/`.
+/// - A **trailing space** means the user finished the current token and wants
+///   the next argument's completions.
+/// - **No trailing space** means the user is still typing the current token;
+///   the current partial token is used to filter the completions.
+///
+/// Dynamic enum sources are resolved via `ctx`.  Pass [`NoopCompletionContext`]
+/// for offline/test use.
+///
+/// # Examples
+/// ```
+/// use commands::specs::suggest_completions;
+/// use commands::subcommands::NoopCompletionContext;
+/// let ctx = NoopCompletionContext;
+/// let cs = suggest_completions("/vault ", &ctx);
+/// assert!(cs.iter().any(|c| c.text == "store"));
+/// ```
+#[must_use]
+pub fn suggest_completions(
+    input: &str,
+    ctx: &dyn crate::subcommands::CompletionContext,
+) -> Vec<crate::subcommands::Completion> {
+    use crate::subcommands::Completion;
+
+    let raw = input.trim_start_matches('/');
+    let trailing_space = input.ends_with(' ');
+
+    let mut tokens: Vec<&str> = raw.split_whitespace().collect();
+
+    // If trailing space, all tokens are complete and we want the next slot.
+    // If no trailing space, the last token is the partial being typed.
+    let partial: String = if trailing_space || tokens.is_empty() {
+        String::new()
+    } else {
+        tokens.pop().unwrap_or("").to_ascii_lowercase()
+    };
+
+    // ── Stage 1: root command not yet typed ──────────────────────────────────
+    if tokens.is_empty() {
+        return slash_command_specs()
+            .iter()
+            .filter(|spec| {
+                partial.is_empty()
+                    || spec.name.starts_with(partial.as_str())
+                    || spec.aliases.iter().any(|a| a.starts_with(partial.as_str()))
+            })
+            .map(|spec| Completion {
+                text: format!("/{}", spec.name),
+                description: spec.summary.to_string(),
+                category: Some(spec.category),
+            })
+            .collect();
+    }
+
+    // ── Stage 2: resolve the root command ────────────────────────────────────
+    let root_name = tokens[0].to_ascii_lowercase();
+    let Some(spec) = slash_command_specs().iter().find(|s| {
+        s.name == root_name || s.aliases.iter().any(|a| *a == root_name)
+    }) else {
+        return vec![];
+    };
+
+    // Remaining tokens after the command name
+    let rest = &tokens[1..];
+
+    // ── Stage 3: walk the subcommand tree ────────────────────────────────────
+    walk_subcommands(spec.subcommands, spec.category, rest, &partial, ctx)
+}
+
+/// Recursively walk the subcommand tree.
+///
+/// `path` is the slice of fully-typed tokens *after* the current tree level's
+/// name was consumed.  `partial` is the partial token being typed (or `""`).
+fn walk_subcommands(
+    subs: &'static [crate::subcommands::SubcommandSpec],
+    category: SlashCommandCategory,
+    path: &[&str],
+    partial: &str,
+    ctx: &dyn crate::subcommands::CompletionContext,
+) -> Vec<crate::subcommands::Completion> {
+    use crate::subcommands::Completion;
+
+    // No more typed tokens — show completions at this level
+    if path.is_empty() {
+        if subs.is_empty() {
+            return vec![];
+        }
+        return subs
+            .iter()
+            .filter(|s| partial.is_empty() || s.name.starts_with(partial))
+            .map(|s| Completion {
+                text: s.name.to_string(),
+                description: s.summary.to_string(),
+                category: Some(category),
+            })
+            .collect();
+    }
+
+    // Try to match the first token to a known subcommand
+    let head = path[0];
+    let tail = &path[1..];
+
+    if let Some(matched) = subs.iter().find(|s| s.name == head) {
+        // If matched sub has further subcommands, recurse
+        if !matched.subcommands.is_empty() {
+            return walk_subcommands(matched.subcommands, category, tail, partial, ctx);
+        }
+        // Otherwise walk the arg specs
+        return walk_args(matched.args, category, tail, partial, ctx);
+    }
+
+    // Head didn't match a subcommand name — nothing to suggest at this point
+    vec![]
+}
+
+/// Expand the next [`ArgSpec`] slot for `remaining_path` and `partial`.
+fn walk_args(
+    args: &'static [crate::subcommands::ArgSpec],
+    category: SlashCommandCategory,
+    remaining_path: &[&str],
+    partial: &str,
+    ctx: &dyn crate::subcommands::CompletionContext,
+) -> Vec<crate::subcommands::Completion> {
+    use crate::subcommands::{ArgSpec, ArgSpecValue, Completion};
+
+    let index = remaining_path.len(); // how many arg slots already filled
+    let Some(arg_spec) = args.get(index) else {
+        return vec![];
+    };
+
+    match arg_spec {
+        ArgSpec::Literal(lit) => {
+            if partial.is_empty() || lit.starts_with(partial) {
+                vec![Completion {
+                    text: (*lit).to_string(),
+                    description: String::new(),
+                    category: Some(category),
+                }]
+            } else {
+                vec![]
+            }
+        }
+        ArgSpec::OneOf(choices) => choices
+            .iter()
+            .filter(|c| partial.is_empty() || c.starts_with(partial))
+            .map(|c| Completion {
+                text: (*c).to_string(),
+                description: String::new(),
+                category: Some(category),
+            })
+            .collect(),
+        ArgSpec::DynamicEnum(source) => ctx
+            .resolve(*source)
+            .into_iter()
+            .filter(|v| partial.is_empty() || v.starts_with(partial))
+            .map(|v| Completion {
+                text: v,
+                description: String::new(),
+                category: Some(category),
+            })
+            .collect(),
+        ArgSpec::FreeText { hint } => {
+            if partial.is_empty() {
+                vec![Completion {
+                    text: format!("<{hint}>"),
+                    description: "free-form text".to_string(),
+                    category: Some(category),
+                }]
+            } else {
+                vec![]
+            }
+        }
+        ArgSpec::OptionalFlag { name, value } => {
+            if partial.is_empty() || name.starts_with(partial) {
+                let desc = match value {
+                    None => "flag".to_string(),
+                    Some(ArgSpecValue::FreeText { hint }) => format!("<{hint}>"),
+                    Some(ArgSpecValue::OneOf(choices)) => choices.join("|"),
+                    Some(ArgSpecValue::DynamicEnum(src)) => {
+                        ctx.resolve(*src).join("|")
+                    }
+                };
+                vec![Completion {
+                    text: (*name).to_string(),
+                    description: desc,
+                    category: Some(category),
+                }]
+            } else {
+                vec![]
+            }
+        }
+    }
 }

@@ -309,10 +309,18 @@ pub(crate) struct CompletionPopup {
     pub selected: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct CompletionItem {
+    /// The text to insert when this item is accepted (empty for header items).
     pub insert: String,
+    /// Short description shown to the right of the insert text.
     pub hint: String,
+    /// When `true` this is a non-selectable category header row.
+    /// The popup renderer should skip these during selection navigation.
+    pub is_header: bool,
+    /// When `true` the insert text is a free-text placeholder (`<hint>`)
+    /// that should be rendered with DIM styling instead of inserted verbatim.
+    pub is_free_text: bool,
 }
 
 // ─── Spinner frames ───────────────────────────────────────────────────────────

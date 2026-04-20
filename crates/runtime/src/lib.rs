@@ -1,6 +1,7 @@
 mod bash;
 mod bootstrap;
 pub mod hub;
+pub mod share;
 pub mod theme;
 pub mod cron;
 pub mod daily;
@@ -127,6 +128,10 @@ pub use usage::{
 pub use hub::{
     format_package_detail, format_package_list, BlockingHubClient, HubClient, HubError,
     HubPackage,
+};
+pub use share::{
+    scrub_secrets, ActiveShare, BlockingShareClient, ShareClient, ShareError, ShareMessage,
+    ShareSnapshot,
 };
 pub use theme::{Rgb, Theme};
 pub use vault::{Credential, CredentialType, TotpCode, TotpEntry, VaultError, VaultManager};

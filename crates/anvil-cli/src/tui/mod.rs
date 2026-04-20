@@ -8,6 +8,7 @@
 //!   `configure_types`  — `ConfigureState`, `ConfigureAction`, `ConfigureData`, configure menu helpers
 //!   `input_handler`    — `AnvilTui` input loop (`read_input`, `handle_key`, editing, history, completion)
 pub mod configure_types;
+pub(super) mod completion;
 pub(super) mod helpers;
 pub(super) mod layout;
 pub(super) mod state;
@@ -356,11 +357,12 @@ impl AnvilTui {
         let elapsed = tab.session_start.elapsed();
         let completion_visible = tab.completion.visible;
         let completion_selected = tab.completion.selected;
-        let completion_matches: Vec<(String, String)> = tab
+        // Snapshot: (insert_text, hint, is_header, is_free_text)
+        let completion_matches: Vec<(String, String, bool, bool)> = tab
             .completion
             .matches
             .iter()
-            .map(|c| (c.insert.clone(), c.hint.clone()))
+            .map(|c| (c.insert.clone(), c.hint.clone(), c.is_header, c.is_free_text))
             .collect();
         // Snapshot tab bar state.
         let tab_infos: Vec<(usize, String, bool, bool)> = self
@@ -903,6 +905,23 @@ impl AnvilTui {
                     .iter()
                     .enumerate()
                     .map(|(i, item)| {
+                        let insert: &str = item.0.as_str();
+                        let hint: &str = item.1.as_str();
+                        let is_header: bool = item.2;
+                        let is_free_text: bool = item.3;
+
+                        // Non-selectable category header rows — rendered in
+                        // accent color with a subtle separator style.
+                        if is_header {
+                            return Line::from(Span::styled(
+                                format!(" {insert}"),
+                                Style::default()
+                                    .fg(rgb(theme.accent))
+                                    .add_modifier(Modifier::BOLD)
+                                    .bg(rgb(theme.bg_card)),
+                            ));
+                        }
+
                         let is_selected = i == completion_selected;
                         let (fg, bg) = if is_selected {
                             (rgb(theme.bg_primary), rgb(theme.accent))
@@ -910,14 +929,24 @@ impl AnvilTui {
                             (rgb(theme.text_primary), rgb(theme.bg_card))
                         };
                         let cmd_width = 24.min(popup_width as usize - 4);
-                        let padded_cmd = format!("{:<width$}", item.0, width = cmd_width);
+                        let padded_cmd = format!("{:<width$}", insert, width = cmd_width);
+
+                        // Free-text placeholder items (e.g. `<query>`) are
+                        // rendered with DIM styling to signal they are hints,
+                        // not insertable completions.
+                        let insert_style = if is_free_text {
+                            Style::default()
+                                .fg(rgb(theme.text_secondary))
+                                .bg(bg)
+                                .add_modifier(Modifier::DIM | Modifier::ITALIC)
+                        } else {
+                            Style::default().fg(fg).bg(bg)
+                        };
+
                         Line::from(vec![
+                            Span::styled(format!(" {padded_cmd}"), insert_style),
                             Span::styled(
-                                format!(" {padded_cmd}"),
-                                Style::default().fg(fg).bg(bg),
-                            ),
-                            Span::styled(
-                                format!(" {}", item.1),
+                                format!(" {hint}"),
                                 Style::default()
                                     .fg(if is_selected { rgb(theme.bg_primary) } else { rgb(theme.text_secondary) })
                                     .bg(bg)

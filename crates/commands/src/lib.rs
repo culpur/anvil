@@ -6,6 +6,7 @@ pub mod git;
 pub mod handlers;
 pub mod plugins;
 pub mod specs;
+pub mod subcommands;
 
 pub use agents::{handle_agents_slash_command, handle_skills_slash_command};
 pub use git::{
@@ -16,7 +17,12 @@ pub use handlers::{handle_slash_command, SlashCommandResult};
 pub use plugins::{handle_plugins_slash_command, render_plugins_report, PluginsCommandResult};
 pub use specs::{
     render_command_detailed_help, render_slash_command_help, resume_supported_slash_commands,
-    slash_command_specs, suggest_slash_commands, SlashCommandCategory, SlashCommandSpec,
+    slash_command_specs, suggest_completions, suggest_slash_commands, SlashCommandCategory,
+    SlashCommandSpec,
+};
+pub use subcommands::{
+    ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
+    RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +370,26 @@ pub enum SlashCommand {
     Daily {
         date: Option<String>,
     },
+    /// `/tab [new|close|switch <id>|list]` — multi-tab management (v2.2.6)
+    Tab {
+        action: Option<String>,
+    },
+    /// `/fork` — duplicate current tab with same conversation context (v2.2.6)
+    Fork,
+    /// `/share [stop|list]` — share current tab as read-only link (v2.2.6)
+    Share {
+        action: Option<String>,
+    },
+    /// `/audit` — composite: /security scan + /deps audit + /vault verify (v2.2.6)
+    Audit,
+    /// `/restart [--soft]` — restart Anvil (v2.2.6)
+    ///
+    /// `soft: true`  → reload config without respawning (`/restart --soft`)
+    /// `soft: false` → full process respawn after confirmation (`/restart`)
+    Restart {
+        /// When `true`, reload config in-place; when `false`, fully respawn.
+        soft: bool,
+    },
     Unknown(String),
 }
 
@@ -656,6 +682,18 @@ impl SlashCommand {
             },
             "daily" | "summary" => Self::Daily {
                 date: remainder_after_command(trimmed, command),
+            },
+            // ── Ghost commands promoted to real variants (v2.2.6) ─────────────
+            "tab" => Self::Tab {
+                action: remainder_after_command(trimmed, command),
+            },
+            "fork" => Self::Fork,
+            "share" => Self::Share {
+                action: remainder_after_command(trimmed, command),
+            },
+            "audit" => Self::Audit,
+            "restart" => Self::Restart {
+                soft: parts.next() == Some("--soft"),
             },
             other => Self::Unknown(other.to_string()),
         })
@@ -1049,8 +1087,12 @@ mod tests {
         assert!(help.contains("aliases: /plugins, /marketplace"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
-        assert_eq!(slash_command_specs().len(), 89);
-        assert_eq!(resume_supported_slash_commands().len(), 21);
+        // v2.2.6: added mcp, productivity, knowledge, daily, think, focus, loop,
+        //         remote-control (8 previously-missing) + tab, fork, share, audit (4 ghost)
+        //         + restart (Phase 5 placeholder) = +13 total
+        assert_eq!(slash_command_specs().len(), 102);
+        // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
+        assert_eq!(resume_supported_slash_commands().len(), 24);
     }
 
     #[test]
@@ -1552,5 +1594,404 @@ mod tests {
         let _ = fs::remove_dir_all(repo);
         let _ = fs::remove_dir_all(remote);
         let _ = fs::remove_dir_all(fake_bin);
+    }
+
+    // ── Phase 0 v2.2.6 tests ─────────────────────────────────────────────────
+
+    /// Exhaustiveness: every SlashCommand variant must have a matching spec entry.
+    ///
+    /// This test intentionally uses an exhaustive match so that the compiler
+    /// forces a spec update whenever a new variant is added.  If you add a
+    /// variant, add the corresponding spec and extend the set below.
+    #[test]
+    fn every_slash_command_variant_has_a_spec() {
+        use super::{slash_command_specs, SlashCommand};
+
+        // Walk every variant and collect the primary name.
+        // New variants MUST be added here — no `_` arm.
+        // Returns "" for Unknown (no spec by design).
+        fn variant_name(cmd: &SlashCommand) -> &'static str {
+            match cmd {
+                SlashCommand::Help { .. } => "help",
+                SlashCommand::Status => "status",
+                SlashCommand::Compact => "compact",
+                SlashCommand::Branch { .. } => "branch",
+                SlashCommand::Bughunter { .. } => "bughunter",
+                SlashCommand::Worktree { .. } => "worktree",
+                SlashCommand::Commit => "commit",
+                SlashCommand::CommitPushPr { .. } => "commit-push-pr",
+                SlashCommand::Pr { .. } => "pr",
+                SlashCommand::Issue { .. } => "issue",
+                SlashCommand::Ultraplan { .. } => "ultraplan",
+                SlashCommand::Teleport { .. } => "teleport",
+                SlashCommand::DebugToolCall => "debug-tool-call",
+                SlashCommand::Model { .. } => "model",
+                SlashCommand::Permissions { .. } => "permissions",
+                SlashCommand::Clear { .. } => "clear",
+                SlashCommand::Cost => "cost",
+                SlashCommand::Resume { .. } => "resume",
+                SlashCommand::Config { .. } => "config",
+                SlashCommand::Memory => "memory",
+                SlashCommand::Init => "init",
+                SlashCommand::Diff => "diff",
+                SlashCommand::Version => "version",
+                SlashCommand::Export { .. } => "export",
+                SlashCommand::Session { .. } => "session",
+                SlashCommand::Plugins { .. } => "plugin",
+                SlashCommand::Agents { .. } => "agents",
+                SlashCommand::Skills { .. } => "skills",
+                SlashCommand::Qmd { .. } => "qmd",
+                SlashCommand::Undo => "undo",
+                SlashCommand::History { .. } => "history",
+                SlashCommand::Context { .. } => "context",
+                SlashCommand::Pin { .. } => "pin",
+                SlashCommand::Unpin { .. } => "unpin",
+                SlashCommand::Chat => "chat",
+                SlashCommand::Vim => "vim",
+                SlashCommand::Web { .. } => "web",
+                SlashCommand::Doctor => "doctor",
+                SlashCommand::Tokens => "tokens",
+                SlashCommand::Provider { .. } => "provider",
+                SlashCommand::Login { .. } => "login",
+                SlashCommand::Search { .. } => "search",
+                SlashCommand::Failover { .. } => "failover",
+                SlashCommand::GenerateImage { .. } => "generate-image",
+                SlashCommand::HistoryArchive { .. } => "history-archive",
+                SlashCommand::Configure { .. } => "configure",
+                SlashCommand::Theme { .. } => "theme",
+                SlashCommand::SemanticSearch { .. } => "semantic-search",
+                SlashCommand::Docker { .. } => "docker",
+                SlashCommand::Test { .. } => "test",
+                SlashCommand::Git { .. } => "git",
+                SlashCommand::Refactor { .. } => "refactor",
+                SlashCommand::Screenshot => "screenshot",
+                SlashCommand::Db { .. } => "db",
+                SlashCommand::Security { .. } => "security",
+                SlashCommand::Api { .. } => "api",
+                SlashCommand::Docs { .. } => "docs",
+                SlashCommand::Scaffold { .. } => "scaffold",
+                SlashCommand::Perf { .. } => "perf",
+                SlashCommand::Debug { .. } => "debug",
+                SlashCommand::Voice { .. } => "voice",
+                SlashCommand::Collab { .. } => "collab",
+                SlashCommand::Changelog => "changelog",
+                SlashCommand::Env { .. } => "env",
+                SlashCommand::Hub { .. } => "hub",
+                SlashCommand::Language { .. } => "language",
+                SlashCommand::Lsp { .. } => "lsp",
+                SlashCommand::Notebook { .. } => "notebook",
+                SlashCommand::K8s { .. } => "k8s",
+                SlashCommand::Iac { .. } => "iac",
+                SlashCommand::Pipeline { .. } => "pipeline",
+                SlashCommand::Review { .. } => "review",
+                SlashCommand::Deps { .. } => "deps",
+                SlashCommand::Mono { .. } => "mono",
+                SlashCommand::Browser { .. } => "browser",
+                SlashCommand::Notify { .. } => "notify",
+                SlashCommand::Vault { .. } => "vault",
+                SlashCommand::Migrate { .. } => "migrate",
+                SlashCommand::Regex { .. } => "regex",
+                SlashCommand::Ssh { .. } => "ssh",
+                SlashCommand::Logs { .. } => "logs",
+                SlashCommand::Markdown { .. } => "markdown",
+                SlashCommand::Snippets { .. } => "snippets",
+                SlashCommand::Finetune { .. } => "finetune",
+                SlashCommand::Webhook { .. } => "webhook",
+                SlashCommand::PluginSdk { .. } => "plugin-sdk",
+                SlashCommand::Sleep => "sleep",
+                SlashCommand::Think => "think",
+                SlashCommand::Fast => "fast",
+                SlashCommand::ReviewPr { .. } => "review-pr",
+                SlashCommand::RemoteControl { .. } => "remote-control",
+                SlashCommand::Loop { .. } => "loop",
+                SlashCommand::Focus => "focus",
+                SlashCommand::Mcp { .. } => "mcp",
+                SlashCommand::Productivity => "productivity",
+                SlashCommand::Knowledge { .. } => "knowledge",
+                SlashCommand::Daily { .. } => "daily",
+                // Ghost commands promoted in v2.2.6:
+                SlashCommand::Tab { .. } => "tab",
+                SlashCommand::Fork => "fork",
+                SlashCommand::Share { .. } => "share",
+                SlashCommand::Audit => "audit",
+                // Respawn mechanism (v2.2.6 Phase 5):
+                SlashCommand::Restart { .. } => "restart",
+                SlashCommand::Unknown(_) => "", // unknown has no spec by design
+            }
+        }
+
+        // Build a representative instance of each variant.
+        // variant_name returns "" for Unknown — we skip those.
+        let variants: Vec<SlashCommand> = vec![
+            SlashCommand::Help { command: None },
+            SlashCommand::Status,
+            SlashCommand::Compact,
+            SlashCommand::Branch { action: None, target: None },
+            SlashCommand::Bughunter { scope: None },
+            SlashCommand::Worktree { action: None, path: None, branch: None },
+            SlashCommand::Commit,
+            SlashCommand::CommitPushPr { context: None },
+            SlashCommand::Pr { context: None },
+            SlashCommand::Issue { context: None },
+            SlashCommand::Ultraplan { task: None },
+            SlashCommand::Teleport { target: None },
+            SlashCommand::DebugToolCall,
+            SlashCommand::Model { model: None },
+            SlashCommand::Permissions { mode: None },
+            SlashCommand::Clear { confirm: false },
+            SlashCommand::Cost,
+            SlashCommand::Resume { session_path: None },
+            SlashCommand::Config { section: None },
+            SlashCommand::Memory,
+            SlashCommand::Init,
+            SlashCommand::Diff,
+            SlashCommand::Version,
+            SlashCommand::Export { format: None, path: None },
+            SlashCommand::Session { action: None, target: None },
+            SlashCommand::Plugins { action: None, target: None },
+            SlashCommand::Agents { args: None },
+            SlashCommand::Skills { args: None },
+            SlashCommand::Qmd { query: None },
+            SlashCommand::Undo,
+            SlashCommand::History { show_all: false },
+            SlashCommand::Context { path: None },
+            SlashCommand::Pin { path: None },
+            SlashCommand::Unpin { path: String::new() },
+            SlashCommand::Chat,
+            SlashCommand::Vim,
+            SlashCommand::Web { query: String::new() },
+            SlashCommand::Doctor,
+            SlashCommand::Tokens,
+            SlashCommand::Provider { action: None },
+            SlashCommand::Login { provider: None },
+            SlashCommand::Search { args: None },
+            SlashCommand::Failover { action: None },
+            SlashCommand::GenerateImage { prompt: String::new(), wp_post_id: None },
+            SlashCommand::HistoryArchive { action: None },
+            SlashCommand::Configure { args: None },
+            SlashCommand::Theme { action: None },
+            SlashCommand::SemanticSearch { args: None },
+            SlashCommand::Docker { action: None },
+            SlashCommand::Test { action: None },
+            SlashCommand::Git { action: None },
+            SlashCommand::Refactor { action: None },
+            SlashCommand::Screenshot,
+            SlashCommand::Db { action: None },
+            SlashCommand::Security { action: None },
+            SlashCommand::Api { action: None },
+            SlashCommand::Docs { action: None },
+            SlashCommand::Scaffold { action: None },
+            SlashCommand::Perf { action: None },
+            SlashCommand::Debug { action: None },
+            SlashCommand::Voice { action: None },
+            SlashCommand::Collab { action: None },
+            SlashCommand::Changelog,
+            SlashCommand::Env { action: None },
+            SlashCommand::Hub { action: None },
+            SlashCommand::Language { lang: None },
+            SlashCommand::Lsp { action: None },
+            SlashCommand::Notebook { action: None },
+            SlashCommand::K8s { action: None },
+            SlashCommand::Iac { action: None },
+            SlashCommand::Pipeline { action: None },
+            SlashCommand::Review { action: None },
+            SlashCommand::Deps { action: None },
+            SlashCommand::Mono { action: None },
+            SlashCommand::Browser { action: None },
+            SlashCommand::Notify { action: None },
+            SlashCommand::Vault { action: None },
+            SlashCommand::Migrate { action: None },
+            SlashCommand::Regex { action: None },
+            SlashCommand::Ssh { action: None },
+            SlashCommand::Logs { action: None },
+            SlashCommand::Markdown { action: None },
+            SlashCommand::Snippets { action: None },
+            SlashCommand::Finetune { action: None },
+            SlashCommand::Webhook { action: None },
+            SlashCommand::PluginSdk { action: None },
+            SlashCommand::Sleep,
+            SlashCommand::Think,
+            SlashCommand::Fast,
+            SlashCommand::ReviewPr { number: None },
+            SlashCommand::RemoteControl { action: None },
+            SlashCommand::Loop { prompt: None },
+            SlashCommand::Focus,
+            SlashCommand::Mcp { action: None },
+            SlashCommand::Productivity,
+            SlashCommand::Knowledge { action: None },
+            SlashCommand::Daily { date: None },
+            SlashCommand::Tab { action: None },
+            SlashCommand::Fork,
+            SlashCommand::Share { action: None },
+            SlashCommand::Audit,
+            SlashCommand::Restart { soft: false },
+        ];
+
+        let specs = slash_command_specs();
+        let spec_names: std::collections::HashSet<&str> =
+            specs.iter().map(|s| s.name).collect();
+
+        for variant in &variants {
+            let name = variant_name(variant);
+            if name.is_empty() {
+                continue; // Unknown variant — no spec by design
+            }
+            assert!(
+                spec_names.contains(name),
+                "SlashCommand variant has no matching spec: '{name}'"
+            );
+        }
+    }
+
+    /// Verify suggest_completions returns root commands when input is empty.
+    #[test]
+    fn completion_root_returns_all_commands_for_empty_input() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/", &ctx);
+        assert!(completions.len() >= 90, "expected at least 90 root completions, got {}", completions.len());
+        assert!(completions.iter().any(|c| c.text == "/vault"));
+        assert!(completions.iter().any(|c| c.text == "/help"));
+    }
+
+    /// Verify prefix filtering at root level.
+    #[test]
+    fn completion_root_filters_by_prefix() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/va", &ctx);
+        assert!(completions.iter().all(|c| c.text.starts_with("/va")));
+        assert!(completions.iter().any(|c| c.text == "/vault"));
+    }
+
+    /// Verify /vault <space> returns the vault subcommands.
+    #[test]
+    fn completion_vault_subcommands() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/vault ", &ctx);
+        let names: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(names.contains(&"store"), "expected 'store' in {:?}", names);
+        assert!(names.contains(&"unlock"));
+        assert!(names.contains(&"list"));
+        assert!(names.contains(&"get"));
+    }
+
+    /// Verify /vault store <space> returns the credential types.
+    #[test]
+    fn completion_vault_store_returns_credential_types() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/vault store ", &ctx);
+        let names: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(names.contains(&"api_key"), "expected 'api_key' in {:?}", names);
+        assert!(names.contains(&"ssh_key"));
+        assert!(names.contains(&"totp"));
+        assert_eq!(names.len(), 21, "expected all 21 credential types");
+    }
+
+    /// Verify /mcp <space> returns its subcommands.
+    #[test]
+    fn completion_mcp_subcommands() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/mcp ", &ctx);
+        let names: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(names.contains(&"list"), "expected 'list' in {:?}", names);
+        assert!(names.contains(&"status"));
+        assert!(names.contains(&"tools"));
+    }
+
+    /// Verify /theme set <space> returns dynamic themes (empty with noop ctx).
+    #[test]
+    fn completion_theme_set_dynamic() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let completions = suggest_completions("/theme set ", &ctx);
+        // With NoopCompletionContext, InstalledThemes returns []
+        assert!(completions.is_empty(), "expected empty with noop ctx, got {:?}", completions);
+    }
+
+    /// Verify /theme set returns dynamic themes with the static default context.
+    #[test]
+    fn completion_theme_set_static_default_context() {
+        use super::{suggest_completions, StaticDefaultCompletionContext};
+        let ctx = StaticDefaultCompletionContext;
+        let completions = suggest_completions("/theme set ", &ctx);
+        let names: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(names.contains(&"dark"), "expected 'dark' in {:?}", names);
+        assert!(names.contains(&"light"));
+    }
+
+    /// Verify every DynamicEnumSource resolves without panic using NoopCompletionContext.
+    #[test]
+    fn noop_completion_context_resolves_all_sources() {
+        use super::{DynamicEnumSource, NoopCompletionContext, CompletionContext};
+        let ctx = NoopCompletionContext;
+        let sources = [
+            DynamicEnumSource::VaultCredentialTypes,
+            DynamicEnumSource::InstalledPlugins,
+            DynamicEnumSource::InstalledThemes,
+            DynamicEnumSource::InstalledAgents,
+            DynamicEnumSource::InstalledSkills,
+            DynamicEnumSource::McpServers,
+            DynamicEnumSource::Sessions,
+            DynamicEnumSource::Models,
+            DynamicEnumSource::Providers,
+            DynamicEnumSource::Languages,
+        ];
+        for source in sources {
+            let result = ctx.resolve(source);
+            assert!(result.is_empty(), "noop ctx should return empty for {source:?}");
+        }
+    }
+
+    /// Verify every DynamicEnumSource resolves with the static default context.
+    #[test]
+    fn static_default_context_resolves_all_sources() {
+        use super::{DynamicEnumSource, StaticDefaultCompletionContext, CompletionContext};
+        let ctx = StaticDefaultCompletionContext;
+        let sources = [
+            DynamicEnumSource::VaultCredentialTypes,
+            DynamicEnumSource::InstalledThemes,
+            DynamicEnumSource::Models,
+            DynamicEnumSource::Providers,
+            DynamicEnumSource::Languages,
+        ];
+        for source in sources {
+            let result = ctx.resolve(source);
+            assert!(!result.is_empty(), "static ctx should return values for {source:?}");
+        }
+    }
+
+    /// Verify ghost commands parse correctly.
+    #[test]
+    fn ghost_commands_parse_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/tab new"),
+            Some(SlashCommand::Tab { action: Some("new".to_string()) })
+        );
+        assert_eq!(SlashCommand::parse("/fork"), Some(SlashCommand::Fork));
+        assert_eq!(
+            SlashCommand::parse("/share stop"),
+            Some(SlashCommand::Share { action: Some("stop".to_string()) })
+        );
+        assert_eq!(SlashCommand::parse("/audit"), Some(SlashCommand::Audit));
+    }
+
+    /// Verify completion of ghost commands.
+    #[test]
+    fn completion_ghost_commands_have_subcommands() {
+        use super::{suggest_completions, NoopCompletionContext};
+        let ctx = NoopCompletionContext;
+        let tab_completions = suggest_completions("/tab ", &ctx);
+        let names: Vec<&str> = tab_completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(names.contains(&"new"), "expected 'new' in tab completions: {names:?}");
+        assert!(names.contains(&"list"));
+        assert!(names.contains(&"close"));
+
+        let share_completions = suggest_completions("/share ", &ctx);
+        let share_names: Vec<&str> = share_completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(share_names.contains(&"stop"), "expected 'stop' in share completions: {share_names:?}");
     }
 }

@@ -391,6 +391,31 @@ fn urlencoded(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Install telemetry
+// ---------------------------------------------------------------------------
+
+impl HubClient {
+    /// Fire-and-forget POST to `/v1/hub/packages/:slug/install` (Phase 4b endpoint).
+    ///
+    /// Increments the download counter on the AnvilHub side.  Failures are
+    /// silently swallowed — the local install has already succeeded.
+    pub async fn post_install_telemetry(
+        &self,
+        slug: &str,
+        version: &str,
+        platform: &str,
+    ) {
+        let url = format!("{}/v1/hub/packages/{}/install", self.base_url, urlencoded(slug));
+        let body = serde_json::json!({
+            "version": version,
+            "client": "anvil/2.2.6",
+            "platform": platform,
+        });
+        let _ = self.http.post(&url).json(&body).send().await;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Blocking convenience wrapper (for use outside an async runtime)
 // ---------------------------------------------------------------------------
 

@@ -237,6 +237,65 @@ pub enum RelayMessage {
         message: String,
     },
 
+    // ── Phase 3: panel-aware config protocol ──────────────────────────
+
+    /// Host → Web: full config snapshot (sent on pair + on demand).
+    ConfigSnapshot {
+        config: serde_json::Value,
+    },
+    /// Host → Web: acknowledgement after a successful config.update write.
+    ConfigSaved {
+        config: serde_json::Value,
+    },
+    /// Host → Web: validation or vault-gate failure for a config.update.
+    ConfigError {
+        panel: String,
+        field: String,
+        message: String,
+    },
+    /// Host → Web: vault lock state (sent on pair + whenever lock state changes).
+    VaultState {
+        locked: bool,
+    },
+    /// Web → Host: update a single field in a named panel.
+    ConfigUpdate {
+        panel: String,
+        field: String,
+        value: serde_json::Value,
+    },
+
+    // ── Phase 4: AnvilHub installer ──────────────────────────────────────────
+
+    /// Web → Host: request to install a package from AnvilHub.
+    HubInstall {
+        slug: String,
+        version: String,
+    },
+    /// Web → Host: request immediate process respawn.
+    RespawnRequest,
+
+    /// Host → Web: package installed successfully.
+    HubInstalled {
+        slug: String,
+        version: String,
+        /// One of "none" | "soft" | "full"
+        requires_restart: String,
+    },
+    /// Host → Web: install attempt failed.
+    HubInstallError {
+        slug: String,
+        reason: String,
+        message: String,
+    },
+    /// Host → Web: progress update during download/install.
+    HubInstallProgress {
+        slug: String,
+        /// Human-readable phase label, e.g. "downloading", "extracting".
+        phase: String,
+        /// 0–100.
+        percent: u8,
+    },
+
     // ── Client input ──
     UserMessage {
         tab_id: usize,
@@ -571,11 +630,36 @@ impl RelayHost {
                                                 let _ = sync_tx.send((0, format!("__config_set:{key}:{value}")));
                                             }
                                     }
+                                    // Phase 3 panel-aware config update
+                                    RelayMessage::ConfigUpdate { ref panel, ref field, ref value } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let value_json = serde_json::to_string(value).unwrap_or_default();
+                                                let _ = sync_tx.send((0, format!("__config_update:{panel}:{field}:{value_json}")));
+                                            }
+                                    }
                                     RelayMessage::RequestRenameTab { tab_id, ref name } => {
                                         let st = state.lock().await;
                                         if st.paired_count() > 0
                                             && let Some(ref sync_tx) = user_input_tx {
                                                 let _ = sync_tx.send((0, format!("__rename_tab:{tab_id}:{name}")));
+                                            }
+                                    }
+                                    // Phase 4: hub install request from web client
+                                    RelayMessage::HubInstall { ref slug, ref version } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__hub_install:{slug}:{version}")));
+                                            }
+                                    }
+                                    // Phase 4: web client requests host to respawn
+                                    RelayMessage::RespawnRequest => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, "__respawn_request".to_string()));
                                             }
                                     }
                                     RelayMessage::PeerDisconnected { client_id } => {
@@ -761,5 +845,377 @@ mod tests {
         let json = r#"{"type":"client_connected","client_id":"xyz789"}"#;
         let msg: Result<RelayMessage, _> = serde_json::from_str(json);
         assert!(msg.is_ok(), "Failed to deserialize client_connected: {:?}", msg.err());
+    }
+
+    // ── Phase 3: config panel protocol round-trip tests ───────────────────────
+
+    #[test]
+    fn config_snapshot_round_trips() {
+        let config = serde_json::json!({
+            "vault": {"vault_session_ttl": 1800, "vault_auto_lock": false},
+            "models": {"default_model": "claude-sonnet-4-6"}
+        });
+        let msg = RelayMessage::ConfigSnapshot { config: config.clone() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"config_snapshot\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigSnapshot { config: c } => {
+                assert_eq!(c["vault"]["vault_session_ttl"], 1800);
+            }
+            other => panic!("Expected ConfigSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_saved_round_trips() {
+        let config = serde_json::json!({"vault": {"vault_auto_lock": true}});
+        let msg = RelayMessage::ConfigSaved { config: config.clone() };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"config_saved\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::ConfigSaved { .. }));
+    }
+
+    #[test]
+    fn config_error_round_trips() {
+        let msg = RelayMessage::ConfigError {
+            panel: "vault".to_string(),
+            field: "auto_lock".to_string(),
+            message: "Vault is locked".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"config_error\""));
+        assert!(json.contains("\"panel\":\"vault\""));
+        assert!(json.contains("\"field\":\"auto_lock\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigError { panel, field, message } => {
+                assert_eq!(panel, "vault");
+                assert_eq!(field, "auto_lock");
+                assert!(message.contains("locked"));
+            }
+            other => panic!("Expected ConfigError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vault_state_round_trips_locked() {
+        let msg = RelayMessage::VaultState { locked: true };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"vault_state\""));
+        assert!(json.contains("\"locked\":true"));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::VaultState { locked: true }));
+    }
+
+    #[test]
+    fn vault_state_round_trips_unlocked() {
+        let msg = RelayMessage::VaultState { locked: false };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"locked\":false"));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::VaultState { locked: false }));
+    }
+
+    #[test]
+    fn config_update_round_trips_string_value() {
+        let msg = RelayMessage::ConfigUpdate {
+            panel: "models".to_string(),
+            field: "default_model".to_string(),
+            value: serde_json::Value::String("claude-opus-4-7".to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"config_update\""));
+        assert!(json.contains("\"panel\":\"models\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigUpdate { panel, field, value } => {
+                assert_eq!(panel, "models");
+                assert_eq!(field, "default_model");
+                assert_eq!(value.as_str().unwrap(), "claude-opus-4-7");
+            }
+            other => panic!("Expected ConfigUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_update_round_trips_bool_value() {
+        let msg = RelayMessage::ConfigUpdate {
+            panel: "vault".to_string(),
+            field: "vault_auto_lock".to_string(),
+            value: serde_json::Value::Bool(true),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigUpdate { value, .. } => {
+                assert_eq!(value, serde_json::Value::Bool(true));
+            }
+            other => panic!("Expected ConfigUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_update_round_trips_numeric_value() {
+        let msg = RelayMessage::ConfigUpdate {
+            panel: "vault".to_string(),
+            field: "vault_session_ttl".to_string(),
+            value: serde_json::json!(3600u64),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigUpdate { field, value, .. } => {
+                assert_eq!(field, "vault_session_ttl");
+                assert_eq!(value.as_u64().unwrap(), 3600);
+            }
+            other => panic!("Expected ConfigUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_snapshot_web_json_keys_use_snake_case() {
+        // Verify serde produces the snake_case type names the browser expects.
+        let msg = RelayMessage::ConfigSnapshot {
+            config: serde_json::json!({}),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("config_snapshot"), "Expected snake_case type key");
+    }
+
+    // ── Phase 3b: Status Line config round-trip tests ─────────────────
+
+    #[test]
+    fn status_line_config_round_trips_via_config_update() {
+        // A full StatusLineConfig carried as a JSON object value through ConfigUpdate.
+        use crate::theme::{Side, StatusLine, StatusLineConfig, StatusWidget};
+        let cfg = StatusLineConfig {
+            preset: "custom".into(),
+            lines: vec![
+                StatusLine {
+                    left: vec![StatusWidget::Model, StatusWidget::Separator, StatusWidget::Cost],
+                    right: vec![StatusWidget::Version],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::GitBranch, StatusWidget::GitStatus],
+                    right: vec![StatusWidget::TokensTotal],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::ContextBar, StatusWidget::ContextPct],
+                    right: vec![],
+                },
+                StatusLine {
+                    left: vec![StatusWidget::Permissions],
+                    right: vec![StatusWidget::TimeDisplay],
+                },
+            ],
+            separator_char: " | ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        };
+        let _ = Side::Left; // ensure import used
+        let cfg_value = serde_json::to_value(&cfg).unwrap();
+        let msg = RelayMessage::ConfigUpdate {
+            panel: "display".to_string(),
+            field: "status_line".to_string(),
+            value: cfg_value,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigUpdate { panel, field, value } => {
+                assert_eq!(panel, "display");
+                assert_eq!(field, "status_line");
+                let back: StatusLineConfig = serde_json::from_value(value).unwrap();
+                assert_eq!(back.preset, "custom");
+                assert_eq!(back.lines.len(), 4);
+                assert_eq!(back.lines[0].left.len(), 3);
+                assert_eq!(back.lines[0].left[0].id(), "model");
+                assert_eq!(back.lines[3].right[0].id(), "time_display");
+            }
+            other => panic!("Expected ConfigUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_line_config_deserialize_all_widget_ids() {
+        // Every id produced by StatusWidget::all_widgets() must survive a
+        // JSON serialise → deserialise round-trip through a StatusLineConfig value.
+        use crate::theme::{StatusLine, StatusLineConfig, StatusWidget};
+        let all = StatusWidget::all_widgets();
+        let cfg = StatusLineConfig {
+            preset: "test".into(),
+            lines: vec![StatusLine { left: all.clone(), right: vec![] }],
+            separator_char: " │ ".into(),
+            compact: false,
+            widgets: std::collections::HashMap::new(),
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: StatusLineConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.lines[0].left.len(), all.len());
+        for (orig, restored) in all.iter().zip(back.lines[0].left.iter()) {
+            assert_eq!(orig.id(), restored.id());
+        }
+    }
+
+    #[test]
+    fn status_line_preset_application_replaces_config() {
+        // Applying a named preset via ConfigUpdate (as a string field value)
+        // must produce a valid preset config that the host can deserialise.
+        use crate::theme::{StatusLineConfig, StatusLinePreset};
+        let preset_name = "minimal";
+        let msg = RelayMessage::ConfigUpdate {
+            panel: "display".to_string(),
+            field: "status_line_preset".to_string(),
+            value: serde_json::Value::String(preset_name.to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::ConfigUpdate { value, .. } => {
+                let name = value.as_str().unwrap();
+                let preset = StatusLinePreset::from_name(name).expect("known preset");
+                let cfg = StatusLineConfig::from_preset(preset);
+                assert_eq!(cfg.preset, "minimal");
+                assert!(!cfg.lines.is_empty());
+            }
+            other => panic!("Expected ConfigUpdate, got {other:?}"),
+        }
+    }
+
+    // ── Phase 4: AnvilHub installer relay message round-trip tests ────────────
+
+    #[test]
+    fn hub_install_round_trips() {
+        let msg = RelayMessage::HubInstall {
+            slug: "skill-foo".to_string(),
+            version: "1.2.3".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"hub_install\""));
+        assert!(json.contains("\"slug\":\"skill-foo\""));
+        assert!(json.contains("\"version\":\"1.2.3\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::HubInstall { slug, version } => {
+                assert_eq!(slug, "skill-foo");
+                assert_eq!(version, "1.2.3");
+            }
+            other => panic!("Expected HubInstall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn respawn_request_round_trips() {
+        let msg = RelayMessage::RespawnRequest;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"respawn_request\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::RespawnRequest));
+    }
+
+    #[test]
+    fn hub_installed_round_trips_with_restart_tags() {
+        for tag in &["none", "soft", "full"] {
+            let msg = RelayMessage::HubInstalled {
+                slug: "plugin-bar".to_string(),
+                version: "2.0.0".to_string(),
+                requires_restart: (*tag).to_string(),
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("\"type\":\"hub_installed\""), "tag={tag}");
+            assert!(json.contains(&format!("\"requires_restart\":\"{tag}\"")), "tag={tag}");
+            let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+            match parsed {
+                RelayMessage::HubInstalled { requires_restart, .. } => {
+                    assert_eq!(requires_restart, *tag);
+                }
+                other => panic!("Expected HubInstalled, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hub_install_error_round_trips() {
+        let msg = RelayMessage::HubInstallError {
+            slug: "bad-pkg".to_string(),
+            reason: "vault_locked".to_string(),
+            message: "Vault is locked — unlock to install packages".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"hub_install_error\""));
+        assert!(json.contains("\"reason\":\"vault_locked\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::HubInstallError { slug, reason, message } => {
+                assert_eq!(slug, "bad-pkg");
+                assert_eq!(reason, "vault_locked");
+                assert!(message.contains("locked"));
+            }
+            other => panic!("Expected HubInstallError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hub_install_progress_round_trips() {
+        let msg = RelayMessage::HubInstallProgress {
+            slug: "theme-cool".to_string(),
+            phase: "downloading".to_string(),
+            percent: 42,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"hub_install_progress\""));
+        assert!(json.contains("\"percent\":42"));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::HubInstallProgress { slug, phase, percent } => {
+                assert_eq!(slug, "theme-cool");
+                assert_eq!(phase, "downloading");
+                assert_eq!(percent, 42);
+            }
+            other => panic!("Expected HubInstallProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pkg_type_to_restart_requirement_mapping() {
+        // PLUGIN/MCP  → "full"
+        // THEME       → "soft"
+        // SKILL/AGENT → "none"
+        fn restart_for_type(t: &str) -> &'static str {
+            match t {
+                "plugin" | "mcp" => "full",
+                "theme" => "soft",
+                _ => "none",
+            }
+        }
+        assert_eq!(restart_for_type("plugin"), "full");
+        assert_eq!(restart_for_type("mcp"), "full");
+        assert_eq!(restart_for_type("theme"), "soft");
+        assert_eq!(restart_for_type("skill"), "none");
+        assert_eq!(restart_for_type("agent"), "none");
+    }
+
+    #[test]
+    fn platform_detection_produces_known_tag() {
+        fn current_platform() -> &'static str {
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                "darwin-arm64"
+            } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+                "darwin-x86_64"
+            } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                "linux-x86_64"
+            } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+                "linux-arm64"
+            } else if cfg!(target_os = "windows") {
+                "windows-x86_64"
+            } else {
+                "linux-x86_64"
+            }
+        }
+        let platform = current_platform();
+        let known = &["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64", "windows-x86_64"];
+        assert!(known.contains(&platform), "unknown platform tag: {platform}");
     }
 }

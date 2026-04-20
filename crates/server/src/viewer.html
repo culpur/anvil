@@ -85,6 +85,235 @@ a { color:var(--accent); }
 .disconnected p { color:var(--text-dim); }
 
 .hidden { display:none !important; }
+
+/* ── Tab view visibility ─────────────────────────────── */
+.view-messages { display:flex; flex-direction:column; flex:1; overflow:hidden; min-height:0; }
+.view-config   { display:flex; flex:1; overflow:hidden; min-height:0; }
+.view-hub      { display:flex; flex:1; overflow:hidden; min-height:0; flex-direction:column; }
+.view-messages.hidden, .view-config.hidden, .view-hub.hidden { display:none !important; }
+
+/* ─── AnvilHub Installer ──────────────────────────────────────────────────── */
+.hub-root { display:flex; flex:1; overflow:hidden; min-height:0; }
+.hub-sidebar { width:180px; flex-shrink:0; background:var(--card); border-right:1px solid var(--border); overflow-y:auto; padding:12px 0; }
+.hub-sidebar-section { padding:4px 12px 2px; font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.06em; margin-top:8px; }
+.hub-sidebar-item { padding:7px 14px; cursor:pointer; color:var(--text-dim); font-size:12px; border-left:2px solid transparent; transition:all 0.12s; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hub-sidebar-item:hover { color:var(--text); background:rgba(15,188,255,0.05); }
+.hub-sidebar-item.active { color:var(--accent); border-left-color:var(--accent); background:rgba(15,188,255,0.07); }
+.hub-main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0; }
+.hub-topbar { display:flex; align-items:center; gap:8px; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--border); flex-shrink:0; flex-wrap:wrap; }
+.hub-search-wrap { display:flex; align-items:center; background:var(--bg); border:1px solid var(--border); border-radius:5px; padding:0 10px; gap:6px; flex:1; min-width:160px; max-width:340px; }
+.hub-search-wrap input { flex:1; background:none; border:none; color:var(--text); font-family:inherit; font-size:12px; outline:none; padding:7px 0; }
+.hub-search-wrap:focus-within { border-color:var(--accent); }
+.hub-filter-select { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-family:inherit; font-size:12px; outline:none; cursor:pointer; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7' viewBox='0 0 10 7'%3E%3Cpath fill='%2394A3B8' d='M5 7L0 0h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; padding-right:24px; }
+.hub-filter-select:focus { border-color:var(--accent); }
+.hub-topbar-gap { flex:1; }
+.hub-vault-warn { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--error); background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.2); border-radius:4px; padding:5px 10px; }
+.hub-grid-wrap { flex:1; overflow-y:auto; padding:16px; }
+.hub-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; }
+.hub-card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; cursor:pointer; transition:all 0.15s; display:flex; flex-direction:column; gap:8px; position:relative; }
+.hub-card:hover { border-color:rgba(15,188,255,0.35); background:rgba(15,188,255,0.03); }
+.hub-card-top { display:flex; align-items:flex-start; gap:10px; }
+.hub-card-icon { font-size:24px; width:36px; text-align:center; flex-shrink:0; line-height:1.2; }
+.hub-card-meta { flex:1; min-width:0; }
+.hub-card-name { font-size:13px; font-weight:700; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hub-card-author { font-size:11px; color:var(--text-dim); margin-top:1px; }
+.hub-card-desc { font-size:11px; color:var(--text-dim); line-height:1.5; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.hub-card-footer { display:flex; align-items:center; gap:8px; margin-top:auto; }
+.hub-card-type { font-size:10px; font-weight:600; padding:2px 7px; border-radius:10px; text-transform:uppercase; }
+.hub-type-skill   { background:rgba(15,188,255,0.1); color:var(--accent); }
+.hub-type-plugin  { background:rgba(139,92,246,0.12); color:#a78bfa; }
+.hub-type-agent   { background:rgba(0,208,132,0.1); color:var(--success); }
+.hub-type-theme   { background:rgba(245,158,11,0.1); color:var(--warning); }
+.hub-card-stats { font-size:10px; color:var(--text-dim); display:flex; align-items:center; gap:6px; }
+.hub-card-install-btn { margin-left:auto; background:var(--accent); color:var(--bg); border:none; border-radius:4px; padding:5px 12px; font-family:inherit; font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0; }
+.hub-card-install-btn:hover { background:#3dd8ff; }
+.hub-card-install-btn:disabled { opacity:0.4; cursor:not-allowed; background:var(--border); color:var(--text-dim); }
+.hub-card-install-btn.installing { background:var(--warning); color:var(--bg); }
+.hub-card-install-btn.installed { background:var(--success); color:var(--bg); }
+.hub-status-bar { padding:6px 16px; font-size:11px; color:var(--text-dim); border-top:1px solid var(--border); flex-shrink:0; background:var(--card); }
+/* Loading / empty / error states */
+.hub-loading { display:flex; align-items:center; justify-content:center; flex:1; gap:10px; color:var(--text-dim); font-size:13px; }
+.hub-spinner { animation:spin 0.9s linear infinite; font-size:18px; }
+.hub-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:8px; color:var(--text-dim); font-size:13px; }
+.hub-error-msg { display:flex; align-items:center; justify-content:center; flex:1; flex-direction:column; gap:8px; color:var(--error); font-size:13px; }
+/* Detail drawer */
+.hub-drawer-overlay { position:fixed; inset:0; z-index:50; pointer-events:none; }
+.hub-drawer { position:fixed; top:0; right:0; bottom:0; width:440px; max-width:100vw; background:var(--card); border-left:1px solid var(--border); z-index:51; display:flex; flex-direction:column; transform:translateX(100%); transition:transform 0.25s ease; overflow:hidden; }
+.hub-drawer.open { transform:translateX(0); }
+.hub-drawer-header { display:flex; align-items:flex-start; gap:12px; padding:20px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.hub-drawer-icon { font-size:32px; line-height:1; flex-shrink:0; }
+.hub-drawer-meta { flex:1; min-width:0; }
+.hub-drawer-name { font-size:16px; font-weight:700; color:var(--text); }
+.hub-drawer-author { font-size:12px; color:var(--text-dim); margin-top:2px; }
+.hub-drawer-badges { display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap; }
+.hub-drawer-close { background:none; border:none; color:var(--text-dim); cursor:pointer; font-size:18px; line-height:1; padding:4px; flex-shrink:0; }
+.hub-drawer-close:hover { color:var(--text); }
+.hub-drawer-body { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:16px; }
+.hub-drawer-section { font-size:11px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:6px; }
+.hub-drawer-desc { font-size:12px; color:var(--text); line-height:1.6; }
+.hub-drawer-readme { font-size:12px; color:var(--text); line-height:1.6; white-space:pre-wrap; word-break:break-word; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:12px; max-height:240px; overflow-y:auto; }
+.hub-drawer-footer { padding:16px 20px; border-top:1px solid var(--border); flex-shrink:0; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.hub-drawer-install-btn { flex:1; background:var(--accent); color:var(--bg); border:none; border-radius:5px; padding:10px 16px; font-family:inherit; font-size:13px; font-weight:700; cursor:pointer; }
+.hub-drawer-install-btn:hover { background:#3dd8ff; }
+.hub-drawer-install-btn:disabled { opacity:0.4; cursor:not-allowed; background:var(--border); color:var(--text-dim); }
+.hub-drawer-install-btn.installing { background:var(--warning); }
+.hub-drawer-install-btn.installed { background:var(--success); }
+/* Restart modal */
+.restart-modal-overlay { position:fixed; inset:0; background:rgba(0,2,12,0.88); display:flex; align-items:center; justify-content:center; z-index:200; }
+.restart-modal { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:32px 36px; max-width:380px; width:90%; text-align:center; }
+.restart-modal h3 { font-size:16px; color:var(--warning); margin-bottom:8px; }
+.restart-modal p { font-size:12px; color:var(--text-dim); margin-bottom:24px; line-height:1.5; }
+.restart-modal-actions { display:flex; gap:10px; }
+.restart-modal-actions button { flex:1; padding:10px; border:none; border-radius:6px; font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+.restart-btn-now { background:var(--accent); color:var(--bg); }
+.restart-btn-now:hover { background:#3dd8ff; }
+.restart-btn-later { background:var(--border); color:var(--text); }
+.restart-btn-later:hover { background:#334155; }
+
+/* ─── Config Panel Layout ──────────────────────────────────────────────────── */
+.config-root { display:flex; flex:1; overflow:hidden; min-height:0; }
+.config-sidebar { width:192px; flex-shrink:0; background:var(--card); border-right:1px solid var(--border); overflow-y:auto; padding:8px 0; }
+.config-sidebar-item { padding:8px 16px; cursor:pointer; color:var(--text-dim); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-left:2px solid transparent; transition:all 0.15s; }
+.config-sidebar-item:hover { color:var(--text); background:rgba(15,188,255,0.05); }
+.config-sidebar-item.active { color:var(--accent); border-left-color:var(--accent); background:rgba(15,188,255,0.08); }
+.config-main { flex:1; overflow-y:auto; padding:24px 32px; min-width:0; }
+.panel-title { font-size:16px; font-weight:700; color:var(--text); margin-bottom:4px; }
+.panel-desc { font-size:12px; color:var(--text-dim); margin-bottom:24px; line-height:1.5; }
+.setting-row { display:flex; align-items:flex-start; gap:16px; padding:12px 0; border-bottom:1px solid var(--border); min-height:52px; }
+.setting-row:last-child { border-bottom:none; }
+.setting-label-col { flex:1; min-width:0; }
+.setting-label { font-size:13px; color:var(--text); font-weight:500; margin-bottom:2px; }
+.setting-hint { font-size:11px; color:var(--text-dim); line-height:1.4; }
+.setting-control { flex-shrink:0; display:flex; align-items:center; gap:8px; min-width:200px; justify-content:flex-end; }
+/* Toggle */
+.toggle-switch { position:relative; width:40px; height:22px; cursor:pointer; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+.toggle-track { position:absolute; inset:0; background:var(--border); border-radius:11px; transition:background 0.2s; }
+.toggle-switch input:checked + .toggle-track { background:var(--accent); }
+.toggle-thumb { position:absolute; top:3px; left:3px; width:16px; height:16px; background:var(--text); border-radius:50%; transition:transform 0.2s; pointer-events:none; }
+.toggle-switch input:checked ~ .toggle-thumb { transform:translateX(18px); }
+.toggle-switch.disabled { opacity:0.4; cursor:not-allowed; pointer-events:none; }
+/* Inputs */
+.cfg-input { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-family:inherit; font-size:12px; outline:none; width:220px; transition:border-color 0.15s; }
+.cfg-input:focus { border-color:var(--accent); }
+.cfg-input:disabled { opacity:0.4; cursor:not-allowed; }
+.cfg-input.saving { border-color:var(--warning); }
+.cfg-input.saved  { border-color:var(--success); }
+.cfg-input.error  { border-color:var(--error); }
+.cfg-number { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-family:inherit; font-size:12px; outline:none; width:100px; transition:border-color 0.15s; }
+.cfg-number:focus { border-color:var(--accent); }
+.cfg-number:disabled { opacity:0.4; cursor:not-allowed; }
+.cfg-select { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-family:inherit; font-size:12px; outline:none; width:220px; cursor:pointer; transition:border-color 0.15s; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2394A3B8' d='M6 8L0 0h12z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; padding-right:28px; }
+.cfg-select:focus { border-color:var(--accent); }
+.cfg-select:disabled { opacity:0.4; cursor:not-allowed; }
+/* Masked */
+.masked-wrap { position:relative; display:flex; align-items:center; }
+.masked-wrap .cfg-input { padding-right:36px; }
+.masked-toggle-btn { position:absolute; right:6px; background:none; border:none; color:var(--text-dim); cursor:pointer; font-size:12px; padding:2px 4px; line-height:1; }
+.masked-toggle-btn:hover { color:var(--text); }
+/* Vault */
+.vault-locked-banner { display:flex; align-items:center; gap:10px; padding:10px 14px; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3); border-radius:6px; margin-bottom:20px; font-size:12px; color:var(--error); }
+.vault-lock-state { display:flex; align-items:center; gap:12px; padding:16px; border-radius:8px; margin-bottom:20px; font-size:13px; border:1px solid var(--border); }
+.vault-lock-state.locked { background:rgba(239,68,68,0.06); border-color:rgba(239,68,68,0.25); color:var(--error); }
+.vault-lock-state.unlocked { background:rgba(0,208,132,0.06); border-color:rgba(0,208,132,0.25); color:var(--success); }
+.vault-lock-state .lock-big { font-size:28px; line-height:1; }
+.vault-lock-state .lock-info { flex:1; }
+.vault-lock-state .lock-title { font-weight:700; margin-bottom:2px; }
+.vault-lock-state .lock-sub { font-size:11px; opacity:0.75; }
+.vault-unlock-form { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:20px; }
+.vault-unlock-form input { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px 10px; color:var(--text); font-family:inherit; font-size:12px; outline:none; width:180px; }
+.vault-unlock-form input:focus { border-color:var(--accent); }
+.btn-vault-unlock { background:var(--accent); color:var(--bg); border:none; border-radius:4px; padding:6px 14px; font-family:inherit; font-size:12px; font-weight:600; cursor:pointer; }
+.btn-vault-unlock:hover { background:#3dd8ff; }
+/* Status Line Editor (Phase 3b) */
+.btn-open-tui { background:var(--card); border:1px solid var(--border); color:var(--accent); border-radius:4px; padding:8px 16px; font-family:inherit; font-size:12px; font-weight:600; cursor:pointer; margin-top:4px; }
+.btn-open-tui:hover { border-color:var(--accent); background:rgba(15,188,255,0.05); }
+.sl-editor { display:flex; flex-direction:column; gap:12px; }
+.sl-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 12px; background:var(--card); border:1px solid var(--border); border-radius:6px; }
+.sl-toolbar label { font-size:11px; color:var(--text-dim); }
+.sl-toolbar select { background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 8px; color:var(--text); font-family:inherit; font-size:11px; outline:none; cursor:pointer; }
+.sl-toolbar select:focus { border-color:var(--accent); }
+.sl-toolbar .sl-sep { width:1px; height:18px; background:var(--border); margin:0 4px; }
+.sl-toolbar-gap { flex:1; }
+.sl-btn { background:var(--card); border:1px solid var(--border); color:var(--text); border-radius:4px; padding:4px 10px; font-family:inherit; font-size:11px; cursor:pointer; white-space:nowrap; }
+.sl-btn:hover { border-color:var(--accent); color:var(--accent); }
+.sl-btn.primary { background:var(--accent); color:var(--bg); border-color:var(--accent); }
+.sl-btn.primary:hover { background:#3dd8ff; }
+.sl-btn.danger { border-color:rgba(239,68,68,0.4); color:var(--error); }
+.sl-btn.danger:hover { background:rgba(239,68,68,0.08); }
+.sl-toggle-row { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-dim); }
+.sl-columns { display:flex; gap:0; flex:1; overflow:hidden; min-height:400px; }
+.sl-palette { width:200px; flex-shrink:0; background:var(--card); border:1px solid var(--border); border-radius:6px; display:flex; flex-direction:column; overflow:hidden; }
+.sl-palette-search { padding:8px; border-bottom:1px solid var(--border); }
+.sl-palette-search input { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:5px 8px; color:var(--text); font-family:inherit; font-size:11px; outline:none; }
+.sl-palette-search input:focus { border-color:var(--accent); }
+.sl-palette-list { flex:1; overflow-y:auto; padding:4px 0; }
+.sl-cat-header { padding:4px 10px 2px; font-size:10px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
+.sl-palette-item { display:flex; align-items:center; gap:6px; padding:5px 10px; cursor:pointer; font-size:11px; color:var(--text-dim); border-left:2px solid transparent; transition:all 0.1s; user-select:none; }
+.sl-palette-item:hover { color:var(--text); background:rgba(15,188,255,0.05); border-left-color:var(--accent); }
+.sl-palette-item .sl-wi { font-size:13px; width:18px; text-align:center; flex-shrink:0; }
+.sl-canvas { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:6px; margin:0 8px; display:flex; flex-direction:column; overflow-y:auto; padding:12px; gap:8px; }
+.sl-canvas-hint { font-size:11px; color:var(--text-dim); text-align:center; padding:8px; font-style:italic; }
+.sl-line-block { border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.sl-line-header { display:flex; align-items:center; gap:6px; padding:6px 10px; background:var(--card); border-bottom:1px solid var(--border); font-size:11px; color:var(--text-dim); }
+.sl-line-header .sl-line-num { font-weight:700; color:var(--accent); min-width:50px; }
+.sl-line-header-gap { flex:1; }
+.sl-line-body { display:flex; gap:0; }
+.sl-side { flex:1; min-height:48px; padding:6px 8px; display:flex; flex-wrap:wrap; gap:4px; align-content:flex-start; position:relative; }
+.sl-side.left { border-right:1px solid var(--border); }
+.sl-side-label { position:absolute; top:4px; right:4px; font-size:9px; color:var(--text-dim); opacity:0.5; font-weight:600; text-transform:uppercase; }
+.sl-side.drag-over { background:rgba(15,188,255,0.06); }
+.sl-widget-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:3px; font-size:10px; font-weight:500; cursor:grab; user-select:none; border:1px solid transparent; transition:all 0.1s; }
+.sl-widget-chip:active { cursor:grabbing; }
+.sl-widget-chip.selected { outline:2px solid var(--accent); outline-offset:1px; }
+.sl-widget-chip.dragging { opacity:0.4; }
+.sl-widget-chip .sl-chip-x { opacity:0; font-size:10px; line-height:1; margin-left:2px; cursor:pointer; color:inherit; }
+.sl-widget-chip:hover .sl-chip-x { opacity:0.7; }
+.sl-widget-chip .sl-chip-x:hover { opacity:1; }
+/* Category chip colors */
+.sl-cat-model   { background:rgba(139,92,246,0.15); border-color:rgba(139,92,246,0.3); color:#a78bfa; }
+.sl-cat-tokens  { background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.3); color:#fbbf24; }
+.sl-cat-context { background:rgba(15,188,255,0.1); border-color:rgba(15,188,255,0.3); color:var(--accent); }
+.sl-cat-session { background:rgba(0,208,132,0.1); border-color:rgba(0,208,132,0.3); color:var(--success); }
+.sl-cat-git     { background:rgba(249,115,22,0.12); border-color:rgba(249,115,22,0.3); color:#fb923c; }
+.sl-cat-system  { background:rgba(148,163,184,0.1); border-color:rgba(148,163,184,0.3); color:#94a3b8; }
+.sl-cat-cost_detail { background:rgba(239,68,68,0.1); border-color:rgba(239,68,68,0.3); color:#f87171; }
+.sl-cat-productivity { background:rgba(34,197,94,0.1); border-color:rgba(34,197,94,0.3); color:#4ade80; }
+.sl-cat-layout  { background:rgba(100,116,139,0.12); border-color:rgba(100,116,139,0.3); color:#64748b; }
+.sl-props { width:240px; flex-shrink:0; background:var(--card); border:1px solid var(--border); border-radius:6px; display:flex; flex-direction:column; overflow:hidden; }
+.sl-props-title { padding:10px 12px; font-size:12px; font-weight:600; color:var(--text); border-bottom:1px solid var(--border); }
+.sl-props-body { flex:1; overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column; gap:10px; }
+.sl-prop-row { display:flex; flex-direction:column; gap:4px; }
+.sl-prop-label { font-size:10px; color:var(--text-dim); font-weight:600; text-transform:uppercase; letter-spacing:0.04em; }
+.sl-prop-input { background:var(--bg); border:1px solid var(--border); border-radius:3px; padding:5px 8px; color:var(--text); font-family:inherit; font-size:11px; outline:none; width:100%; }
+.sl-prop-input:focus { border-color:var(--accent); }
+.sl-prop-select { background:var(--bg); border:1px solid var(--border); border-radius:3px; padding:5px 8px; color:var(--text); font-family:inherit; font-size:11px; outline:none; width:100%; cursor:pointer; }
+.sl-prop-select:focus { border-color:var(--accent); }
+.sl-props-empty { font-size:11px; color:var(--text-dim); font-style:italic; line-height:1.6; padding:4px 0; }
+.sl-add-line-btn { display:flex; align-items:center; justify-content:center; gap:6px; padding:8px; border:1px dashed var(--border); border-radius:6px; font-size:11px; color:var(--text-dim); cursor:pointer; transition:all 0.15s; }
+.sl-add-line-btn:hover { border-color:var(--accent); color:var(--accent); background:rgba(15,188,255,0.04); }
+/* Toasts */
+.toast-container { position:fixed; bottom:24px; right:24px; display:flex; flex-direction:column; gap:8px; z-index:200; pointer-events:none; }
+.toast { padding:10px 16px; border-radius:6px; font-size:12px; font-weight:500; max-width:320px; pointer-events:auto; animation:toastIn 0.2s ease-out; box-shadow:0 4px 12px rgba(0,0,0,0.4); }
+.toast.success { background:rgba(0,208,132,0.15); border:1px solid rgba(0,208,132,0.4); color:var(--success); }
+.toast.error   { background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); color:var(--error); }
+.toast.info    { background:rgba(15,188,255,0.1); border:1px solid rgba(15,188,255,0.3); color:var(--accent); }
+@keyframes toastIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+/* Badges + radio + chains + cron */
+.status-badge { font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; flex-shrink:0; }
+.status-badge.ok { background:rgba(0,208,132,0.12); color:var(--success); border:1px solid rgba(0,208,132,0.25); }
+.status-badge.missing { background:rgba(239,68,68,0.08); color:var(--error); border:1px solid rgba(239,68,68,0.2); }
+.radio-group { display:flex; flex-direction:column; gap:6px; }
+.radio-option { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12px; color:var(--text-dim); padding:6px 10px; border-radius:4px; border:1px solid transparent; transition:all 0.15s; }
+.radio-option:hover { color:var(--text); background:rgba(15,188,255,0.04); border-color:var(--border); }
+.radio-option input[type=radio] { accent-color:var(--accent); }
+.radio-option input[type=radio]:checked + span { color:var(--accent); font-weight:600; }
+.chain-list { display:flex; flex-direction:column; gap:4px; width:220px; }
+.chain-item { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); background:var(--card); border:1px solid var(--border); border-radius:4px; padding:5px 8px; }
+.chain-item .chain-num { color:var(--accent); font-weight:700; font-size:11px; min-width:16px; }
+.cron-list { display:flex; flex-direction:column; gap:4px; min-width:220px; max-height:120px; overflow-y:auto; }
+.cron-item { font-size:11px; color:var(--text-dim); background:var(--card); border:1px solid var(--border); border-radius:3px; padding:4px 8px; }
+.cron-empty { font-size:11px; color:var(--text-dim); font-style:italic; }
 </style>
 </head>
 <body>
@@ -100,13 +329,43 @@ a { color:var(--accent); }
 <!-- Tab bar -->
 <div class="tab-bar" id="tab-bar"></div>
 
-<!-- Messages (one per tab, only active visible) -->
-<div class="messages" id="messages"></div>
+<!-- Messages view (session tabs) -->
+<div class="view-messages" id="view-messages">
+  <div class="messages" id="messages"></div>
+  <div class="input-bar">
+    <input type="text" id="input" placeholder="Type a message..." disabled>
+    <button id="send-btn" disabled>Send</button>
+  </div>
+</div>
 
-<!-- Input -->
-<div class="input-bar">
-  <input type="text" id="input" placeholder="Type a message..." disabled>
-  <button id="send-btn" disabled>Send</button>
+<!-- Config view (17 panels) -->
+<div class="view-config hidden" id="view-config">
+  <div id="config-root" class="config-root"></div>
+</div>
+
+<!-- AnvilHub view -->
+<div class="view-hub hidden" id="view-hub">
+  <div class="hub-root" id="hub-root"></div>
+  <div class="hub-status-bar" id="hub-status-bar"></div>
+</div>
+
+<!-- AnvilHub detail drawer (outside hub-root so it overlays everything) -->
+<div class="hub-drawer" id="hub-drawer">
+  <div class="hub-drawer-header" id="hub-drawer-header"></div>
+  <div class="hub-drawer-body" id="hub-drawer-body"></div>
+  <div class="hub-drawer-footer" id="hub-drawer-footer"></div>
+</div>
+
+<!-- Restart modal (hidden until hub install triggers it) -->
+<div class="restart-modal-overlay hidden" id="restart-modal">
+  <div class="restart-modal">
+    <h3>&#9888;&#65039; Restart Required</h3>
+    <p id="restart-modal-msg">This package requires Anvil to restart before changes take effect.</p>
+    <div class="restart-modal-actions">
+      <button class="restart-btn-now" onclick="hubRestartNow()">Restart Now</button>
+      <button class="restart-btn-later" onclick="hubRestartLater()">Later</button>
+    </div>
+  </div>
 </div>
 
 <!-- Pairing modal -->
@@ -136,6 +395,8 @@ let ws = null;
 let paired = false;
 let activeTab = 0;
 let tabs = {}; // tabId -> {name, model, log:[], streaming:''}
+let configTabActive = false; // true when Config tab is selected
+let hubTabActive = false;    // true when AnvilHub tab is selected
 
 // ─── WebSocket Connection ─────────────────────────────────────────
 
@@ -168,6 +429,7 @@ function handleMessage(msg) {
         document.getElementById('input').disabled = false;
         document.getElementById('send-btn').disabled = false;
         setStatus('green', 'Connected');
+        renderTabBar(); // show Config tab immediately on pair
       } else {
         document.getElementById('pair-error').textContent = msg.error || 'Wrong code';
         document.getElementById('pair-error').classList.remove('hidden');
@@ -227,6 +489,24 @@ function handleMessage(msg) {
     case 'peer_disconnected':
       showDisconnected();
       break;
+    // Phase 3: config panel protocol
+    case 'config_snapshot':
+    case 'config_saved':
+    case 'config_error':
+    case 'vault_state':
+      handleConfigMessage(msg);
+      if (msg.type === 'vault_state') hubOnVaultStateChange(!!msg.locked);
+      break;
+    // Phase 4: AnvilHub installer
+    case 'hub_installed':
+      handleHubInstalled(msg);
+      break;
+    case 'hub_install_error':
+      handleHubInstallError(msg);
+      break;
+    case 'hub_install_progress':
+      handleHubInstallProgress(msg);
+      break;
   }
 }
 
@@ -266,13 +546,59 @@ function loadSnapshot(tabList) {
 function renderTabBar() {
   const bar = document.getElementById('tab-bar');
   bar.innerHTML = '';
+
+  // Session tabs
   Object.entries(tabs).forEach(([id, tab]) => {
-    const el = document.createElement('div');
-    el.className = 'tab' + (parseInt(id) === activeTab ? ' active' : '');
-    el.textContent = tab.name;
-    el.onclick = () => { activeTab = parseInt(id); renderTabBar(); renderMessages(); };
-    bar.appendChild(el);
+    const t = document.createElement('div');
+    const isActive = !configTabActive && !hubTabActive && parseInt(id) === activeTab;
+    t.className = 'tab' + (isActive ? ' active' : '');
+    t.textContent = tab.name;
+    t.onclick = () => {
+      activeTab = parseInt(id);
+      configTabActive = false;
+      hubTabActive = false;
+      deactivateConfigTab();
+      document.getElementById('view-messages').classList.remove('hidden');
+      document.getElementById('view-config').classList.add('hidden');
+      document.getElementById('view-hub').classList.add('hidden');
+      renderTabBar();
+      renderMessages();
+    };
+    bar.appendChild(t);
   });
+
+  // Config tab and AnvilHub tab (always shown when paired)
+  if (paired) {
+    const hubTab = document.createElement('div');
+    hubTab.className = 'tab' + (hubTabActive ? ' active' : '');
+    hubTab.textContent = 'AnvilHub';
+    hubTab.style.marginLeft = 'auto';
+    hubTab.onclick = () => {
+      hubTabActive = true;
+      configTabActive = false;
+      deactivateConfigTab();
+      document.getElementById('view-messages').classList.add('hidden');
+      document.getElementById('view-config').classList.add('hidden');
+      document.getElementById('view-hub').classList.remove('hidden');
+      renderTabBar();
+      activateHubTab();
+    };
+    bar.appendChild(hubTab);
+
+    const cfgTab = document.createElement('div');
+    cfgTab.className = 'tab' + (configTabActive ? ' active' : '');
+    cfgTab.textContent = 'Config';
+    cfgTab.onclick = () => {
+      configTabActive = true;
+      hubTabActive = false;
+      document.getElementById('view-messages').classList.add('hidden');
+      document.getElementById('view-config').classList.remove('hidden');
+      document.getElementById('view-hub').classList.add('hidden');
+      renderTabBar();
+      activateConfigTab();
+    };
+    bar.appendChild(cfgTab);
+  }
 }
 
 // ─── Message Rendering ────────────────────────────────────────────
@@ -393,6 +719,1579 @@ if (hash && hash !== '') {
 } else {
   setStatus('red', 'No session hash');
   document.getElementById('pairing-modal').classList.add('hidden');
+}
+
+// ─── AnvilHub Installer (Phase 4) ────────────────────────────────────
+
+const HUB = {
+  pkgs: [],
+  detail: null,
+  query: '',
+  typeFilter: 'all',
+  sort: 'downloads',
+  category: 'all',
+  categories: [],
+  loading: false,
+  error: null,
+  installing: {},
+  searchTimer: null,
+  vaultLocked: true,
+  pendingRestart: null,
+};
+
+const HUB_BASE = 'https://passage.culpur.net';
+
+const HUB_ICONS = {
+  skill:  '\uD83E\uDDE0',
+  plugin: '\uD83D\uDD0C',
+  agent:  '\uD83E\uDD16',
+  theme:  '\uD83C\uDFA8',
+};
+
+function hubTypeClass(t) { return 'hub-type-' + (HUB_ICONS[t] ? t : 'skill'); }
+function hubIcon(t) { return HUB_ICONS[t] || '\uD83D\uDCE6'; }
+function hubFmtDownloads(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
+  if (n >= 1000) return (n/1000).toFixed(1)+'k';
+  return String(n||0);
+}
+
+function activateHubTab() {
+  // Sync vault state from CFG (set by Phase 3 on pair)
+  HUB.vaultLocked = CFG.vaultLocked;
+  if (HUB.pkgs.length === 0 && !HUB.loading) hubFetchPackages();
+  else renderHubRoot();
+}
+
+function hubOnVaultStateChange(locked) {
+  HUB.vaultLocked = locked;
+  if (hubTabActive) renderHubRoot();
+}
+
+async function hubFetchPackages() {
+  HUB.loading = true; HUB.error = null;
+  if (hubTabActive) renderHubRoot();
+  const typeParam = HUB.typeFilter !== 'all' ? `&type=${HUB.typeFilter}` : '';
+  try {
+    const resp = await fetch(`${HUB_BASE}/v1/hub/packages?limit=50${typeParam}&sort=${HUB.sort}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    HUB.pkgs = Array.isArray(json.data) ? json.data : [];
+    const cats = new Set();
+    HUB.pkgs.forEach(p => { if (p.category) cats.add(p.category); });
+    HUB.categories = Array.from(cats).sort();
+    HUB.error = null;
+  } catch (e) {
+    HUB.pkgs = []; HUB.error = 'AnvilHub is unreachable \u2014 check your connection';
+  }
+  HUB.loading = false;
+  if (hubTabActive) renderHubRoot();
+}
+
+async function hubSearch(q) {
+  HUB.loading = true; HUB.error = null;
+  if (hubTabActive) renderHubRoot();
+  const typeParam = HUB.typeFilter !== 'all' ? `&type=${HUB.typeFilter}` : '';
+  try {
+    const resp = await fetch(`${HUB_BASE}/v1/hub/packages/search?q=${encodeURIComponent(q)}${typeParam}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const json = await resp.json();
+    HUB.pkgs = Array.isArray(json.data) ? json.data : [];
+    HUB.error = null;
+  } catch (e) {
+    HUB.pkgs = []; HUB.error = 'AnvilHub is unreachable \u2014 check your connection';
+  }
+  HUB.loading = false;
+  if (hubTabActive) renderHubRoot();
+}
+
+async function hubFetchDetail(slug) {
+  try {
+    const resp = await fetch(`${HUB_BASE}/v1/hub/packages/${encodeURIComponent(slug)}`);
+    if (resp.status === 404) return null;
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    return json.data || null;
+  } catch { return null; }
+}
+
+function hubInstall(pkg) {
+  if (HUB.vaultLocked) { showToast('Unlock vault to install packages', 'error'); return; }
+  const slug = pkg.slug || pkg.name;
+  if (HUB.installing[slug] === 'installing') return;
+  HUB.installing[slug] = 'installing';
+  if (hubTabActive) renderHubRoot();
+  if (HUB.detail && (HUB.detail.slug===slug || HUB.detail.name===slug)) renderHubDrawer(HUB.detail);
+  if (ws && paired) ws.send(JSON.stringify({ type:'hub_install', slug, version: pkg.version||'0.0.0' }));
+  hubUpdateStatusBar(`Installing ${pkg.name} v${pkg.version}\u2026`);
+}
+
+function handleHubInstalled(msg) {
+  const slug = msg.slug;
+  HUB.installing[slug] = 'installed';
+  showToast(`Installed '${slug}' v${msg.version}`, 'success');
+  hubUpdateStatusBar(`Installed ${slug} v${msg.version}`);
+  if (hubTabActive) renderHubRoot();
+  if (HUB.detail && (HUB.detail.slug===slug || HUB.detail.name===slug)) renderHubDrawer(HUB.detail);
+  if (msg.requires_restart === 'full') {
+    HUB.pendingRestart = { slug, version: msg.version };
+    document.getElementById('restart-modal-msg').textContent =
+      `'${slug}' requires Anvil to restart to activate. Restart now?`;
+    document.getElementById('restart-modal').classList.remove('hidden');
+  } else if (msg.requires_restart === 'soft') {
+    showToast('Installed (config reloaded)', 'success');
+  }
+}
+
+function handleHubInstallError(msg) {
+  const slug = msg.slug;
+  HUB.installing[slug] = 'error';
+  let uiMsg = msg.message || 'Install failed';
+  if (msg.reason === 'vault_locked')  uiMsg = 'Unlock vault to install packages';
+  if (msg.reason === 'not_found')     uiMsg = `Package '${slug}' is no longer available`;
+  if (msg.reason === 'network_error') uiMsg = 'AnvilHub is unreachable \u2014 check your connection';
+  showToast(uiMsg, 'error');
+  hubUpdateStatusBar(`Install failed: ${slug}`);
+  if (hubTabActive) renderHubRoot();
+  if (HUB.detail && (HUB.detail.slug===slug || HUB.detail.name===slug)) renderHubDrawer(HUB.detail);
+}
+
+function handleHubInstallProgress(msg) {
+  hubUpdateStatusBar(`${msg.slug}: ${msg.phase} (${msg.percent}%)`);
+}
+
+function hubUpdateStatusBar(text) {
+  const el = document.getElementById('hub-status-bar');
+  if (el) el.textContent = text;
+}
+
+function hubRestartNow() {
+  document.getElementById('restart-modal').classList.add('hidden');
+  if (ws && paired) { ws.send(JSON.stringify({ type:'respawn_request' })); showToast('Restart initiated\u2026','info'); }
+  HUB.pendingRestart = null;
+}
+
+function hubRestartLater() {
+  document.getElementById('restart-modal').classList.add('hidden');
+  showToast('Restart when ready to activate changes','info');
+  HUB.pendingRestart = null;
+}
+
+function renderHubRoot() {
+  const container = document.getElementById('hub-root');
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Sidebar
+  const sidebar = cfgEl('div','hub-sidebar');
+  const allItem = cfgEl('div','hub-sidebar-item'+(HUB.category==='all'?' active':''));
+  allItem.textContent='All Packages';
+  allItem.onclick = () => { HUB.category='all'; renderHubRoot(); };
+  sidebar.appendChild(allItem);
+  if (HUB.categories.length) {
+    const catHdr = cfgEl('div','hub-sidebar-section'); catHdr.textContent='Categories';
+    sidebar.appendChild(catHdr);
+    HUB.categories.forEach(cat => {
+      const item = cfgEl('div','hub-sidebar-item'+(HUB.category===cat?' active':''));
+      item.textContent=cat;
+      item.onclick = () => { HUB.category=cat; renderHubRoot(); };
+      sidebar.appendChild(item);
+    });
+  }
+
+  // Main
+  const main = cfgEl('div','hub-main');
+
+  // Top bar
+  const topbar = cfgEl('div','hub-topbar');
+  const searchWrap = cfgEl('div','hub-search-wrap');
+  const sIcon = cfgEl('span',''); sIcon.textContent='\uD83D\uDD0D'; sIcon.style.color='var(--text-dim)';
+  const searchInp = document.createElement('input');
+  searchInp.placeholder='Search packages...'; searchInp.value=HUB.query;
+  searchInp.oninput = () => {
+    HUB.query = searchInp.value.trim();
+    clearTimeout(HUB.searchTimer);
+    HUB.searchTimer = setTimeout(() => { HUB.query ? hubSearch(HUB.query) : hubFetchPackages(); }, 300);
+  };
+  searchWrap.appendChild(sIcon); searchWrap.appendChild(searchInp);
+  topbar.appendChild(searchWrap);
+
+  const typeFilter = document.createElement('select'); typeFilter.className='hub-filter-select';
+  [['all','All Types'],['skill','Skills'],['plugin','Plugins'],['agent','Agents'],['theme','Themes']].forEach(([v,l]) => {
+    const o=document.createElement('option'); o.value=v; o.textContent=l; o.selected=(HUB.typeFilter===v); typeFilter.appendChild(o);
+  });
+  typeFilter.onchange = () => { HUB.typeFilter=typeFilter.value; HUB.query?hubSearch(HUB.query):hubFetchPackages(); };
+  topbar.appendChild(typeFilter);
+
+  const sortFilter = document.createElement('select'); sortFilter.className='hub-filter-select';
+  [['downloads','Downloads'],['rating','Rating'],['recent','Recent']].forEach(([v,l]) => {
+    const o=document.createElement('option'); o.value=v; o.textContent=l; o.selected=(HUB.sort===v); sortFilter.appendChild(o);
+  });
+  sortFilter.onchange = () => { HUB.sort=sortFilter.value; HUB.query?hubSearch(HUB.query):hubFetchPackages(); };
+  topbar.appendChild(sortFilter);
+
+  topbar.appendChild(cfgEl('span','hub-topbar-gap'));
+
+  if (HUB.vaultLocked) {
+    const warn=cfgEl('div','hub-vault-warn'); warn.innerHTML='\uD83D\uDD12 Vault locked \u2014 unlock to install';
+    topbar.appendChild(warn);
+  }
+  main.appendChild(topbar);
+
+  // Grid area
+  const gridWrap = cfgEl('div','hub-grid-wrap');
+  if (HUB.loading) {
+    const loading=cfgEl('div','hub-loading');
+    loading.innerHTML='<span class="hub-spinner">\u29D7</span><span>Loading packages\u2026</span>';
+    gridWrap.appendChild(loading);
+  } else if (HUB.error) {
+    const err=cfgEl('div','hub-error-msg');
+    err.innerHTML=`<span style="font-size:28px">\u26A0\uFE0F</span><span>${esc(HUB.error)}</span>`;
+    const rb=document.createElement('button'); rb.className='sl-btn'; rb.textContent='Retry';
+    rb.onclick=()=>hubFetchPackages(); err.appendChild(rb);
+    gridWrap.appendChild(err);
+  } else {
+    let filtered = HUB.pkgs;
+    if (HUB.category!=='all') filtered=filtered.filter(p=>p.category===HUB.category);
+    if (!filtered.length) {
+      const empty=cfgEl('div','hub-empty');
+      empty.innerHTML='<span style="font-size:28px">\uD83D\uDCE6</span><span>No packages found</span>';
+      gridWrap.appendChild(empty);
+    } else {
+      const grid=cfgEl('div','hub-grid');
+      filtered.forEach(pkg=>renderHubCard(grid,pkg));
+      gridWrap.appendChild(grid);
+    }
+  }
+  main.appendChild(gridWrap);
+  container.appendChild(sidebar);
+  container.appendChild(main);
+}
+
+function renderHubCard(grid, pkg) {
+  const slug = pkg.slug||pkg.name;
+  const st = HUB.installing[slug];
+  const card = cfgEl('div','hub-card');
+
+  const top=cfgEl('div','hub-card-top');
+  const icon=cfgEl('div','hub-card-icon'); icon.textContent=hubIcon(pkg.type||pkg.pkg_type);
+  const meta=cfgEl('div','hub-card-meta');
+  const nm=cfgEl('div','hub-card-name'); nm.textContent=pkg.name;
+  const auth=cfgEl('div','hub-card-author'); auth.textContent='by '+(pkg.author||'unknown');
+  meta.appendChild(nm); meta.appendChild(auth);
+  top.appendChild(icon); top.appendChild(meta);
+  card.appendChild(top);
+
+  const desc=cfgEl('div','hub-card-desc'); desc.textContent=pkg.description||'';
+  card.appendChild(desc);
+
+  const footer=cfgEl('div','hub-card-footer');
+  const tb=cfgEl('span','hub-card-type '+hubTypeClass(pkg.type||pkg.pkg_type));
+  tb.textContent=pkg.type||pkg.pkg_type||'?';
+  footer.appendChild(tb);
+  const stats=cfgEl('span','hub-card-stats');
+  stats.innerHTML=`\u2B07\uFE0F ${hubFmtDownloads(pkg.downloads||0)}`;
+  if (pkg.rating) stats.innerHTML+=` \u00A0\u2B50 ${Number(pkg.rating).toFixed(1)}`;
+  footer.appendChild(stats);
+
+  let lbl='Install', btnCls='hub-card-install-btn', dis=HUB.vaultLocked;
+  if (st==='installing') { lbl='Installing\u2026'; btnCls+=' installing'; dis=true; }
+  else if (st==='installed') { lbl='Installed'; btnCls+=' installed'; }
+  else if (st==='error') { lbl='Retry'; dis=false; }
+  if (HUB.vaultLocked) lbl='\uD83D\uDD12 Locked';
+  const btn=document.createElement('button'); btn.className=btnCls; btn.textContent=lbl; btn.disabled=dis;
+  btn.title=HUB.vaultLocked?'Unlock vault to install packages':`Install ${pkg.name}`;
+  btn.onclick=(e)=>{ e.stopPropagation(); hubInstall(pkg); };
+  footer.appendChild(btn);
+  card.appendChild(footer);
+  card.onclick=()=>hubOpenDrawer(pkg);
+  grid.appendChild(card);
+}
+
+async function hubOpenDrawer(pkg) {
+  HUB.detail=pkg;
+  document.getElementById('hub-drawer').classList.add('open');
+  renderHubDrawer(pkg);
+  const slug=pkg.slug||pkg.name;
+  const detail=await hubFetchDetail(slug);
+  if (detail) { HUB.detail=detail; renderHubDrawer(detail); }
+}
+
+function hubCloseDrawer() {
+  document.getElementById('hub-drawer').classList.remove('open');
+  HUB.detail=null;
+}
+
+function renderHubDrawer(pkg) {
+  const slug=pkg.slug||pkg.name;
+  const st=HUB.installing[slug];
+
+  const header=document.getElementById('hub-drawer-header');
+  header.innerHTML='';
+  const icon=cfgEl('div','hub-drawer-icon'); icon.textContent=hubIcon(pkg.type||pkg.pkg_type);
+  const meta=cfgEl('div','hub-drawer-meta');
+  const nm=cfgEl('div','hub-drawer-name'); nm.textContent=pkg.name;
+  const auth=cfgEl('div','hub-drawer-author'); auth.textContent='by '+(pkg.author||'unknown');
+  const badges=cfgEl('div','hub-drawer-badges');
+  const tb=cfgEl('span','hub-card-type '+hubTypeClass(pkg.type||pkg.pkg_type));
+  tb.textContent=pkg.type||pkg.pkg_type||'?';
+  const vb=cfgEl('span','status-badge ok'); vb.textContent='v'+(pkg.version||'?');
+  badges.appendChild(tb); badges.appendChild(vb);
+  if (pkg.downloads!=null) {
+    const dl=cfgEl('span',''); dl.style.cssText='font-size:11px;color:var(--text-dim);';
+    dl.textContent=hubFmtDownloads(pkg.downloads)+' installs';
+    badges.appendChild(dl);
+  }
+  meta.appendChild(nm); meta.appendChild(auth); meta.appendChild(badges);
+  const closeBtn=document.createElement('button');
+  closeBtn.className='hub-drawer-close'; closeBtn.innerHTML='&times;'; closeBtn.onclick=hubCloseDrawer;
+  header.appendChild(icon); header.appendChild(meta); header.appendChild(closeBtn);
+
+  const body=document.getElementById('hub-drawer-body');
+  body.innerHTML='';
+  const ds=cfgEl('div','hub-drawer-section'); ds.textContent='Description';
+  const dd=cfgEl('div','hub-drawer-desc'); dd.textContent=pkg.description||'No description available.';
+  body.appendChild(ds); body.appendChild(dd);
+  if (pkg.readme) {
+    const rs=cfgEl('div','hub-drawer-section'); rs.textContent='README';
+    const rd=cfgEl('pre','hub-drawer-readme'); rd.textContent=pkg.readme;
+    body.appendChild(rs); body.appendChild(rd);
+  }
+  if (pkg.compatibility) {
+    const cs=cfgEl('div','hub-drawer-section'); cs.textContent='Compatibility';
+    const cd=cfgEl('div','hub-drawer-desc'); cd.textContent=pkg.compatibility;
+    body.appendChild(cs); body.appendChild(cd);
+  }
+  const stSec=cfgEl('div','hub-drawer-section'); stSec.textContent='Stats';
+  const stDiv=cfgEl('div','hub-drawer-desc');
+  stDiv.innerHTML=`Downloads: <strong>${hubFmtDownloads(pkg.downloads||0)}</strong>`;
+  if (pkg.rating) stDiv.innerHTML+=` &nbsp; Rating: <strong>\u2B50 ${Number(pkg.rating).toFixed(1)}</strong>`;
+  body.appendChild(stSec); body.appendChild(stDiv);
+
+  const footer=document.getElementById('hub-drawer-footer');
+  footer.innerHTML='';
+  let lbl=`Install v${pkg.version||'?'}`, btnCls='hub-drawer-install-btn', dis=HUB.vaultLocked;
+  if (st==='installing') { lbl='Installing\u2026'; btnCls+=' installing'; dis=true; }
+  else if (st==='installed') { lbl='Installed'; btnCls+=' installed'; }
+  if (HUB.vaultLocked) lbl='\uD83D\uDD12 Unlock vault to install';
+  const btn=document.createElement('button'); btn.className=btnCls; btn.textContent=lbl; btn.disabled=dis;
+  btn.onclick=()=>hubInstall(pkg);
+  footer.appendChild(btn);
+}
+
+// ─── Config Panels (Phase 3) ─────────────────────────────────────
+
+const CFG = {
+  data: {},
+  vaultLocked: true,
+  activePanel: 'providers',
+  saveTimers: {},
+  configTabActive: false,
+};
+
+const VAULT_SENSITIVE = new Set([
+  'anthropic_api_key', 'openai_api_key', 'xai_api_key', 'ollama_api_key',
+  'tavily_api_key', 'brave_search_api_key', 'exa_api_key',
+  'perplexity_api_key', 'google_search_api_key', 'bing_search_api_key',
+  'notify_discord_webhook', 'notify_slack_webhook', 'notify_telegram_token',
+  'notify_matrix_token', 'notify_signal_sender',
+  'github_token', 'wp_password',
+  'db_url',
+]);
+
+const PANELS = [
+  { id: 'providers',    label: 'Providers' },
+  { id: 'models',       label: 'Models' },
+  { id: 'context',      label: 'Context' },
+  { id: 'search',       label: 'Search' },
+  { id: 'permissions',  label: 'Permissions' },
+  { id: 'display',      label: 'Display' },
+  { id: 'integrations', label: 'Integrations' },
+  { id: 'lang_theme',   label: 'Language & Theme' },
+  { id: 'vault',        label: 'Vault' },
+  { id: 'notifications',label: 'Notifications' },
+  { id: 'failover',     label: 'Failover' },
+  { id: 'ssh',          label: 'SSH' },
+  { id: 'docker_k8s',   label: 'Docker & K8s' },
+  { id: 'database',     label: 'Database' },
+  { id: 'memory',       label: 'Memory & Archive' },
+  { id: 'plugins',      label: 'Plugins & Cron' },
+  { id: 'statusline',   label: 'Status Line' },
+];
+
+function handleConfigMessage(msg) {
+  switch (msg.type) {
+    case 'config_snapshot':
+      CFG.data = msg.config || {};
+      if (configTabActive) renderActivePanel();
+      break;
+    case 'config_saved':
+      CFG.data = msg.config || {};
+      showToast('Settings saved', 'success');
+      if (configTabActive) renderActivePanel();
+      break;
+    case 'config_error':
+      showToast('Error (' + msg.panel + '.' + msg.field + '): ' + msg.message, 'error');
+      if (configTabActive) renderActivePanel();
+      break;
+    case 'vault_state':
+      const wasLocked = CFG.vaultLocked;
+      CFG.vaultLocked = !!msg.locked;
+      if (wasLocked !== CFG.vaultLocked && configTabActive) renderActivePanel();
+      break;
+  }
+}
+
+function activateConfigTab() {
+  configTabActive = true;
+  CFG.configTabActive = true;
+  if (Object.keys(CFG.data).length === 0 && ws) {
+    ws.send(JSON.stringify({ type: 'config_get' }));
+  }
+  renderConfigRoot();
+}
+
+function deactivateConfigTab() {
+  configTabActive = false;
+  CFG.configTabActive = false;
+}
+
+function renderConfigRoot() {
+  const container = document.getElementById('config-root');
+  if (!container) return;
+  container.innerHTML = '';
+  container.className = 'config-root';
+
+  const sidebar = cfgEl('div', 'config-sidebar');
+  PANELS.forEach(p => {
+    const item = cfgEl('div', 'config-sidebar-item' + (CFG.activePanel === p.id ? ' active' : ''));
+    item.textContent = p.label;
+    item.onclick = () => { CFG.activePanel = p.id; renderConfigRoot(); };
+    sidebar.appendChild(item);
+  });
+
+  const main = cfgEl('div', 'config-main');
+  main.id = 'config-main-pane';
+  container.appendChild(sidebar);
+  container.appendChild(main);
+  renderActivePanel();
+}
+
+function renderActivePanel() {
+  const main = document.getElementById('config-main-pane');
+  if (!main) return;
+  main.innerHTML = '';
+
+  if (CFG.vaultLocked && CFG.activePanel !== 'vault') {
+    const banner = cfgEl('div', 'vault-locked-banner');
+    banner.innerHTML = '<span style="font-size:16px">&#128274;</span><span style="flex:1">Vault locked — credential fields are hidden. Go to Vault panel to unlock.</span>';
+    main.appendChild(banner);
+  }
+
+  const panelFns = {
+    providers:     renderProvidersPanel,
+    models:        renderModelsPanel,
+    context:       renderContextPanel,
+    search:        renderSearchPanel,
+    permissions:   renderPermissionsPanel,
+    display:       renderDisplayPanel,
+    integrations:  renderIntegrationsPanel,
+    lang_theme:    renderLangThemePanel,
+    vault:         renderVaultPanel,
+    notifications: renderNotificationsPanel,
+    failover:      renderFailoverPanel,
+    ssh:           renderSshPanel,
+    docker_k8s:    renderDockerK8sPanel,
+    database:      renderDatabasePanel,
+    memory:        renderMemoryPanel,
+    plugins:       renderPluginsPanel,
+    statusline:    renderStatusLinePanel,
+  };
+  const fn = panelFns[CFG.activePanel];
+  if (fn) fn(main);
+}
+
+// Panel 1: Providers
+function renderProvidersPanel(c) {
+  panelHdr(c, 'Providers', 'Configure API credentials for AI providers.');
+  const p = CFG.data.providers || {};
+  appendRow(c, 'Anthropic', 'API key or OAuth for Claude models.', maskedInput('anthropic_api_key', 'providers', ''), statusBadge(p.anthropic_status));
+  appendRow(c, 'OpenAI', 'API key for GPT / image models.', maskedInput('openai_api_key', 'providers', ''), statusBadge(p.openai_status));
+  appendRow(c, 'Ollama host', 'Local Ollama server URL.', textInput('ollama_host', 'providers', p.ollama_host || 'http://localhost:11434'), statusBadge(p.ollama_status));
+  appendRow(c, 'xAI', 'Grok API key.', maskedInput('xai_api_key', 'providers', ''), statusBadge(p.xai_status));
+}
+
+// Panel 2: Models
+function renderModelsPanel(c) {
+  panelHdr(c, 'Models', 'Set the default model, image model, and failover chain.');
+  const m = CFG.data.models || {};
+  appendRow(c, 'Default model', 'Startup model for new sessions.', textInput('default_model', 'models', m.default_model || ''));
+  appendRow(c, 'Image model', 'Model used for image generation.', textInput('image_model', 'models', m.image_model || 'gpt-image-1.5'));
+  const chain = Array.isArray(m.failover_chain) ? m.failover_chain : [];
+  const chainEl = cfgEl('div', 'chain-list');
+  if (!chain.length) { const e = cfgEl('span','cron-empty'); e.textContent='No failover chain.'; chainEl.appendChild(e); }
+  else chain.forEach((model, i) => { const it = cfgEl('div','chain-item'); it.innerHTML='<span class="chain-num">'+(i+1)+'</span><span>'+escCfg(model)+'</span>'; chainEl.appendChild(it); });
+  appendRow(c, 'Failover chain', 'Configure via /failover in TUI.', chainEl);
+}
+
+// Panel 3: Context
+function renderContextPanel(c) {
+  panelHdr(c, 'Context', 'Control context window size, compaction, and integrations.');
+  const ctx = CFG.data.context || {};
+  appendRow(c, 'Context size (tokens)', 'Maximum tokens in the context window.', numInput('context_size', 'context', ctx.context_size || 1000000, 1000, 2000000));
+  appendRow(c, 'Auto-compact threshold %', 'Trigger compaction at this % of context.', numInput('compact_threshold', 'context', ctx.compact_threshold || 85, 1, 100));
+  appendRow(c, 'QMD integration', 'Enable local QMD semantic search.', toggleSwitch('qmd_enabled', 'context', !!(ctx.qmd_status && !ctx.qmd_status.startsWith('disabled'))));
+  appendRow(c, 'History archival', 'Archive completed sessions to disk.', toggleSwitch('history_enabled', 'context', true));
+}
+
+// Panel 4: Search
+function renderSearchPanel(c) {
+  panelHdr(c, 'Search', 'Configure search providers and API keys.');
+  const s = CFG.data.search || {};
+  const providers = ['duckduckgo','tavily','brave','searxng','exa','perplexity','google','bing'];
+  appendRow(c, 'Default provider', 'Provider used when /search is invoked.', selInput('default_search', 'search', s.default_search || 'duckduckgo', providers.map(p=>({value:p,label:p[0].toUpperCase()+p.slice(1)}))));
+  appendRow(c, 'Tavily API key', 'tavily.com', maskedInput('tavily_api_key', 'search', ''));
+  appendRow(c, 'Brave API key', 'brave.com/search/api', maskedInput('brave_search_api_key', 'search', ''));
+  appendRow(c, 'SearXNG URL', 'Your SearXNG instance URL.', textInput('searxng_url', 'search', ''));
+  appendRow(c, 'Exa API key', 'exa.ai', maskedInput('exa_api_key', 'search', ''));
+  appendRow(c, 'Perplexity API key', 'perplexity.ai', maskedInput('perplexity_api_key', 'search', ''));
+  appendRow(c, 'Google API key', 'Google Custom Search API key.', maskedInput('google_search_api_key', 'search', ''));
+  appendRow(c, 'Bing API key', 'Azure Bing Search key.', maskedInput('bing_search_api_key', 'search', ''));
+}
+
+// Panel 5: Permissions
+function renderPermissionsPanel(c) {
+  panelHdr(c, 'Permissions', 'Control what tools Anvil can use.');
+  const perm = (CFG.data.permissions || {}).permission_mode || 'danger-full-access';
+  const rg = cfgEl('div', 'radio-group');
+  [
+    { value:'read-only',          label:'Read-only — read files only, no writes or shell' },
+    { value:'workspace-write',    label:'Workspace write — read + write files, no shell' },
+    { value:'danger-full-access', label:'Full access — complete tool access including shell' },
+  ].forEach(mode => {
+    const lbl = document.createElement('label'); lbl.className='radio-option';
+    const inp = document.createElement('input'); inp.type='radio'; inp.name='permission_mode'; inp.value=mode.value; inp.checked=(perm===mode.value);
+    inp.onchange = () => sendConfigUpdate('permissions', 'permission_mode', mode.value);
+    const sp = document.createElement('span'); sp.textContent = mode.label;
+    lbl.appendChild(inp); lbl.appendChild(sp); rg.appendChild(lbl);
+  });
+  appendRow(c, 'Permission mode', 'Applies to the current session.', rg);
+}
+
+// Panel 6: Display
+function renderDisplayPanel(c) {
+  panelHdr(c, 'Display', 'Toggle keybinding modes and interface options.');
+  const d = CFG.data.display || {};
+  appendRow(c, 'Vim mode', 'Enable Vim keybindings in the TUI.', toggleSwitch('vim_mode', 'display', !!d.vim_mode));
+  appendRow(c, 'Chat mode', 'Disable tools — respond as a plain chat model.', toggleSwitch('chat_mode', 'display', !!d.chat_mode));
+  appendRow(c, 'Tab forward key', 'Switch to next tab.', textInput('tab_key_forward', 'display', d.tab_key_forward || 'Ctrl+]'));
+  appendRow(c, 'Tab back key', 'Switch to previous tab.', textInput('tab_key_back', 'display', d.tab_key_back || 'Ctrl+['));
+}
+
+// Panel 7: Integrations
+function renderIntegrationsPanel(c) {
+  panelHdr(c, 'Integrations', 'Connect external services.');
+  const i = CFG.data.integrations || {};
+  appendRow(c, 'AnvilHub URL', 'Base URL for the AnvilHub marketplace.', textInput('anvilhub_url', 'integrations', i.anvilhub_url || 'https://anvilhub.culpur.net'));
+  appendRow(c, 'WordPress URL', 'Your WordPress site URL.', textInput('wp_url', 'integrations', i.wp_url || ''));
+  appendRow(c, 'WordPress user', 'WordPress username.', textInput('wp_user', 'integrations', i.wp_user || ''));
+  appendRow(c, 'GitHub token', 'Personal access token for GitHub tools.', maskedInput('github_token', 'integrations', ''));
+}
+
+// Panel 8: Language & Theme
+function renderLangThemePanel(c) {
+  panelHdr(c, 'Language & Theme', 'Set display language and visual theme.');
+  const d = CFG.data.display || {};
+  const langs = [{value:'en',label:'English'},{value:'de',label:'Deutsch'},{value:'fr',label:'Français'},{value:'es',label:'Español'},{value:'ja',label:'日本語'},{value:'zh',label:'中文'},{value:'pt',label:'Português'},{value:'ru',label:'Русский'}];
+  appendRow(c, 'Language', 'Interface language.', selInput('language', 'lang_theme', d.language || 'en', langs));
+  const themes = ['culpur-defense','nord','dracula','gruvbox','catppuccin','tokyo-night','one-dark','solarized-dark','monokai'].map(t=>({value:t,label:t}));
+  appendRow(c, 'Theme', 'TUI color theme.', selInput('theme', 'lang_theme', d.active_theme || 'culpur-defense', themes));
+  const presets = ['default','minimal','full','developer','compact','ops','security','writing'].map(t=>({value:t,label:t}));
+  appendRow(c, 'Status line preset', 'Preset layout for the status bar.', selInput('status_line_preset', 'lang_theme', d.status_line_preset || 'default', presets));
+}
+
+// Panel 9: Vault
+function renderVaultPanel(c) {
+  panelHdr(c, 'Vault', 'Manage encrypted credentials and vault session.');
+  const v = CFG.data.vault || {};
+  const lockState = cfgEl('div', 'vault-lock-state ' + (CFG.vaultLocked ? 'locked' : 'unlocked'));
+  lockState.innerHTML = '<span class="lock-big">'+(CFG.vaultLocked?'&#128274;':'&#128275;')+'</span><div class="lock-info"><div class="lock-title">'+(CFG.vaultLocked?'Vault Locked':'Vault Unlocked')+'</div><div class="lock-sub">'+(CFG.vaultLocked?'Sensitive fields hidden. Unlock to edit credentials.':'Vault active. Sensitive fields are editable.')+'</div></div>';
+  c.appendChild(lockState);
+  if (CFG.vaultLocked) {
+    const form = cfgEl('div', 'vault-unlock-form');
+    const pwEl = document.createElement('input'); pwEl.type='password'; pwEl.placeholder='Vault password'; pwEl.id='vault-unlock-pw';
+    const btn = document.createElement('button'); btn.className='btn-vault-unlock'; btn.textContent='Unlock';
+    btn.onclick = () => {
+      const pw = document.getElementById('vault-unlock-pw').value;
+      if (!pw) return;
+      if (ws) ws.send(JSON.stringify({type:'user_message',tab_id:0,message:'/vault unlock '+pw}));
+      showToast('Unlock request sent', 'info');
+      pwEl.value = '';
+    };
+    pwEl.addEventListener('keydown', e => { if (e.key==='Enter') btn.click(); });
+    form.appendChild(pwEl); form.appendChild(btn); c.appendChild(form);
+  }
+  appendRow(c, 'Session TTL (seconds)', 'Seconds before vault auto-locks.', numInput('vault_session_ttl', 'vault', v.vault_session_ttl || 1800, 60, 86400));
+  appendRow(c, 'Auto-lock', 'Lock vault automatically after TTL.', toggleSwitch('vault_auto_lock', 'vault', !!v.vault_auto_lock));
+}
+
+// Panel 10: Notifications
+function renderNotificationsPanel(c) {
+  panelHdr(c, 'Notifications', 'Configure alert delivery channels.');
+  const n = CFG.data.notifications || {};
+  const platforms = ['desktop','discord','slack','telegram','matrix','signal','none'].map(p=>({value:p,label:p[0].toUpperCase()+p.slice(1)}));
+  appendRow(c, 'Platform', 'Active notification channel.', selInput('notify_platform', 'notifications', n.notify_platform || 'desktop', platforms));
+  appendRow(c, 'Discord webhook', 'Webhook URL for Discord alerts.', maskedInput('notify_discord_webhook', 'notifications', ''));
+  appendRow(c, 'Slack webhook', 'Webhook URL for Slack alerts.', maskedInput('notify_slack_webhook', 'notifications', ''));
+  appendRow(c, 'Telegram token', 'Bot token for Telegram alerts.', maskedInput('notify_telegram_token', 'notifications', ''));
+  appendRow(c, 'Matrix homeserver', 'e.g. https://matrix.org', textInput('notify_matrix_homeserver', 'notifications', n.notify_matrix_homeserver || ''));
+  appendRow(c, 'Signal sender', 'Signal CLI sender number.', maskedInput('notify_signal_sender', 'notifications', ''));
+}
+
+// Panel 11: Failover
+function renderFailoverPanel(c) {
+  panelHdr(c, 'Failover', 'Control model fallback behavior.');
+  const f = CFG.data.failover || {};
+  appendRow(c, 'Cooldown (seconds)', 'Wait before retrying a failed model.', numInput('failover_cooldown', 'failover', f.failover_cooldown || 60, 0, 3600));
+  appendRow(c, 'Budget (USD)', 'Cost budget per session (0 = unlimited).', numInput('failover_budget', 'failover', f.failover_budget || 0, 0, 1000));
+  appendRow(c, 'Auto-recovery', 'Retry primary model after cooldown.', toggleSwitch('failover_auto_recovery', 'failover', f.failover_auto_recovery !== false));
+}
+
+// Panel 12: SSH
+function renderSshPanel(c) {
+  panelHdr(c, 'SSH', 'Configure SSH key and bastion settings.');
+  const s = CFG.data.ssh || {};
+  appendRow(c, 'Key path', 'Path to your SSH private key.', textInput('ssh_key_path', 'ssh', s.ssh_key_path || '~/.ssh/id_ed25519'));
+  appendRow(c, 'Bastion host', 'Jump host for SSH tunnels.', textInput('ssh_bastion_host', 'ssh', s.ssh_bastion_host || ''));
+  appendRow(c, 'Config path', 'Path to SSH config file.', textInput('ssh_config_path', 'ssh', s.ssh_config_path || '~/.ssh/config'));
+}
+
+// Panel 13: Docker & K8s
+function renderDockerK8sPanel(c) {
+  panelHdr(c, 'Docker & Kubernetes', 'Configure container and orchestration settings.');
+  const d = CFG.data.docker_k8s || {};
+  appendRow(c, 'Compose file', 'Path to docker-compose.yml.', textInput('docker_compose_file', 'docker_k8s', d.docker_compose_file || ''));
+  appendRow(c, 'Registry URL', 'Container registry base URL.', textInput('docker_registry', 'docker_k8s', d.docker_registry || ''));
+  appendRow(c, 'K8s context', 'kubectl context name.', textInput('k8s_context', 'docker_k8s', d.k8s_context || ''));
+  appendRow(c, 'K8s namespace', 'Default Kubernetes namespace.', textInput('k8s_namespace', 'docker_k8s', d.k8s_namespace || 'default'));
+}
+
+// Panel 14: Database
+function renderDatabasePanel(c) {
+  panelHdr(c, 'Database', 'Configure database connection and schema tooling.');
+  const d = CFG.data.database || {};
+  appendRow(c, 'Database URL', 'Connection string (stored in vault when unlocked).', maskedInput('db_url', 'database', ''));
+  appendRow(c, 'Schema tool', 'Tool for schema introspection.', selInput('db_schema_tool', 'database', d.db_schema_tool || 'prisma', ['prisma','sqlx','diesel','alembic','flyway','liquibase','none'].map(t=>({value:t,label:t}))));
+}
+
+// Panel 15: Memory & Archive
+function renderMemoryPanel(c) {
+  panelHdr(c, 'Memory & Archive', 'Control how conversations are saved and archived.');
+  const m = CFG.data.memory || {};
+  appendRow(c, 'Auto-save memory', 'Automatically save context to memory files.', toggleSwitch('auto_save_memory', 'memory', m.auto_save_memory !== false));
+  appendRow(c, 'Archive every N sessions', 'Sessions between archive snapshots.', numInput('archive_frequency', 'memory', m.archive_frequency || 5, 1, 100));
+  appendRow(c, 'Retention (days)', 'Days to keep archived sessions.', numInput('archive_retention_days', 'memory', m.archive_retention_days || 30, 1, 3650));
+  appendRow(c, 'Memory directory', 'Override default ~/.anvil/memory path.', textInput('memory_dir', 'memory', m.memory_dir || ''));
+}
+
+// Panel 16: Plugins & Cron
+function renderPluginsPanel(c) {
+  panelHdr(c, 'Plugins & Cron', 'Manage plugin search paths and scheduled jobs.');
+  const p = CFG.data.plugins || {};
+  appendRow(c, 'Search paths', 'Colon-separated paths for plugins.', textInput('plugin_search_paths', 'plugins', p.plugin_search_paths || ''));
+  appendRow(c, 'Auto-enable plugins', 'Enable new plugins automatically.', toggleSwitch('auto_enable_plugins', 'plugins', !!p.auto_enable_plugins));
+  appendRow(c, 'Cron enabled', 'Enable the Anvil cron scheduler.', toggleSwitch('cron_enabled', 'plugins', !!p.cron_enabled));
+  const jobs = Array.isArray(p.active_cron_jobs) ? p.active_cron_jobs : [];
+  const jl = cfgEl('div','cron-list');
+  if (!jobs.length) { const e=cfgEl('span','cron-empty'); e.textContent='No active cron jobs.'; jl.appendChild(e); }
+  else jobs.forEach(j=>{ const it=cfgEl('div','cron-item'); it.textContent=j; jl.appendChild(it); });
+  appendRow(c, 'Active cron jobs', 'Read-only. Manage via /cron in TUI.', jl);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Panel 17: Status Line Editor (Phase 3b — full implementation)
+// ──────────────────────────────────────────────────────────────────────────────
+
+// ── Widget catalog (mirrors StatusWidget::all_widgets() in theme.rs) ──────────
+const SL_WIDGETS = [
+  // model
+  { id:'model',            name:'Model',           cat:'model',        sym:'\uD83E\uDDE0' },
+  { id:'thinking',         name:'Thinking',        cat:'model',        sym:'\uD83D\uDCA1' },
+  { id:'effort',           name:'Effort',          cat:'model',        sym:'\u2B06\uFE0F' },
+  { id:'provider',         name:'Provider',        cat:'model',        sym:'\u2601\uFE0F' },
+  // tokens
+  { id:'tokens_total',     name:'Total Tokens',    cat:'tokens',       sym:'\uD83D\uDCCA' },
+  { id:'tokens_input',     name:'Input Tokens',    cat:'tokens',       sym:'\u2199\uFE0F' },
+  { id:'tokens_output',    name:'Output Tokens',   cat:'tokens',       sym:'\u2197\uFE0F' },
+  { id:'cost',             name:'Cost',            cat:'tokens',       sym:'\uD83D\uDCB0' },
+  { id:'token_speed',      name:'Token Speed',     cat:'tokens',       sym:'\u26A1' },
+  // context
+  { id:'context_bar',      name:'Context Bar',     cat:'context',      sym:'\uD83D\uDCCA' },
+  { id:'context_pct',      name:'Context %',       cat:'context',      sym:'\uD83D\uDCCD' },
+  { id:'context_tokens',   name:'Context Tokens',  cat:'context',      sym:'\uD83D\uDCC4' },
+  // session
+  { id:'session_time',     name:'Session Time',    cat:'session',      sym:'\u23F1\uFE0F' },
+  { id:'session_pct',      name:'Session %',       cat:'session',      sym:'\uD83D\uDD52' },
+  { id:'block_time',       name:'Block Time',      cat:'session',      sym:'\u23F0' },
+  // git
+  { id:'git_branch',       name:'Git Branch',      cat:'git',          sym:'\uD83C\uDF3F' },
+  { id:'git_status',       name:'Git Status',      cat:'git',          sym:'\uD83D\uDFE1' },
+  { id:'git_diff',         name:'Git Diff',        cat:'git',          sym:'\u00B1' },
+  // system
+  { id:'permissions',      name:'Permissions',     cat:'system',       sym:'\uD83D\uDEE1\uFE0F' },
+  { id:'qmd_status',       name:'QMD Status',      cat:'system',       sym:'\uD83D\uDCDA' },
+  { id:'version',          name:'Version',         cat:'system',       sym:'\uD83C\uDFF7\uFE0F' },
+  { id:'vim_mode',         name:'Vim Mode',        cat:'system',       sym:'\u2328\uFE0F' },
+  { id:'remote_control',   name:'Remote Control',  cat:'system',       sym:'\uD83D\uDEF8' },
+  { id:'update_available', name:'Update Available',cat:'system',       sym:'\u2B06\uFE0F' },
+  { id:'archive_status',   name:'Archive Status',  cat:'system',       sym:'\uD83D\uDDC2\uFE0F' },
+  { id:'mcp_status',       name:'MCP Status',      cat:'system',       sym:'\uD83D\uDD0C' },
+  { id:'time_display',     name:'Time',            cat:'system',       sym:'\uD83D\uDD54' },
+  // cost_detail
+  { id:'burn_rate',        name:'Burn Rate',        cat:'cost_detail',  sym:'\uD83D\uDD25' },
+  { id:'cost_daily',       name:'Cost (Daily)',     cat:'cost_detail',  sym:'\uD83D\uDCB8' },
+  { id:'cost_weekly',      name:'Cost (Weekly)',    cat:'cost_detail',  sym:'\uD83D\uDCB5' },
+  { id:'cost_monthly',     name:'Cost (Monthly)',   cat:'cost_detail',  sym:'\uD83D\uDCB4' },
+  { id:'cost_projection',  name:'Cost Projection',  cat:'cost_detail',  sym:'\uD83D\uDCC8' },
+  { id:'cache_hit_rate',   name:'Cache Hit Rate',   cat:'cost_detail',  sym:'\u26A1' },
+  // productivity
+  { id:'code_productivity',name:'Code Productivity',cat:'productivity', sym:'\uD83D\uDCBB' },
+  // layout
+  { id:'spacer',           name:'Spacer',           cat:'layout',       sym:'\u2194\uFE0F' },
+  { id:'separator',        name:'Separator',         cat:'layout',       sym:'\u2502' },
+];
+
+// ── 16 Presets (mirrors StatusLinePreset::all() in theme.rs) ─────────────────
+const SL_PRESETS = [
+  { id:'default',        label:'Default',         desc:'Balanced layout — model, tokens, context, git, permissions' },
+  { id:'minimal',        label:'Minimal',         desc:'Clean and quiet — model + context bar only' },
+  { id:'developer',      label:'Developer',       desc:'Full git info, permissions, QMD — for power users' },
+  { id:'token-heavy',    label:'Token Heavy',     desc:'Token counts front and center' },
+  { id:'git-heavy',      label:'Git Heavy',       desc:'Git branch, status, diff prominent' },
+  { id:'compact',        label:'Compact',         desc:'Everything on 2 lines — maximizes content area' },
+  { id:'cost-focused',   label:'Cost Focused',    desc:'Cost and token speed prominent' },
+  { id:'streamer',       label:'Streamer',        desc:'Large model name, no cost — clean for screen sharing' },
+  { id:'gaming',         label:'Gaming \uD83C\uDFAE',      desc:'Emoji-rich gaming/streamer vibe with burn rate' },
+  { id:'devops',         label:'DevOps \uD83D\uDC33',      desc:'MCP, permissions, git, RC prominent' },
+  { id:'budget-tracker', label:'Budget Tracker \uD83D\uDCB8', desc:'Full cost breakdown — daily/weekly/monthly' },
+  { id:'zen',            label:'Zen \uD83E\uDDD8',         desc:'Ultra-minimal zen — just model + context' },
+  { id:'academic',       label:'Academic \uD83D\uDCDA',    desc:'Learning — productivity, session time, token detail' },
+  { id:'hacker',         label:'Hacker \uD83D\uDC80',      desc:'Cyberpunk hacker — permissions, RC, MCP' },
+  { id:'night-owl',      label:'Night Owl \uD83C\uDF19',   desc:'Chill night-owl — time, session, relaxed layout' },
+  { id:'dashboard',      label:'Dashboard \uD83D\uDCCA',   desc:'Maximalist — every widget, 4 lines, full dashboard' },
+];
+
+// ── Per-preset default configs (mirrors theme.rs preset_* methods) ─────────
+const SL_PRESET_CONFIGS = {
+  'default': {
+    preset:'default', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost','separator','git_branch','git_diff'], right:['tokens_total'] },
+      { left:['context_bar','context_tokens','separator','session_pct','block_time'], right:['version'] },
+      { left:['permissions','separator','qmd_status','archive_status','update_available','remote_control'], right:[] },
+    ]
+  },
+  'minimal': {
+    preset:'minimal', separator_char:' \u00B7 ', compact:true, widgets:{},
+    lines:[
+      { left:['model'], right:['cost'] },
+      { left:['context_bar','context_pct'], right:['version'] },
+    ]
+  },
+  'developer': {
+    preset:'developer', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost'], right:['tokens_total'] },
+      { left:['context_bar','context_tokens','separator','session_pct','block_time'], right:['version'] },
+      { left:['permissions','separator','git_branch','git_status','git_diff','separator','qmd_status','archive_status','update_available','remote_control'], right:['vim_mode'] },
+    ]
+  },
+  'token-heavy': {
+    preset:'token-heavy', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','tokens_input','separator','tokens_output','separator','tokens_total','separator','cost'], right:['token_speed'] },
+      { left:['context_bar','context_tokens','context_pct'], right:['version'] },
+      { left:['permissions','separator','git_branch','update_available','remote_control'], right:[] },
+    ]
+  },
+  'git-heavy': {
+    preset:'git-heavy', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['git_branch','separator','git_status','separator','git_diff'], right:['model'] },
+      { left:['context_bar','context_tokens','separator','cost'], right:['version'] },
+      { left:['permissions','separator','qmd_status','update_available','remote_control'], right:[] },
+    ]
+  },
+  'compact': {
+    preset:'compact', separator_char:' \u00B7 ', compact:true, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost','separator','git_branch','git_diff'], right:['tokens_total'] },
+      { left:['context_bar','context_pct','separator','permissions','separator','block_time','update_available','remote_control'], right:['version'] },
+    ]
+  },
+  'cost-focused': {
+    preset:'cost-focused', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['cost','separator','token_speed','separator','model'], right:['tokens_input','separator','tokens_output'] },
+      { left:['context_bar','context_tokens','separator','session_pct'], right:['version'] },
+      { left:['permissions','separator','git_branch','update_available','remote_control'], right:[] },
+    ]
+  },
+  'streamer': {
+    preset:'streamer', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking'], right:['git_branch'] },
+      { left:['context_bar','context_pct'], right:['version'] },
+    ]
+  },
+  'gaming': {
+    preset:'gaming', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost'], right:['remote_control'] },
+      { left:['burn_rate','separator','token_speed','separator','context_bar','context_pct'], right:['version'] },
+    ]
+  },
+  'devops': {
+    preset:'devops', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost','separator','git_branch','git_diff'], right:['tokens_total'] },
+      { left:['context_bar','context_tokens','separator','mcp_status','separator','permissions'], right:['version'] },
+      { left:['remote_control','separator','qmd_status','archive_status','update_available'], right:['time_display'] },
+    ]
+  },
+  'budget-tracker': {
+    preset:'budget-tracker', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['cost','separator','burn_rate','separator','cost_projection','separator','model'], right:['tokens_input','separator','tokens_output'] },
+      { left:['context_bar','context_pct','separator','cost_daily','separator','cost_weekly','separator','cost_monthly'], right:['version'] },
+      { left:['permissions','separator','remote_control','update_available'], right:[] },
+    ]
+  },
+  'zen': {
+    preset:'zen', separator_char:' \u2502 ', compact:true, widgets:{},
+    lines:[
+      { left:['model'], right:['context_pct','separator','version'] },
+    ]
+  },
+  'academic': {
+    preset:'academic', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','code_productivity','separator','session_time'], right:['cost'] },
+      { left:['context_bar','context_tokens','separator','tokens_total'], right:['version'] },
+    ]
+  },
+  'hacker': {
+    preset:'hacker', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','permissions','separator','burn_rate','separator','context_pct'], right:['token_speed'] },
+      { left:['git_branch','git_diff','separator','mcp_status','separator','remote_control'], right:['update_available'] },
+    ]
+  },
+  'night-owl': {
+    preset:'night-owl', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','session_time','separator','cost'], right:['time_display'] },
+      { left:['context_bar','context_pct'], right:['version'] },
+    ]
+  },
+  'dashboard': {
+    preset:'dashboard', separator_char:' \u2502 ', compact:false, widgets:{},
+    lines:[
+      { left:['model','separator','thinking','separator','cost','separator','git_branch','git_diff'], right:['tokens_total'] },
+      { left:['context_bar','context_tokens','separator','session_time','separator','burn_rate','separator','token_speed'], right:['version'] },
+      { left:['permissions','separator','qmd_status','archive_status','separator','mcp_status'], right:['time_display'] },
+      { left:['cost_daily','separator','cost_weekly','separator','cost_projection','separator','code_productivity','separator','remote_control'], right:['update_available'] },
+    ]
+  },
+};
+
+// ── State for the status line editor ─────────────────────────────────────────
+const SL = {
+  draft: null,          // { preset, lines:[{left:[id,...],right:[id,...]},...], separator_char, compact, widgets:{} }
+  selected: null,       // { lineIdx, side, widgetIdx } or null
+  livePreview: true,
+  saveTimer: null,
+};
+
+function slGetOrInitDraft() {
+  if (SL.draft) return SL.draft;
+  const d = CFG.data.display || {};
+  if (d.status_line_config && typeof d.status_line_config === 'object') {
+    // Normalise: lines contain arrays of widget ids (strings)
+    const raw = d.status_line_config;
+    SL.draft = {
+      preset: raw.preset || 'custom',
+      lines: (raw.lines || []).map(l => ({
+        left: (l.left || []).map(w => (typeof w === 'string' ? w : (w.type || w))),
+        right: (l.right || []).map(w => (typeof w === 'string' ? w : (w.type || w))),
+      })),
+      separator_char: raw.separator_char || ' \u2502 ',
+      compact: !!raw.compact,
+      widgets: raw.widgets || {},
+    };
+  } else {
+    SL.draft = JSON.parse(JSON.stringify(SL_PRESET_CONFIGS['default']));
+    if (d.status_line_preset && SL_PRESET_CONFIGS[d.status_line_preset]) {
+      SL.draft = JSON.parse(JSON.stringify(SL_PRESET_CONFIGS[d.status_line_preset]));
+    }
+  }
+  return SL.draft;
+}
+
+function slWidgetById(id) {
+  return SL_WIDGETS.find(w => w.id === id) || { id, name: id, cat:'layout', sym:'\u25A1' };
+}
+
+function slCategoryClass(cat) {
+  return 'sl-cat-' + (cat || 'layout');
+}
+
+function slSerializeDraft() {
+  const d = SL.draft;
+  if (!d) return null;
+  // Build the JSON shape matching StatusLineConfig in theme.rs
+  return {
+    preset: d.preset,
+    separator_char: d.separator_char,
+    compact: d.compact,
+    widgets: d.widgets || {},
+    lines: d.lines.map(l => ({
+      left: l.left.map(id => {
+        if (id === 'text') return { text: { content: '' } };
+        return id;
+      }),
+      right: l.right.map(id => {
+        if (id === 'text') return { text: { content: '' } };
+        return id;
+      }),
+    })),
+  };
+}
+
+function slPushUpdate() {
+  if (!ws || !paired) return;
+  const cfg = slSerializeDraft();
+  if (!cfg) return;
+  ws.send(JSON.stringify({
+    type: 'config_update',
+    panel: 'display',
+    field: 'status_line',
+    value: cfg,
+  }));
+}
+
+function slSchedulePush() {
+  if (!SL.livePreview) return;
+  clearTimeout(SL.saveTimer);
+  SL.saveTimer = setTimeout(slPushUpdate, 300);
+}
+
+function slApplyPreset(presetId) {
+  const cfg = SL_PRESET_CONFIGS[presetId];
+  if (!cfg) return;
+  SL.draft = JSON.parse(JSON.stringify(cfg));
+  SL.selected = null;
+  slSchedulePush();
+}
+
+function slAddLine() {
+  const d = slGetOrInitDraft();
+  if (d.lines.length >= 4) { showToast('Maximum 4 lines reached', 'info'); return; }
+  d.lines.push({ left: [], right: [] });
+  d.preset = 'custom';
+  slSchedulePush();
+}
+
+function slRemoveLine(idx) {
+  const d = slGetOrInitDraft();
+  if (d.lines.length <= 1) { showToast('Cannot remove the last line', 'info'); return; }
+  d.lines.splice(idx, 1);
+  d.preset = 'custom';
+  if (SL.selected && SL.selected.lineIdx === idx) SL.selected = null;
+  slSchedulePush();
+}
+
+function slCloneLine(idx) {
+  const d = slGetOrInitDraft();
+  if (d.lines.length >= 4) { showToast('Maximum 4 lines reached', 'info'); return; }
+  const clone = JSON.parse(JSON.stringify(d.lines[idx]));
+  d.lines.splice(idx + 1, 0, clone);
+  d.preset = 'custom';
+  slSchedulePush();
+}
+
+function slMoveLineUp(idx) {
+  const d = slGetOrInitDraft();
+  if (idx === 0) return;
+  [d.lines[idx-1], d.lines[idx]] = [d.lines[idx], d.lines[idx-1]];
+  d.preset = 'custom';
+  slSchedulePush();
+}
+
+function slMoveLineDown(idx) {
+  const d = slGetOrInitDraft();
+  if (idx >= d.lines.length - 1) return;
+  [d.lines[idx], d.lines[idx+1]] = [d.lines[idx+1], d.lines[idx]];
+  d.preset = 'custom';
+  slSchedulePush();
+}
+
+function slAddWidget(widgetId) {
+  const d = slGetOrInitDraft();
+  if (!d.lines.length) slAddLine();
+  // Add to selected line+side, or left of last line
+  let lineIdx = d.lines.length - 1;
+  let side = 'left';
+  if (SL.selected) { lineIdx = SL.selected.lineIdx; side = SL.selected.side; }
+  d.lines[lineIdx][side].push(widgetId);
+  d.preset = 'custom';
+  SL.selected = { lineIdx, side, widgetIdx: d.lines[lineIdx][side].length - 1 };
+  slSchedulePush();
+}
+
+function slRemoveWidget(lineIdx, side, widgetIdx) {
+  const d = slGetOrInitDraft();
+  d.lines[lineIdx][side].splice(widgetIdx, 1);
+  d.preset = 'custom';
+  if (SL.selected && SL.selected.lineIdx === lineIdx && SL.selected.side === side && SL.selected.widgetIdx === widgetIdx) {
+    SL.selected = null;
+  }
+  slSchedulePush();
+}
+
+function slSelectWidget(lineIdx, side, widgetIdx) {
+  SL.selected = { lineIdx, side, widgetIdx };
+}
+
+// ── Drag-and-drop state ───────────────────────────────────────────────────────
+const SL_DRAG = { active: false, lineIdx: null, side: null, widgetIdx: null };
+
+function slOnDragStart(e, lineIdx, side, widgetIdx) {
+  SL_DRAG.active = true;
+  SL_DRAG.lineIdx = lineIdx;
+  SL_DRAG.side = side;
+  SL_DRAG.widgetIdx = widgetIdx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', JSON.stringify({ lineIdx, side, widgetIdx }));
+  e.target.classList.add('dragging');
+}
+
+function slOnDragEnd(e) {
+  SL_DRAG.active = false;
+  e.target.classList.remove('dragging');
+}
+
+function slOnDragOver(e, lineIdx, side) {
+  if (!SL_DRAG.active) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  // Visual indicator is handled via CSS .drag-over
+}
+
+function slOnDrop(e, toLineIdx, toSide) {
+  e.preventDefault();
+  let payload;
+  try { payload = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+  const { lineIdx: fromLine, side: fromSide, widgetIdx: fromIdx } = payload;
+  const d = slGetOrInitDraft();
+  const widget = d.lines[fromLine][fromSide][fromIdx];
+  if (!widget) return;
+  // Remove from source
+  d.lines[fromLine][fromSide].splice(fromIdx, 1);
+  // Append to target side
+  d.lines[toLineIdx][toSide].push(widget);
+  d.preset = 'custom';
+  SL.selected = { lineIdx: toLineIdx, side: toSide, widgetIdx: d.lines[toLineIdx][toSide].length - 1 };
+  slSchedulePush();
+  renderStatusLinePanel(document.getElementById('config-main-pane'));
+}
+
+// ── Render functions ──────────────────────────────────────────────────────────
+
+function renderStatusLinePanel(c) {
+  panelHdr(c, 'Status Line', 'Configure the visual status bar — drag widgets, apply presets, edit properties.');
+
+  const d = slGetOrInitDraft();
+  const wrap = cfgEl('div', 'sl-editor');
+
+  // ── Toolbar ──
+  const toolbar = cfgEl('div', 'sl-toolbar');
+
+  const presetLbl = cfgEl('span', ''); presetLbl.textContent = 'Preset:';
+  const presetSel = document.createElement('select');
+  presetSel.className = '';
+  presetSel.style.cssText='background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:4px 8px;color:var(--text);font-family:inherit;font-size:11px;outline:none;cursor:pointer;';
+  const custOpt = document.createElement('option');
+  custOpt.value = 'custom'; custOpt.textContent = 'Custom';
+  custOpt.selected = d.preset === 'custom';
+  presetSel.appendChild(custOpt);
+  SL_PRESETS.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.label;
+    o.selected = d.preset === p.id;
+    presetSel.appendChild(o);
+  });
+  presetSel.onchange = () => {
+    if (presetSel.value === 'custom') return;
+    slApplyPreset(presetSel.value);
+    renderStatusLinePanel(document.getElementById('config-main-pane'));
+  };
+
+  const sepLbl = cfgEl('span',''); sepLbl.textContent='Sep:';
+  const sepInp = document.createElement('input');
+  sepInp.type='text'; sepInp.style.cssText='width:50px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:4px 6px;color:var(--text);font-family:inherit;font-size:11px;outline:none;';
+  sepInp.value = d.separator_char;
+  sepInp.oninput = () => { d.separator_char = sepInp.value; d.preset='custom'; slSchedulePush(); };
+
+  const compactLbl = cfgEl('label','sl-toggle-row');
+  const compactCb = document.createElement('input'); compactCb.type='checkbox'; compactCb.checked=d.compact;
+  compactCb.style.accentColor='var(--accent)';
+  compactCb.onchange = () => { d.compact = compactCb.checked; d.preset='custom'; slSchedulePush(); };
+  const compactSpan = cfgEl('span',''); compactSpan.textContent='Compact';
+  compactLbl.appendChild(compactCb); compactLbl.appendChild(compactSpan);
+
+  const gap = cfgEl('span','sl-toolbar-gap');
+
+  const applyBtn = document.createElement('button');
+  applyBtn.className='sl-btn primary'; applyBtn.textContent='Apply';
+  applyBtn.title='Push current layout to TUI status bar';
+  applyBtn.onclick = () => { slPushUpdate(); showToast('Status line applied', 'success'); };
+
+  const resetBtn = document.createElement('button');
+  resetBtn.className='sl-btn'; resetBtn.textContent='Reset';
+  resetBtn.onclick = () => {
+    SL.draft = JSON.parse(JSON.stringify(SL_PRESET_CONFIGS['default']));
+    SL.selected = null;
+    slSchedulePush();
+    renderStatusLinePanel(document.getElementById('config-main-pane'));
+  };
+
+  const liveTogRow = cfgEl('label','sl-toggle-row');
+  const liveCb = document.createElement('input'); liveCb.type='checkbox'; liveCb.checked=SL.livePreview;
+  liveCb.style.accentColor='var(--accent)';
+  liveCb.onchange = () => { SL.livePreview = liveCb.checked; };
+  const liveSpan = cfgEl('span',''); liveSpan.textContent='Live preview';
+  liveTogRow.appendChild(liveCb); liveTogRow.appendChild(liveSpan);
+
+  const sep1 = cfgEl('span','sl-sep');
+  const sep2 = cfgEl('span','sl-sep');
+  toolbar.appendChild(presetLbl);
+  toolbar.appendChild(presetSel);
+  toolbar.appendChild(sep1);
+  toolbar.appendChild(sepLbl);
+  toolbar.appendChild(sepInp);
+  toolbar.appendChild(sep2);
+  toolbar.appendChild(compactLbl);
+  toolbar.appendChild(gap);
+  toolbar.appendChild(liveTogRow);
+  toolbar.appendChild(applyBtn);
+  toolbar.appendChild(resetBtn);
+
+  wrap.appendChild(toolbar);
+
+  // ── 3-column editor layout ──
+  const cols = cfgEl('div','sl-columns');
+
+  // Left: palette
+  const palette = cfgEl('div','sl-palette');
+  const searchWrap = cfgEl('div','sl-palette-search');
+  const searchInp = document.createElement('input');
+  searchInp.placeholder='Search widgets...';
+  searchWrap.appendChild(searchInp);
+  palette.appendChild(searchWrap);
+  const paletteList = cfgEl('div','sl-palette-list');
+
+  function renderPalette(filter) {
+    paletteList.innerHTML = '';
+    const categories = ['model','tokens','context','session','git','system','cost_detail','productivity','layout'];
+    const catLabels = { model:'Model & AI', tokens:'Tokens & Cost', context:'Context', session:'Session', git:'Git', system:'System', cost_detail:'Cost Detail', productivity:'Productivity', layout:'Layout' };
+    categories.forEach(cat => {
+      const items = SL_WIDGETS.filter(w => w.cat===cat && (!filter || w.name.toLowerCase().includes(filter.toLowerCase()) || w.id.includes(filter.toLowerCase())));
+      if (!items.length) return;
+      const hdr = cfgEl('div','sl-cat-header'); hdr.textContent = catLabels[cat] || cat;
+      paletteList.appendChild(hdr);
+      items.forEach(w => {
+        const item = cfgEl('div','sl-palette-item');
+        const sym = cfgEl('span','sl-wi'); sym.textContent = w.sym;
+        const nm = cfgEl('span',''); nm.textContent = w.name;
+        item.appendChild(sym); item.appendChild(nm);
+        item.title = 'Click to add "' + w.name + '" to canvas';
+        item.onclick = () => {
+          slAddWidget(w.id);
+          renderStatusLinePanel(document.getElementById('config-main-pane'));
+        };
+        paletteList.appendChild(item);
+      });
+    });
+  }
+  searchInp.oninput = () => renderPalette(searchInp.value);
+  renderPalette('');
+  palette.appendChild(paletteList);
+  cols.appendChild(palette);
+
+  // Center: canvas
+  const canvas = cfgEl('div','sl-canvas');
+  if (!d.lines.length) {
+    const hint = cfgEl('div','sl-canvas-hint'); hint.textContent='No lines — click "Add Line" to start.';
+    canvas.appendChild(hint);
+  }
+
+  d.lines.forEach((line, lineIdx) => {
+    const block = cfgEl('div','sl-line-block');
+
+    const hdr = cfgEl('div','sl-line-header');
+    const lnum = cfgEl('span','sl-line-num'); lnum.textContent='Line '+(lineIdx+1);
+    hdr.appendChild(lnum);
+    const hdrGap = cfgEl('span','sl-line-header-gap');
+    hdr.appendChild(hdrGap);
+
+    // Up/down/clone/delete
+    if (lineIdx > 0) {
+      const ub = document.createElement('button'); ub.className='sl-btn'; ub.textContent='\u25B2';
+      ub.title='Move line up'; ub.style.padding='2px 6px'; ub.style.fontSize='10px';
+      ub.onclick = () => { slMoveLineUp(lineIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+      hdr.appendChild(ub);
+    }
+    if (lineIdx < d.lines.length - 1) {
+      const db = document.createElement('button'); db.className='sl-btn'; db.textContent='\u25BC';
+      db.title='Move line down'; db.style.padding='2px 6px'; db.style.fontSize='10px';
+      db.onclick = () => { slMoveLineDown(lineIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+      hdr.appendChild(db);
+    }
+    const clb = document.createElement('button'); clb.className='sl-btn'; clb.textContent='Clone';
+    clb.style.padding='2px 6px'; clb.style.fontSize='10px';
+    clb.onclick = () => { slCloneLine(lineIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+    hdr.appendChild(clb);
+    const delb = document.createElement('button'); delb.className='sl-btn danger'; delb.textContent='Remove';
+    delb.style.padding='2px 6px'; delb.style.fontSize='10px';
+    delb.onclick = () => { slRemoveLine(lineIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+    hdr.appendChild(delb);
+
+    block.appendChild(hdr);
+
+    const body = cfgEl('div','sl-line-body');
+
+    ['left','right'].forEach(side => {
+      const sideEl = cfgEl('div','sl-side '+side);
+      const sideLabel = cfgEl('span','sl-side-label'); sideLabel.textContent=side.toUpperCase();
+      sideEl.appendChild(sideLabel);
+
+      line[side].forEach((wid, widgetIdx) => {
+        const wdef = slWidgetById(wid);
+        const isSelected = SL.selected && SL.selected.lineIdx===lineIdx && SL.selected.side===side && SL.selected.widgetIdx===widgetIdx;
+        const chip = cfgEl('div','sl-widget-chip '+slCategoryClass(wdef.cat)+(isSelected?' selected':''));
+        chip.draggable = true;
+        chip.title = wdef.name + ' (drag to move, click to select)';
+        const chipSym = cfgEl('span',''); chipSym.textContent=wdef.sym+' ';
+        const chipName = cfgEl('span',''); chipName.textContent=wdef.name;
+        const chipX = cfgEl('span','sl-chip-x'); chipX.innerHTML='&#10005;';
+        chipX.title='Remove widget';
+        chipX.onclick = (e) => { e.stopPropagation(); slRemoveWidget(lineIdx, side, widgetIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+        chip.appendChild(chipSym); chip.appendChild(chipName); chip.appendChild(chipX);
+        chip.onclick = () => { slSelectWidget(lineIdx, side, widgetIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+        chip.addEventListener('dragstart', (e) => slOnDragStart(e, lineIdx, side, widgetIdx));
+        chip.addEventListener('dragend', slOnDragEnd);
+        sideEl.appendChild(chip);
+      });
+
+      sideEl.addEventListener('dragover', (e) => { slOnDragOver(e, lineIdx, side); sideEl.classList.add('drag-over'); });
+      sideEl.addEventListener('dragleave', () => sideEl.classList.remove('drag-over'));
+      sideEl.addEventListener('drop', (e) => { sideEl.classList.remove('drag-over'); slOnDrop(e, lineIdx, side); });
+
+      body.appendChild(sideEl);
+    });
+
+    block.appendChild(body);
+    canvas.appendChild(block);
+  });
+
+  // Add line button
+  if (d.lines.length < 4) {
+    const addBtn = cfgEl('div','sl-add-line-btn');
+    addBtn.innerHTML='&#43; Add Line';
+    addBtn.onclick = () => { slAddLine(); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+    canvas.appendChild(addBtn);
+  }
+
+  cols.appendChild(canvas);
+
+  // Right: properties panel
+  const props = cfgEl('div','sl-props');
+  const propsTitle = cfgEl('div','sl-props-title'); propsTitle.textContent='Properties';
+  props.appendChild(propsTitle);
+  const propsBody = cfgEl('div','sl-props-body');
+
+  if (SL.selected) {
+    const { lineIdx, side, widgetIdx } = SL.selected;
+    const wid = d.lines[lineIdx] && d.lines[lineIdx][side] && d.lines[lineIdx][side][widgetIdx];
+    if (wid) {
+      const wdef = slWidgetById(wid);
+      const ws = (d.widgets && d.widgets[wid]) ? d.widgets[wid] : {};
+
+      const idRow = cfgEl('div','sl-prop-row');
+      const idLbl = cfgEl('div','sl-prop-label'); idLbl.textContent='Widget';
+      const idVal = cfgEl('div',''); idVal.style.cssText='font-size:12px;color:var(--text);font-weight:600;';
+      idVal.textContent=wdef.sym+' '+wdef.name+' ('+wdef.cat+')';
+      idRow.appendChild(idLbl); idRow.appendChild(idVal);
+      propsBody.appendChild(idRow);
+
+      // Color override
+      const colorRow = cfgEl('div','sl-prop-row');
+      const colorLbl = cfgEl('div','sl-prop-label'); colorLbl.textContent='Category Color';
+      const colorSel = document.createElement('select'); colorSel.className='sl-prop-select';
+      const colorOpts = [
+        {v:'',l:'Default (by category)'},
+        {v:'accent',l:'Accent (blue)'},
+        {v:'success',l:'Success (green)'},
+        {v:'warning',l:'Warning (amber)'},
+        {v:'error',l:'Error (red)'},
+        {v:'text',l:'Text (white)'},
+        {v:'dim',l:'Dim (grey)'},
+        {v:'purple',l:'Purple'},
+        {v:'orange',l:'Orange'},
+      ];
+      colorOpts.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value=o.v; opt.textContent=o.l; opt.selected=(ws.color||'')==o.v;
+        colorSel.appendChild(opt);
+      });
+      colorSel.onchange = () => {
+        d.widgets = d.widgets || {};
+        d.widgets[wid] = d.widgets[wid] || {};
+        if (colorSel.value) { d.widgets[wid].color = colorSel.value; }
+        else { delete d.widgets[wid].color; }
+        d.preset='custom'; slSchedulePush();
+      };
+      colorRow.appendChild(colorLbl); colorRow.appendChild(colorSel);
+      propsBody.appendChild(colorRow);
+
+      // Show label toggle
+      const labelRow = cfgEl('div','sl-prop-row');
+      const labelLbl = cfgEl('div','sl-prop-label'); labelLbl.textContent='Show Label';
+      const labelWrap = cfgEl('label','sl-toggle-row');
+      const labelCb = document.createElement('input'); labelCb.type='checkbox';
+      labelCb.style.accentColor='var(--accent)';
+      labelCb.checked = ws.label !== false;
+      labelCb.onchange = () => {
+        d.widgets = d.widgets || {};
+        d.widgets[wid] = d.widgets[wid] || {};
+        d.widgets[wid].label = labelCb.checked;
+        d.preset='custom'; slSchedulePush();
+      };
+      const labelSpan = cfgEl('span',''); labelSpan.textContent='Enabled';
+      labelWrap.appendChild(labelCb); labelWrap.appendChild(labelSpan);
+      labelRow.appendChild(labelLbl); labelRow.appendChild(labelWrap);
+      propsBody.appendChild(labelRow);
+
+      // Bold toggle
+      const boldRow = cfgEl('div','sl-prop-row');
+      const boldLbl = cfgEl('div','sl-prop-label'); boldLbl.textContent='Bold';
+      const boldWrap = cfgEl('label','sl-toggle-row');
+      const boldCb = document.createElement('input'); boldCb.type='checkbox';
+      boldCb.style.accentColor='var(--accent)';
+      boldCb.checked = !!ws.bold;
+      boldCb.onchange = () => {
+        d.widgets = d.widgets || {};
+        d.widgets[wid] = d.widgets[wid] || {};
+        d.widgets[wid].bold = boldCb.checked;
+        d.preset='custom'; slSchedulePush();
+      };
+      const boldSpan = cfgEl('span',''); boldSpan.textContent='Enabled';
+      boldWrap.appendChild(boldCb); boldWrap.appendChild(boldSpan);
+      boldRow.appendChild(boldLbl); boldRow.appendChild(boldWrap);
+      propsBody.appendChild(boldRow);
+
+      // Remove button
+      const rmRow = cfgEl('div','sl-prop-row');
+      rmRow.style.marginTop='4px';
+      const rmBtn = document.createElement('button');
+      rmBtn.className='sl-btn danger'; rmBtn.textContent='Remove Widget';
+      rmBtn.style.width='100%';
+      rmBtn.onclick = () => { slRemoveWidget(lineIdx, side, widgetIdx); renderStatusLinePanel(document.getElementById('config-main-pane')); };
+      rmRow.appendChild(rmBtn);
+      propsBody.appendChild(rmRow);
+    }
+  } else {
+    const emptyMsg = cfgEl('p','sl-props-empty');
+    emptyMsg.textContent='Click a widget in the canvas to edit its properties, or click a widget in the palette to add it.';
+    propsBody.appendChild(emptyMsg);
+
+    // Global settings
+    const lineCountRow = cfgEl('div','sl-prop-row');
+    const lcLbl = cfgEl('div','sl-prop-label'); lcLbl.textContent='Lines';
+    const lcVal = cfgEl('div',''); lcVal.style.cssText='font-size:12px;color:var(--text);';
+    lcVal.textContent = d.lines.length + ' / 4';
+    lineCountRow.appendChild(lcLbl); lineCountRow.appendChild(lcVal);
+    propsBody.appendChild(lineCountRow);
+
+    const wCountRow = cfgEl('div','sl-prop-row');
+    const wcLbl = cfgEl('div','sl-prop-label'); wcLbl.textContent='Total Widgets';
+    const wcVal = cfgEl('div',''); wcVal.style.cssText='font-size:12px;color:var(--text);';
+    const total = d.lines.reduce((sum, l) => sum + l.left.length + l.right.length, 0);
+    wcVal.textContent = total;
+    wCountRow.appendChild(wcLbl); wCountRow.appendChild(wcVal);
+    propsBody.appendChild(wCountRow);
+
+    const presetRow = cfgEl('div','sl-prop-row');
+    const prLbl = cfgEl('div','sl-prop-label'); prLbl.textContent='Active Preset';
+    const prVal = cfgEl('div',''); prVal.style.cssText='font-size:12px;color:var(--accent);';
+    prVal.textContent = d.preset;
+    presetRow.appendChild(prLbl); presetRow.appendChild(prVal);
+    propsBody.appendChild(presetRow);
+  }
+
+  props.appendChild(propsBody);
+  cols.appendChild(props);
+
+  wrap.appendChild(cols);
+  c.appendChild(wrap);
+}
+
+// ── Control builders ───────────────────────────────────────────────
+
+function toggleSwitch(field, panel, checked) {
+  const wrap = cfgEl('label', 'toggle-switch' + (CFG.vaultLocked && VAULT_SENSITIVE.has(field) ? ' disabled' : ''));
+  const inp = document.createElement('input');
+  inp.type='checkbox'; inp.checked=checked;
+  inp.disabled = CFG.vaultLocked && VAULT_SENSITIVE.has(field);
+  inp.onchange = () => sendConfigUpdate(panel, field, inp.checked);
+  const track = cfgEl('div','toggle-track');
+  const thumb = cfgEl('div','toggle-thumb');
+  wrap.appendChild(inp); wrap.appendChild(track); wrap.appendChild(thumb);
+  return wrap;
+}
+
+function textInput(field, panel, value) {
+  const locked = CFG.vaultLocked && VAULT_SENSITIVE.has(field);
+  const inp = document.createElement('input');
+  inp.type='text'; inp.className='cfg-input';
+  inp.value = locked ? '' : value;
+  inp.placeholder = locked ? '\u2022\u2022\u2022\u2022' : '';
+  inp.disabled = locked;
+  if (!locked) inp.addEventListener('input', () => debouncedSave(panel, field, inp.value, inp));
+  return inp;
+}
+
+function maskedInput(field, panel, value) {
+  const locked = CFG.vaultLocked && VAULT_SENSITIVE.has(field);
+  const wrap = cfgEl('div','masked-wrap');
+  const inp = document.createElement('input');
+  inp.type='password'; inp.className='cfg-input';
+  inp.value = locked ? '' : value;
+  inp.placeholder = locked ? '\u2022\u2022\u2022\u2022' : 'Enter value...';
+  inp.disabled = locked;
+  const btn = document.createElement('button');
+  btn.className='masked-toggle-btn'; btn.type='button';
+  btn.innerHTML = '&#128065;';
+  btn.title='Show / hide';
+  btn.onclick = () => { inp.type = inp.type === 'password' ? 'text' : 'password'; };
+  if (!locked) inp.addEventListener('input', () => debouncedSave(panel, field, inp.value, inp));
+  wrap.appendChild(inp); wrap.appendChild(btn);
+  return wrap;
+}
+
+function numInput(field, panel, value, min, max) {
+  const locked = CFG.vaultLocked && VAULT_SENSITIVE.has(field);
+  const inp = document.createElement('input');
+  inp.type='number'; inp.className='cfg-number';
+  inp.value = locked ? '' : value;
+  inp.min=min; inp.max=max; inp.disabled=locked;
+  if (!locked) {
+    inp.addEventListener('input', () => {
+      const n=Number(inp.value);
+      if (!Number.isNaN(n) && n>=min && n<=max) debouncedSave(panel, field, n, inp);
+    });
+  }
+  return inp;
+}
+
+function selInput(field, panel, value, options) {
+  const locked = CFG.vaultLocked && VAULT_SENSITIVE.has(field);
+  const sel = document.createElement('select');
+  sel.className='cfg-select'; sel.disabled=locked;
+  options.forEach(opt => {
+    const o = document.createElement('option');
+    o.value = typeof opt==='string' ? opt : opt.value;
+    o.textContent = typeof opt==='string' ? opt : opt.label;
+    o.selected = o.value===value;
+    sel.appendChild(o);
+  });
+  if (!locked) sel.onchange = () => sendConfigUpdate(panel, field, sel.value);
+  return sel;
+}
+
+function statusBadge(status) {
+  if (!status) return null;
+  const b = cfgEl('span','status-badge ' + (status.startsWith('\u2713') ? 'ok' : 'missing'));
+  b.textContent = status.startsWith('\u2713') ? 'configured' : 'not set';
+  return b;
+}
+
+function panelHdr(c, title, desc) {
+  const h = cfgEl('div','panel-title'); h.textContent=title; c.appendChild(h);
+  const d = cfgEl('div','panel-desc');  d.textContent=desc;  c.appendChild(d);
+}
+
+function appendRow(c, label, hint, ...controls) {
+  const row = cfgEl('div','setting-row');
+  const lc = cfgEl('div','setting-label-col');
+  const le = cfgEl('div','setting-label'); le.textContent=label; lc.appendChild(le);
+  if (hint) { const he=cfgEl('div','setting-hint'); he.textContent=hint; lc.appendChild(he); }
+  const ctrl = cfgEl('div','setting-control');
+  controls.forEach(ctrl2 => { if (ctrl2) ctrl.appendChild(ctrl2); });
+  row.appendChild(lc); row.appendChild(ctrl);
+  c.appendChild(row);
+}
+
+// ── Config update protocol ─────────────────────────────────────────
+
+function sendConfigUpdate(panel, field, value) {
+  if (!ws || !paired) return;
+  ws.send(JSON.stringify({ type: 'config_update', panel, field, value }));
+}
+
+function debouncedSave(panel, field, value, inputEl) {
+  clearTimeout(CFG.saveTimers[field]);
+  if (inputEl) {
+    inputEl.className = inputEl.className.replace(/ ?(saving|saved|error)/g,'') + ' saving';
+  }
+  CFG.saveTimers[field] = setTimeout(() => {
+    sendConfigUpdate(panel, field, value);
+    if (inputEl) {
+      inputEl.className = inputEl.className.replace(/ ?saving/g,'') + ' saved';
+      setTimeout(() => {
+        if (inputEl) inputEl.className = inputEl.className.replace(/ ?saved/g,'');
+      }, 1500);
+    }
+  }, 500);
+}
+
+// ── Toast ──────────────────────────────────────────────────────────
+
+function showToast(message, type) {
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = cfgEl('div','toast-container'); container.id='toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = cfgEl('div','toast '+(type||'info'));
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 3500);
+}
+
+// ── Util ───────────────────────────────────────────────────────────
+
+function cfgEl(tag, cls) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  return e;
+}
+
+function escCfg(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
 }
 </script>
 </body>

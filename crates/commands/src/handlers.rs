@@ -420,6 +420,27 @@ pub fn handle_slash_command(
             message: "/daily is handled by the runtime. Use /daily to view today's summary or /daily <date> for a specific day.".to_string(),
             session: session.clone(),
         }),
+        // ── Ghost commands promoted in v2.2.6 ─────────────────────────────
+        SlashCommand::Tab { .. } => Some(SlashCommandResult {
+            message: "/tab is not yet implemented here. Tab management is available in TUI mode — use Ctrl+T (new), Ctrl+W (close), and Ctrl+] / Ctrl+[ (switch).".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Fork => Some(SlashCommandResult {
+            message: "/fork is not yet implemented here. Tab forking is available in TUI mode — it duplicates the current tab with the same conversation context.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Share { .. } => Some(SlashCommandResult {
+            message: "/share is not yet implemented. Tab sharing generates a read-only URL via the passage-culpur relay. This feature is available in TUI and web modes.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Audit => Some(SlashCommandResult {
+            message: "/audit is not yet implemented. The composite audit runs /security scan + /deps audit + /vault verify in sequence. Run each individually in the meantime.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Restart { .. } => Some(SlashCommandResult {
+            message: "/restart is not yet implemented here. In TUI mode, /restart will respawn the Anvil process (available in Phase 5).".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),
