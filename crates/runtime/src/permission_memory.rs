@@ -1,3 +1,9 @@
+// Allow `unsafe` blocks in tests only — we need `std::env::set_var` to
+// redirect `ANVIL_CONFIG_HOME` at a temp dir for isolated test runs, and
+// Rust 2024 gates env mutation behind `unsafe`. The crate-wide
+// `#![forbid(unsafe_code)]` lint would otherwise block it.
+#![cfg_attr(test, allow(unsafe_code))]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -195,8 +201,42 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
+    /// Scoped guard that points `ANVIL_CONFIG_HOME` at a fresh temp dir for
+    /// the duration of a single test, restoring the previous value on drop.
+    /// Shares the crate-wide `test_env_lock()` so it serialises with other
+    /// tests that also mutate `ANVIL_CONFIG_HOME` (oauth, prompt).
+    struct ConfigHomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _home: TempDir,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl ConfigHomeGuard {
+        fn new() -> Self {
+            let lock = crate::test_env_lock();
+            let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+            let home = tempfile::tempdir().unwrap();
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", home.path()); }
+            Self {
+                _lock: lock,
+                _home: home,
+                prev,
+            }
+        }
+    }
+
+    impl Drop for ConfigHomeGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(value) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", value); },
+                None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+            }
+        }
+    }
+
     #[test]
     fn is_allowed_returns_false_when_empty() {
+        let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
         let mem = PermissionMemory::load(dir.path());
         assert!(!mem.is_allowed("bash", "echo hi"));
@@ -204,6 +244,7 @@ mod tests {
 
     #[test]
     fn grant_session_allows_immediately() {
+        let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
         let mut mem = PermissionMemory::load(dir.path());
         mem.grant("bash", None, PermissionScope::Session);
@@ -213,6 +254,7 @@ mod tests {
 
     #[test]
     fn grant_with_pattern_matches_substring() {
+        let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
         let mut mem = PermissionMemory::load(dir.path());
         mem.grant("bash", Some("echo"), PermissionScope::Session);
@@ -222,6 +264,7 @@ mod tests {
 
     #[test]
     fn save_and_reload_project_scope() {
+        let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
         {
             let mut mem = PermissionMemory::load(dir.path());
@@ -234,6 +277,7 @@ mod tests {
 
     #[test]
     fn session_scope_not_persisted() {
+        let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
         {
             let mut mem = PermissionMemory::load(dir.path());
