@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.6-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.7-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![5 Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -158,6 +158,10 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ## Changelog
 
+
+### v2.2.7 &mdash; April 21, 2026
+
+See the [release notes](https://github.com/culpur/anvil/releases/tag/v2.2.7) for full details.
 ### v2.2.6 &mdash; April 20, 2026
 
 **Command Parity, Deep Autocomplete, Web Config, AnvilHub Installer** &mdash; the biggest web UI release since v2.0.
