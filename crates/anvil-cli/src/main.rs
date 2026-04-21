@@ -21,7 +21,11 @@ mod share;
 mod screensaver;
 mod session;
 mod tui;
+mod check;
+mod setup;
+mod uninstall;
 mod update;
+mod upgrade;
 mod utils;
 mod vault;
 mod wizard;
@@ -82,7 +86,11 @@ use session::{
     SessionHandle,
 };
 use help::print_help;
+use check::run_check;
+use setup::run_setup_wizard;
+use uninstall::run_uninstall;
 use update::{check_for_update, run_self_update};
+use upgrade::run_upgrade;
 use vault::{run_vault_command_impl, write_curl_auth_header};
 use wizard::{anvil_config_json_exists, run_first_run_wizard};
 use providers::{
@@ -236,6 +244,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
         CliAction::FirstRunWizard => run_first_run_wizard(),
+        CliAction::Setup => run_setup_wizard(),
+        CliAction::Check => {
+            let fails = run_check();
+            std::process::exit(if fails == 0 { 0 } else { 1 });
+        }
+        CliAction::Upgrade => run_upgrade(),
+        CliAction::Uninstall => run_uninstall(),
         CliAction::Repl {
             model,
             allowed_tools,
@@ -290,8 +305,16 @@ enum CliAction {
     Continue,
     /// List all saved sessions.
     Sessions,
-    /// Run the interactive first-run setup wizard.
+    /// Run the interactive first-run setup wizard (existing REPL wizard).
     FirstRunWizard,
+    /// Run the post-install setup wizard (new, called by installer scripts).
+    Setup,
+    /// Print the installation health checklist.
+    Check,
+    /// Upgrade Anvil to the latest release.
+    Upgrade,
+    /// Uninstall Anvil binary and optionally ~/.anvil/.
+    Uninstall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,9 +373,17 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 run_self_update();
                 std::process::exit(0);
             }
-            "--first-run" | "--setup" => {
-                run_first_run_wizard();
-                std::process::exit(0);
+            "--check" => {
+                return Ok(CliAction::Check);
+            }
+            "--uninstall" => {
+                return Ok(CliAction::Uninstall);
+            }
+            "--setup" => {
+                return Ok(CliAction::Setup);
+            }
+            "--first-run" => {
+                return Ok(CliAction::FirstRunWizard);
             }
             "--model" => {
                 let value = args
@@ -458,7 +489,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     match rest[0].as_str() {
         "continue" => Ok(CliAction::Continue),
         "sessions" | "session-list" => Ok(CliAction::Sessions),
-        "setup" | "first-run" => Ok(CliAction::FirstRunWizard),
+        "first-run" => Ok(CliAction::FirstRunWizard),
+        "check" => Ok(CliAction::Check),
+        "upgrade" => Ok(CliAction::Upgrade),
+        "uninstall" => Ok(CliAction::Uninstall),
+        "setup" => Ok(CliAction::Setup),
         "resume" => {
             if rest.get(1).is_some() {
                 parse_resume_args(&rest[1..])

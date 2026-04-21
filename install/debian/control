@@ -1,0 +1,16 @@
+Package: anvil
+Version: 2.2.7
+Architecture: amd64
+Maintainer: Culpur Defense Engineering <jyoung@culpur.net>
+Depends: libc6 (>= 2.35), ca-certificates, git
+Recommends: nodejs (>= 18), npm
+Description: Anvil AI coding assistant
+ Anvil is a full-featured AI coding assistant with multi-provider support
+ (Anthropic, OpenAI, Google, xAI, Ollama), encrypted vault for API keys,
+ AnvilHub package ecosystem, and deep shell integration.
+ .
+ After install, run: anvil --setup
+Homepage: https://anvilhub.culpur.net
+Section: devel
+Priority: optional
+License: Proprietary
