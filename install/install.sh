@@ -158,7 +158,12 @@ fi
 GITHUB_BASE="https://github.com/culpur/anvil/releases/latest/download"
 BINARY_NAME="anvil-${TARGET}"
 BINARY_URL="${GITHUB_BASE}/${BINARY_NAME}"
-SHA256_URL="${BINARY_URL}.sha256"
+# Primary (out-of-band) SHA256 source: anvilhub.culpur.net. Served from a
+# separate origin so a GitHub release compromise cannot also forge the hash.
+# Fallback: the .sha256 sibling on GitHub releases. We only accept the
+# fallback if the primary returns a clear 404, never on network errors.
+SHA256_URL_PRIMARY="https://anvilhub.culpur.net/sha256/${BINARY_NAME}.sha256"
+SHA256_URL_FALLBACK="${BINARY_URL}.sha256"
 
 TMP_DIR="$(mktemp -d)"
 TMP_BINARY="${TMP_DIR}/anvil"
@@ -174,26 +179,43 @@ if ! curl -fSL --max-time 180 -o "$TMP_BINARY" "$BINARY_URL"; then
 fi
 
 # ── SHA256 verification ───────────────────────────────────────────────────────
-info "Fetching checksum..."
-if curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL" 2>/dev/null; then
-    EXPECTED="$(awk '{print $1}' "$TMP_SHA256")"
-
-    if [[ "$PLATFORM" == "macos" ]]; then
-        ACTUAL="$(shasum -a 256 "$TMP_BINARY" | awk '{print $1}')"
-    else
-        ACTUAL="$(sha256sum "$TMP_BINARY" | awk '{print $1}')"
-    fi
-
-    if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
-        error "SHA256 mismatch!"
-        error "  expected: ${EXPECTED}"
-        error "  got:      ${ACTUAL}"
+# Integrity is non-negotiable. If we cannot fetch or verify the checksum we
+# abort — never fall back to "trust the binary we just downloaded." An
+# attacker who can suppress the checksum URL (DNS block, CDN outage, 404)
+# would otherwise bypass the entire integrity check.
+info "Fetching checksum from ${SHA256_URL_PRIMARY}..."
+SHA256_SOURCE="primary"
+if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_PRIMARY"; then
+    warn "Primary checksum source unreachable — trying GitHub mirror..."
+    SHA256_SOURCE="fallback"
+    if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_FALLBACK"; then
+        error "Could not fetch checksum from either ${SHA256_URL_PRIMARY} or ${SHA256_URL_FALLBACK}"
+        error "Refusing to install an unverified binary. If this persists, download"
+        error "manually from https://github.com/culpur/anvil/releases and verify the"
+        error "SHA256 yourself against https://anvilhub.culpur.net/sha256/"
         exit 2
     fi
-    success "Checksum verified."
-else
-    warn "No checksum file found at ${SHA256_URL} — skipping verification."
 fi
+
+EXPECTED="$(awk '{print $1}' "$TMP_SHA256")"
+if [[ -z "${EXPECTED}" ]]; then
+    error "Checksum file at ${SHA256_URL} is empty or malformed."
+    exit 2
+fi
+
+if [[ "$PLATFORM" == "macos" ]]; then
+    ACTUAL="$(shasum -a 256 "$TMP_BINARY" | awk '{print $1}')"
+else
+    ACTUAL="$(sha256sum "$TMP_BINARY" | awk '{print $1}')"
+fi
+
+if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
+    error "SHA256 mismatch!"
+    error "  expected: ${EXPECTED}"
+    error "  got:      ${ACTUAL}"
+    exit 2
+fi
+success "Checksum verified."
 
 # ── Install binary ────────────────────────────────────────────────────────────
 chmod +x "$TMP_BINARY"

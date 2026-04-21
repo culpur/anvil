@@ -108,7 +108,11 @@ if (-not (Test-Command 'qmd')) {
 $GithubBase = "https://github.com/culpur/anvil/releases/latest/download"
 $BinaryName = "anvil-$Target.exe"
 $BinaryUrl  = "$GithubBase/$BinaryName"
-$Sha256Url  = "$BinaryUrl.sha256"
+# Primary (out-of-band) SHA256 source: anvilhub.culpur.net. Served from a
+# separate origin so a GitHub release compromise cannot also forge the hash.
+# Fallback: the .sha256 sibling on GitHub releases.
+$Sha256UrlPrimary  = "https://anvilhub.culpur.net/sha256/$BinaryName.sha256"
+$Sha256UrlFallback = "$BinaryUrl.sha256"
 
 $TmpDir     = Join-Path $env:TEMP "anvil-install-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
@@ -125,23 +129,45 @@ try {
 }
 
 # ── SHA256 verification ───────────────────────────────────────────────────────
-Write-Info "Verifying checksum..."
+# Integrity is non-negotiable. If checksum fetch fails we abort — we never
+# install an unverified binary. Previously a network error in the checksum
+# fetch would silently skip verification, which meant an attacker blocking
+# the .sha256 URL would bypass the whole integrity check.
+Write-Info "Verifying checksum from $Sha256UrlPrimary ..."
+$Sha256Source = "primary"
 try {
-    Invoke-WebRequest -Uri $Sha256Url -OutFile $TmpSha256 -UseBasicParsing
-    $Expected = (Get-Content $TmpSha256 -Raw).Trim().Split()[0].ToLower()
-    $Actual   = (Get-FileHash -Path $TmpBinary -Algorithm SHA256).Hash.ToLower()
-
-    if ($Actual -ne $Expected) {
-        Write-Fail "SHA256 mismatch!"
-        Write-Fail "  expected: $Expected"
-        Write-Fail "  got:      $Actual"
+    Invoke-WebRequest -Uri $Sha256UrlPrimary -OutFile $TmpSha256 -UseBasicParsing -ErrorAction Stop
+} catch {
+    Write-Warn "Primary checksum source unreachable — trying GitHub mirror..."
+    $Sha256Source = "fallback"
+    try {
+        Invoke-WebRequest -Uri $Sha256UrlFallback -OutFile $TmpSha256 -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Fail "Could not fetch checksum from either $Sha256UrlPrimary or $Sha256UrlFallback"
+        Write-Fail "Refusing to install an unverified binary. Download manually from"
+        Write-Fail "https://github.com/culpur/anvil/releases and verify SHA256 against"
+        Write-Fail "https://anvilhub.culpur.net/sha256/"
         Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
         exit 2
     }
-    Write-Success "Checksum verified."
-} catch {
-    Write-Warn "No checksum file found — skipping verification."
 }
+
+$Expected = (Get-Content $TmpSha256 -Raw).Trim().Split()[0].ToLower()
+if ([string]::IsNullOrWhiteSpace($Expected)) {
+    Write-Fail "Checksum file at $Sha256Url is empty or malformed."
+    Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+    exit 2
+}
+
+$Actual = (Get-FileHash -Path $TmpBinary -Algorithm SHA256).Hash.ToLower()
+if ($Actual -ne $Expected) {
+    Write-Fail "SHA256 mismatch!"
+    Write-Fail "  expected: $Expected"
+    Write-Fail "  got:      $Actual"
+    Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
+    exit 2
+}
+Write-Success "Checksum verified."
 
 # ── Install binary ────────────────────────────────────────────────────────────
 $DestExe = Join-Path $InstallDir "anvil.exe"

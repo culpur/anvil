@@ -110,19 +110,25 @@ pub(crate) fn is_newer(candidate: &str, current: &str) -> bool {
 /// Fetch the published SHA256 checksum file for a given release asset.
 /// The checksum file is expected at `<base>/<tag>/anvil-<target>.sha256`.
 fn fetch_sha256(tag: &str, binary: &str) -> Option<String> {
-    let url = format!("{GITHUB_RELEASES_BASE}/{tag}/{binary}.sha256");
-    let out = Command::new("curl")
-        .args(["-sfL", "--max-time", "15", &url])
-        .output()
-        .ok()?;
+    // Primary: out-of-band manifest at anvilhub.culpur.net (separate origin from
+    // GitHub releases, so a GitHub release compromise cannot also forge the hash).
+    // Fallback: the .sha256 sibling on GitHub releases.
+    let primary = format!("https://anvilhub.culpur.net/sha256/{binary}.sha256");
+    let fallback = format!("{GITHUB_RELEASES_BASE}/{tag}/{binary}.sha256");
 
-    if !out.status.success() {
-        return None;
+    for url in [&primary, &fallback] {
+        let out = Command::new("curl")
+            .args(["-sfL", "--max-time", "15", url])
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(hash) = text.split_whitespace().next() {
+                return Some(hash.to_string());
+            }
+        }
     }
-
-    // File may be "HASH  filename\n" or just "HASH\n"
-    let text = String::from_utf8_lossy(&out.stdout);
-    text.split_whitespace().next().map(str::to_string)
+    None
 }
 
 /// Compute the SHA256 of a local file using the platform-native tool.
@@ -275,10 +281,19 @@ pub(crate) fn run_upgrade() {
     print!("  Verifying SHA256...");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
+    // Integrity is non-negotiable: if the checksum cannot be fetched we
+    // abort. We never install an unverified upgrade.
     match fetch_sha256(&release.tag, &binary) {
         None => {
-            // If no checksum file is published, warn but continue.
-            println!(" \x1b[33mno checksum file found, skipping verification\x1b[0m");
+            eprintln!();
+            eprintln!("  \x1b[31m\u{2718}\x1b[0m  Could not fetch SHA256 for {binary}");
+            eprintln!("      Refusing to install an unverified binary. Try again later, or");
+            eprintln!(
+                "      download manually from https://github.com/culpur/anvil/releases/tag/{}",
+                release.tag
+            );
+            let _ = fs::remove_dir_all(&tmp_dir);
+            std::process::exit(2);
         }
         Some(expected) => match verify_sha256(&new_binary, &expected) {
             Ok(()) => println!(" \x1b[32mok\x1b[0m"),

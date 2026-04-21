@@ -179,6 +179,17 @@ fn write_provider_config(
     fs::write(&config_path, json_str)
         .map_err(|e| format!("cannot write config.json: {e}"))?;
 
+    // Tighten permissions: config.json may hold API keys in plaintext until
+    // the user migrates them into the encrypted vault. Mode 0600 means only
+    // the owning user can read. No-op on non-Unix (NTFS ACLs handle this).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o600);
+        fs::set_permissions(&config_path, perms)
+            .map_err(|e| format!("cannot set config.json permissions: {e}"))?;
+    }
+
     Ok(())
 }
 
@@ -359,7 +370,22 @@ fn pull_model(tag: &str) -> bool {
 }
 
 fn install_ollama() -> Result<(), String> {
-    // Step 1: official Ollama installer (already confirmed by prompt_ollama_install)
+    // Double-prompt: a plain "install Ollama?" isn't enough — we're about to
+    // pipe a remote shell script into sh. Surface the exact URL and what will
+    // happen, then re-confirm.
+    println!();
+    println!("  \x1b[1;33mAbout to run:\x1b[0m");
+    println!("    sh -c \"curl -fsSL https://ollama.com/install.sh | sh\"");
+    println!();
+    println!("  This downloads and executes the official Ollama install script");
+    println!("  from ollama.com. It may require sudo.");
+    let confirm = prompt("  Proceed with installing Ollama? [y/N] ");
+    if !matches!(confirm.to_ascii_lowercase().as_str(), "y" | "yes") {
+        info("Ollama install cancelled. You can install it later from https://ollama.com");
+        return Err("Ollama install cancelled by user".to_string());
+    }
+
+    // Step 1: official Ollama installer
     let out = Command::new("sh")
         .args(["-c", "curl -fsSL https://ollama.com/install.sh | sh"])
         .status()
@@ -454,7 +480,11 @@ pub(crate) fn run_setup_wizard() {
         _ => {
             if let Some(env_key) = provider.key_env() {
                 info(&format!("Get your key at: {}", provider.docs_url()));
-                info(&format!("It will be stored in {} (not in plain text).", home.join("config.json").display()));
+                info(&format!(
+                    "It will be stored in {} (plaintext, chmod 0600). Migrate to the",
+                    home.join("config.json").display()
+                ));
+                info("encrypted vault later with `/vault setup` then `/vault store <type> <label>`.");
                 println!();
 
                 // Check if already in environment
@@ -470,7 +500,11 @@ pub(crate) fn run_setup_wizard() {
                 }
 
                 if api_key.is_empty() {
-                    api_key = prompt("  Paste your API key (input hidden in production): ");
+                    // No-echo input so the key never appears on screen or in scrollback.
+                    match rpassword::prompt_password("  Paste your API key (hidden): ") {
+                        Ok(k) => api_key = k.trim().to_string(),
+                        Err(e) => warn(&format!("Could not read key: {e}")),
+                    }
                 }
 
                 if api_key.is_empty() {
