@@ -144,7 +144,7 @@ impl LiveCli {
                     return "Usage: /history-archive search <query>".to_string();
                 }
                 if !self.qmd.is_enabled() {
-                    return "QMD is not available — install it at /opt/homebrew/bin/qmd or ensure it is on PATH.".to_string();
+                    return "QMD is not available — ensure `qmd` is installed and on your PATH.".to_string();
                 }
                 let results = self.qmd.search_collection("anvil-history", query, 5, 0.3);
                 if results.is_empty() {

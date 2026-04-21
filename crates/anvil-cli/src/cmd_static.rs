@@ -672,7 +672,7 @@ pub(crate) fn run_ssh_command(args: Option<&str>) -> String {
     let sub = parts.next().unwrap_or("list");
     match sub {
         "list" => {
-            let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+            let home = dirs_next::home_dir().unwrap_or_default();
             let config_path = home.join(".ssh").join("config");
             match fs::read_to_string(&config_path) {
                 Ok(cfg) => {
@@ -701,7 +701,7 @@ pub(crate) fn run_ssh_command(args: Option<&str>) -> String {
             format!("SSH tunnel\n  Host             {host}\n  Local port       {local}\n  Remote port      {remote}\n  Command          ssh -L {local}:localhost:{remote} {host} -N -f")
         }
         "keys" => {
-            let home = PathBuf::from(env::var("HOME").unwrap_or_default());
+            let home = dirs_next::home_dir().unwrap_or_default();
             let ssh_dir = home.join(".ssh");
             match fs::read_dir(&ssh_dir) {
                 Ok(entries) => {

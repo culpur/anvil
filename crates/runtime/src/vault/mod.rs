@@ -209,8 +209,10 @@ impl VaultManager {
     /// Return the default vault directory (`~/.anvil/vault/`).
     #[must_use]
     pub fn default_vault_dir() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(".anvil").join("vault")
+        dirs_next::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join(".anvil")
+            .join("vault")
     }
 
     /// Create a new manager pointing at `vault_dir`.

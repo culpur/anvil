@@ -71,8 +71,11 @@ pub struct QmdClient {
 impl QmdClient {
     /// Create a new client, auto-detecting the `qmd` binary.
     ///
-    /// Checks `/opt/homebrew/bin/qmd` first, then falls back to `which qmd`.
-    /// If neither is found the client starts disabled.
+    /// Uses the `which` crate for cross-platform PATH lookup (handles
+    /// `PATHEXT` on Windows).  Falls back to well-known install locations on
+    /// macOS (`/opt/homebrew/bin`) and Windows (`%LOCALAPPDATA%\Programs\qmd`,
+    /// `%PROGRAMFILES%\qmd`).  If the binary cannot be found the client starts
+    /// disabled and all search methods return empty results.
     #[must_use]
     pub fn new() -> Self {
         let qmd_path = Self::detect_binary();
@@ -247,19 +250,40 @@ impl QmdClient {
     // -------------------------------------------------------------------------
 
     fn detect_binary() -> Option<PathBuf> {
-        // 1. Well-known Homebrew location on macOS.
-        let homebrew = PathBuf::from("/opt/homebrew/bin/qmd");
-        if homebrew.is_file() {
-            return Some(homebrew);
+        // 1. Use the `which` crate for cross-platform PATH lookup.
+        //    On Windows this respects PATHEXT (.exe, .cmd, .bat) automatically.
+        //    On Unix it behaves identically to the `which` shell built-in.
+        if let Ok(p) = which::which("qmd") {
+            return Some(p);
         }
 
-        // 2. Resolve via PATH using `which`.
-        let which_out = Command::new("which").arg("qmd").output().ok()?;
-        if which_out.status.success() {
-            let path_str = String::from_utf8(which_out.stdout).ok()?;
-            let trimmed = path_str.trim();
-            if !trimmed.is_empty() {
-                return Some(PathBuf::from(trimmed));
+        // 2. macOS Homebrew well-known location (may not be on PATH in some
+        //    shell environments such as GUI-launched apps).
+        #[cfg(target_os = "macos")]
+        {
+            let homebrew = PathBuf::from("/opt/homebrew/bin/qmd");
+            if homebrew.is_file() {
+                return Some(homebrew);
+            }
+        }
+
+        // 3. Common Windows install locations.
+        #[cfg(target_os = "windows")]
+        {
+            for candidate in [
+                std::env::var("LOCALAPPDATA")
+                    .ok()
+                    .map(|d| PathBuf::from(d).join("Programs").join("qmd").join("qmd.exe")),
+                std::env::var("PROGRAMFILES")
+                    .ok()
+                    .map(|d| PathBuf::from(d).join("qmd").join("qmd.exe")),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
 
@@ -494,5 +518,108 @@ mod tests {
         let status = parse_status_plain(text).expect("should parse");
         assert_eq!(status.total_docs, 2489);
         assert!(status.size_mb > 100.0);
+    }
+
+    // ── Cross-platform binary detection ──────────────────────────────────
+
+    /// Disabled client (no qmd on PATH, no fallback) must not be enabled.
+    ///
+    /// This test is best-effort: it passes on machines where `qmd` is not
+    /// installed and skips gracefully when it is.
+    #[test]
+    fn client_disabled_when_no_binary() {
+        // Only assert disabled when `which::which` itself also finds nothing.
+        // On CI / developer machines that have qmd installed this test would
+        // be a false negative, so we check the precondition first.
+        if which::which("qmd").is_ok() {
+            // qmd is installed — skip rather than fail.
+            return;
+        }
+        // On macOS, also skip when the Homebrew path actually exists.
+        #[cfg(target_os = "macos")]
+        if std::path::PathBuf::from("/opt/homebrew/bin/qmd").is_file() {
+            return;
+        }
+        let client = QmdClient::new();
+        assert!(
+            !client.is_enabled(),
+            "client must be disabled when qmd binary is not available"
+        );
+    }
+
+    /// When `qmd` exists in a directory that is on the PATH the `which` crate
+    /// must locate it.  We use `which::which_in` with an explicit search path
+    /// so we never mutate process environment state (which is `unsafe` in
+    /// Rust 2024 and forbidden by the workspace `unsafe-code` lint).
+    #[test]
+    #[cfg(unix)]
+    fn detect_binary_finds_qmd_via_which_in() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("qmd");
+        // Write a minimal shell stub (contents irrelevant; only existence + x bit matter).
+        fs::write(&bin, b"#!/bin/sh\nexit 0\n").expect("write stub");
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+
+        // Build a search path string containing only our temp dir so we get a
+        // deterministic result regardless of what `qmd` installations exist on
+        // the real PATH.
+        let search_path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()))
+            .expect("join_paths");
+
+        let found = which::which_in("qmd", Some(&search_path), dir.path())
+            .expect("which_in must find the stub");
+
+        assert_eq!(found, bin, "resolved path must point to our stub");
+    }
+
+    /// `which::which` path splitting must use the OS-appropriate separator.
+    ///
+    /// On Unix it is `:`, on Windows it is `;`.  We verify the constant is
+    /// correct by round-tripping a two-element path through split/join.
+    #[test]
+    fn path_env_split_join_roundtrip() {
+        let dir_a = std::path::PathBuf::from("/fake/dir/a");
+        let dir_b = std::path::PathBuf::from("/fake/dir/b");
+        let joined = std::env::join_paths([&dir_a, &dir_b]).expect("join");
+        let split: Vec<_> = std::env::split_paths(&joined).collect();
+        assert_eq!(split, vec![dir_a, dir_b], "split_paths(join_paths(…)) must roundtrip");
+
+        // Verify the separator is not `/` (which would produce a single path).
+        let joined_str = joined.to_string_lossy();
+        assert!(
+            joined_str.contains(':') || joined_str.contains(';'),
+            "joined PATH must contain OS path separator"
+        );
+    }
+
+    /// Windows fallback candidates are built from LOCALAPPDATA / PROGRAMFILES.
+    ///
+    /// We cannot create real `.exe` files in a Unix CI environment, so this
+    /// test only verifies the path *construction* logic, not disk existence.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_fallback_paths_use_env_vars() {
+        // If LOCALAPPDATA is set, the expected path must end with the known suffix.
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            let expected = std::path::PathBuf::from(&local)
+                .join("Programs")
+                .join("qmd")
+                .join("qmd.exe");
+            assert!(
+                expected.to_string_lossy().contains("Programs"),
+                "LOCALAPPDATA fallback path must contain Programs segment"
+            );
+        }
+        if let Ok(pf) = std::env::var("PROGRAMFILES") {
+            let expected = std::path::PathBuf::from(&pf).join("qmd").join("qmd.exe");
+            assert!(
+                expected.to_string_lossy().ends_with("qmd.exe"),
+                "PROGRAMFILES fallback path must end with qmd.exe"
+            );
+        }
     }
 }

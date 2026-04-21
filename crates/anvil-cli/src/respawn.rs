@@ -34,8 +34,8 @@ fn anvil_home() -> PathBuf {
     if let Ok(config_home) = env::var("ANVIL_CONFIG_HOME") {
         return PathBuf::from(config_home);
     }
-    env::var("HOME")
-        .map_or_else(|_| env::current_dir().unwrap_or_default(), PathBuf::from)
+    dirs_next::home_dir()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_default())
         .join(".anvil")
 }
 
@@ -483,6 +483,11 @@ impl Drop for PidFileGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialise any test that touches the shared resume.json on disk so
+    /// parallel test threads don't stomp each other's writes.
+    static RESUME_MUTEX: Mutex<()> = Mutex::new(());
 
     // ── RespawnContext::capture ───────────────────────────────────────────
 
@@ -625,6 +630,7 @@ mod tests {
 
     #[test]
     fn resume_state_roundtrip() {
+        let _guard = RESUME_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         // We need a writable home.
         let home = anvil_home();
         let _ = fs::create_dir_all(&home);
@@ -649,6 +655,7 @@ mod tests {
 
     #[test]
     fn resume_state_stale_returns_none() {
+        let _guard = RESUME_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let home = anvil_home();
         let _ = fs::create_dir_all(&home);
         let resume_path = home.join("resume.json");

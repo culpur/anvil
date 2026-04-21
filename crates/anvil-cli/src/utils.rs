@@ -91,11 +91,15 @@ pub(crate) fn render_mode_unavailable(command: &str, label: &str) -> String {
 
 // ---------------------------------------------------------------------------
 /// Return `~/.anvil/` as a `PathBuf`.
+///
+/// On Windows, "home" resolves via `%USERPROFILE%`; on macOS/Linux via `$HOME`.
+/// If neither can be determined, falls back to the current working directory.
 pub(crate) fn anvil_home_dir() -> PathBuf {
     if let Ok(config_home) = std::env::var("ANVIL_CONFIG_HOME") {
         return PathBuf::from(config_home);
     }
-    std::env::var("HOME").map_or_else(|_| std::env::current_dir().unwrap_or_default(), PathBuf::from)
+    dirs_next::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
         .join(".anvil")
 }
 
@@ -898,12 +902,31 @@ pub(crate) fn git_status_ok(args: &[&str]) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// Returns `true` when `name` resolves to an executable on the current PATH.
+///
+/// Uses a cross-platform PATH walk: on Windows each directory entry is also
+/// checked with the extensions listed in `PATHEXT` (e.g. `.exe`, `.cmd`).
+/// Unlike the Unix-only `which` shell built-in, this works on every platform.
 pub(crate) fn command_exists(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    let path_os = match std::env::var_os("PATH") {
+        Some(v) => v,
+        None => return false,
+    };
+    for dir in std::env::split_paths(&path_os) {
+        if dir.join(name).is_file() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if let Ok(pathext) = std::env::var("PATHEXT") {
+            for ext in pathext.split(';') {
+                let candidate = dir.join(format!("{name}{ext}"));
+                if candidate.is_file() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Return the path to `~/.anvil/pinned.json`, creating `~/.anvil/` if needed.
@@ -916,12 +939,12 @@ pub(crate) fn anvil_pinned_path() -> Result<PathBuf, Box<dyn std::error::Error>>
     Ok(dir.join("pinned.json"))
 }
 
-/// Portable home directory lookup (no external crate needed).
+/// Portable home directory lookup — returns the platform home directory.
+///
+/// Uses `dirs_next::home_dir()` which resolves `$HOME` on Unix and
+/// `%USERPROFILE%` on Windows.
 pub(crate) fn dirs_next_home() -> Option<PathBuf> {
-    env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| env::var("USERPROFILE").ok().map(PathBuf::from))
+    dirs_next::home_dir()
 }
 
 /// Load pinned paths from `~/.anvil/pinned.json`.  Returns an empty vec if

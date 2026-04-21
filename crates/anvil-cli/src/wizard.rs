@@ -22,8 +22,8 @@ use crate::auth::run_anthropic_login;
 /// Returns true when `~/.anvil/config.json` already exists, meaning the user
 /// has already completed (or explicitly skipped) first-run setup.
 pub(crate) fn anvil_config_json_exists() -> bool {
-    let Ok(home) = std::env::var("HOME") else { return true };
-    PathBuf::from(home).join(".anvil").join("config.json").exists()
+    let Some(home) = dirs_next::home_dir() else { return true };
+    home.join(".anvil").join("config.json").exists()
 }
 
 /// Print a boxed banner line using a fixed-width inner area.
@@ -134,8 +134,9 @@ pub(crate) fn wizard_save_credential_plaintext(key: &str, value: &str) -> io::Re
 pub(crate) fn wizard_save_config(
     config: &serde_json::Map<String, serde_json::Value>,
 ) -> io::Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dir = PathBuf::from(home).join(".anvil");
+    let dir = dirs_next::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join(".anvil");
     fs::create_dir_all(&dir)?;
     let path = dir.join("config.json");
     let mut existing = if path.exists() {

@@ -465,9 +465,7 @@ fn load_failover_config() -> Option<FailoverConfig> {
 }
 
 fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(std::path::PathBuf::from)
+    dirs_next::home_dir()
 }
 
 fn unix_now_secs() -> u64 {

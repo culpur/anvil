@@ -356,17 +356,7 @@ const fn provider_has_credentials(cfg: &ProviderConfig) -> bool {
 // ---------------------------------------------------------------------------
 
 fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            #[cfg(target_os = "macos")]
-            {
-                std::env::var("USERPROFILE").ok().map(std::path::PathBuf::from)
-            }
-            #[cfg(not(target_os = "macos"))]
-            None
-        })
+    dirs_next::home_dir()
 }
 
 // ---------------------------------------------------------------------------

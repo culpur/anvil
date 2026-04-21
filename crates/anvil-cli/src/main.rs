@@ -3099,7 +3099,7 @@ impl LiveCli {
         };
 
         if !self.qmd.is_enabled() {
-            eprintln!("QMD is not available — install it at /opt/homebrew/bin/qmd or ensure it is on PATH.");
+            eprintln!("QMD is not available — ensure `qmd` is installed and on your PATH.");
             return;
         }
 
@@ -5890,6 +5890,8 @@ impl LiveCli {
                     has_unread: false,
                     branches: Vec::new(),
                     active_branch: 0,
+                    scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
+                    scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
                 };
                 self.share_manager.stop_share(&synthetic)
             }

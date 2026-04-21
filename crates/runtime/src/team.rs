@@ -352,8 +352,10 @@ pub struct TeamStatus {
 // ---------------------------------------------------------------------------
 
 fn default_store_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".anvil").join("teams.json")
+    dirs_next::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".anvil")
+        .join("teams.json")
 }
 
 #[allow(clippy::cast_possible_truncation)]

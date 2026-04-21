@@ -1549,11 +1549,11 @@ mod tests {
         write_fake_gh(&fake_bin, &gh_log, "https://example.com/pr/123");
 
         let previous_path = env::var_os("PATH");
-        let mut new_path = fake_bin.display().to_string();
-        if let Some(path) = &previous_path {
-            new_path.push(':');
-            new_path.push_str(&path.to_string_lossy());
-        }
+        let new_path = env::join_paths(
+            std::iter::once(fake_bin.clone())
+                .chain(env::split_paths(&previous_path.clone().unwrap_or_default())),
+        )
+        .expect("join paths");
         unsafe { env::set_var("PATH", &new_path); }
         let previous_safeuser = env::var_os("SAFEUSER");
         unsafe { env::set_var("SAFEUSER", "tester"); }

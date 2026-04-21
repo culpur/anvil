@@ -2416,8 +2416,13 @@ printf 'pwsh:%s' "$1"
             .arg(&script)
             .status()
             .expect("chmod");
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        unsafe { std::env::set_var("PATH", format!("{}:{}", dir.display(), original_path)); }
+        let original_path = std::env::var_os("PATH").unwrap_or_default();
+        let new_path = std::env::join_paths(
+            std::iter::once(dir.clone())
+                .chain(std::env::split_paths(&original_path)),
+        )
+        .expect("join paths");
+        unsafe { std::env::set_var("PATH", &new_path); }
 
         let result = execute_tool(
             "PowerShell",

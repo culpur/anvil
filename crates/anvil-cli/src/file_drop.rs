@@ -98,8 +98,7 @@ fn try_resolve_path(raw: &str) -> Option<PathBuf> {
     }
 
     let expanded = if let Some(rest) = s.strip_prefix("~/") {
-        let home = std::env::var("HOME").ok()?;
-        PathBuf::from(home).join(rest)
+        dirs_next::home_dir()?.join(rest)
     } else {
         PathBuf::from(s)
     };

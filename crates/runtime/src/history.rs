@@ -246,10 +246,7 @@ fn unix_secs() -> u64 {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+    dirs_next::home_dir()
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {

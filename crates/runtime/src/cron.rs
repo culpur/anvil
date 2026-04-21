@@ -348,8 +348,10 @@ fn unix_to_parts(ts: u64) -> DateTimeParts {
 // ---------------------------------------------------------------------------
 
 fn default_store_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".anvil").join("cron.json")
+    dirs_next::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".anvil")
+        .join("cron.json")
 }
 
 #[allow(clippy::cast_possible_truncation)]
