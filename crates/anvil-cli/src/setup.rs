@@ -288,8 +288,78 @@ fn prompt_ollama_install() -> bool {
     matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Curated Ollama model menu.
+///
+/// General-purpose models users can pick from after Ollama is installed.
+/// We deliberately exclude DeepSeek and Kimi. Origins are labeled so the
+/// user can make an informed choice about which weights to pull.
+const GENERAL_MODELS: &[(&str, &str, &str)] = &[
+    // (ollama-tag, approximate-size, label)
+    ("llama3.1:8b",      "~5 GB",  "Llama 3.1 8B (Meta) — recommended default"),
+    ("qwen3:8b",         "~5 GB",  "Qwen 3 8B (Alibaba)"),
+    ("mistral-nemo:12b", "~7 GB",  "Mistral Nemo 12B (Mistral AI)"),
+    ("gemma3:4b",        "~3 GB",  "Gemma 3 4B (Google) — low spec"),
+    ("phi4:14b",         "~9 GB",  "Phi 4 14B (Microsoft) — reasoning-focused"),
+    ("qwen3:14b",        "~9 GB",  "Qwen 3 14B (Alibaba) — larger variant"),
+    ("llama3.3:70b",     "~43 GB", "Llama 3.3 70B (Meta) — power user (64+ GB RAM)"),
+];
+
+/// Coding-specialized models. Same origin policy as general models.
+const CODING_MODELS: &[(&str, &str, &str)] = &[
+    ("qwen2.5-coder:7b",  "~5 GB",  "Qwen 2.5-Coder 7B (Alibaba) — recommended default"),
+    ("codellama:13b",     "~7 GB",  "Code Llama 13B (Meta)"),
+    ("codestral:22b",     "~13 GB", "Codestral 22B (Mistral AI)"),
+    ("qwen2.5-coder:14b", "~9 GB",  "Qwen 2.5-Coder 14B (Alibaba) — larger"),
+    ("codellama:7b",      "~4 GB",  "Code Llama 7B (Meta) — smallest footprint"),
+    ("qwen3-coder:30b",   "~18 GB", "Qwen 3-Coder 30B (Alibaba) — heaviest"),
+];
+
+/// Present the model menu and pull each model the user confirms.
+/// Zero network activity happens without an explicit "y" answer.
+fn prompt_model_menu<'a>(
+    kind: &str,
+    choices: &'a [(&'static str, &'static str, &'static str)],
+) -> Option<&'a str> {
+    println!();
+    println!("  Pick a {kind} model (or skip):");
+    for (idx, (_tag, size, label)) in choices.iter().enumerate() {
+        println!("    {}) {label:<55} [{size}]", idx + 1);
+    }
+    println!("    {}) Skip", choices.len() + 1);
+    let answer = prompt(&format!("  Your choice [1-{}]: ", choices.len() + 1));
+    let pick: Option<usize> = answer.trim().parse().ok();
+    match pick {
+        Some(n) if n >= 1 && n <= choices.len() => Some(choices[n - 1].0),
+        _ => None,
+    }
+}
+
+fn pull_model(tag: &str) -> bool {
+    let confirm = prompt(&format!(
+        "  Download {tag} now? (Ollama will pull several GB) [y/N] "
+    ));
+    if !matches!(confirm.to_ascii_lowercase().as_str(), "y" | "yes") {
+        info(&format!("Skipped {tag}. You can pull it later with `ollama pull {tag}`"));
+        return false;
+    }
+    info(&format!("Pulling {tag} (this may take a few minutes)..."));
+    let pull = Command::new("ollama").args(["pull", tag]).status();
+    match pull {
+        Ok(status) if status.success() => {
+            success(&format!("{tag} ready."));
+            true
+        }
+        _ => {
+            warn(&format!(
+                "Could not pull {tag} — you can retry later with `ollama pull {tag}`"
+            ));
+            false
+        }
+    }
+}
+
 fn install_ollama() -> Result<(), String> {
-    // The official installer script
+    // Step 1: official Ollama installer (already confirmed by prompt_ollama_install)
     let out = Command::new("sh")
         .args(["-c", "curl -fsSL https://ollama.com/install.sh | sh"])
         .status()
@@ -299,17 +369,17 @@ fn install_ollama() -> Result<(), String> {
         return Err("Ollama installer exited with a non-zero status".to_string());
     }
 
-    // Pull the default model
-    info("Pulling qwen2.5-coder:7b (this may take a few minutes)...");
-    let pull = Command::new("ollama")
-        .args(["pull", "qwen2.5-coder:7b"])
-        .status()
-        .map_err(|e| format!("ollama pull failed: {e}"))?;
+    // Step 2: offer the model menus. Each pull requires explicit confirmation.
+    println!();
+    println!("  \x1b[1mOllama is installed. Choose which models to download.\x1b[0m");
+    println!("  DeepSeek and Kimi are intentionally excluded.");
 
-    if !pull.success() {
-        warn("Could not pull qwen2.5-coder:7b — you can do it later with `ollama pull qwen2.5-coder:7b`");
-    } else {
-        success("qwen2.5-coder:7b model ready.");
+    if let Some(tag) = prompt_model_menu("general-purpose", GENERAL_MODELS) {
+        pull_model(tag);
+    }
+
+    if let Some(tag) = prompt_model_menu("coding-specialized", CODING_MODELS) {
+        pull_model(tag);
     }
 
     Ok(())
