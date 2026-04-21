@@ -17,6 +17,10 @@ pub use failover::{
 };
 pub use providers::anvil_provider::{AuthSource, AnvilApiClient, AnvilApiClient as ApiClient};
 pub use providers::ollama::OllamaClient;
+pub use providers::ollama_tool_parser::{
+    parse_ollama_text_for_tool_calls, silent_write_warning, ExtractedToolCall, OllamaParseResult,
+    ParseSource, SilentWriteDetection,
+};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     detect_provider_kind, max_tokens_for_model, provider_display_name, resolve_model_alias,

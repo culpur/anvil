@@ -7,6 +7,7 @@ use crate::types::{MessageRequest, MessageResponse};
 pub mod anvil_provider;
 pub mod common;
 pub mod ollama;
+pub mod ollama_tool_parser;
 pub mod openai_compat;
 
 pub type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ApiError>> + Send + 'a>>;

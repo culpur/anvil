@@ -19,6 +19,7 @@ use super::common::{
     self, extract_sse_data, next_sse_frame, read_env_non_empty,
     request_id_from_headers, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF, DEFAULT_MAX_RETRIES,
 };
+use super::ollama_tool_parser::{parse_ollama_text_for_tool_calls, silent_write_warning};
 use super::{Provider, ProviderFuture};
 
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
@@ -798,15 +799,48 @@ fn normalize_response(
             "chat completion response missing choices",
         ))?;
     let mut content = Vec::new();
-    if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
-        content.push(OutputContentBlock::Text { text });
-    }
+
+    let had_structured_tool_calls = !choice.message.tool_calls.is_empty();
+
+    // Capture the raw text content before consuming it.
+    let text_content = choice
+        .message
+        .content
+        .filter(|value| !value.is_empty());
+
+    // Primary path: structured OpenAI-format tool_calls.
     for tool_call in choice.message.tool_calls {
         content.push(OutputContentBlock::ToolUse {
             id: tool_call.id,
             name: tool_call.function.name,
             input: parse_tool_arguments(&tool_call.function.arguments),
         });
+    }
+
+    // Secondary path: scan text for inline tool calls (Ollama fallback).
+    if let Some(ref text) = text_content {
+        let parsed = parse_ollama_text_for_tool_calls(text, had_structured_tool_calls);
+
+        for (idx, call) in parsed.tool_calls.iter().enumerate() {
+            let id = format!("inline_tool_{}_{}", idx, call.name);
+            content.push(OutputContentBlock::ToolUse {
+                id,
+                name: call.name.clone(),
+                input: call.input.clone(),
+            });
+        }
+
+        // Fail-loud: append warning as a text block when the model claimed
+        // to write a file but no tool call was found anywhere.
+        if let Some(detection) = parsed.silent_write {
+            let warning = silent_write_warning(&detection);
+            content.push(OutputContentBlock::Text { text: warning });
+        }
+    }
+
+    // Text block goes first so context appears before tool results in chat.
+    if let Some(text) = text_content {
+        content.insert(0, OutputContentBlock::Text { text });
     }
 
     Ok(MessageResponse {

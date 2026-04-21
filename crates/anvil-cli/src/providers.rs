@@ -24,7 +24,8 @@ use api::{
     AnvilApiClient, AuthSource, ContentBlockDelta, ImageSource, ImageSourceKind,
     InputContentBlock, InputMessage, MessageRequest, OutputContentBlock, ProviderClient,
     ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice, ToolResultContentBlock,
-    detect_provider_kind, max_tokens_for_model, resolve_startup_auth_source,
+    detect_provider_kind, max_tokens_for_model, parse_ollama_text_for_tool_calls,
+    resolve_startup_auth_source, silent_write_warning,
 };
 use commands::slash_command_specs;
 use crate::format_tool::{
@@ -826,6 +827,74 @@ impl ApiClient for DefaultRuntimeClient {
                 }
             }
             } // close loop
+
+            // ── Ollama inline tool-call recovery ─────────────────────────────
+            // Ollama models that don't emit structured tool_calls chunks may
+            // embed tool intent as XML tags, JSON fences, or prose.  Scan the
+            // accumulated text and inject AssistantEvent::ToolUse events so
+            // the agentic loop can execute them.
+            {
+                let had_structured_tool_calls = events
+                    .iter()
+                    .any(|event| matches!(event, AssistantEvent::ToolUse { .. }));
+
+                let accumulated_text: String = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AssistantEvent::TextDelta(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+
+                if !accumulated_text.is_empty() {
+                    let parsed = parse_ollama_text_for_tool_calls(
+                        &accumulated_text,
+                        had_structured_tool_calls,
+                    );
+
+                    for (idx, call) in parsed.tool_calls.iter().enumerate() {
+                        let id = format!("ollama_inline_{}", idx);
+                        let input_str = call.input.to_string();
+                        let detail = tool_call_detail(&call.name, &input_str);
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::ToolCallActive {
+                                name: call.name.clone(),
+                                detail,
+                            });
+                        } else if self.emit_output {
+                            writeln!(out)
+                                .and_then(|()| {
+                                    render_tool_call_block(
+                                        &call.name,
+                                        &detail,
+                                        BlockState::Active,
+                                        out,
+                                    )
+                                })
+                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                        }
+                        events.push(AssistantEvent::ToolUse {
+                            id,
+                            name: call.name.clone(),
+                            input: input_str,
+                        });
+                    }
+
+                    // Fail-loud: warn the user if the model claimed to write a
+                    // file but no tool call was found anywhere in the response.
+                    if let Some(detection) = parsed.silent_write {
+                        let warning = silent_write_warning(&detection);
+                        if let Some(ref tx) = tui_tx {
+                            tx.send(TuiEvent::TextDelta(format!("\n\n{warning}")));
+                        } else if self.emit_output {
+                            writeln!(out, "\n{warning}")
+                                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                        }
+                        events.push(AssistantEvent::TextDelta(format!("\n\n{warning}")));
+                    }
+                }
+            }
+            // ── end Ollama inline tool-call recovery ──────────────────────────
 
             if !saw_stop
                 && events.iter().any(|event| {
