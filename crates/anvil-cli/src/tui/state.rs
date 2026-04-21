@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use runtime::{Rgb, Theme};
 
 use super::helpers::strip_ansi;
+use super::scrollback::{ScrollbackBuffer, ScrollbackState};
 
 // ─── Public event type ────────────────────────────────────────────────────────
 
@@ -237,6 +238,10 @@ pub(crate) struct Tab {
     pub branches: Vec<(String, Vec<LogEntry>)>,
     /// Active branch index (0 = main, 1+ = branches).
     pub active_branch: usize,
+    /// Ring buffer holding the last N rendered text lines for in-TUI scrollback.
+    pub scrollback: ScrollbackBuffer,
+    /// Current scrollback navigation state (None = live view).
+    pub scrollback_state: ScrollbackState,
 }
 
 impl Tab {
@@ -264,6 +269,8 @@ impl Tab {
             has_unread: false,
             branches: Vec::new(),
             active_branch: 0,
+            scrollback: ScrollbackBuffer::new(),
+            scrollback_state: ScrollbackState::live(),
         }
     }
 

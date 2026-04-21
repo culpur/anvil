@@ -11,6 +11,7 @@ pub mod configure_types;
 pub(super) mod completion;
 pub(super) mod helpers;
 pub(super) mod layout;
+pub(super) mod scrollback;
 pub(super) mod state;
 pub(super) mod widgets;
 pub(super) mod input_handler;
@@ -115,12 +116,6 @@ pub struct AnvilTui {
     pub(super) relay_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Update notification message (empty = no update available).
     pub(super) update_available: String,
-    /// Scroll offset for content area (0 = at bottom, >0 = scrolled up)
-    #[allow(dead_code)]
-    pub(super) content_scroll_offset: usize,
-    /// Whether auto-scroll is active (disabled when user scrolls up)
-    #[allow(dead_code)]
-    pub(super) content_auto_scroll: bool,
     /// Whether the agent panel is visible (toggled with Ctrl+A).
     pub agent_panel_visible: bool,
     /// Agent panel rows snapshot — refreshed by the caller each frame.
@@ -168,7 +163,19 @@ impl AnvilTui {
         let context_max = context_max_for_model(&model_str);
         let (git_branch, git_diff_stats, initial_added, initial_removed) = fetch_git_info();
 
-        let initial_tab = Tab::new(1, "main", model_str, session_id_str);
+        let mut initial_tab = Tab::new(1, "main", model_str, session_id_str);
+
+        // ── Platform selection/scrollback hint ───────────────────────────────
+        // Printed once at startup so users know the key conventions without
+        // reading documentation.
+        #[cfg(target_os = "macos")]
+        let sel_hint = "Hold Option and drag to select text";
+        #[cfg(not(target_os = "macos"))]
+        let sel_hint = "Hold Shift and drag to select text";
+
+        initial_tab.log.push(LogEntry::System(format!(
+            "{sel_hint}  •  PageUp to scroll back  •  End to return to live view"
+        )));
 
         Ok((
             Self {
@@ -190,8 +197,6 @@ impl AnvilTui {
                 thinking_enabled: false,
                 relay_tx: None,
                 update_available: String::new(),
-                content_scroll_offset: 0,
-                content_auto_scroll: true,
                 agent_panel_visible: true,
                 agent_rows: Vec::new(),
                 ctrl_c_empty_at: None,
@@ -341,6 +346,34 @@ impl AnvilTui {
     /// Draw the current state.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
     pub(super) fn draw(&mut self) -> io::Result<()> {
+        // ── Feed scrollback buffer ───────────────────────────────────────────
+        // Push newly-rendered log lines into the per-tab ring buffer so PageUp
+        // can reach them.  We approximate content_width using terminal width.
+        let approx_width: u16 = self.terminal.size().map(|s| s.width).unwrap_or(80);
+        {
+            let theme = self.theme.clone();
+            let tab = self.active_tab_mut();
+            // Build the full set of plain-text lines from log + pending.
+            let log_plain: Vec<String> = tab
+                .log
+                .iter()
+                .flat_map(|entry| {
+                    entry.to_lines(approx_width, &theme).into_iter().map(|line| {
+                        line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+                    })
+                })
+                .collect();
+            let pending_plain: Vec<String> =
+                tab.pending_text.lines().map(|l| strip_ansi(l)).collect();
+            let expected = log_plain.len() + pending_plain.len();
+            if tab.scrollback.len() < expected {
+                let already = tab.scrollback.len();
+                for line in log_plain.into_iter().chain(pending_plain).skip(already) {
+                    tab.scrollback.push(line);
+                }
+            }
+        }
+
         // Snapshot per-tab data from the active tab.
         let tab = self.active_tab();
         let log_snapshot = tab.log.clone();
@@ -350,6 +383,8 @@ impl AnvilTui {
         let input_text = tab.input.clone();
         let cursor_pos = tab.cursor;
         let scroll = tab.scroll;
+        let scrollback_state = tab.scrollback_state;
+        let scrollback_is_live = scrollback_state.is_live();
         let model = tab.model.clone();
         let session_id = tab.session_id.clone();
         let input_tokens = tab.input_tokens;
@@ -386,6 +421,19 @@ impl AnvilTui {
         let remote_url = self.remote_url.clone();
         let remote_code = self.remote_code.clone();
         let sl_config = self.status_line_config.clone();
+
+        // Pre-fetch scrollback lines for historical view before terminal.draw()
+        // takes ownership.  Estimate content height conservatively.
+        let approx_content_height =
+            self.terminal.size().map(|s| s.height.saturating_sub(6) as usize).unwrap_or(18);
+        let scrollback_view_lines: Option<Vec<String>> = if scrollback_is_live {
+            None
+        } else {
+            let tab = self.active_tab();
+            let anchor = scrollback_state.effective_anchor(&tab.scrollback, approx_content_height);
+            let (lines, _) = tab.scrollback.lines_in_range(anchor, approx_content_height + 4);
+            Some(lines)
+        };
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -563,11 +611,40 @@ impl AnvilTui {
                 0
             };
 
-            let visible_lines: Vec<Line<'static>> = all_lines
-                .into_iter()
-                .skip(effective_scroll)
-                .take(visible_height)
-                .collect();
+            // ── Scrollback / live view selection ─────────────────────────────
+            // When in historical view, replace content lines with the
+            // pre-fetched scrollback buffer lines and prepend the status banner.
+            let visible_lines: Vec<Line<'static>> =
+                if let Some(ref hist_lines) = scrollback_view_lines {
+                    let banner_pad = "─".repeat(width.saturating_sub(50));
+                    let banner_text = format!(
+                        "─── HISTORICAL VIEW  (Press End to return to live) {banner_pad}"
+                    );
+                    let banner = Line::from(Span::styled(
+                        banner_text,
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    let content_height = visible_height.saturating_sub(1);
+                    let mut lines: Vec<Line<'static>> = vec![banner];
+                    lines.extend(
+                        hist_lines
+                            .iter()
+                            .take(content_height)
+                            .map(|s| Line::from(Span::raw(s.clone()))),
+                    );
+                    while lines.len() < visible_height {
+                        lines.push(Line::from(""));
+                    }
+                    lines
+                } else {
+                    all_lines
+                        .into_iter()
+                        .skip(effective_scroll)
+                        .take(visible_height)
+                        .collect()
+                };
 
             // Clear the content area first.
             frame.render_widget(ratatui::widgets::Clear, content_area);
@@ -1129,21 +1206,48 @@ impl AnvilTui {
         }
     }
 
-    /// Auto-scroll to the bottom of the content.
+    /// Auto-scroll to the bottom of the content and return to live view.
     pub(super) fn scroll_to_bottom(&mut self) {
-        self.active_tab_mut().scroll = usize::MAX;
+        let tab = self.active_tab_mut();
+        tab.scroll = usize::MAX;
+        tab.scrollback_state = scrollback::ScrollbackState::live();
     }
 
     /// Scroll up by `n` lines.
+    ///
+    /// On the first call this transitions from live view into the in-TUI
+    /// scrollback buffer, which retains up to [`scrollback::DEFAULT_CAPACITY`]
+    /// lines.  Subsequent calls move the viewport further back.
     pub fn scroll_up(&mut self, n: usize) {
-        let s = self.active_tab_mut().scroll;
-        self.active_tab_mut().scroll = s.saturating_sub(n);
+        let tab = self.active_tab_mut();
+        let est_height = 20usize;
+        let new_state = tab.scrollback_state.page_up(&tab.scrollback, est_height, n);
+        tab.scrollback_state = new_state;
+        // Keep legacy scroll in sync.
+        tab.scroll = tab.scroll.saturating_sub(n);
     }
 
-    /// Scroll down by `n` lines (`draw()` clamps to max).
+    /// Scroll down by `n` lines.
+    ///
+    /// Automatically returns to live view when the bottom of the scrollback
+    /// buffer is reached.
     pub fn scroll_down(&mut self, n: usize) {
-        let s = self.active_tab_mut().scroll;
-        self.active_tab_mut().scroll = s.saturating_add(n);
+        let tab = self.active_tab_mut();
+        if !tab.scrollback_state.is_live() {
+            let est_height = 20usize;
+            let new_state = tab.scrollback_state.page_down(&tab.scrollback, est_height, n);
+            tab.scrollback_state = new_state;
+            if new_state.is_live() {
+                tab.scroll = usize::MAX;
+                return;
+            }
+        }
+        tab.scroll = tab.scroll.saturating_add(n);
+    }
+
+    /// Return immediately to live view (End key, or Ctrl+End).
+    pub(super) fn scroll_to_live(&mut self) {
+        self.scroll_to_bottom();
     }
 
     // ─── Public interface ────────────────────────────────────────────────────

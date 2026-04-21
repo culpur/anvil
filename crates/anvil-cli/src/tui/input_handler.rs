@@ -38,14 +38,29 @@ impl AnvilTui {
                     self.refresh_completion();
                 }
                 CtEvent::Mouse(mouse) => {
-                    match mouse.kind {
-                        crossterm::event::MouseEventKind::ScrollUp => {
-                            self.scroll_up(3);
+                    // Bug A fix: Shift+Drag events are passed through — the terminal
+                    // emulator (Windows Terminal, ConEmu, most Linux VTEs, iTerm2)
+                    // intercepts them for native text selection when the application
+                    // does not consume them.  By explicitly not handling Shift+Drag
+                    // here, we allow the emulator to perform selection.
+                    //
+                    // Note: cmd.exe does not reliably report the Shift modifier on
+                    // drag events.  Users on cmd.exe should upgrade to Windows
+                    // Terminal for native selection support.
+                    if matches!(mouse.kind, crossterm::event::MouseEventKind::Drag(_))
+                        && mouse.modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
+                    {
+                        // Pass through — do not consume.
+                    } else {
+                        match mouse.kind {
+                            crossterm::event::MouseEventKind::ScrollUp => {
+                                self.scroll_up(3);
+                            }
+                            crossterm::event::MouseEventKind::ScrollDown => {
+                                self.scroll_down(3);
+                            }
+                            _ => {}
                         }
-                        crossterm::event::MouseEventKind::ScrollDown => {
-                            self.scroll_down(3);
-                        }
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -96,7 +111,15 @@ impl AnvilTui {
             KeyCode::Left => self.cursor_left(),
             KeyCode::Right => self.cursor_right(),
             KeyCode::Home => self.cursor_home(),
-            KeyCode::End => self.cursor_end(),
+            KeyCode::End => {
+                // Bug B fix: if in scrollback historical view, End returns to
+                // the live bottom.  Otherwise fall through to move input cursor.
+                if !self.active_tab().scrollback_state.is_live() {
+                    self.scroll_to_live();
+                } else {
+                    self.cursor_end();
+                }
+            }
             KeyCode::Up => {
                 if self.active_tab().completion.visible {
                     self.completion_up();

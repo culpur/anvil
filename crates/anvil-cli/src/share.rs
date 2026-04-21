@@ -224,6 +224,8 @@ mod tests {
             has_unread: false,
             branches: Vec::new(),
             active_branch: 0,
+            scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
+            scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
         }
     }
 
