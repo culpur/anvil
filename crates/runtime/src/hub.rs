@@ -408,7 +408,7 @@ impl HubClient {
         let url = format!("{}/v1/hub/packages/{}/install", self.base_url, urlencoded(slug));
         let body = serde_json::json!({
             "version": version,
-            "client": "anvil/2.2.6",
+            "client": concat!("anvil/", env!("CARGO_PKG_VERSION")),
             "platform": platform,
         });
         let _ = self.http.post(&url).json(&body).send().await;
