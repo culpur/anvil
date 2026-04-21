@@ -1,0 +1,18 @@
+[targets]
+anvilhub_path = "/opt/projects/anvilhub/packages/web"
+anvilhub_pm2_process = "anvilhub-web"
+culpur_wp_page_id = 619
+culpur_wp_slug = "anvil"
+
+[pages]
+# Files to update (all references to the old version → new version)
+# Paths are relative to anvilhub_path (without leading slash)
+anvilhub_files = [
+  "src/lib/anvil-config.ts",
+  "src/app/page.tsx",
+  "src/app/about/page.tsx",
+]
+
+[wordpress]
+shortcode_file = "/var/www/html/wp-content/mu-plugins/culpur-hardening.php"
+shortcode_name = "anvil_version"
