@@ -4,7 +4,24 @@
 #   autoload -Uz compinit && compinit
 
 _anvil() {
-    local -a subcommands flags models providers output_formats permission_modes
+    local -a subcommands flags models providers output_formats permission_modes slash_commands
+
+    # Slash commands usable as the first argument (or inside the REPL).
+    # Keep in sync with the bash completion file.
+    slash_commands=(
+        /help /status /compact /cost /memory /init /diff /version /undo /doctor
+        /tokens /chat /vim /think /fast /changelog /sleep /focus /screenshot
+        /model /permissions /clear /context /pin /unpin /export /loop
+        /commit /commit-push-pr /pr /issue /ultraplan /teleport /debug-tool-call
+        /bughunter /mcp /plugins /session /resume /productivity /knowledge /daily
+        /hub /provider /login /failover /language /theme /agents /skills
+        /branch /worktree /git /db /docker /test /refactor /security /api /docs
+        /scaffold /perf /debug /voice /collab /env /lsp /notebook /k8s /iac
+        /pipeline /review /deps /mono /browser /notify /migrate /regex /ssh /logs
+        /markdown /snippets /finetune /webhook /plugin-sdk /remote-control
+        /history-archive /review-pr /configure /vault /web /qmd /search
+        /semantic-search /generate-image /tab /fork /share /audit /restart
+    )
 
     subcommands=(
         'check:Print installation health checklist'
@@ -53,7 +70,12 @@ _anvil() {
 
     case "$state" in
         cmd)
-            _describe 'subcommand' subcommands
+            # If user typed / as prefix, offer slash-command completions.
+            if [[ ${words[$CURRENT]} == /* ]]; then
+                compadd -a slash_commands
+            else
+                _describe 'subcommand' subcommands
+            fi
             ;;
         args)
             case "${words[1]}" in

@@ -197,9 +197,16 @@ if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_PRIMARY"; then
     fi
 fi
 
+# Track which source the checksum came from so the error message is accurate.
+if [[ "${SHA256_SOURCE}" == "primary" ]]; then
+    SHA256_SOURCE_URL="${SHA256_URL_PRIMARY}"
+else
+    SHA256_SOURCE_URL="${SHA256_URL_FALLBACK}"
+fi
+
 EXPECTED="$(awk '{print $1}' "$TMP_SHA256")"
 if [[ -z "${EXPECTED}" ]]; then
-    error "Checksum file at ${SHA256_URL} is empty or malformed."
+    error "Checksum file at ${SHA256_SOURCE_URL} is empty or malformed."
     exit 2
 fi
 

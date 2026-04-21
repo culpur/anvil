@@ -66,3 +66,22 @@ complete -c anvil -n '__fish_seen_subcommand_from model' -a '
 
 # ── Subcommand: resume — JSON session files ───────────────────────────────────
 complete -c anvil -n '__fish_seen_subcommand_from resume' -F -a '*.json'
+
+# ── Slash commands (first-positional if starting with /) ─────────────────────
+# Keep in sync with anvil.bash + anvil.zsh.
+set -l __anvil_slash_commands \
+    /help /status /compact /cost /memory /init /diff /version /undo /doctor \
+    /tokens /chat /vim /think /fast /changelog /sleep /focus /screenshot \
+    /model /permissions /clear /context /pin /unpin /export /loop \
+    /commit /commit-push-pr /pr /issue /ultraplan /teleport /debug-tool-call \
+    /bughunter /mcp /plugins /session /resume /productivity /knowledge /daily \
+    /hub /provider /login /failover /language /theme /agents /skills \
+    /branch /worktree /git /db /docker /test /refactor /security /api /docs \
+    /scaffold /perf /debug /voice /collab /env /lsp /notebook /k8s /iac \
+    /pipeline /review /deps /mono /browser /notify /migrate /regex /ssh /logs \
+    /markdown /snippets /finetune /webhook /plugin-sdk /remote-control \
+    /history-archive /review-pr /configure /vault /web /qmd /search \
+    /semantic-search /generate-image /tab /fork /share /audit /restart
+
+complete -c anvil -n '__fish_use_subcommand; and string match -qr "^/" -- (commandline -ct)' \
+    -a "$__anvil_slash_commands" -d 'Slash command'

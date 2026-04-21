@@ -152,9 +152,10 @@ try {
     }
 }
 
+$Sha256SourceUrl = if ($Sha256Source -eq 'primary') { $Sha256UrlPrimary } else { $Sha256UrlFallback }
 $Expected = (Get-Content $TmpSha256 -Raw).Trim().Split()[0].ToLower()
 if ([string]::IsNullOrWhiteSpace($Expected)) {
-    Write-Fail "Checksum file at $Sha256Url is empty or malformed."
+    Write-Fail "Checksum file at $Sha256SourceUrl is empty or malformed."
     Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
     exit 2
 }
