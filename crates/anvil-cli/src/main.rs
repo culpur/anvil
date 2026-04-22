@@ -56,7 +56,7 @@ use api::{
 };
 
 use commands::{
-    format_suggestions, format_suggestions_hint, handle_agents_slash_command,
+    format_suggestions_hint, handle_agents_slash_command,
     handle_plugins_slash_command, handle_skills_slash_command, match_triggers,
     render_command_detailed_help, AgentSubcommand, SkillSubcommand, SlashCommand,
     bundled_catalogue, compose_agent, format_traits_listing, ComposeError,
