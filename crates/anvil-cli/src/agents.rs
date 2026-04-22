@@ -589,14 +589,14 @@ mod tests {
 
     #[test]
     fn spawned_agent_inherits_process_sandbox_mode() {
-        use runtime::file_ops::{active_sandbox_mode, set_active_sandbox_mode, SandboxMode};
+        use runtime::{active_sandbox_mode, set_active_sandbox_mode, SandboxMode};
         use std::sync::{Arc, Mutex};
 
         // Set the "parent" mode to DangerFullAccess before spawning.
         set_active_sandbox_mode(SandboxMode::DangerFullAccess);
 
         let observed_mode: Arc<Mutex<Option<SandboxMode>>> = Arc::new(Mutex::new(None));
-        let observed_clone = Arc::clone(&observed_mode);
+        let observed_clone: Arc<Mutex<Option<SandboxMode>>> = Arc::clone(&observed_mode);
 
         let mut mgr = AgentManager::new();
         mgr.spawn(
