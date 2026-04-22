@@ -467,6 +467,19 @@ pub(crate) fn build_runtime_with_tui_slot(
     agent_manager: Arc<Mutex<agents::AgentManager>>,
 ) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
 {
+    // Sync the process-scoped sandbox mode so file_ops sees the mode we're
+    // about to run under. Called here (instead of once at CLI startup)
+    // because `/permissions <mode>` rebuilds the runtime — this keeps the
+    // file_ops sandbox in lockstep with whatever mode the user just picked.
+    runtime::set_active_sandbox_mode(match permission_mode {
+        PermissionMode::ReadOnly => runtime::SandboxMode::ReadOnly,
+        PermissionMode::WorkspaceWrite => runtime::SandboxMode::WorkspaceWrite,
+        PermissionMode::DangerFullAccess => runtime::SandboxMode::DangerFullAccess,
+        // Prompt / Allow are session-level prompt-gating modes, not
+        // boundary modes; they don't loosen the workspace sandbox.
+        PermissionMode::Prompt | PermissionMode::Allow => runtime::SandboxMode::WorkspaceWrite,
+    });
+
     let (feature_config, mut tool_registry, runtime_config) = build_runtime_plugin_state()?;
 
     // Build and initialize the MCP server manager, then inject discovered tools

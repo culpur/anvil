@@ -5,6 +5,7 @@ use std::cmp::Reverse;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Instant;
 
 use glob::Pattern;
@@ -15,6 +16,79 @@ use walkdir::WalkDir;
 // ---------------------------------------------------------------------------
 // Project-boundary sandbox
 // ---------------------------------------------------------------------------
+//
+// Permission model (mirrors Claude Code):
+//
+//   read-only          read ok, write denied (anywhere)
+//   workspace-write    read ok; write ok inside CWD project root + a few
+//                      always-allowed helper paths (/tmp, ~/.anvil, …),
+//                      denied outside
+//   danger-full-access read ok anywhere, write ok anywhere — equivalent to
+//                      `--dangerously-skip-permissions`; chosen by the user
+//                      when they explicitly need to operate outside the
+//                      project boundary
+//
+// The active mode is process-scoped and can be switched on the fly via the
+// `/permissions` slash command. Storing it in an AtomicU8 (rather than
+// passing a PermissionMode through every fn signature) matches the existing
+// env-var precedent and lets `/permissions <mode>` take effect on the next
+// tool call without rebuilding the runtime.
+
+/// Encoded representation of `PermissionMode` for the process-scoped atomic.
+/// Mirrors `crate::permissions::PermissionMode` but lives here so `file_ops`
+/// has no dependency on the permissions module (avoids a cycle).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Default until the CLI sets one — treat as WorkspaceWrite, the
+    /// historical behavior.
+    Unset = 0,
+    ReadOnly = 1,
+    WorkspaceWrite = 2,
+    DangerFullAccess = 3,
+}
+
+impl SandboxMode {
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::ReadOnly,
+            2 => Self::WorkspaceWrite,
+            3 => Self::DangerFullAccess,
+            _ => Self::Unset,
+        }
+    }
+}
+
+static ACTIVE_MODE: AtomicU8 = AtomicU8::new(SandboxMode::Unset as u8);
+
+/// Set the active sandbox mode for this process. Called by the CLI after
+/// arg parsing and by `/permissions <mode>` when the user switches modes.
+/// Takes effect on the next tool call — no runtime rebuild required.
+pub fn set_active_sandbox_mode(mode: SandboxMode) {
+    ACTIVE_MODE.store(mode as u8, Ordering::Relaxed);
+}
+
+/// Read the currently-active sandbox mode.
+#[must_use]
+pub fn active_sandbox_mode() -> SandboxMode {
+    SandboxMode::from_u8(ACTIVE_MODE.load(Ordering::Relaxed))
+}
+
+/// True when the active mode bypasses both read and write boundary checks.
+fn bypass_sandbox() -> bool {
+    // Env-var escape hatch for non-TUI callers (tests, one-shot `anvil prompt`
+    // before the CLI has set the mode). Keeps the historical behavior for
+    // scripts that rely on ANVIL_ALLOW_GLOBAL_WRITES.
+    if std::env::var("ANVIL_ALLOW_GLOBAL_WRITES").as_deref() == Ok("1") {
+        return true;
+    }
+    matches!(active_sandbox_mode(), SandboxMode::DangerFullAccess)
+}
+
+/// True when the active mode forbids all writes.
+fn writes_forbidden() -> bool {
+    matches!(active_sandbox_mode(), SandboxMode::ReadOnly)
+}
 
 /// Walk up from the current working directory looking for well-known project
 /// root markers. Returns the first ancestor that contains one of those markers,
@@ -99,14 +173,35 @@ fn is_always_allowed_write(path: &Path) -> bool {
 }
 
 /// Enforces the write sandbox. Returns an error when the write should be
-/// blocked. Respects `ANVIL_ALLOW_GLOBAL_WRITES=1` as a power-user bypass.
+/// blocked.
+///
+/// Modes:
+///   ReadOnly         → every write denied, regardless of path
+///   WorkspaceWrite   → writes inside the project root + always-allowed
+///                      paths are ok; anything else is denied
+///   DangerFullAccess → no path check at all (user has explicitly opted in)
+///   Unset            → behaves as WorkspaceWrite (historical default)
+///
+/// `ANVIL_ALLOW_GLOBAL_WRITES=1` still short-circuits for backward compat.
 fn enforce_write_boundary(path: &Path) -> io::Result<()> {
-    // Power-user escape hatch
-    if std::env::var("ANVIL_ALLOW_GLOBAL_WRITES").as_deref() == Ok("1") {
+    // ReadOnly: all writes denied, full stop.
+    if writes_forbidden() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "sandbox is in read-only mode; cannot write {}. \
+                 Run /permissions workspace-write or /permissions danger-full-access to enable writes.",
+                path.display()
+            ),
+        ));
+    }
+
+    // DangerFullAccess or env bypass: anywhere goes.
+    if bypass_sandbox() {
         return Ok(());
     }
 
-    // Paths that are always safe to write
+    // Paths that are always safe to write (temp dirs, ~/.anvil, …)
     if is_always_allowed_write(path) {
         return Ok(());
     }
@@ -119,7 +214,8 @@ fn enforce_write_boundary(path: &Path) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "path is outside project boundary: {} (root: {})",
+                "path is outside project boundary: {} (root: {}). \
+                 Run /permissions danger-full-access to allow writes outside the project.",
                 path.display(),
                 canonical_root.display()
             ),
@@ -131,7 +227,12 @@ fn enforce_write_boundary(path: &Path) -> io::Result<()> {
 
 /// Emits a warning to stderr when a read targets a path outside the project
 /// boundary. Never blocks the read — read-only access is considered safe.
+/// Silent in `danger-full-access` mode (the user has opted into full access
+/// and doesn't need to be nagged about every out-of-tree read).
 fn warn_if_outside_boundary(path: &Path) {
+    if bypass_sandbox() {
+        return;
+    }
     let root = find_project_root();
     let canonical_root = root.canonicalize().unwrap_or(root);
     if !is_within_boundary(path, &canonical_root) {
@@ -624,9 +725,37 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        edit_file, find_project_root, glob_search, grep_search, is_always_allowed_write,
-        is_within_boundary, read_file, write_file, GrepSearchInput,
+        active_sandbox_mode, edit_file, find_project_root, glob_search, grep_search,
+        is_always_allowed_write, is_within_boundary, read_file, set_active_sandbox_mode,
+        write_file, GrepSearchInput, SandboxMode,
     };
+
+    /// Scoped guard that sets the process-scoped sandbox mode AND holds
+    /// ENV_MUTEX for the duration of the test. Both are required to
+    /// serialise sandbox-mode tests against every other test that reads or
+    /// mutates process-global state.
+    struct SandboxModeGuard {
+        previous: SandboxMode,
+        _env_guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl SandboxModeGuard {
+        fn new(mode: SandboxMode) -> Self {
+            let env_guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+            let previous = active_sandbox_mode();
+            set_active_sandbox_mode(mode);
+            Self {
+                previous,
+                _env_guard: env_guard,
+            }
+        }
+    }
+
+    impl Drop for SandboxModeGuard {
+        fn drop(&mut self) {
+            set_active_sandbox_mode(self.previous);
+        }
+    }
 
     /// Global mutex to serialise tests that mutate process-level env vars.
     /// Rust's test harness runs tests in parallel; without this, one thread
@@ -643,6 +772,9 @@ mod tests {
 
     #[test]
     fn reads_and_writes_files() {
+        // Hold ENV_MUTEX so a parallel sandbox-mode test can't flip the
+        // atomic to ReadOnly while we're writing. See SandboxModeGuard.
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let path = temp_path("read-write.txt");
         let write_output = write_file(path.to_string_lossy().as_ref(), "one\ntwo\nthree")
             .expect("write should succeed");
@@ -655,6 +787,7 @@ mod tests {
 
     #[test]
     fn edits_file_contents() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let path = temp_path("edit.txt");
         write_file(path.to_string_lossy().as_ref(), "alpha beta alpha")
             .expect("initial write should succeed");
@@ -742,6 +875,7 @@ mod tests {
     #[test]
     fn write_to_tmp_succeeds_despite_boundary() {
         // Writes to temp dir must succeed even when project root is elsewhere.
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let path = temp_path("sandbox-write.txt");
         let result = write_file(path.to_string_lossy().as_ref(), "sandbox ok");
         assert!(result.is_ok(), "write to $TMPDIR should be allowed: {result:?}");
@@ -799,6 +933,7 @@ mod tests {
 
     #[test]
     fn globs_and_greps_directory() {
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         let dir = temp_path("search-dir");
         std::fs::create_dir_all(&dir).expect("directory should be created");
         let file = dir.join("demo.rs");
@@ -830,5 +965,131 @@ mod tests {
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
+    }
+
+    // ------------------------------------------------------------------
+    // Sandbox mode tests (Claude-Code-style permission modes)
+    // ------------------------------------------------------------------
+    //
+    // These tests share the process-global ACTIVE_MODE atomic and the
+    // ANVIL_ALLOW_GLOBAL_WRITES env var, so they acquire ENV_MUTEX to
+    // serialise with each other and with the existing env-var tests.
+
+    #[test]
+    fn read_only_mode_denies_all_writes() {
+        // SandboxModeGuard holds ENV_MUTEX internally; don't double-lock or
+        // we'll self-deadlock (the mutex is not recursive on macOS).
+        let _mode = SandboxModeGuard::new(SandboxMode::ReadOnly);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        // Even a path that would normally be allowed (under /tmp) must be
+        // denied in read-only mode. The whole point of read-only is that
+        // nothing mutates.
+        let tmp_file = temp_path("read-only-denies");
+        let err = write_file(tmp_file.to_string_lossy().as_ref(), "nope")
+            .expect_err("read-only must deny tmp writes");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("read-only"),
+            "error should explain the mode: {err}"
+        );
+    }
+
+    #[test]
+    fn danger_full_access_allows_writes_outside_project_boundary() {
+        // In DangerFullAccess, the workspace boundary is not enforced —
+        // equivalent to Claude Code's --dangerously-skip-permissions.
+        // Pick a path that is definitely outside any project root and not
+        // under /tmp, then confirm the sandbox does not fire (only the OS
+        // may still reject the actual write, which is fine).
+        let outside = std::path::Path::new("/var/anvil-sandbox-danger-test/secret.txt");
+
+        let _mode = SandboxModeGuard::new(SandboxMode::DangerFullAccess);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        let result = write_file(outside.to_string_lossy().as_ref(), "bypass");
+        if let Err(e) = result {
+            assert!(
+                !e.to_string().contains("path is outside project boundary"),
+                "DangerFullAccess must not trip the workspace boundary: {e}"
+            );
+        } else {
+            // The OS let it through; also acceptable.
+        }
+    }
+
+    #[test]
+    fn workspace_write_mode_denies_writes_outside_project_boundary() {
+        // WorkspaceWrite is the default "I'm working on a project" mode.
+        // It must still fire the boundary check — this is the exact
+        // protection the user is opting into.
+        let outside = std::path::Path::new("/var/anvil-sandbox-workspace-test/secret.txt");
+
+        let _mode = SandboxModeGuard::new(SandboxMode::WorkspaceWrite);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        let err = write_file(outside.to_string_lossy().as_ref(), "nope")
+            .expect_err("WorkspaceWrite must deny out-of-tree writes");
+        // The sandbox message is the authoritative signal; OS errors may
+        // also occur but the sandbox should fire first.
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("outside project boundary"),
+            "sandbox should have fired: {err}"
+        );
+    }
+
+    #[test]
+    fn mode_switch_takes_effect_on_next_call() {
+        // This exercises the on-the-fly switch semantic: same process,
+        // same write_file call path, different mode — behavior flips.
+        let outside =
+            std::path::Path::new("/var/anvil-sandbox-switch-test/file.txt");
+
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        // Start in WorkspaceWrite — blocked.
+        set_active_sandbox_mode(SandboxMode::WorkspaceWrite);
+        let blocked = write_file(outside.to_string_lossy().as_ref(), "a");
+        assert!(
+            blocked.as_ref().map_or_else(
+                |e| e.to_string().contains("outside project boundary"),
+                |_| false,
+            ),
+            "WorkspaceWrite must block outside path"
+        );
+
+        // Flip to DangerFullAccess — sandbox no longer fires.
+        set_active_sandbox_mode(SandboxMode::DangerFullAccess);
+        let allowed = write_file(outside.to_string_lossy().as_ref(), "b");
+        if let Err(e) = allowed {
+            assert!(
+                !e.to_string().contains("outside project boundary"),
+                "after flipping to DangerFullAccess, sandbox must not fire: {e}"
+            );
+        }
+
+        // Restore historical default for other tests.
+        set_active_sandbox_mode(SandboxMode::Unset);
+    }
+
+    #[test]
+    fn unset_mode_behaves_like_workspace_write() {
+        // The atomic starts at Unset; callers who never set a mode (tests,
+        // early CLI paths) should see the historical WorkspaceWrite
+        // behavior — otherwise we'd break every legacy caller.
+        let outside =
+            std::path::Path::new("/var/anvil-sandbox-unset-test/file.txt");
+
+        let _mode = SandboxModeGuard::new(SandboxMode::Unset);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        let err = write_file(outside.to_string_lossy().as_ref(), "a")
+            .expect_err("Unset must behave like WorkspaceWrite and block");
+        assert!(
+            err.to_string().contains("outside project boundary"),
+            "Unset sandbox should mirror WorkspaceWrite: {err}"
+        );
     }
 }
