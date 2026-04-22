@@ -27,6 +27,46 @@ pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
+/// Default per-request timeout: 10 minutes.  Generous enough for slow Ollama
+/// or local-LLM calls on consumer hardware; configurable via
+/// `ANVIL_API_TIMEOUT_MS` for tighter or looser requirements.
+pub const DEFAULT_API_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+
+/// Parse `ANVIL_API_TIMEOUT_MS` (plain integer milliseconds).
+///
+/// Returns the default when the variable is absent.  Returns the default and
+/// prints a warning when the variable is set but contains garbage — fail-loud,
+/// don't silently ignore the misconfiguration.
+pub fn resolve_api_timeout() -> Duration {
+    match std::env::var("ANVIL_API_TIMEOUT_MS") {
+        Err(_) => Duration::from_millis(DEFAULT_API_TIMEOUT_MS),
+        Ok(raw) => match raw.trim().parse::<u64>() {
+            Ok(ms) => Duration::from_millis(ms),
+            Err(_) => {
+                eprintln!(
+                    "[anvil] warning: ANVIL_API_TIMEOUT_MS={raw:?} is not a valid integer; \
+                     using default {}ms",
+                    DEFAULT_API_TIMEOUT_MS
+                );
+                Duration::from_millis(DEFAULT_API_TIMEOUT_MS)
+            }
+        },
+    }
+}
+
+/// Build a `reqwest::Client` with the configured per-request timeout.
+///
+/// The timeout is applied at the client level so it covers both the connect
+/// phase and response body reads.  For streaming, the connection stays open
+/// across chunks — the dead-air timeout in `MessageStream` handles the
+/// chunk-level guard independently.
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(resolve_api_timeout())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpenAiCompatConfig {
     pub provider_name: &'static str,
@@ -106,7 +146,7 @@ impl OpenAiCompatClient {
     #[must_use]
     pub fn new(api_key: impl Into<String>, config: OpenAiCompatConfig) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: build_http_client(),
             api_key: api_key.into(),
             base_url: read_base_url(config),
             max_retries: DEFAULT_MAX_RETRIES,
@@ -121,7 +161,7 @@ impl OpenAiCompatClient {
     #[must_use]
     pub fn new_no_auth(base_url: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: build_http_client(),
             api_key: String::new(),
             base_url: base_url.into(),
             max_retries: DEFAULT_MAX_RETRIES,
@@ -1359,6 +1399,53 @@ mod tests {
         assert!(
             msg.contains("stream stalled after 300000ms"),
             "unexpected display: {msg}"
+        );
+    }
+
+    // ─── Bug #84: configurable API request timeout ───────────────────────────
+
+    #[test]
+    fn resolve_api_timeout_returns_default_when_env_unset() {
+        use super::{resolve_api_timeout, DEFAULT_API_TIMEOUT_MS};
+        let _lock = env_lock();
+        let _restore = EnvRestore::set("ANVIL_API_TIMEOUT_MS", None);
+        let got = resolve_api_timeout();
+        assert_eq!(
+            got,
+            std::time::Duration::from_millis(DEFAULT_API_TIMEOUT_MS),
+            "default should be 10 minutes"
+        );
+    }
+
+    #[test]
+    fn resolve_api_timeout_reads_env_override() {
+        use super::resolve_api_timeout;
+        let _lock = env_lock();
+        let _restore = EnvRestore::set("ANVIL_API_TIMEOUT_MS", Some("5000"));
+        let got = resolve_api_timeout();
+        assert_eq!(got, std::time::Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn resolve_api_timeout_falls_back_on_garbage_value() {
+        use super::{resolve_api_timeout, DEFAULT_API_TIMEOUT_MS};
+        let _lock = env_lock();
+        let _restore = EnvRestore::set("ANVIL_API_TIMEOUT_MS", Some("garbage"));
+        let got = resolve_api_timeout();
+        assert_eq!(
+            got,
+            std::time::Duration::from_millis(DEFAULT_API_TIMEOUT_MS),
+            "garbage env var should fall back to default, not panic or accept"
+        );
+    }
+
+    #[test]
+    fn resolve_api_timeout_default_is_ten_minutes() {
+        use super::DEFAULT_API_TIMEOUT_MS;
+        assert_eq!(
+            DEFAULT_API_TIMEOUT_MS,
+            600_000,
+            "default API timeout must be 10 minutes (600_000 ms)"
         );
     }
 }
