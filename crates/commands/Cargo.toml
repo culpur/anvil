@@ -12,3 +12,5 @@ workspace = true
 plugins = { path = "../plugins" }
 runtime = { path = "../runtime" }
 serde_json.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true

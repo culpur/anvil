@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::normalize_optional_args;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum DefinitionSource {
+pub enum DefinitionSource {
     ProjectCodex,
     ProjectAnvil,
     UserCodexHome,
@@ -16,7 +16,7 @@ pub(crate) enum DefinitionSource {
 }
 
 impl DefinitionSource {
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::ProjectCodex => "Project (.codex)",
             Self::ProjectAnvil => "Project (.anvil)",
@@ -39,22 +39,26 @@ pub(crate) struct AgentSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SkillSummary {
-    pub(crate) name: String,
-    pub(crate) description: Option<String>,
-    pub(crate) source: DefinitionSource,
-    pub(crate) shadowed_by: Option<DefinitionSource>,
-    pub(crate) origin: SkillOrigin,
+pub struct SkillSummary {
+    pub name: String,
+    pub description: Option<String>,
+    /// Keywords declared in the skill's YAML front-matter `triggers:` list.
+    /// Skills without a `triggers:` key default to an empty vec and behave
+    /// exactly as before this feature was added (explicit-invoke only).
+    pub triggers: Vec<String>,
+    pub source: DefinitionSource,
+    pub shadowed_by: Option<DefinitionSource>,
+    pub origin: SkillOrigin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SkillOrigin {
+pub enum SkillOrigin {
     SkillsDir,
     LegacyCommandsDir,
 }
 
 impl SkillOrigin {
-    pub(crate) const fn detail_label(self) -> Option<&'static str> {
+    pub const fn detail_label(self) -> Option<&'static str> {
         match self {
             Self::SkillsDir => None,
             Self::LegacyCommandsDir => Some("legacy /commands"),
@@ -106,6 +110,9 @@ pub fn handle_skills_slash_command(args: Option<&str>, cwd: &Path) -> std::io::R
                 skills.push(SkillSummary {
                     name: def.name.to_string(),
                     description: Some(def.description.to_string()),
+                    // Static bundled skill definitions listed here have no
+                    // trigger keywords — they are explicit-invoke only.
+                    triggers: vec![],
                     source: DefinitionSource::Bundled,
                     shadowed_by,
                     origin: SkillOrigin::SkillsDir,
@@ -359,11 +366,12 @@ pub(crate) fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec
                         continue;
                     }
                     let contents = fs::read_to_string(skill_path)?;
-                    let (name, description) = parse_skill_frontmatter(&contents);
+                    let fm = parse_skill_frontmatter(&contents);
                     root_skills.push(SkillSummary {
-                        name: name
+                        name: fm.name
                             .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string()),
-                        description,
+                        description: fm.description,
+                        triggers: fm.triggers,
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
@@ -391,10 +399,11 @@ pub(crate) fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec
                         || entry.file_name().to_string_lossy().to_string(),
                         |stem| stem.to_string_lossy().to_string(),
                     );
-                    let (name, description) = parse_skill_frontmatter(&contents);
+                    let fm = parse_skill_frontmatter(&contents);
                     root_skills.push(SkillSummary {
-                        name: name.unwrap_or(fallback_name),
-                        description,
+                        name: fm.name.unwrap_or(fallback_name),
+                        description: fm.description,
+                        triggers: fm.triggers,
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
@@ -442,19 +451,49 @@ fn parse_toml_string(contents: &str, key: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn parse_skill_frontmatter(contents: &str) -> (Option<String>, Option<String>) {
+/// Parsed output of a skill's YAML front-matter block.
+pub(crate) struct SkillFrontmatter {
+    pub(crate) name: Option<String>,
+    pub(crate) description: Option<String>,
+    /// Trigger keywords declared with `triggers: [word, "phrase"]`.
+    /// Empty when the key is absent, preserving backwards compatibility.
+    pub(crate) triggers: Vec<String>,
+}
+
+/// Parse the YAML front-matter block at the top of a skill markdown file.
+///
+/// Only the `name:`, `description:`, and `triggers:` keys are extracted;
+/// all other keys are ignored.  Skills without a leading `---` fence or
+/// without specific keys return empty/`None` defaults — they are valid and
+/// continue to behave exactly as before (explicit `/skill-name` only).
+pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
     let mut lines = contents.lines();
     if lines.next().map(str::trim) != Some("---") {
-        return (None, None);
+        return SkillFrontmatter {
+            name: None,
+            description: None,
+            triggers: vec![],
+        };
     }
 
     let mut name = None;
     let mut description = None;
+    let mut triggers: Vec<String> = vec![];
+    // When Some we are inside a `triggers:` block list.
+    let mut in_triggers = false;
+
     for line in lines {
         let trimmed = line.trim();
         if trimmed == "---" {
             break;
         }
+
+        // Detect whether this line starts a new top-level key (not indented).
+        let is_new_key = !line.starts_with(' ') && !line.starts_with('\t');
+        if is_new_key {
+            in_triggers = false;
+        }
+
         if let Some(value) = trimmed.strip_prefix("name:") {
             let value = unquote_frontmatter_value(value.trim());
             if !value.is_empty() {
@@ -467,10 +506,42 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> (Option<String>, Option
             if !value.is_empty() {
                 description = Some(value);
             }
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("triggers:") {
+            // Inline list form: `triggers: [audit, "security review"]`
+            let rest = rest.trim();
+            if rest.starts_with('[') {
+                let inner = rest
+                    .trim_start_matches('[')
+                    .trim_end_matches(']');
+                for item in inner.split(',') {
+                    let kw = unquote_frontmatter_value(item.trim());
+                    if !kw.is_empty() {
+                        triggers.push(kw.to_ascii_lowercase());
+                    }
+                }
+            } else if rest.is_empty() {
+                // Block list form: subsequent indented `- item` lines
+                in_triggers = true;
+            }
+            continue;
+        }
+        if in_triggers {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let kw = unquote_frontmatter_value(item.trim());
+                if !kw.is_empty() {
+                    triggers.push(kw.to_ascii_lowercase());
+                }
+            }
         }
     }
 
-    (name, description)
+    SkillFrontmatter {
+        name,
+        description,
+        triggers,
+    }
 }
 
 fn unquote_frontmatter_value(value: &str) -> String {

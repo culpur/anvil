@@ -5,10 +5,17 @@ pub mod agents;
 pub mod git;
 pub mod handlers;
 pub mod plugins;
+pub mod skill_triggers;
 pub mod specs;
 pub mod subcommands;
+pub mod traits;
 
 pub use agents::{handle_agents_slash_command, handle_skills_slash_command};
+pub use skill_triggers::{match_triggers, TriggerMatch};
+pub use traits::{
+    bundled_catalogue, compose_agent, compose_agent_with_options, ComposeError, ComposeOptions,
+    ComposedAgent, Trait, TraitCatalogue,
+};
 pub use git::{
     detect_default_branch, handle_branch_slash_command, handle_commit_push_pr_slash_command,
     handle_commit_slash_command, handle_worktree_slash_command, CommitPushPrRequest,
@@ -1360,9 +1367,10 @@ mod tests {
     #[test]
     fn parses_quoted_skill_frontmatter_values() {
         let contents = "---\nname: \"hud\"\ndescription: 'Quoted description'\n---\n";
-        let (name, description) = super::agents::parse_skill_frontmatter(contents);
-        assert_eq!(name.as_deref(), Some("hud"));
-        assert_eq!(description.as_deref(), Some("Quoted description"));
+        let fm = super::agents::parse_skill_frontmatter(contents);
+        assert_eq!(fm.name.as_deref(), Some("hud"));
+        assert_eq!(fm.description.as_deref(), Some("Quoted description"));
+        assert!(fm.triggers.is_empty());
     }
 
     #[test]
