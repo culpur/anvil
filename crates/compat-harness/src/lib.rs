@@ -1,3 +1,5 @@
+pub mod skill_evals;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
