@@ -151,7 +151,7 @@ fn render_plugin_install_report(plugin_id: &str, plugin: Option<&PluginSummary>)
 }
 
 fn resolve_plugin_target(
-    manager: &PluginManager,
+    manager: &mut PluginManager,
     target: &str,
 ) -> Result<PluginSummary, PluginError> {
     let mut matches = manager

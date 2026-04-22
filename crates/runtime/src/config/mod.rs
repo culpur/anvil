@@ -3,6 +3,7 @@ pub mod hooks;
 pub mod lsp;
 pub mod mcp;
 pub mod oauth;
+pub mod output_style;
 pub mod plugins;
 pub mod sandbox;
 
@@ -30,6 +31,7 @@ pub use mcp::{
     McpTransport, McpWebSocketServerConfig, ScopedMcpServerConfig,
 };
 pub use oauth::OAuthConfig;
+pub use output_style::OutputStyle;
 pub use plugins::RuntimePluginConfig;
 
 pub const ANVIL_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
@@ -71,6 +73,7 @@ pub struct RuntimeFeatureConfig {
     model: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
     sandbox: SandboxConfig,
+    output_style: OutputStyle,
 }
 
 #[derive(Debug)]
@@ -180,6 +183,7 @@ impl ConfigLoader {
             model: parse_optional_model(&merged_value),
             permission_mode: parse_optional_permission_mode(&merged_value)?,
             sandbox: parse_optional_sandbox_config(&merged_value)?,
+            output_style: parse_optional_output_style(&merged_value),
         };
 
         Ok(RuntimeConfig {
@@ -264,6 +268,11 @@ impl RuntimeConfig {
     pub const fn sandbox(&self) -> &SandboxConfig {
         &self.feature_config.sandbox
     }
+
+    #[must_use]
+    pub const fn output_style(&self) -> OutputStyle {
+        self.feature_config.output_style
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -318,6 +327,11 @@ impl RuntimeFeatureConfig {
     pub const fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
     }
+
+    #[must_use]
+    pub const fn output_style(&self) -> OutputStyle {
+        self.output_style
+    }
 }
 
 #[must_use]
@@ -326,6 +340,14 @@ pub fn default_config_home() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".anvil")))
         .unwrap_or_else(|| PathBuf::from(".anvil"))
+}
+
+fn parse_optional_output_style(root: &JsonValue) -> OutputStyle {
+    root.as_object()
+        .and_then(|object| object.get("output_style"))
+        .and_then(JsonValue::as_str)
+        .and_then(OutputStyle::from_str)
+        .unwrap_or_default()
 }
 
 fn parse_optional_model(root: &JsonValue) -> Option<String> {
@@ -731,6 +753,52 @@ mod tests {
         assert!(error
             .to_string()
             .contains("mcpServers.broken: missing string field url"));
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn parses_output_style_from_settings() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(cwd.join(".anvil")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        // Condensed explicitly set.
+        fs::write(
+            home.join("settings.json"),
+            r#"{"output_style": "condensed"}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert_eq!(loaded.output_style(), super::OutputStyle::Condensed);
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn defaults_output_style_to_precise_when_absent() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(cwd.join(".anvil")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        // No output_style key at all.
+        fs::write(
+            home.join("settings.json"),
+            r#"{"model": "opus"}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load");
+        assert_eq!(loaded.output_style(), super::OutputStyle::Precise);
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

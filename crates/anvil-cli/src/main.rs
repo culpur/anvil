@@ -24,6 +24,7 @@ mod tui;
 mod check;
 mod setup;
 mod uninstall;
+mod skill_eval;
 mod update;
 mod upgrade;
 mod utils;
@@ -32,7 +33,7 @@ mod wizard;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
-pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report};
+pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
 
 pub(crate) use configure::config_data_to_json;
 
@@ -55,8 +56,10 @@ use api::{
 };
 
 use commands::{
-    handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
-    render_command_detailed_help, SlashCommand,
+    format_suggestions, format_suggestions_hint, handle_agents_slash_command,
+    handle_plugins_slash_command, handle_skills_slash_command, match_triggers,
+    render_command_detailed_help, AgentSubcommand, SkillSubcommand, SlashCommand,
+    bundled_catalogue, compose_agent, format_traits_listing, ComposeError,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use render::{
@@ -68,7 +71,7 @@ use runtime::{
     render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
     ConfigLoader, ConversationRuntime, CronDaemon,
-    HistoryArchiver,
+    HistoryArchiver, OutputStyle,
     PermissionMode, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
@@ -259,6 +262,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Help => print_help(),
         CliAction::Continue => run_continue()?,
         CliAction::Sessions => print_sessions_standalone()?,
+        CliAction::SkillEval { args } => {
+            skill_eval::run_skill_eval(args)?;
+        }
     }
     Ok(())
 }
@@ -315,6 +321,10 @@ enum CliAction {
     Upgrade,
     /// Uninstall Anvil binary and optionally ~/.anvil/.
     Uninstall,
+    /// Run a three-arm skill evaluation.
+    SkillEval {
+        args: skill_eval::SkillEvalArgs,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,6 +519,15 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "skills" => Ok(CliAction::Skills {
             args: join_optional_args(&rest[1..]),
         }),
+        "skill-eval" => {
+            let sub_args = rest[1..].to_vec();
+            if sub_args.iter().any(|a| a == "--help" || a == "-h") {
+                print!("{}", skill_eval::USAGE);
+                std::process::exit(0);
+            }
+            let parsed = skill_eval::parse_skill_eval_args(&sub_args)?;
+            Ok(CliAction::SkillEval { args: parsed })
+        }
         "system-prompt" => parse_system_prompt_args(&rest[1..]),
         // `anvil model <name>` — shorthand for `anvil --model <name>` (starts REPL)
         "model" => {
@@ -587,6 +606,13 @@ fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
         Some(SlashCommand::Help { .. }) => Ok(CliAction::Help),
         Some(SlashCommand::Agents { args }) => Ok(CliAction::Agents { args }),
         Some(SlashCommand::Skills { args }) => Ok(CliAction::Skills { args }),
+        Some(SlashCommand::Agent {
+            subcommand: AgentSubcommand::Traits,
+        }) => {
+            let catalogue = bundled_catalogue();
+            println!("{}", format_traits_listing(catalogue));
+            std::process::exit(0);
+        }
         Some(command) => Err(format_direct_slash_command_error(
             match &command {
                 SlashCommand::Unknown(name) => format!("/{name}"),
@@ -636,7 +662,7 @@ fn current_tool_registry() -> Result<GlobalToolRegistry, String> {
     let cwd = env::current_dir().map_err(|error| error.to_string())?;
     let loader = ConfigLoader::default_for(&cwd);
     let runtime_config = loader.load().map_err(|error| error.to_string())?;
-    let plugin_manager = build_plugin_manager(&cwd, &loader, &runtime_config);
+    let mut plugin_manager = build_plugin_manager(&cwd, &loader, &runtime_config);
     let plugin_tools = plugin_manager
         .aggregated_tools()
         .map_err(|error| error.to_string())?;
@@ -1341,6 +1367,9 @@ fn run_resume_command(
         | SlashCommand::Share { .. }
         | SlashCommand::Audit
         | SlashCommand::Restart { .. }
+        | SlashCommand::Agent { .. }
+        | SlashCommand::OutputStyle { .. }
+        | SlashCommand::Skill { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2805,6 +2834,8 @@ struct LiveCli {
     thinking_enabled: bool,
     /// Fast mode: lower `max_tokens` and prepend a concise-response instruction.
     fast_mode: bool,
+    /// Output style: Precise (default) or Condensed (prepends terse skill body).
+    output_style: OutputStyle,
     /// Sub-agent manager — tracks spawned agents and their status.
     /// Wrapped in Arc<Mutex<>> so it can be shared with `CliToolExecutor`.
     agent_manager: Arc<Mutex<agents::AgentManager>>,
@@ -2872,6 +2903,7 @@ impl LiveCli {
                     .unwrap_or(false)
             },
             fast_mode: false,
+            output_style: load_output_style(),
             relay_session: None,
             relay_event_tx: None,
             relay_input_rx: None,
@@ -3053,6 +3085,20 @@ impl LiveCli {
                     if let Some(msg) = self.maybe_auto_compact() {
                         tx.send(TuiEvent::System(msg));
                     }
+                    // Emit skill suggestion hint as a TUI system message (non-blocking).
+                    {
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let roots = discover_skill_roots(&cwd);
+                        if let Ok(skills) = load_skills_from_roots(&roots) {
+                            let skills_with_triggers: Vec<&commands::agents::SkillSummary> =
+                                skills.iter().filter(|s| !s.triggers.is_empty()).collect();
+                            let matches = match_triggers(input, &skills_with_triggers);
+                            if let Some(hint) = format_suggestions_hint(&matches) {
+                                tx.send(TuiEvent::System(hint));
+                            }
+                        }
+                    }
                     Ok(())
                 }
                 Err(error) => {
@@ -3090,6 +3136,8 @@ impl LiveCli {
                     if let Some(msg) = self.maybe_auto_compact() {
                         println!("{msg}");
                     }
+                    // Emit skill suggestion hint as turn-end footer (non-blocking).
+                    self.maybe_emit_skill_hint(input);
                     Ok(())
                 }
                 Err(error) => {
@@ -3469,6 +3517,10 @@ impl LiveCli {
                 let changed = self.set_permissions(mode)?;
                 (format!("Permissions: {}", self.permission_mode.as_str()), changed)
             }
+            SlashCommand::OutputStyle { style } => {
+                let msg = self.set_output_style(style).unwrap_or_else(|e| e.to_string());
+                (msg, false)
+            }
             SlashCommand::Clear { confirm } => {
                 let changed = self.clear_session(confirm)?;
                 (if changed { "Session cleared.".to_string() } else { "Use /clear --confirm to clear.".to_string() }, changed)
@@ -3827,6 +3879,105 @@ impl LiveCli {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 ("Focus mode is handled by the TUI event loop.".to_string(), false)
             }
+            SlashCommand::Agent { subcommand } => {
+                // For the TUI path, /agent traits is a simple listing.
+                // /agent compose runs a full model turn via rebuild-run-restore.
+                match subcommand {
+                    AgentSubcommand::Traits => {
+                        let catalogue = bundled_catalogue();
+                        (format_traits_listing(catalogue), false)
+                    }
+                    AgentSubcommand::Compose { traits, task } => {
+                        if traits.is_empty() {
+                            return Ok(("No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\"".to_string(), false));
+                        }
+                        if task.trim().is_empty() {
+                            return Ok((format!("No task provided. Usage: /agent compose {} \"<task description>\"", traits.join(",")), false));
+                        }
+                        let catalogue = bundled_catalogue();
+                        let trait_refs: Vec<&str> = traits.iter().map(String::as_str).collect();
+                        match compose_agent(catalogue, &trait_refs, &task) {
+                            Err(ComposeError::EmptyTraits) => ("No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\"".to_string(), false),
+                            Err(ComposeError::UnknownTrait(name)) => (format!("Unknown trait: {name}. Run /agent traits to list available traits."), false),
+                            Err(ComposeError::ConflictingTraits { dim, a, b }) => (
+                                format!(
+                                    "Conflicting traits in dimension \"{dim}\": \"{a}\" and \"{b}\" cannot be combined.\nRemove one, or use traits from different dimensions.\n(A future version will add --allow-conflicts.)"
+                                ),
+                                false,
+                            ),
+                            Err(ComposeError::ParseError(msg)) => (format!("Trait catalogue parse error: {msg}"), false),
+                            Ok(composed) => {
+                                let header = format!("Composing agent with traits: {}", composed.traits.join(", "));
+                                let original_system_prompt = self.system_prompt.clone();
+                                let mut composed_system_prompt = vec![composed.prompt.clone()];
+                                composed_system_prompt.extend(original_system_prompt.iter().cloned());
+
+                                let rebuild = build_runtime_with_tui_slot(
+                                    self.runtime.session().clone(),
+                                    self.model.clone(),
+                                    composed_system_prompt,
+                                    true,
+                                    true,
+                                    self.allowed_tools.clone(),
+                                    self.permission_mode,
+                                    None,
+                                    self.tui_slot.clone(),
+                                    self.agent_manager.clone(),
+                                );
+                                match rebuild {
+                                    Err(e) => (format!("agent compose: failed to build runtime: {e}"), false),
+                                    Ok(new_runtime) => {
+                                        self.runtime = new_runtime;
+                                        let turn_result = self.run_turn(&task);
+                                        let restore = build_runtime_with_tui_slot(
+                                            self.runtime.session().clone(),
+                                            self.model.clone(),
+                                            original_system_prompt.clone(),
+                                            true,
+                                            true,
+                                            self.allowed_tools.clone(),
+                                            self.permission_mode,
+                                            None,
+                                            self.tui_slot.clone(),
+                                            self.agent_manager.clone(),
+                                        );
+                                        self.system_prompt = original_system_prompt;
+                                        if let Ok(restored) = restore {
+                                            self.runtime = restored;
+                                        }
+                                        if let Err(e) = turn_result {
+                                            (format!("{header}\nagent compose turn failed: {e}"), false)
+                                        } else {
+                                            (header, false)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            SlashCommand::Skill { subcommand } => {
+                // `/skill load <name>` — prepend skill body to next turn's system prompt.
+                match subcommand {
+                    SkillSubcommand::Load { name } => {
+                        let cwd = env::current_dir().unwrap_or_default();
+                        let output = handle_skills_slash_command(Some(&format!("load {name}")), &cwd);
+                        (output.unwrap_or_else(|e| format!("skill load: {e}")), false)
+                    }
+                    SkillSubcommand::List => {
+                        let cwd = env::current_dir().unwrap_or_default();
+                        let output = handle_skills_slash_command(Some("list"), &cwd);
+                        (output.unwrap_or_else(|e| format!("skill list: {e}")), false)
+                    }
+                    SkillSubcommand::Suggest { prompt } => {
+                        let cwd = env::current_dir().unwrap_or_default();
+                        let arg = prompt.as_deref().map(|p| format!("suggest {p}")).unwrap_or_else(|| "suggest".to_string());
+                        let output = handle_skills_slash_command(Some(&arg), &cwd);
+                        (output.unwrap_or_else(|e| format!("skill suggest: {e}")), false)
+                    }
+                }
+            }
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
@@ -3883,6 +4034,62 @@ impl LiveCli {
     // -----------------------------------------------------------------
     // New slash command implementations
     // -----------------------------------------------------------------
+
+    /// `/output-style [precise|condensed]` — get or set the response style.
+    ///
+    /// When `style` is `None`, prints current setting.
+    /// When `style` is `Some("precise")` or `Some("condensed")`, applies the
+    /// change, persists it to `~/.anvil/config.json`, and rebuilds the runtime
+    /// so the new system prompt takes effect immediately.
+    fn set_output_style(&mut self, style: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+        const TERSE_SKILL_BODY: &str = include_str!("../../commands/bundled/skills/terse/SKILL.md");
+        const TERSE_MARKER: &str = "# terse — token-economical response style";
+
+        let Some(style_str) = style else {
+            return Ok(format!("Output style: {}", self.output_style.as_str()));
+        };
+
+        let new_style = OutputStyle::from_str(&style_str).ok_or_else(|| {
+            format!(
+                "Unknown output style '{style_str}'. Use: precise, condensed."
+            )
+        })?;
+
+        if new_style == self.output_style {
+            return Ok(format!("Output style already set to: {}", self.output_style.as_str()));
+        }
+
+        // Update system_prompt: remove any existing terse block, then prepend
+        // the full skill body when switching to Condensed.
+        self.system_prompt.retain(|s| !s.contains(TERSE_MARKER));
+
+        if new_style == OutputStyle::Condensed {
+            self.system_prompt.insert(0, TERSE_SKILL_BODY.to_string());
+        }
+
+        // Rebuild the runtime so the new system prompt takes effect.
+        let session = self.runtime.session().clone();
+        self.runtime = build_runtime_with_tui_slot(
+            session,
+            self.model.clone(),
+            self.system_prompt.clone(),
+            true,
+            true,
+            self.allowed_tools.clone(),
+            self.permission_mode,
+            None,
+            self.tui_slot.clone(),
+            self.agent_manager.clone(),
+        )?;
+
+        self.output_style = new_style;
+        save_output_style(new_style);
+
+        Ok(format!("Output style: {} — terse rules {} for next turn.",
+            new_style.as_str(),
+            if new_style == OutputStyle::Condensed { "active" } else { "removed" },
+        ))
+    }
 
     /// `/pin [path]` — pin a file persistently, or list pinned files.
     #[allow(clippy::unused_self)]
@@ -4658,6 +4865,21 @@ impl LiveCli {
                 Self::print_skills(args.as_deref())?;
                 false
             }
+            SlashCommand::Skill { subcommand } => {
+                let cwd = env::current_dir().unwrap_or_default();
+                let arg = match &subcommand {
+                    SkillSubcommand::Load { name } => format!("load {name}"),
+                    SkillSubcommand::List => "list".to_string(),
+                    SkillSubcommand::Suggest { prompt } => {
+                        prompt.as_deref().map(|p| format!("suggest {p}")).unwrap_or_else(|| "suggest".to_string())
+                    }
+                };
+                match handle_skills_slash_command(Some(&arg), &cwd) {
+                    Ok(output) => println!("{output}"),
+                    Err(e) => eprintln!("skill: {e}"),
+                }
+                false
+            }
             SlashCommand::Qmd { query } => {
                 self.run_qmd_command(query.as_deref());
                 false
@@ -4990,6 +5212,13 @@ impl LiveCli {
                 }
                 false
             }
+            SlashCommand::OutputStyle { style } => {
+                match self.set_output_style(style) {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => eprintln!("output-style error: {e}"),
+                }
+                false
+            }
             SlashCommand::ReviewPr { number } => {
                 println!("{}", self.run_review_pr_command(number.as_deref()));
                 false
@@ -5066,11 +5295,135 @@ impl LiveCli {
                 }
                 false
             }
+            SlashCommand::Agent { subcommand } => {
+                if let Err(e) = self.run_agent_command(subcommand) {
+                    eprintln!("agent: {e}");
+                }
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", render_unknown_repl_command(&name));
                 false
             }
         })
+    }
+
+    // ── /agent command ────────────────────────────────────────────────────────
+
+    /// Handle `/agent compose <traits> "<task>"` and `/agent traits`.
+    ///
+    /// For `compose`: loads the bundled catalogue, calls `compose_agent`, then
+    /// runs the task as a subagent turn.  The turn runs through the existing
+    /// runtime with the composed system prompt prepended — using the same path
+    /// as `/fast` mode (rebuild runtime with modified prompt, run one turn,
+    /// restore).  This keeps it on the `build_runtime_with_tui_slot` path and
+    /// inside the existing `AgentManager`.
+    ///
+    /// For `traits`: prints `format_traits_listing` to stdout.
+    fn run_agent_command(
+        &mut self,
+        subcommand: AgentSubcommand,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match subcommand {
+            AgentSubcommand::Traits => {
+                let catalogue = bundled_catalogue();
+                println!("{}", format_traits_listing(catalogue));
+                Ok(())
+            }
+            AgentSubcommand::Compose { traits, task } => {
+                if traits.is_empty() {
+                    println!(
+                        "No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\""
+                    );
+                    return Ok(());
+                }
+                if task.trim().is_empty() {
+                    println!(
+                        "No task provided. Usage: /agent compose {} \"<task description>\"",
+                        traits.join(",")
+                    );
+                    return Ok(());
+                }
+
+                let catalogue = bundled_catalogue();
+                let trait_refs: Vec<&str> = traits.iter().map(String::as_str).collect();
+
+                match compose_agent(catalogue, &trait_refs, &task) {
+                    Err(ComposeError::EmptyTraits) => {
+                        println!(
+                            "No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\""
+                        );
+                        Ok(())
+                    }
+                    Err(ComposeError::UnknownTrait(name)) => {
+                        println!(
+                            "Unknown trait: {name}. Run /agent traits to list available traits."
+                        );
+                        Ok(())
+                    }
+                    Err(ComposeError::ConflictingTraits { dim, a, b }) => {
+                        println!(
+                            "Conflicting traits in dimension \"{dim}\": \"{a}\" and \"{b}\" \
+                             cannot be combined — they would fight over the same identity axis.\n\
+                             Remove one of them, or use traits from different dimensions.\n\
+                             (A future version will add --allow-conflicts for when you really want this.)"
+                        );
+                        Ok(())
+                    }
+                    Err(ComposeError::ParseError(msg)) => {
+                        println!("Trait catalogue parse error: {msg}");
+                        Ok(())
+                    }
+                    Ok(composed) => {
+                        println!(
+                            "Composing agent with traits: {}\n",
+                            composed.traits.join(", ")
+                        );
+
+                        // Rebuild runtime with composed system prompt prepended,
+                        // run one turn, then restore — same pattern as /fast mode.
+                        let original_system_prompt = self.system_prompt.clone();
+                        let mut composed_system_prompt = vec![composed.prompt.clone()];
+                        composed_system_prompt.extend(original_system_prompt.iter().cloned());
+
+                        self.runtime = build_runtime_with_tui_slot(
+                            self.runtime.session().clone(),
+                            self.model.clone(),
+                            composed_system_prompt,
+                            true,
+                            true,
+                            self.allowed_tools.clone(),
+                            self.permission_mode,
+                            None,
+                            self.tui_slot.clone(),
+                            self.agent_manager.clone(),
+                        )?;
+
+                        let turn_result = self.run_turn(&task);
+
+                        // Restore original system prompt regardless of outcome.
+                        let restore_result = build_runtime_with_tui_slot(
+                            self.runtime.session().clone(),
+                            self.model.clone(),
+                            original_system_prompt.clone(),
+                            true,
+                            true,
+                            self.allowed_tools.clone(),
+                            self.permission_mode,
+                            None,
+                            self.tui_slot.clone(),
+                            self.agent_manager.clone(),
+                        );
+                        self.system_prompt = original_system_prompt;
+                        if let Ok(restored) = restore_result {
+                            self.runtime = restored;
+                        }
+
+                        turn_result
+                    }
+                }
+            }
+        }
     }
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -5372,6 +5725,27 @@ impl LiveCli {
         let cwd = env::current_dir()?;
         println!("{}", handle_skills_slash_command(args, &cwd)?);
         Ok(())
+    }
+
+    /// Emit a post-turn skill hint when the user prompt matches trigger keywords.
+    /// This is the "turn-end footer" approach — informational, never blocks the turn.
+    fn maybe_emit_skill_hint(&self, last_user_input: &str) {
+        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let roots = discover_skill_roots(&cwd);
+        let skills: Vec<commands::agents::SkillSummary> = match load_skills_from_roots(&roots) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let skills_with_triggers: Vec<&commands::agents::SkillSummary> =
+            skills.iter().filter(|s| !s.triggers.is_empty()).collect();
+        if skills_with_triggers.is_empty() {
+            return;
+        }
+        let matches = match_triggers(last_user_input, &skills_with_triggers);
+        if let Some(hint) = format_suggestions_hint(&matches) {
+            println!("{hint}");
+        }
     }
 
     fn print_diff() -> Result<(), Box<dyn std::error::Error>> {

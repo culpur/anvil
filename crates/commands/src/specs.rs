@@ -1805,6 +1805,67 @@ Notes:
         requires_vault: false,
         requires_restart: RestartRequirement::Full,
     },
+    // ── Agent composition (v2.2.7) ────────────────────────────────────────────
+    SlashCommandSpec {
+        name: "agent",
+        aliases: &[],
+        summary: "Compose a trait-based agent for a one-shot task",
+        argument_hint: Some("[traits|compose <traits> \"<task>\"]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/agent — Trait-based agent composition
+
+Usage:
+  /agent traits                              List available traits
+  /agent compose <trait1,trait2> \"<task>\"   Compose and run a one-shot agent",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    // ── Skill dispatch (v2.2.7) ──────────────────────────────────────────────
+    SlashCommandSpec {
+        name: "skill",
+        aliases: &[],
+        summary: "Load, suggest, or list Anvil skills",
+        argument_hint: Some("[suggest [<prompt>]|load <name>|list]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/skill — Anvil skill management
+
+Usage:
+  /skill list               List all available skills
+  /skill load <name>        Prepend skill body to the next system prompt turn
+  /skill suggest [<prompt>] Show trigger-matched skill suggestions for a prompt",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "output-style",
+        aliases: &["output_style"],
+        summary: "Set response verbosity: precise (default) or condensed",
+        argument_hint: Some("[precise|condensed]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/output-style — Control response verbosity
+
+Usage:
+  /output-style             Show the current output style
+  /output-style precise     Full sentences, full explanations (default)
+  /output-style condensed   Terse, bullet-point responses (opt-in)",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
 ];
 
 #[must_use]

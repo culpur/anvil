@@ -288,6 +288,34 @@ pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
     }
 }
 
+/// Write `output_style` to `~/.anvil/config.json`, preserving all other keys.
+pub(crate) fn save_output_style(style: runtime::OutputStyle) {
+    let anvil_dir = anvil_home_dir();
+    let path = anvil_dir.join("config.json");
+    let mut map = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok())
+            .unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+    map.insert("output_style".to_string(), serde_json::Value::String(style.as_str().to_string()));
+    let _ = fs::create_dir_all(&anvil_dir);
+    let _ = fs::write(&path, serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default());
+}
+
+/// Read `output_style` from `~/.anvil/config.json`, defaulting to `Precise`.
+pub(crate) fn load_output_style() -> runtime::OutputStyle {
+    let path = anvil_home_dir().join("config.json");
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok())
+        .and_then(|map| map.get("output_style").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|s| runtime::OutputStyle::from_str(&s))
+        .unwrap_or_default()
+}
+
 /// Return the currently configured language code, defaulting to "en".
 pub(crate) fn current_language_code() -> String {
     let path = anvil_home_dir().join("config.json");

@@ -74,8 +74,8 @@ impl CompletionContext for TuiCompletionContext {
             DynamicEnumSource::InstalledAgents => vec![],
 
             // ── Installed skills ───────────────────────────────────────────
-            // TODO: No installed-skills registry exists yet.
-            DynamicEnumSource::InstalledSkills => vec![],
+            // Discover skills from all configured roots relative to cwd.
+            DynamicEnumSource::InstalledSkills => list_installed_skills(),
 
             // ── MCP servers ────────────────────────────────────────────────
             DynamicEnumSource::McpServers => list_mcp_server_names(),
@@ -162,13 +162,32 @@ fn list_installed_plugins() -> Vec<String> {
         None => return vec![],
     };
     let plugin_config = plugins::PluginManagerConfig::new(config_home);
-    let manager = plugins::PluginManager::new(plugin_config);
+    let mut manager = plugins::PluginManager::new(plugin_config);
     manager
         .list_installed_plugins()
         .unwrap_or_default()
         .into_iter()
         .map(|s| s.metadata.id)
         .collect()
+}
+
+// ─── Helper: installed skills ─────────────────────────────────────────────────
+
+/// Discover and return the names of all installed skills for tab completion.
+/// Skills are loaded from all configured skill roots relative to the current
+/// working directory.  Returns an empty vec on any error (completion is
+/// best-effort — errors must not block the TUI keystroke path).
+fn list_installed_skills() -> Vec<String> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let roots = commands::discover_skill_roots(&cwd);
+    match commands::load_skills_from_roots(&roots) {
+        Ok(skills) => skills
+            .into_iter()
+            .filter(|s| s.shadowed_by.is_none())
+            .map(|s| s.name)
+            .collect(),
+        Err(_) => vec![],
+    }
 }
 
 // ─── Helper: custom (user-installed) themes ───────────────────────────────────

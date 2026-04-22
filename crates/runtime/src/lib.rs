@@ -52,7 +52,7 @@ pub use config::{
     ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig, LspServerEntry,
     McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig, McpRemoteServerConfig,
     McpSdkServerConfig, McpServerConfig, McpStdioServerConfig, McpTransport,
-    McpWebSocketServerConfig, OAuthConfig, ResolvedPermissionMode, RuntimeConfig,
+    McpWebSocketServerConfig, OAuthConfig, OutputStyle, ResolvedPermissionMode, RuntimeConfig,
     RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig,
     ANVIL_SETTINGS_SCHEMA_NAME,
 };

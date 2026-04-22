@@ -10,11 +10,11 @@ pub mod specs;
 pub mod subcommands;
 pub mod traits;
 
-pub use agents::{handle_agents_slash_command, handle_skills_slash_command};
+pub use agents::{discover_skill_roots, handle_agents_slash_command, handle_skills_slash_command, load_skills_from_roots};
 pub use skill_triggers::{match_triggers, TriggerMatch};
 pub use traits::{
-    bundled_catalogue, compose_agent, compose_agent_with_options, ComposeError, ComposeOptions,
-    ComposedAgent, Trait, TraitCatalogue,
+    bundled_catalogue, compose_agent, compose_agent_with_options, format_traits_listing,
+    ComposeError, ComposeOptions, ComposedAgent, Trait, TraitCatalogue,
 };
 pub use git::{
     detect_default_branch, handle_branch_slash_command, handle_commit_push_pr_slash_command,
@@ -397,7 +397,41 @@ pub enum SlashCommand {
         /// When `true`, reload config in-place; when `false`, fully respawn.
         soft: bool,
     },
+    /// `/agent [traits|compose <trait1,trait2,...> "<task>"]` — agentic trait composition
+    Agent {
+        subcommand: AgentSubcommand,
+    },
+    /// `/output-style [precise|condensed]` — set output verbosity axis (v2.2.7)
+    OutputStyle {
+        style: Option<String>,
+    },
+    /// `/skill suggest [<prompt>]` — trigger-matched skill suggestions
+    /// `/skill load <name>` — prepend skill body to next system prompt
+    /// `/skill list` — alias for /skills
+    Skill {
+        subcommand: SkillSubcommand,
+    },
     Unknown(String),
+}
+
+/// Sub-commands for `/agent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSubcommand {
+    /// `/agent traits` — list all bundled traits
+    Traits,
+    /// `/agent compose <trait1,trait2,...> "<task>"` — compose a temporary agent
+    Compose { traits: Vec<String>, task: String },
+}
+
+/// Sub-commands for `/skill`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillSubcommand {
+    /// `/skill suggest [<prompt>]`
+    Suggest { prompt: Option<String> },
+    /// `/skill load <name>`
+    Load { name: String },
+    /// `/skill list`
+    List,
 }
 
 impl SlashCommand {
@@ -702,9 +736,112 @@ impl SlashCommand {
             "restart" => Self::Restart {
                 soft: parts.next() == Some("--soft"),
             },
+            "agent" => {
+                let sub = parts.next().unwrap_or("traits");
+                match sub {
+                    "traits" | "list" => Self::Agent { subcommand: AgentSubcommand::Traits },
+                    "compose" => {
+                        // /agent compose security,skeptical "audit auth.rs"
+                        let trait_str = parts.next().unwrap_or_default();
+                        let traits: Vec<String> = trait_str
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let task_parts: Vec<&str> = parts.collect();
+                        let task = task_parts.join(" ")
+                            .trim_matches('"')
+                            .trim()
+                            .to_string();
+                        Self::Agent { subcommand: AgentSubcommand::Compose { traits, task } }
+                    }
+                    _ => Self::Agent { subcommand: AgentSubcommand::Traits },
+                }
+            }
+            "output-style" | "output_style" => Self::OutputStyle {
+                style: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "skill" => {
+                let sub = parts.next().unwrap_or("suggest");
+                match sub {
+                    "list" => Self::Skill { subcommand: SkillSubcommand::List },
+                    "load" => {
+                        let name = parts.collect::<Vec<_>>().join(" ");
+                        Self::Skill { subcommand: SkillSubcommand::Load { name } }
+                    }
+                    other_sub => {
+                        // "suggest" or bare keyword treated as the start of the prompt
+                        let first_token = if other_sub != "suggest" {
+                            Some(other_sub.to_string())
+                        } else {
+                            None
+                        };
+                        let mut prompt_parts: Vec<String> = first_token.into_iter().collect();
+                        prompt_parts.extend(parts.map(ToOwned::to_owned));
+                        let prompt_str = prompt_parts.join(" ");
+                        let prompt_str = prompt_str
+                            .trim()
+                            .trim_start_matches('"')
+                            .trim_end_matches('"')
+                            .trim()
+                            .to_string();
+                        let prompt = if prompt_str.is_empty() { None } else { Some(prompt_str) };
+                        Self::Skill { subcommand: SkillSubcommand::Suggest { prompt } }
+                    }
+                }
+            }
             other => Self::Unknown(other.to_string()),
         })
     }
+}
+
+/// Format a grouped listing of trigger-matched skills for display.
+///
+/// When `matches` is empty returns the "no matches" fallback.
+/// `prompt` is echoed back in the header for context.
+#[must_use]
+pub fn format_suggestions(matches: &[TriggerMatch], prompt: &str) -> String {
+    if matches.is_empty() {
+        return format!(
+            "No skill suggestions for \"{prompt}\".\n\
+             Try a more specific prompt, or /skill list to browse all installed skills."
+        );
+    }
+
+    let header = format!("Skill suggestions for \"{prompt}\":");
+    let mut lines = vec![header];
+
+    let max_name = matches.iter().map(|m| m.skill_name.len()).max().unwrap_or(0);
+
+    for m in matches {
+        let padded = format!("{:<width$}", m.skill_name, width = max_name);
+        lines.push(format!(
+            "  {padded}    matched \"{:<16}\" — /skill load {}",
+            m.matched_trigger, m.skill_name
+        ));
+    }
+    lines.push(
+        "No matches? Try a more specific prompt, or /skill list to browse all installed skills."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+/// Build a one-line TUI hint for trigger-matched skills.
+/// Returns `None` when `matches` is empty (silent = no hint shown).
+#[must_use]
+pub fn format_suggestions_hint(matches: &[TriggerMatch]) -> Option<String> {
+    if matches.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = matches
+        .iter()
+        .map(|m| format!("{} ({})", m.skill_name, m.matched_trigger))
+        .collect();
+    Some(format!(
+        "\u{2726} Skill suggestions: {} \u{2014} /skill load <name> to apply",
+        parts.join(" \u{00b7} ")
+    ))
 }
 
 fn remainder_after_command(input: &str, command: &str) -> Option<String> {
@@ -737,7 +874,7 @@ mod tests {
             render_slash_command_help, resume_supported_slash_commands, slash_command_specs,
             suggest_slash_commands,
         },
-        CommitPushPrRequest, SlashCommand,
+        AgentSubcommand, CommitPushPrRequest, SkillSubcommand, SlashCommand,
     };
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{CompactionConfig, ContentBlock, ConversationMessage, MessageRole, Session};
@@ -1097,7 +1234,8 @@ mod tests {
         // v2.2.6: added mcp, productivity, knowledge, daily, think, focus, loop,
         //         remote-control (8 previously-missing) + tab, fork, share, audit (4 ghost)
         //         + restart (Phase 5 placeholder) = +13 total
-        assert_eq!(slash_command_specs().len(), 102);
+        // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
+        assert_eq!(slash_command_specs().len(), 105);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -1724,6 +1862,12 @@ mod tests {
                 SlashCommand::Audit => "audit",
                 // Respawn mechanism (v2.2.6 Phase 5):
                 SlashCommand::Restart { .. } => "restart",
+                // Agent composition (v2.2.7):
+                SlashCommand::Agent { .. } => "agent",
+                // Output style axis (v2.2.8):
+                SlashCommand::OutputStyle { .. } => "output-style",
+                // Skill dispatch (v2.2.7):
+                SlashCommand::Skill { .. } => "skill",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
             }
         }
@@ -1833,6 +1977,9 @@ mod tests {
             SlashCommand::Share { action: None },
             SlashCommand::Audit,
             SlashCommand::Restart { soft: false },
+            SlashCommand::Agent { subcommand: AgentSubcommand::Traits },
+            SlashCommand::OutputStyle { style: None },
+            SlashCommand::Skill { subcommand: SkillSubcommand::List },
         ];
 
         let specs = slash_command_specs();
@@ -2001,5 +2148,130 @@ mod tests {
         let share_completions = suggest_completions("/share ", &ctx);
         let share_names: Vec<&str> = share_completions.iter().map(|c| c.text.as_str()).collect();
         assert!(share_names.contains(&"stop"), "expected 'stop' in share completions: {share_names:?}");
+    }
+
+    // ── /skill command parser tests ───────────────────────────────────────────
+
+    #[test]
+    fn skill_suggest_with_quoted_prompt_parses() {
+        let cmd = SlashCommand::parse(r#"/skill suggest "audit my code""#);
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Skill {
+                    subcommand: SkillSubcommand::Suggest { prompt: Some(ref p) }
+                }) if p == "audit my code"
+            ),
+            "expected Skill::Suggest with prompt, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn skill_suggest_bare_parses_with_no_prompt() {
+        let cmd = SlashCommand::parse("/skill suggest");
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Skill {
+                    subcommand: SkillSubcommand::Suggest { prompt: None }
+                })
+            ),
+            "expected Skill::Suggest with no prompt, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn skill_bare_parses_as_suggest_with_no_prompt() {
+        // `/skill` with no subcommand defaults to suggest with no prompt.
+        let cmd = SlashCommand::parse("/skill");
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Skill {
+                    subcommand: SkillSubcommand::Suggest { prompt: None }
+                })
+            ),
+            "expected Skill::Suggest (no prompt) for bare /skill, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn skill_load_parses_with_name() {
+        let cmd = SlashCommand::parse("/skill load security-audit");
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Skill {
+                    subcommand: SkillSubcommand::Load { ref name }
+                }) if name == "security-audit"
+            ),
+            "expected Skill::Load {{ name: security-audit }}, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn skill_list_parses() {
+        let cmd = SlashCommand::parse("/skill list");
+        assert!(
+            matches!(cmd, Some(SlashCommand::Skill { subcommand: SkillSubcommand::List })),
+            "expected Skill::List, got: {cmd:?}"
+        );
+    }
+
+    // ── format_suggestions tests ──────────────────────────────────────────────
+
+    #[test]
+    fn format_suggestions_with_matches_produces_grouped_listing() {
+        use super::skill_triggers::{match_triggers, TriggerMatch};
+        let matches = vec![
+            TriggerMatch {
+                skill_name: "security-audit".to_string(),
+                matched_trigger: "audit".to_string(),
+            },
+            TriggerMatch {
+                skill_name: "code-review".to_string(),
+                matched_trigger: "review".to_string(),
+            },
+        ];
+        let output = super::format_suggestions(&matches, "audit auth.rs");
+        assert!(output.contains("security-audit"), "missing security-audit in: {output}");
+        assert!(output.contains("/skill load security-audit"), "missing /skill load hint in: {output}");
+        assert!(output.contains("audit"), "missing matched trigger in: {output}");
+    }
+
+    #[test]
+    fn format_suggestions_empty_returns_no_matches_message() {
+        let output = super::format_suggestions(&[], "unrelated prompt");
+        assert!(output.contains("No skill suggestions"), "expected 'No skill suggestions' in: {output}");
+    }
+
+    // ── format_suggestions_hint tests ────────────────────────────────────────
+
+    #[test]
+    fn format_suggestions_hint_fires_when_matches_exist() {
+        use super::skill_triggers::TriggerMatch;
+        let matches = vec![TriggerMatch {
+            skill_name: "security-audit".to_string(),
+            matched_trigger: "audit".to_string(),
+        }];
+        let hint = super::format_suggestions_hint(&matches);
+        assert!(hint.is_some(), "expected Some hint");
+        let hint = hint.unwrap();
+        assert!(hint.contains("security-audit"), "missing skill name in: {hint}");
+        assert!(hint.contains("/skill load"), "missing /skill load in: {hint}");
+    }
+
+    #[test]
+    fn format_suggestions_hint_is_silent_when_no_matches() {
+        let hint = super::format_suggestions_hint(&[]);
+        assert!(hint.is_none(), "expected None when no matches");
+    }
+
+    #[test]
+    fn skill_load_unknown_name_message() {
+        // Ensure format_suggestions still works without a real skill root
+        // (no disk I/O needed for this unit test path).
+        let output = super::format_suggestions(&[], "some prompt");
+        assert!(!output.is_empty());
     }
 }

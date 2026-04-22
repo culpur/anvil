@@ -58,7 +58,7 @@ fn build_runtime_plugin_state(
     let cwd = env::current_dir()?;
     let loader = ConfigLoader::default_for(&cwd);
     let runtime_config = loader.load()?;
-    let plugin_manager = build_plugin_manager(&cwd, &loader, &runtime_config);
+    let mut plugin_manager = build_plugin_manager(&cwd, &loader, &runtime_config);
     let tool_registry = GlobalToolRegistry::with_plugin_tools(plugin_manager.aggregated_tools()?)?;
     Ok((runtime_config.feature_config().clone(), tool_registry, runtime_config))
 }
