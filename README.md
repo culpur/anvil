@@ -161,7 +161,20 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ### v2.2.7 &mdash; April 21, 2026
 
-See the [release notes](https://github.com/culpur/anvil/releases/tag/v2.2.7) for full details.
+**Cross-OS installers, `anvil upgrade`, shell completions, curated Ollama menu, Windows fixes, release-pipeline hardening.**
+
+- &#10003; `install.sh` (macOS/Linux) and `install.ps1` (Windows) with SHA256 verification from anvilhub.culpur.net with GitHub fallback &mdash; aborts on dual failure, no unverified binary ever lands
+- &#10003; `anvil upgrade`, `anvil --check`, `anvil --setup`, `anvil --uninstall` &mdash; full lifecycle from the binary itself
+- &#10003; Shell completions for bash, zsh, fish, and PowerShell &mdash; all 101 slash commands, subcommands, flags, provider and model names
+- &#10003; First-run wizard: curated Ollama model menu &mdash; Llama 3.x, Qwen 3 / 2.5-Coder, Mistral Nemo, Gemma 3, Phi 4, Code Llama, Codestral, per-model confirmation
+- &#10003; TUI scrollback + text selection via Shift-drag pass-through to the terminal emulator
+- &#10003; Windows: correct `HOME` / `PATH` / `PATHEXT` handling, `.exe` on respawn, cmd.exe-aware install detection
+- &#10003; QMD cross-platform discovery &mdash; no more hard-coded Unix socket paths
+- &#10003; Ollama tool-use: multi-format parser (Anthropic, OpenAI, XML, JSON-fence, natural language) with fail-loud on ambiguity
+- &#10003; Remote-control 503 fixed &mdash; `anvil-relay-ws` now a declared pm2 app in the passage ecosystem
+- &#10003; Release pipeline: per-binary embedded-version audit gate &mdash; makes the v2.2.6 Windows-exe-labeled-as-2.2.1 class of bug impossible
+- &#10003; 618 tests passing, zero warnings
+
 ### v2.2.6 &mdash; April 20, 2026
 
 **Command Parity, Deep Autocomplete, Web Config, AnvilHub Installer** &mdash; the biggest web UI release since v2.0.
