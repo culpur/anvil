@@ -20,6 +20,14 @@ pub enum ApiError {
         message: Option<String>,
         body: String,
         retryable: bool,
+        /// Parsed value of the `Retry-After` response header (seconds), if
+        /// present and valid.  Only populated on 429 responses; `None`
+        /// everywhere else.
+        retry_after_secs: Option<u64>,
+    },
+    /// The stream produced no data for longer than the dead-air timeout.
+    StreamStalled {
+        elapsed_ms: u64,
     },
     RetriesExhausted {
         attempts: u32,
@@ -54,7 +62,19 @@ impl ApiError {
             | Self::Io(_)
             | Self::Json(_)
             | Self::InvalidSseFrame(_)
-            | Self::BackoffOverflow { .. } => false,
+            | Self::BackoffOverflow { .. }
+            | Self::StreamStalled { .. } => false,
+        }
+    }
+
+    /// Return the server-supplied `Retry-After` hint in seconds, if present.
+    /// Only `ApiError::Api` carries this value (populated from the 429
+    /// response header); all other variants return `None`.
+    #[must_use]
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Self::Api { retry_after_secs, .. } => *retry_after_secs,
+            _ => None,
         }
     }
 }
@@ -80,6 +100,10 @@ impl Display for ApiError {
             Self::Http(error) => write!(f, "http error: {error}"),
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Json(error) => write!(f, "json error: {error}"),
+            Self::StreamStalled { elapsed_ms } => write!(
+                f,
+                "stream stalled after {elapsed_ms}ms of no data"
+            ),
             Self::Api {
                 status,
                 error_type,

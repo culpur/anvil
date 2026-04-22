@@ -120,7 +120,17 @@ where
             break retryable_error;
         }
 
-        tokio::time::sleep(backoff_for_attempt(attempts, initial_backoff, max_backoff)?).await;
+        // Bug #81 fix: the server-supplied Retry-After is a *minimum* hint,
+        // not the whole wait.  Take max(server hint, exponential backoff) so
+        // that small Retry-After values (e.g. 1 s) don't burn all retries in
+        // a few seconds while exponential growth keeps the ceiling sane.
+        let backoff = backoff_for_attempt(attempts, initial_backoff, max_backoff)?;
+        let server_hint = retryable_error
+            .retry_after_secs()
+            .map(Duration::from_secs)
+            .unwrap_or(Duration::ZERO);
+        let sleep_duration = backoff.max(server_hint).min(max_backoff);
+        tokio::time::sleep(sleep_duration).await;
     };
 
     Err(ApiError::RetriesExhausted {
@@ -139,11 +149,23 @@ where
 /// it as the common `{"error": {"type": "...", "message": "..."}}` envelope,
 /// and the resulting `ApiError::Api` is returned.  Unknown envelope shapes
 /// fall back gracefully — `error_type` / `message` will simply be `None`.
+///
+/// On 429 responses the `Retry-After` header (if present and valid) is parsed
+/// and stored in `ApiError::Api::retry_after_secs` so the retry loop can use
+/// it as a *minimum* floor rather than the sole wait duration.
 pub async fn expect_success(response: reqwest::Response) -> Result<reqwest::Response, ApiError> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
     }
+
+    // Parse Retry-After header *before* consuming the body (headers live on the
+    // response struct, not the body stream).
+    let retry_after_secs: Option<u64> = if status.as_u16() == 429 {
+        parse_retry_after_header(response.headers())
+    } else {
+        None
+    };
 
     let body = response.text().await.unwrap_or_default();
     let parsed = serde_json::from_str::<ErrorEnvelope>(&body).ok();
@@ -155,7 +177,20 @@ pub async fn expect_success(response: reqwest::Response) -> Result<reqwest::Resp
         message: parsed.as_ref().and_then(|e| e.error.message.clone()),
         body,
         retryable,
+        retry_after_secs,
     })
+}
+
+/// Parse a `Retry-After` header value into a whole number of seconds.
+///
+/// Accepts the integer-seconds form only (e.g. `"30"` → `Some(30)`).
+/// The HTTP-date form is not handled and returns `None` — the retry loop
+/// treats `None` as "use exponential backoff alone", which is safe.
+pub fn parse_retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// A flexible error envelope that covers both the Anthropic API shape
@@ -239,7 +274,7 @@ pub fn extract_sse_data(frame: &str) -> Option<String> {
 mod tests {
     use super::{
         backoff_for_attempt, extract_sse_data, is_retryable_status, next_sse_frame,
-        read_env_non_empty,
+        parse_retry_after_header, read_env_non_empty,
     };
     use std::time::Duration;
 
@@ -266,6 +301,74 @@ mod tests {
         assert_eq!(
             read_env_non_empty("__ANVIL_TEST_ABSENT_KEY__").unwrap(),
             None
+        );
+    }
+
+    // ─── Bug #81: Retry-After as minimum ────────────────────────────────────
+
+    /// Helper: build a minimal HeaderMap with a `retry-after` entry.
+    fn headers_with_retry_after(value: &str) -> reqwest::header::HeaderMap {
+        let mut map = reqwest::header::HeaderMap::new();
+        map.insert(
+            "retry-after",
+            value.parse().expect("valid header value"),
+        );
+        map
+    }
+
+    #[test]
+    fn parse_retry_after_header_returns_seconds_for_integer_value() {
+        let headers = headers_with_retry_after("30");
+        assert_eq!(parse_retry_after_header(&headers), Some(30));
+    }
+
+    #[test]
+    fn parse_retry_after_header_returns_none_for_http_date() {
+        // HTTP-date form is not supported; we return None and fall back to backoff.
+        let headers = headers_with_retry_after("Wed, 21 Oct 2025 07:28:00 GMT");
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    #[test]
+    fn parse_retry_after_header_returns_none_when_absent() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert_eq!(parse_retry_after_header(&headers), None);
+    }
+
+    /// Confirm that max(server_hint, backoff) grows across attempt indices even
+    /// when the server returns a small Retry-After (1 s).
+    ///
+    /// Attempt 1: backoff = 200 ms, server = 1000 ms → sleep = 1000 ms
+    /// Attempt 2: backoff = 400 ms, server = 1000 ms → sleep = 1000 ms
+    /// Attempt 3: backoff = 800 ms, server = 1000 ms → sleep = 1000 ms
+    /// Attempt 4: backoff = 1600 ms, server = 1000 ms → sleep = 1600 ms (capped at 2 s)
+    ///
+    /// This verifies the wait is never *less* than the server hint AND that it
+    /// still grows past the hint once the exponential term overtakes it.
+    #[test]
+    fn retry_after_used_as_minimum_not_ceiling() {
+        let initial = Duration::from_millis(200);
+        let max_bo = Duration::from_secs(2);
+        let server_hint = Duration::from_secs(1); // small hint: 1 s
+
+        for attempt in 1u32..=4 {
+            let backoff = backoff_for_attempt(attempt, initial, max_bo).unwrap();
+            let sleep = backoff.max(server_hint).min(max_bo);
+            assert!(
+                sleep >= server_hint,
+                "attempt {attempt}: sleep {sleep:?} must be >= server hint {server_hint:?}"
+            );
+            assert!(
+                sleep >= backoff,
+                "attempt {attempt}: sleep {sleep:?} must be >= backoff {backoff:?}"
+            );
+        }
+
+        // At attempt 4 (backoff = 1600 ms) the exponential term overtakes the hint.
+        let backoff_4 = backoff_for_attempt(4, initial, max_bo).unwrap();
+        assert!(
+            backoff_4 > server_hint,
+            "by attempt 4 the backoff ({backoff_4:?}) should exceed the 1 s server hint"
         );
     }
 

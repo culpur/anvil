@@ -73,6 +73,7 @@ impl OllamaClient {
                 message: Some("Ollama /api/tags request failed".to_string()),
                 body,
                 retryable: false,
+                retry_after_secs: None,
             });
         }
 
