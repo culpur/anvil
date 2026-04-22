@@ -643,6 +643,48 @@ struct DeltaFunction {
     arguments: Option<String>,
 }
 
+/// Resolve the `num_ctx` value to send to Ollama for a chat request.
+///
+/// Reads `ANVIL_OLLAMA_NUM_CTX` first (explicit, Ollama-specific), then
+/// `ANVIL_CONTEXT_SIZE` (shared override used elsewhere in Anvil for the
+/// context bar display). Both accept K/M suffixes. Falls back to 32_768.
+///
+/// Pure function: no I/O beyond reading env vars.
+fn resolve_ollama_num_ctx() -> u64 {
+    const DEFAULT_NUM_CTX: u64 = 32_768;
+
+    for var in ["ANVIL_OLLAMA_NUM_CTX", "ANVIL_CONTEXT_SIZE"] {
+        if let Ok(raw) = std::env::var(var)
+            && let Some(parsed) = parse_num_ctx(&raw)
+        {
+            return parsed;
+        }
+    }
+    DEFAULT_NUM_CTX
+}
+
+/// Parse a context-size string. Accepts plain numbers ("65536"), K-suffixed
+/// ("128K"), and M-suffixed ("1M"). Returns None on any parse failure so the
+/// caller can fall through to the next priority.
+fn parse_num_ctx(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+
+    let (digits, multiplier): (&str, u64) = if let Some(rest) = lower.strip_suffix('k') {
+        (rest, 1_000)
+    } else if let Some(rest) = lower.strip_suffix('m') {
+        (rest, 1_000_000)
+    } else {
+        (lower.as_str(), 1)
+    };
+
+    let n: u64 = digits.trim().parse().ok()?;
+    n.checked_mul(multiplier)
+}
+
 fn build_chat_completion_request(request: &MessageRequest) -> Value {
     let mut messages = Vec::new();
     if let Some(system) = request.system.as_ref().filter(|value| !value.is_empty()) {
@@ -670,10 +712,32 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
     // For Ollama models: pass think parameter to control reasoning mode.
     // Ollama's /v1/ endpoint may not support this yet, but native /api/chat does.
     // We pass it anyway for forward compatibility, and it's harmless for other providers.
-    if request.model.contains(':') || request.model.starts_with("qwen") || request.model.starts_with("llama") || request.model.starts_with("glm") {
+    let is_ollama_model = request.model.contains(':')
+        || request.model.starts_with("qwen")
+        || request.model.starts_with("llama")
+        || request.model.starts_with("glm");
+    if is_ollama_model {
         // Default to think: false unless explicitly enabled
         // This dramatically speeds up responses for thinking-capable models
         payload["think"] = json!(false);
+
+        // Tell Ollama how large a context window to allocate for this request.
+        // Without num_ctx, Ollama silently caps the context at its Modelfile
+        // default (typically 2048 tokens) regardless of the model's actual
+        // capability — so qwen3:8b (128K-capable) gets truncated to 2K and
+        // agentic workflows fall over with "context exceeded" surprises.
+        //
+        // Priority:
+        //   1. ANVIL_OLLAMA_NUM_CTX   — explicit per-request override
+        //   2. ANVIL_CONTEXT_SIZE     — shared override used by the TUI display
+        //   3. 32_768                 — safe default; larger than qwen3's
+        //                               Modelfile default, well within the
+        //                               capability envelope of current local
+        //                               models running on consumer GPUs
+        //
+        // Values accept a trailing K or M multiplier (e.g. "128K", "1M").
+        let num_ctx = resolve_ollama_num_ctx();
+        payload["options"] = json!({ "num_ctx": num_ctx });
     }
 
     if let Some(tools) = &request.tools {
@@ -932,7 +996,8 @@ impl StringExt for String {
 mod tests {
     use super::{
         build_chat_completion_request, chat_completions_endpoint, normalize_finish_reason,
-        openai_tool_choice, parse_tool_arguments, OpenAiCompatClient, OpenAiCompatConfig,
+        openai_tool_choice, parse_num_ctx, parse_tool_arguments, resolve_ollama_num_ctx,
+        OpenAiCompatClient, OpenAiCompatConfig,
     };
     use crate::error::ApiError;
     use crate::types::{
@@ -1041,5 +1106,149 @@ mod tests {
     fn normalizes_stop_reasons() {
         assert_eq!(normalize_finish_reason("stop"), "end_turn");
         assert_eq!(normalize_finish_reason("tool_calls"), "tool_use");
+    }
+
+    // ─── Ollama num_ctx override tests ──────────────────────────────────
+
+    #[test]
+    fn parse_num_ctx_accepts_plain_digits() {
+        assert_eq!(parse_num_ctx("65536"), Some(65_536));
+        assert_eq!(parse_num_ctx("   131072   "), Some(131_072));
+    }
+
+    #[test]
+    fn parse_num_ctx_accepts_k_and_m_suffixes() {
+        assert_eq!(parse_num_ctx("128K"), Some(128_000));
+        assert_eq!(parse_num_ctx("128k"), Some(128_000));
+        assert_eq!(parse_num_ctx("1M"), Some(1_000_000));
+        assert_eq!(parse_num_ctx("1m"), Some(1_000_000));
+    }
+
+    #[test]
+    fn parse_num_ctx_rejects_garbage() {
+        assert_eq!(parse_num_ctx(""), None);
+        assert_eq!(parse_num_ctx("   "), None);
+        assert_eq!(parse_num_ctx("abc"), None);
+        assert_eq!(parse_num_ctx("128X"), None);
+        assert_eq!(parse_num_ctx("128KB"), None); // not a supported suffix
+    }
+
+    // Env-var-driven tests share process state with other tests in this
+    // module — the existing `env_lock` (above) serialises them.
+
+    struct EnvRestore {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvRestore {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let original = std::env::var(key).ok();
+            match value {
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_num_ctx_defaults_to_32k_when_env_unset() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", None);
+        let _b = EnvRestore::set("ANVIL_CONTEXT_SIZE", None);
+        assert_eq!(resolve_ollama_num_ctx(), 32_768);
+    }
+
+    #[test]
+    fn resolve_num_ctx_honors_ollama_specific_var_first() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", Some("128K"));
+        let _b = EnvRestore::set("ANVIL_CONTEXT_SIZE", Some("1M"));
+        assert_eq!(resolve_ollama_num_ctx(), 128_000);
+    }
+
+    #[test]
+    fn resolve_num_ctx_falls_through_to_generic_context_size() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", None);
+        let _b = EnvRestore::set("ANVIL_CONTEXT_SIZE", Some("65536"));
+        assert_eq!(resolve_ollama_num_ctx(), 65_536);
+    }
+
+    #[test]
+    fn resolve_num_ctx_ignores_garbage_env_and_falls_through() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", Some("not-a-number"));
+        let _b = EnvRestore::set("ANVIL_CONTEXT_SIZE", Some("64K"));
+        // The Ollama-specific var is garbage → fall through to ANVIL_CONTEXT_SIZE.
+        assert_eq!(resolve_ollama_num_ctx(), 64_000);
+    }
+
+    #[test]
+    fn ollama_request_includes_num_ctx_options() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", Some("100K"));
+        let _b = EnvRestore::set("ANVIL_CONTEXT_SIZE", None);
+
+        let payload = build_chat_completion_request(&MessageRequest {
+            model: "qwen3:8b".to_string(),
+            max_tokens: 64,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Text {
+                    text: "hi".to_string(),
+                }],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: true,
+        });
+
+        let options = payload
+            .get("options")
+            .and_then(|v| v.as_object())
+            .expect("Ollama payload must include options object");
+        assert_eq!(
+            options.get("num_ctx").and_then(|v| v.as_u64()),
+            Some(100_000)
+        );
+    }
+
+    #[test]
+    fn non_ollama_request_does_not_include_num_ctx() {
+        let _lock = env_lock();
+        let _a = EnvRestore::set("ANVIL_OLLAMA_NUM_CTX", Some("100K"));
+
+        let payload = build_chat_completion_request(&MessageRequest {
+            model: "gpt-4o".to_string(),
+            max_tokens: 64,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Text {
+                    text: "hi".to_string(),
+                }],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: true,
+        });
+
+        // gpt-4o is an OpenAI model, not Ollama; num_ctx should not be set.
+        assert!(
+            payload.get("options").is_none(),
+            "non-Ollama request must not include Ollama-specific options"
+        );
     }
 }
