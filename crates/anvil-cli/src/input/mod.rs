@@ -46,6 +46,12 @@ pub struct LineEditor {
     completions: Vec<String>,
     history: Vec<String>,
     yank_buffer: YankBuffer,
+    /// Ctrl+U stash — cleared input is kept here so Ctrl+Y can restore it.
+    /// Intentionally separate from the vim-style yank buffer: kill-yank is
+    /// a readline convention that should work regardless of vim mode, and
+    /// mixing the two (Ctrl+U overwrites yank, then `p` pastes the wrong
+    /// thing) would surprise vim users.
+    kill_buffer: String,
     vim_enabled: bool,
     completion_state: Option<CompletionState>,
 }
@@ -58,6 +64,7 @@ impl LineEditor {
             completions,
             history: Vec::new(),
             yank_buffer: YankBuffer::default(),
+            kill_buffer: String::new(),
             vim_enabled: false,
             completion_state: None,
         }
@@ -199,6 +206,31 @@ impl LineEditor {
                     }
                     self.delete_char_under_cursor(session);
                     return KeyAction::Continue;
+                }
+                // Ctrl+U: clear the whole input buffer and stash it so
+                // Ctrl+Y can restore it. Readline convention, mirrored from
+                // Claude Code v2.1.111. Only fires in modes where we edit
+                // free-form text (Insert/Plain); in Normal/Visual/Command
+                // the fall-through lets vim bindings handle it.
+                KeyCode::Char('u' | 'U') => {
+                    if matches!(session.mode, EditorMode::Insert | EditorMode::Plain) {
+                        self.kill_all_and_stash(session);
+                        return KeyAction::Continue;
+                    }
+                }
+                // Ctrl+Y: yank (restore) the last Ctrl+U-killed buffer at
+                // the cursor. We consume the key in free-form-text modes
+                // regardless of whether the stash is empty — otherwise a
+                // lone Ctrl+Y (no prior Ctrl+U) would fall through to the
+                // Char('y') match below and insert a literal 'y'.
+                KeyCode::Char('y' | 'Y') => {
+                    if matches!(session.mode, EditorMode::Insert | EditorMode::Plain) {
+                        if !self.kill_buffer.is_empty() {
+                            let stashed = self.kill_buffer.clone();
+                            self.insert_active_text(session, &stashed);
+                        }
+                        return KeyAction::Continue;
+                    }
                 }
                 _ => {}
             }
@@ -377,6 +409,23 @@ impl LineEditor {
         } else {
             session.text.insert_str(session.cursor, text);
             session.cursor += text.len();
+        }
+    }
+
+    /// Kill the entire input buffer, stashing it so `Ctrl+Y` can restore
+    /// it. Clears the cursor to column 0 — this is a whole-buffer kill,
+    /// not a kill-to-line-start. Empty input is a no-op; we don't want to
+    /// stomp a previously-stashed kill with an empty string.
+    fn kill_all_and_stash(&mut self, session: &mut EditSession) {
+        if session.mode == EditorMode::Command {
+            if !session.command_buffer.is_empty() {
+                self.kill_buffer = session.command_buffer.clone();
+                session.command_buffer.clear();
+                session.command_cursor = 0;
+            }
+        } else if !session.text.is_empty() {
+            self.kill_buffer = std::mem::take(&mut session.text);
+            session.cursor = 0;
         }
     }
 
@@ -753,5 +802,89 @@ mod tests {
 
         // then
         assert!(matches!(action, KeyAction::Cancel));
+    }
+
+    // ─── Ctrl+U / Ctrl+Y — kill-yank readline bindings ─────────────────
+
+    #[test]
+    fn ctrl_u_clears_buffer_and_stashes_for_ctrl_y() {
+        let mut editor = LineEditor::new("> ", vec![]);
+        let mut session = EditSession::new(false);
+        session.text = "hello world".to_string();
+        session.cursor = session.text.len();
+
+        // Ctrl+U — kill everything, stash, cursor to 0.
+        let action = editor.handle_key_event(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(action, KeyAction::Continue));
+        assert_eq!(session.text, "");
+        assert_eq!(session.cursor, 0);
+        assert_eq!(editor.kill_buffer, "hello world");
+
+        // Type some new text, then Ctrl+Y to restore the stash at cursor.
+        editor.insert_active_text(&mut session, "x");
+        let action = editor.handle_key_event(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(action, KeyAction::Continue));
+        assert_eq!(session.text, "xhello world");
+    }
+
+    #[test]
+    fn ctrl_u_on_empty_input_does_not_clobber_stash() {
+        // If the user hits Ctrl+U on empty input, we must NOT overwrite a
+        // previously-stashed kill with an empty string — otherwise a stray
+        // Ctrl+U would destroy their yank target.
+        let mut editor = LineEditor::new("> ", vec![]);
+        editor.kill_buffer = "previously killed".to_string();
+        let mut session = EditSession::new(false);
+
+        let _ = editor.handle_key_event(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(editor.kill_buffer, "previously killed");
+    }
+
+    #[test]
+    fn ctrl_y_with_empty_stash_is_a_noop() {
+        let mut editor = LineEditor::new("> ", vec![]);
+        let mut session = EditSession::new(false);
+        session.text = "abc".to_string();
+        session.cursor = 2;
+
+        let _ = editor.handle_key_event(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(session.text, "abc");
+        assert_eq!(session.cursor, 2);
+    }
+
+    #[test]
+    fn ctrl_u_in_vim_normal_mode_is_passthrough() {
+        // vim Normal mode has its own Ctrl+U convention (half-page up);
+        // we must not intercept. Verify the kill handler doesn't fire when
+        // the session is in Normal.
+        let mut editor = LineEditor::new("> ", vec![]);
+        editor.vim_enabled = true;
+        let mut session = EditSession::new(true);
+        session.text = "hello".to_string();
+        session.cursor = session.text.len();
+        let _ = editor.handle_escape(&mut session);
+        assert_eq!(session.mode, EditorMode::Normal);
+
+        let _ = editor.handle_key_event(
+            &mut session,
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        );
+        // Our handler did not fire, so text is unchanged and nothing was
+        // stashed. Whatever happens downstream (vim handling or fall-
+        // through) is fine as long as kill_all_and_stash didn't run.
+        assert_eq!(session.text, "hello");
+        assert_eq!(editor.kill_buffer, "");
     }
 }

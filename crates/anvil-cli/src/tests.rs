@@ -519,6 +519,28 @@ fn model_switch_report_preserves_context_summary() {
 }
 
 #[test]
+fn model_switch_report_warns_on_mid_conversation_switch() {
+    // Claude Code v2.1.108 parity: mid-conversation switches re-read the
+    // whole history uncached against the new model, which is a real cost
+    // surprise. Surface the warning when message_count > 0.
+    let mid = format_model_switch_report("sonnet", "opus", 42);
+    assert!(
+        mid.contains("Warning") && mid.contains("uncached"),
+        "mid-conversation switch must warn: {mid}"
+    );
+}
+
+#[test]
+fn model_switch_report_no_warning_on_fresh_session() {
+    // Fresh session (message_count == 0) — no warning, nothing to re-read.
+    let fresh = format_model_switch_report("sonnet", "opus", 0);
+    assert!(
+        !fresh.contains("Warning"),
+        "fresh-session switch should not warn: {fresh}"
+    );
+}
+
+#[test]
 fn status_line_reports_model_and_token_totals() {
     let status = format_status_report(
         "sonnet",

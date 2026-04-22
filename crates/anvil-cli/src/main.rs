@@ -855,13 +855,24 @@ Next
 }
 
 fn format_model_switch_report(previous: &str, next: &str, message_count: usize) -> String {
-    format!(
+    // Mid-conversation switches re-read the entire history against the new
+    // model (or the new provider), which bypasses prompt caching for the
+    // next response. Claude Code shipped a similar warning in v2.1.108 —
+    // it's a real footgun on long sessions where the user didn't realize
+    // they just paid to re-tokenize everything. Surface it explicitly.
+    let mut report = format!(
         "Model updated
   Previous         {previous}
   Current          {next}
   Preserved        {message_count} messages
   Tip              Existing conversation context stayed attached"
-    )
+    );
+    if message_count > 0 {
+        report.push_str(
+            "\n  Warning          Next response re-reads full history uncached (new model/provider)",
+        );
+    }
+    report
 }
 
 fn format_permissions_report(mode: &str) -> String {
