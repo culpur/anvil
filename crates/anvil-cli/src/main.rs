@@ -57,7 +57,7 @@ use api::{
 
 use commands::{
     format_suggestions_hint, handle_agents_slash_command,
-    handle_plugins_slash_command, handle_skills_slash_command, match_triggers,
+    handle_plugins_slash_command, handle_skills_slash_command, load_skill_body, match_triggers,
     render_command_detailed_help, AgentSubcommand, SkillSubcommand, SlashCommand,
     bundled_catalogue, compose_agent, format_traits_listing, ComposeError,
 };
@@ -3958,12 +3958,38 @@ impl LiveCli {
                 }
             }
             SlashCommand::Skill { subcommand } => {
-                // `/skill load <name>` — prepend skill body to next turn's system prompt.
                 match subcommand {
                     SkillSubcommand::Load { name } => {
                         let cwd = env::current_dir().unwrap_or_default();
-                        let output = handle_skills_slash_command(Some(&format!("load {name}")), &cwd);
-                        (output.unwrap_or_else(|e| format!("skill load: {e}")), false)
+                        match load_skill_body(&name, &cwd) {
+                            Ok(body) => {
+                                // Prepend skill body to system prompt and rebuild runtime
+                                // so it takes effect on the very next turn.
+                                let marker = format!("# skill:{name} —");
+                                self.system_prompt.retain(|s| !s.contains(&marker));
+                                self.system_prompt.insert(0, body);
+                                let session = self.runtime.session().clone();
+                                match build_runtime_with_tui_slot(
+                                    session,
+                                    self.model.clone(),
+                                    self.system_prompt.clone(),
+                                    true,
+                                    true,
+                                    self.allowed_tools.clone(),
+                                    self.permission_mode,
+                                    None,
+                                    self.tui_slot.clone(),
+                                    self.agent_manager.clone(),
+                                ) {
+                                    Ok(rt) => {
+                                        self.runtime = rt;
+                                        (format!("Skill '{name}' loaded — active for the next turn."), false)
+                                    }
+                                    Err(e) => (format!("skill load: runtime rebuild failed: {e}"), false),
+                                }
+                            }
+                            Err(msg) => (msg, false),
+                        }
                     }
                     SkillSubcommand::List => {
                         let cwd = env::current_dir().unwrap_or_default();
@@ -3972,9 +3998,34 @@ impl LiveCli {
                     }
                     SkillSubcommand::Suggest { prompt } => {
                         let cwd = env::current_dir().unwrap_or_default();
-                        let arg = prompt.as_deref().map(|p| format!("suggest {p}")).unwrap_or_else(|| "suggest".to_string());
-                        let output = handle_skills_slash_command(Some(&arg), &cwd);
-                        (output.unwrap_or_else(|e| format!("skill suggest: {e}")), false)
+                        use commands::{format_suggestions, match_triggers as mt};
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use runtime::{ContentBlock, MessageRole};
+                        let prompt_text = prompt.unwrap_or_default();
+                        if prompt_text.is_empty() {
+                            // Fall back to the last user message in session history.
+                            let last_user = self.runtime.session().messages.iter().rev()
+                                .filter(|m| m.role == MessageRole::User)
+                                .find_map(|m| m.blocks.iter().find_map(|b| {
+                                    if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
+                                }))
+                                .unwrap_or_default();
+                            if last_user.is_empty() {
+                                ("No prompt provided. Usage: /skill suggest <prompt>".to_string(), false)
+                            } else {
+                                let roots = discover_skill_roots(&cwd);
+                                let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                                let skill_refs: Vec<&commands::agents::SkillSummary> = skills.iter().collect();
+                                let matches = mt(&last_user, &skill_refs);
+                                (format_suggestions(&matches, &last_user), false)
+                            }
+                        } else {
+                            let roots = discover_skill_roots(&cwd);
+                            let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                            let skill_refs: Vec<&commands::agents::SkillSummary> = skills.iter().collect();
+                            let matches = mt(&prompt_text, &skill_refs);
+                            (format_suggestions(&matches, &prompt_text), false)
+                        }
                     }
                 }
             }
@@ -4867,16 +4918,67 @@ impl LiveCli {
             }
             SlashCommand::Skill { subcommand } => {
                 let cwd = env::current_dir().unwrap_or_default();
-                let arg = match &subcommand {
-                    SkillSubcommand::Load { name } => format!("load {name}"),
-                    SkillSubcommand::List => "list".to_string(),
-                    SkillSubcommand::Suggest { prompt } => {
-                        prompt.as_deref().map(|p| format!("suggest {p}")).unwrap_or_else(|| "suggest".to_string())
+                match subcommand {
+                    SkillSubcommand::Load { name } => {
+                        match load_skill_body(&name, &cwd) {
+                            Ok(body) => {
+                                let marker = format!("# skill:{name} —");
+                                self.system_prompt.retain(|s| !s.contains(&marker));
+                                self.system_prompt.insert(0, body);
+                                let session = self.runtime.session().clone();
+                                match build_runtime_with_tui_slot(
+                                    session,
+                                    self.model.clone(),
+                                    self.system_prompt.clone(),
+                                    true,
+                                    true,
+                                    self.allowed_tools.clone(),
+                                    self.permission_mode,
+                                    None,
+                                    self.tui_slot.clone(),
+                                    self.agent_manager.clone(),
+                                ) {
+                                    Ok(rt) => {
+                                        self.runtime = rt;
+                                        println!("Skill '{name}' loaded — active for the next turn.");
+                                    }
+                                    Err(e) => eprintln!("skill load: runtime rebuild failed: {e}"),
+                                }
+                            }
+                            Err(msg) => eprintln!("{msg}"),
+                        }
                     }
-                };
-                match handle_skills_slash_command(Some(&arg), &cwd) {
-                    Ok(output) => println!("{output}"),
-                    Err(e) => eprintln!("skill: {e}"),
+                    SkillSubcommand::List => {
+                        match handle_skills_slash_command(Some("list"), &cwd) {
+                            Ok(output) => println!("{output}"),
+                            Err(e) => eprintln!("skill list: {e}"),
+                        }
+                    }
+                    SkillSubcommand::Suggest { prompt } => {
+                        use commands::{format_suggestions, match_triggers as mt};
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use runtime::{ContentBlock, MessageRole};
+                        let prompt_text = prompt.unwrap_or_default();
+                        let effective = if prompt_text.is_empty() {
+                            self.runtime.session().messages.iter().rev()
+                                .filter(|m| m.role == MessageRole::User)
+                                .find_map(|m| m.blocks.iter().find_map(|b| {
+                                    if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
+                                }))
+                                .unwrap_or_default()
+                        } else {
+                            prompt_text
+                        };
+                        if effective.is_empty() {
+                            println!("No prompt provided. Usage: /skill suggest <prompt>");
+                        } else {
+                            let roots = discover_skill_roots(&cwd);
+                            let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                            let skill_refs: Vec<&commands::agents::SkillSummary> = skills.iter().collect();
+                            let matches = mt(&effective, &skill_refs);
+                            println!("{}", format_suggestions(&matches, &effective));
+                        }
+                    }
                 }
                 false
             }

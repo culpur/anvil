@@ -693,3 +693,60 @@ fn render_skills_usage(unexpected: Option<&str>) -> String {
     }
     lines.join("\n")
 }
+
+// ---------------------------------------------------------------------------
+// Skill body resolution
+// ---------------------------------------------------------------------------
+
+/// Embedded bodies for the three trigger-matched bundled skills.
+const BUNDLED_SKILL_BODIES: &[(&str, &str)] = &[
+    (
+        "security-audit",
+        include_str!("../bundled/skills/security-audit/SKILL.md"),
+    ),
+    (
+        "code-review",
+        include_str!("../bundled/skills/code-review/SKILL.md"),
+    ),
+    (
+        "terse",
+        include_str!("../bundled/skills/terse/SKILL.md"),
+    ),
+];
+
+/// Resolve the full body of a named skill.
+///
+/// Resolution order:
+/// 1. Bundled skills embedded at compile time (security-audit, code-review, terse).
+/// 2. Skills found on disk via `discover_skill_roots(cwd)`.
+///
+/// Returns `Ok(body)` on success, `Err(message)` when no such skill is found.
+pub fn load_skill_body(name: &str, cwd: &Path) -> Result<String, String> {
+    // 1. Bundled skills — fast, no I/O.
+    for (bundled_name, body) in BUNDLED_SKILL_BODIES {
+        if bundled_name.eq_ignore_ascii_case(name) {
+            return Ok((*body).to_string());
+        }
+    }
+
+    // 2. Disk-discovered skills.
+    let roots = discover_skill_roots(cwd);
+    for root in &roots {
+        let skill_dir = root.path.join(name);
+        let skill_md = skill_dir.join("SKILL.md");
+        if skill_md.is_file() {
+            return fs::read_to_string(&skill_md)
+                .map_err(|e| format!("could not read skill file {}: {e}", skill_md.display()));
+        }
+        // Also check legacy flat .md files.
+        let flat_md = root.path.join(format!("{name}.md"));
+        if flat_md.is_file() {
+            return fs::read_to_string(&flat_md)
+                .map_err(|e| format!("could not read skill file {}: {e}", flat_md.display()));
+        }
+    }
+
+    Err(format!(
+        "No such skill '{name}'. Use /skill list to browse installed skills."
+    ))
+}

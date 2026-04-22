@@ -10,7 +10,7 @@ pub mod specs;
 pub mod subcommands;
 pub mod traits;
 
-pub use agents::{discover_skill_roots, handle_agents_slash_command, handle_skills_slash_command, load_skills_from_roots};
+pub use agents::{discover_skill_roots, handle_agents_slash_command, handle_skills_slash_command, load_skill_body, load_skills_from_roots};
 pub use skill_triggers::{match_triggers, TriggerMatch};
 pub use traits::{
     bundled_catalogue, compose_agent, compose_agent_with_options, format_traits_listing,
