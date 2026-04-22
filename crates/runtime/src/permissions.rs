@@ -234,4 +234,57 @@ mod tests {
             PermissionOutcome::Deny { reason } if reason == "not now"
         ));
     }
+
+    // ─── Bug #83 Part A: DangerFullAccess stability through authorize() ──────
+
+    /// Confirm that `authorize()` never mutates `active_mode()` even when the
+    /// prompter returns `Allow`.  Claude Code had a bug where approving an
+    /// out-of-workspace write downgraded the mode; this test documents the
+    /// invariant so any future regression fails loudly.
+    #[test]
+    fn danger_full_access_mode_is_stable_through_authorize_cycle() {
+        let policy = PermissionPolicy::new(PermissionMode::DangerFullAccess)
+            .with_tool_requirement("write_file", PermissionMode::DangerFullAccess);
+
+        // Even with a prompter that always approves, mode must not change.
+        let mut prompter = RecordingPrompter {
+            seen: Vec::new(),
+            allow: true,
+        };
+
+        let outcome = policy.authorize("write_file", "/etc/passwd", Some(&mut prompter));
+        // DangerFullAccess >= DangerFullAccess, so no prompt is needed.
+        assert_eq!(outcome, PermissionOutcome::Allow);
+        // The prompter must not have been consulted (no escalation needed).
+        assert_eq!(prompter.seen.len(), 0, "prompter should not be called when mode already satisfies requirement");
+        // Mode must be unchanged.
+        assert_eq!(
+            policy.active_mode(),
+            PermissionMode::DangerFullAccess,
+            "active_mode must remain DangerFullAccess after authorize()"
+        );
+    }
+
+    /// Confirm the same invariant when starting from WorkspaceWrite and a
+    /// prompter approves a DangerFullAccess escalation — the policy's stored
+    /// `active_mode` must not change; only this one call is approved.
+    #[test]
+    fn workspace_write_mode_stable_after_prompted_escalation() {
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
+
+        let mut prompter = RecordingPrompter {
+            seen: Vec::new(),
+            allow: true,
+        };
+
+        let outcome = policy.authorize("bash", "rm -rf /", Some(&mut prompter));
+        assert_eq!(outcome, PermissionOutcome::Allow);
+        // Mode must not have been promoted to DangerFullAccess.
+        assert_eq!(
+            policy.active_mode(),
+            PermissionMode::WorkspaceWrite,
+            "active_mode must not be silently upgraded after a prompted allow"
+        );
+    }
 }

@@ -575,4 +575,62 @@ mod tests {
         let custom = AgentType::parse("mycustomtype");
         assert_eq!(custom.label(), "mycustomtype");
     }
+
+    // ─── Bug #83 Part B: subagents inherit sandbox mode ──────────────────────
+    //
+    // Anvil's subagent threads do not call build_runtime() — they only make
+    // direct LLM API calls.  The permission/sandbox mode is enforced via the
+    // process-scoped ACTIVE_MODE atomic in file_ops, which is set once by
+    // build_runtime_with_tui_slot() and then READ by all threads.  No thread
+    // resets it, so spawned agents always inherit the parent session's mode.
+    //
+    // This test documents the invariant: a runner spawned via AgentManager
+    // sees the same ACTIVE_MODE that the parent set before spawning.
+
+    #[test]
+    fn spawned_agent_inherits_process_sandbox_mode() {
+        use runtime::file_ops::{active_sandbox_mode, set_active_sandbox_mode, SandboxMode};
+        use std::sync::{Arc, Mutex};
+
+        // Set the "parent" mode to DangerFullAccess before spawning.
+        set_active_sandbox_mode(SandboxMode::DangerFullAccess);
+
+        let observed_mode: Arc<Mutex<Option<SandboxMode>>> = Arc::new(Mutex::new(None));
+        let observed_clone = Arc::clone(&observed_mode);
+
+        let mut mgr = AgentManager::new();
+        mgr.spawn(
+            "mode-inherit-test",
+            AgentType::General,
+            "inherit sandbox mode",
+            move |_sender| {
+                // The agent thread must see the mode the parent set.
+                let mode = active_sandbox_mode();
+                *observed_clone.lock().unwrap() = Some(mode);
+                AgentResult {
+                    output: "done".to_string(),
+                    success: true,
+                    duration: Duration::from_millis(1),
+                }
+            },
+        );
+
+        // Wait for the thread to record its observation.
+        thread::sleep(Duration::from_millis(100));
+        mgr.poll();
+
+        let seen = observed_mode
+            .lock()
+            .unwrap()
+            .expect("agent should have recorded its observed mode");
+
+        assert_eq!(
+            seen,
+            SandboxMode::DangerFullAccess,
+            "spawned agent must inherit the parent's DangerFullAccess sandbox mode"
+        );
+
+        // Restore a safe default so other tests are not affected.
+        set_active_sandbox_mode(SandboxMode::WorkspaceWrite);
+    }
 }

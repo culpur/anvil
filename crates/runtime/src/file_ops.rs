@@ -1074,6 +1074,43 @@ mod tests {
         set_active_sandbox_mode(SandboxMode::Unset);
     }
 
+    // ─── Bug #83 Part A: ACTIVE_MODE stability through write_file ───────────
+
+    /// Confirm that calling `write_file` on an out-of-tree path does NOT
+    /// mutate `ACTIVE_MODE` when it is set to `DangerFullAccess`.  The only
+    /// thing that should change is the file on disk (or an OS error).
+    #[test]
+    fn danger_full_access_mode_stable_after_out_of_tree_write() {
+        let outside = std::path::Path::new("/var/anvil-sandbox-mode-stability-test/file.txt");
+
+        let _mode = SandboxModeGuard::new(SandboxMode::DangerFullAccess);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        let _ = write_file(outside.to_string_lossy().as_ref(), "stability test");
+
+        // Regardless of whether the write succeeded or the OS rejected it,
+        // ACTIVE_MODE must still read DangerFullAccess.
+        assert_eq!(
+            active_sandbox_mode(),
+            SandboxMode::DangerFullAccess,
+            "ACTIVE_MODE must not be mutated by write_file"
+        );
+    }
+
+    /// Confirm `ACTIVE_MODE` is stable through a successful tmp write.
+    #[test]
+    fn danger_full_access_mode_stable_after_tmp_write() {
+        let _mode = SandboxModeGuard::new(SandboxMode::DangerFullAccess);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+        let path = temp_path("dfa-stability.txt");
+        let _ = write_file(path.to_string_lossy().as_ref(), "ok");
+        assert_eq!(
+            active_sandbox_mode(),
+            SandboxMode::DangerFullAccess,
+            "ACTIVE_MODE must not be mutated after a successful write"
+        );
+    }
+
     #[test]
     fn unset_mode_behaves_like_workspace_write() {
         // The atomic starts at Unset; callers who never set a mode (tests,
