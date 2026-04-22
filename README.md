@@ -2,46 +2,49 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.7-blue)
+![Version](https://img.shields.io/badge/version-2.2.8-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-618%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-756%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
 
 ---
 
-## What's New in v2.2.7
+## What's New in v2.2.8
 
-### Cross-OS installers with SHA256 verification
-`install.sh` and `install.ps1` both fetch the SHA256 from `anvilhub.culpur.net/sha256/` as the primary source, fall back to the GitHub release, and **refuse to install on dual failure**. No more silent-skip on integrity check. Windows gets a PowerShell installer at parity with the shell script, including PATH wiring and first-run wizard launch.
+### Trait-based agent composition — `/agent compose`
+A 30-trait catalogue (expertise × personality × approach) composes thousands of agent variants from one YAML file. `/agent compose security,skeptical,first-principles "audit crates/runtime/src/oauth.rs"` assembles a system prompt in locked order (intro → expertise → personality → approach → task), spawns a subagent turn, renders the response. Dimension conflicts hard-error by default to force intentional composition. Browse the catalogue with `/agent traits`. Adapted from Miessler's `Personal_AI_Infrastructure`.
 
-### `anvil upgrade`, `--check`, `--setup`, `--uninstall`
-The binary now ships its own lifecycle. `anvil upgrade` self-updates with SHA256 verification. `anvil --check` prints an install health checklist. `anvil --setup` re-runs the first-run wizard. `anvil --uninstall` removes the binary and completions cleanly.
+### Skill front-matter triggers with suggest-not-auto
+Skills now declare YAML front-matter `triggers: [keyword, "phrase"]`. Anvil scans your prompt with case-insensitive whole-word matching and **suggests** relevant skills instead of silently injecting them (auto-injection would be a prompt-injection vector when Anvil is shipped to others). The user confirms via `/skill load <name>`. Three bundled skills ship as reference: `security-audit`, `code-review`, `terse`. Adapted from Miessler's `USE WHEN` descriptions + SuperClaude's `commands/*.md` triggers.
 
-### Shell completions for every shell
-Bash, zsh, fish, and PowerShell completion files ship in `install/completions/` and cover all 101 slash commands, subcommands, global flags, provider names, model names, and output formats. Type `anvil /v<TAB>` and get `/vault`, `/version`, `/vim`, `/voice`.
+### Prompt-type hooks
+Plugin lifecycle hooks can now inject a string into the next model turn instead of only running shell commands. `{"type":"prompt","body":"Verify the {tool_name} on {cwd}"}` with variable interpolation. Backward-compatible with bare-string command hooks. The model cannot write its own prompt-hooks (self-modifying-prompt vector).
 
-### Curated Ollama model menu
-First-run wizard now shows a vetted list: Llama 3.1 / 3.3, Qwen 3 and Qwen 2.5-Coder, Mistral Nemo, Gemma 3, Phi 4, Code Llama, Codestral. Per-model confirmation before pulling anything — nothing downloads without your explicit yes.
+### Three-arm skill evaluation harness — `anvil skill-eval`
+Honest measurement of whether a skill helps: `__baseline__` (no system prompt) vs `__terse__` ("Answer concisely.") vs `<skill>` ("Answer concisely.\n\n" + SKILL.md). Every report bakes in three honest caveats: directional tokenizer, measures count-only (not fidelity/latency/cost/quality), near-zero delta = skill doing nothing useful. JSON snapshots committed to git for diff-against. Adapted from `caveman`'s `evals/`.
 
-### TUI scrollback + text selection
-Press Shift to pass mouse events through to your terminal emulator. Select and copy directly from the scrollback ring buffer. No more losing output to the screen-clear.
+### Output style — `precise` (default) vs `condensed`
+User-selectable global response style: `/output-style precise` keeps full sentences; `/output-style condensed` activates the bundled terse skill. **Anvil never auto-applies condensed** — always an explicit choice. Auto-Clarity rules inside `terse` still fire for security warnings, irreversible actions, multi-step procedures, and consent confirmations even when condensed is active.
 
-### Windows-specific fixes
-`HOME` / `PATH` / `PATHEXT` handling works correctly on Windows 10/11. In-place respawn adds `.exe`. cmd.exe-aware install detection. Shortcut and completion installation no longer assumes Unix paths.
+### Plugin loader is forward-compatible
+A single bad plugin manifest used to crash the entire binary at startup. v2.2.8 isolates per-plugin failures — `PluginLoadDiagnostic` surfaces structured warnings on stderr and the other plugins continue loading. Exactly the class of bug that bricked a v2.2.7 binary reading v2.2.8 tagged-hook manifests.
 
-### QMD cross-platform discovery
-QMD helper now discovers its Unix socket or named pipe on whatever host you're on. No more hard-coded `/tmp` paths.
+### Bundled plugins are embedded in the binary
+No more `env!("CARGO_MANIFEST_DIR")` — the bundled plugin tree is now embedded via `include_dir` and materialized to `~/.anvil/plugins/bundled/` on first run with SHA-based fingerprint for idempotent updates. Homebrew users' bundled plugins are finally visible; developers' installed binaries are no longer wired to their live source tree.
 
-### Ollama tool-use reliability
-Multi-format tool-call parser (Anthropic, OpenAI, XML, JSON-fence, natural-language) with fail-loud on ambiguous responses. Local inference now matches cloud-provider tool-use behavior.
-
-### Release-pipeline hardening
-The release MCP now audits every binary's embedded version string before uploading. The v2.2.6 bug (where the Windows exe shipped labeled as 2.2.1) is impossible to reproduce — the build aborts if any binary's version doesn't match the tag.
+### Claude-Code-parity bug fixes
+- 429 `Retry-After` is now a minimum, not authoritative (Claude Code v2.1.98 parity)
+- 5-minute stream dead-air timeout — override via `ANVIL_STREAM_DEAD_AIR_MS` (v2.1.110 parity)
+- Request timeout configurable — override via `ANVIL_API_TIMEOUT_MS` (default 10 min) (v2.1.101 parity)
+- `/model` warns on mid-conversation switch (uncached re-read — v2.1.108 parity)
+- DangerFullAccess stability invariants + subagent mode inheritance (v2.1.97/v2.1.98 parity)
 
 ### Previous Releases
+- **v2.2.7**: Cross-OS installers with SHA256 verification, `anvil upgrade`, shell completions, curated Ollama menu, Windows env fixes, release-pipeline hardening
+- **v2.2.6**: 17 web config panels, full Status Line editor in browser, AnvilHub installer, deep hierarchical autocomplete, 8 previously-broken TUI handlers restored
 - **v2.2.5**: Intelligent memory system — 6-tier architecture, self-improving knowledge base
 - **v2.2.4**: Security hardening — 17 audit findings resolved, constant-time HMAC, zero warnings
 - **v2.2.3**: Six major features — interactive widget editor, agent types, MCP config panel
