@@ -121,8 +121,19 @@ pub(super) fn build_assistant_message(
             "assistant stream ended without a message stop event",
         ));
     }
+
+    // A properly-terminated stream with no content blocks means the model
+    // emitted just a stop token. This happens legitimately after a tool-call
+    // turn — Ollama and some OpenAI-compatible backends will answer a
+    // successful tool_result with an empty message rather than a
+    // follow-up paragraph. Treat it as "nothing more to say" and return an
+    // empty-text assistant message so the caller can break the turn loop
+    // cleanly. We keep the `!finished` guard above as the real error
+    // signal for truncated/disconnected streams.
     if blocks.is_empty() {
-        return Err(RuntimeError::new("assistant stream produced no content"));
+        blocks.push(ContentBlock::Text {
+            text: String::new(),
+        });
     }
 
     Ok((
@@ -136,5 +147,72 @@ fn flush_text_block(text: &mut String, blocks: &mut Vec<ContentBlock>) {
         blocks.push(ContentBlock::Text {
             text: std::mem::take(text),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_assistant_message;
+    use crate::session::ContentBlock;
+    use crate::usage::TokenUsage;
+    use super::super::AssistantEvent;
+
+    #[test]
+    fn empty_stream_after_tool_result_is_not_an_error() {
+        // Ollama (and some OpenAI-compatible backends) answer a successful
+        // tool_result with just a MessageStop — no text, no further tool calls.
+        // Before the fix, build_assistant_message returned
+        // "assistant stream produced no content" and killed the turn. Regression
+        // test: an empty-but-terminated stream yields a single empty-text block,
+        // not an error.
+        let events = vec![
+            AssistantEvent::Usage(TokenUsage {
+                input_tokens: 100,
+                output_tokens: 0,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            }),
+            AssistantEvent::MessageStop,
+        ];
+
+        let (message, usage) = build_assistant_message(events)
+            .expect("empty-but-terminated stream must not error");
+
+        assert!(usage.is_some(), "usage should propagate");
+        assert_eq!(message.blocks.len(), 1, "exactly one placeholder block");
+        match &message.blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, ""),
+            other => panic!("expected empty Text block, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stream_without_message_stop_is_still_an_error() {
+        // Truncated / disconnected streams should still fail loud. Only the
+        // empty-after-MessageStop case is treated as "done."
+        let events = vec![AssistantEvent::TextDelta("partial".to_string())];
+        let err = build_assistant_message(events)
+            .expect_err("truncated stream must error");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("ended without a message stop"),
+            "expected truncated-stream error, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn normal_text_response_still_works() {
+        let events = vec![
+            AssistantEvent::TextDelta("Hello ".to_string()),
+            AssistantEvent::TextDelta("world.".to_string()),
+            AssistantEvent::MessageStop,
+        ];
+        let (message, _) =
+            build_assistant_message(events).expect("text response should parse");
+        assert_eq!(message.blocks.len(), 1);
+        match &message.blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "Hello world."),
+            other => panic!("expected Text block, got {:?}", other),
+        }
     }
 }
