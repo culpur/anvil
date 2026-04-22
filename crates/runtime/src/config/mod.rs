@@ -478,8 +478,15 @@ mod tests {
             .and_then(JsonValue::as_object)
             .expect("hooks object")
             .contains_key("PostToolUse"));
-        assert_eq!(loaded.hooks().pre_tool_use(), &["base".to_string()]);
-        assert_eq!(loaded.hooks().post_tool_use(), &["project".to_string()]);
+        use plugins::HookSpec;
+        assert_eq!(
+            loaded.hooks().pre_tool_use(),
+            &[HookSpec::Command("base".to_string())]
+        );
+        assert_eq!(
+            loaded.hooks().post_tool_use(),
+            &[HookSpec::Command("project".to_string())]
+        );
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());
 

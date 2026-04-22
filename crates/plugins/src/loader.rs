@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::hooks::sanitize_hook_command;
+use crate::hooks::{sanitize_hook_command, HookKind, HookSpec};
 use crate::manifest::{
     is_literal_command, plugin_manifest_path, PluginHooks, PluginLifecycle, PluginToolDefinition,
     PluginToolManifest, load_plugin_from_directory,
@@ -112,8 +112,13 @@ pub(crate) fn validate_hook_paths(root: Option<&Path>, hooks: &PluginHooks) -> R
     let Some(root) = root else {
         return Ok(());
     };
-    for entry in hooks.pre_tool_use.iter().chain(hooks.post_tool_use.iter()) {
-        validate_command_path(root, entry, "hook")?;
+    for spec in hooks.pre_tool_use.iter().chain(hooks.post_tool_use.iter()) {
+        // Prompt hooks have no filesystem path — only validate non-empty body.
+        if spec.is_prompt() {
+            spec.validate_non_empty().map_err(PluginError::InvalidManifest)?;
+            continue;
+        }
+        validate_command_path(root, spec.body(), "hook")?;
     }
     Ok(())
 }
@@ -265,12 +270,12 @@ pub(crate) fn resolve_hooks(root: &Path, hooks: &PluginHooks) -> PluginHooks {
         pre_tool_use: hooks
             .pre_tool_use
             .iter()
-            .map(|entry| resolve_hook_entry(root, entry))
+            .map(|spec| resolve_hook_spec(root, spec))
             .collect(),
         post_tool_use: hooks
             .post_tool_use
             .iter()
-            .map(|entry| resolve_hook_entry(root, entry))
+            .map(|spec| resolve_hook_spec(root, spec))
             .collect(),
     }
 }
@@ -314,6 +319,25 @@ pub(crate) fn resolve_tools(
             )
         })
         .collect()
+}
+
+/// Resolve a `HookSpec` against the plugin root directory.
+///
+/// For command specs, relative paths are expanded to absolute paths so the
+/// runner can exec them without a working-directory assumption.  Prompt specs
+/// carry no filesystem path and are returned unchanged.
+fn resolve_hook_spec(root: &Path, spec: &HookSpec) -> HookSpec {
+    match spec {
+        HookSpec::Command(entry) => HookSpec::Command(resolve_hook_entry(root, entry)),
+        HookSpec::Tagged { kind: HookKind::Prompt, body } => HookSpec::Tagged {
+            kind: HookKind::Prompt,
+            body: body.clone(),
+        },
+        HookSpec::Tagged { kind: HookKind::Command, body } => HookSpec::Tagged {
+            kind: HookKind::Command,
+            body: resolve_hook_entry(root, body),
+        },
+    }
 }
 
 fn resolve_hook_entry(root: &Path, entry: &str) -> String {

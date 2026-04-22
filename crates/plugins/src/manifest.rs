@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::hooks::HookSpec;
 use crate::PluginError;
 
 // ---------------------------------------------------------------------------
@@ -15,9 +16,9 @@ use crate::PluginError;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginHooks {
     #[serde(rename = "PreToolUse", default)]
-    pub pre_tool_use: Vec<String>,
+    pub pre_tool_use: Vec<HookSpec>,
     #[serde(rename = "PostToolUse", default)]
-    pub post_tool_use: Vec<String>,
+    pub post_tool_use: Vec<HookSpec>,
 }
 
 impl PluginHooks {
@@ -366,8 +367,8 @@ pub(crate) fn build_plugin_manifest(
     validate_required_manifest_field("description", &raw.description, &mut errors);
 
     let permissions = build_manifest_permissions(&raw.permissions, &mut errors);
-    validate_command_entries(root, raw.hooks.pre_tool_use.iter(), "hook", &mut errors);
-    validate_command_entries(root, raw.hooks.post_tool_use.iter(), "hook", &mut errors);
+    validate_hook_spec_entries(root, raw.hooks.pre_tool_use.iter(), "hook", &mut errors);
+    validate_hook_spec_entries(root, raw.hooks.post_tool_use.iter(), "hook", &mut errors);
     validate_command_entries(
         root,
         raw.lifecycle.init.iter(),
@@ -557,6 +558,29 @@ fn build_manifest_commands(
     }
 
     validated
+}
+
+pub(crate) fn validate_hook_spec_entries<'a>(
+    root: &Path,
+    entries: impl Iterator<Item = &'a crate::hooks::HookSpec>,
+    kind: &'static str,
+    errors: &mut Vec<PluginManifestValidationError>,
+) {
+    for spec in entries {
+        // Prompt hooks have no filesystem path to validate — only check non-empty.
+        if spec.is_prompt() {
+            if let Err(reason) = spec.validate_non_empty() {
+                errors.push(PluginManifestValidationError::EmptyEntryField {
+                    kind,
+                    field: "body",
+                    name: Some(reason),
+                });
+            }
+            continue;
+        }
+        // Command spec: validate the path/command string as before.
+        validate_command_entry(root, spec.body(), kind, errors);
+    }
 }
 
 pub(crate) fn validate_command_entries<'a>(

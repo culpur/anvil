@@ -278,6 +278,7 @@ mod tests {
     };
     use crate::compact::CompactionConfig;
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
+    use plugins::HookSpec;
     use crate::permissions::{
         PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
         PermissionRequest,
@@ -487,7 +488,9 @@ mod tests {
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
             RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
-                vec![shell_snippet("printf 'blocked by hook'; exit 2")],
+                vec![HookSpec::Command(shell_snippet(
+                    "printf 'blocked by hook'; exit 2",
+                ))],
                 Vec::new(),
             )),
         );
@@ -553,8 +556,8 @@ mod tests {
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
             vec!["system".to_string()],
             RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
-                vec![shell_snippet("printf 'pre hook ran'")],
-                vec![shell_snippet("printf 'post hook ran'")],
+                vec![HookSpec::Command(shell_snippet("printf 'pre hook ran'"))],
+                vec![HookSpec::Command(shell_snippet("printf 'post hook ran'"))],
             )),
         );
 

@@ -1,4 +1,4 @@
-mod hooks;
+pub mod hooks;
 pub mod loader;
 pub mod manifest;
 pub mod marketplace;
@@ -12,7 +12,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-pub use hooks::{HookEvent, HookRunResult, HookRunner};
+pub use hooks::{
+    interpolate, HookEvent, HookInterpolationContext, HookKind, HookRunResult, HookRunner, HookSpec,
+};
 
 // Re-export the most common public surface so callers don't have to name submodules.
 pub use loader::builtin_plugins;
@@ -677,7 +679,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["read", "write"]
         );
-        assert_eq!(manifest.hooks.pre_tool_use, vec!["./hooks/pre.sh"]);
+        assert_eq!(
+            manifest.hooks.pre_tool_use,
+            vec![hooks::HookSpec::Command("./hooks/pre.sh".to_string())]
+        );
         assert_eq!(manifest.tools.len(), 1);
         assert_eq!(manifest.tools[0].name, "echo_tool");
         assert_eq!(
@@ -935,7 +940,7 @@ mod tests {
 
         let hooks = manager.aggregated_hooks().expect("hooks should aggregate");
         assert_eq!(hooks.pre_tool_use.len(), 1);
-        assert!(hooks.pre_tool_use[0].contains("pre.sh"));
+        assert!(hooks.pre_tool_use[0].body().contains("pre.sh"));
 
         manager
             .disable("demo@external")

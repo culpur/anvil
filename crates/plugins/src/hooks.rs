@@ -2,9 +2,141 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{PluginError, PluginHooks, PluginRegistry};
+
+// ---------------------------------------------------------------------------
+// HookSpec — tagged-union hook entry (backward-compatible with bare strings)
+// ---------------------------------------------------------------------------
+
+/// A single hook entry in a plugin manifest.
+///
+/// Bare strings deserialize as `Command` (shell/script path), preserving
+/// backward compatibility.  Tagged objects with `"type": "prompt"` inject
+/// a message into the next model turn instead of running a subprocess.
+///
+/// # Examples (JSON)
+/// ```json
+/// // Legacy bare-string form — still works unchanged
+/// "PreToolUse": ["./hooks/pre.sh"]
+///
+/// // Command hook — explicit tagged form
+/// { "type": "command", "body": "./hooks/pre.sh" }
+///
+/// // Prompt hook — injects text into the next model turn
+/// { "type": "prompt", "body": "verify the edit you just made still compiles" }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HookSpec {
+    /// Bare string — shell command or script path.  Backward-compatible.
+    Command(String),
+    /// Explicit tagged form with a `type` discriminant.
+    Tagged {
+        #[serde(rename = "type")]
+        kind: HookKind,
+        body: String,
+    },
+}
+
+impl HookSpec {
+    /// Returns `true` when this spec is a prompt hook.
+    #[must_use]
+    pub fn is_prompt(&self) -> bool {
+        matches!(
+            self,
+            Self::Tagged {
+                kind: HookKind::Prompt,
+                ..
+            }
+        )
+    }
+
+    /// Returns the body/command string regardless of variant.
+    #[must_use]
+    pub fn body(&self) -> &str {
+        match self {
+            Self::Command(s) => s,
+            Self::Tagged { body, .. } => body,
+        }
+    }
+
+    /// Validate that the body is non-empty.
+    pub fn validate_non_empty(&self) -> Result<(), String> {
+        if self.body().trim().is_empty() {
+            Err(format!(
+                "hook {} body must not be empty",
+                match self {
+                    Self::Command(_) => "command",
+                    Self::Tagged { kind, .. } => kind.as_str(),
+                }
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Discriminant for tagged hook entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookKind {
+    /// Run a shell command / script path.
+    Command,
+    /// Inject a string into the next model turn.
+    Prompt,
+}
+
+impl HookKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Prompt => "prompt",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Variable interpolation for prompt-hook bodies
+// ---------------------------------------------------------------------------
+
+/// Context variables available inside prompt-hook body strings.
+#[derive(Debug, Clone, Default)]
+pub struct HookInterpolationContext {
+    pub tool_name: Option<String>,
+    pub tool_input: Option<String>,
+    pub cwd: Option<String>,
+    pub date: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Replace `{key}` placeholders in `template` with values from `ctx`.
+///
+/// Only the five documented keys are substituted.  Unknown `{tokens}` are left
+/// literal so they appear verbatim in transcripts and are easy to spot.
+#[must_use]
+pub fn interpolate(template: &str, ctx: &HookInterpolationContext) -> String {
+    let mut result = template.to_string();
+    if let Some(ref v) = ctx.tool_name {
+        result = result.replace("{tool_name}", v);
+    }
+    if let Some(ref v) = ctx.tool_input {
+        result = result.replace("{tool_input}", v);
+    }
+    if let Some(ref v) = ctx.cwd {
+        result = result.replace("{cwd}", v);
+    }
+    if let Some(ref v) = ctx.date {
+        result = result.replace("{date}", v);
+    }
+    if let Some(ref v) = ctx.model {
+        result = result.replace("{model}", v);
+    }
+    result
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
@@ -95,13 +227,13 @@ impl HookRunner {
     fn run_commands(
         &self,
         event: HookEvent,
-        commands: &[String],
+        specs: &[HookSpec],
         tool_name: &str,
         tool_input: &str,
         tool_output: Option<&str>,
         is_error: bool,
     ) -> HookRunResult {
-        if commands.is_empty() {
+        if specs.is_empty() {
             return HookRunResult::allow(Vec::new());
         }
 
@@ -115,18 +247,33 @@ impl HookRunner {
         })
         .to_string();
 
+        let ctx = HookInterpolationContext {
+            tool_name: Some(tool_name.to_string()),
+            tool_input: Some(tool_input.to_string()),
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string()),
+            date: Some(current_date_iso()),
+            model: None,
+        };
+
         let mut messages = Vec::new();
 
-        for command in commands {
-            match self.run_command(
-                command,
-                event,
-                tool_name,
-                tool_input,
-                tool_output,
-                is_error,
-                &payload,
-            ) {
+        for spec in specs {
+            let outcome = if spec.is_prompt() {
+                self.run_prompt_spec(spec, event, tool_name, &ctx)
+            } else {
+                self.run_command(
+                    spec.body(),
+                    event,
+                    tool_name,
+                    tool_input,
+                    tool_output,
+                    is_error,
+                    &payload,
+                )
+            };
+            match outcome {
                 HookCommandOutcome::Allow { message } => {
                     if let Some(message) = message {
                         messages.push(message);
@@ -146,6 +293,32 @@ impl HookRunner {
         }
 
         HookRunResult::allow(messages)
+    }
+
+    /// Execute a prompt-type hook: interpolate variables and wrap the body with
+    /// a distinctive label so it is easy to spot in session transcripts.
+    #[allow(clippy::unused_self)]
+    fn run_prompt_spec(
+        &self,
+        spec: &HookSpec,
+        event: HookEvent,
+        tool_name: &str,
+        ctx: &HookInterpolationContext,
+    ) -> HookCommandOutcome {
+        let body = spec.body();
+        if body.trim().is_empty() {
+            return HookCommandOutcome::Warn {
+                message: format!(
+                    "{} prompt hook for `{tool_name}` has an empty body; skipping",
+                    event.as_str()
+                ),
+            };
+        }
+        let interpolated = interpolate(body, ctx);
+        let labeled = format!("[hook: {} → '{}']\n{interpolated}", event.as_str(), body);
+        HookCommandOutcome::Allow {
+            message: Some(labeled),
+        }
     }
 
     #[allow(clippy::too_many_arguments, clippy::unused_self)]
@@ -337,6 +510,43 @@ impl CommandWithStdin {
     }
 }
 
+/// Return today's date in ISO 8601 format (YYYY-MM-DD) using the system clock.
+fn current_date_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Simple calculation: days since epoch → year/month/day.
+    let days = secs / 86_400;
+    let mut year = 1970u32;
+    let mut remaining = days;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap_year(year);
+    let month_days: [u32; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u32;
+    for &md in &month_days {
+        if remaining < u64::from(md) {
+            break;
+        }
+        remaining -= u64::from(md);
+        month += 1;
+    }
+    let day = remaining + 1;
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+const fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{HookRunResult, HookRunner};
@@ -442,7 +652,9 @@ mod tests {
         }
 
         let runner = HookRunner::new(crate::PluginHooks {
-            pre_tool_use: vec![script.to_str().expect("utf8 path").to_string()],
+            pre_tool_use: vec![crate::hooks::HookSpec::Command(
+                script.to_str().expect("utf8 path").to_string(),
+            )],
             post_tool_use: Vec::new(),
         });
 
@@ -466,5 +678,128 @@ mod tests {
         // Safe commands must be accepted.
         assert!(super::sanitize_hook_command("my-hook.sh").is_ok());
         assert!(super::sanitize_hook_command("hooks/pre-check").is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Prompt-hook tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bare_string_deserializes_as_command_spec() {
+        let spec: super::HookSpec =
+            serde_json::from_str(r#""./hooks/pre.sh""#).expect("bare string should deserialize");
+        assert!(!spec.is_prompt());
+        assert_eq!(spec.body(), "./hooks/pre.sh");
+    }
+
+    #[test]
+    fn tagged_prompt_deserializes_correctly() {
+        let spec: super::HookSpec =
+            serde_json::from_str(r#"{"type":"prompt","body":"verify it compiled"}"#)
+                .expect("tagged prompt should deserialize");
+        assert!(spec.is_prompt());
+        assert_eq!(spec.body(), "verify it compiled");
+    }
+
+    #[test]
+    fn tagged_command_roundtrips() {
+        let original: super::HookSpec =
+            serde_json::from_str(r#"{"type":"command","body":"./hooks/pre.sh"}"#)
+                .expect("tagged command should deserialize");
+        assert!(!original.is_prompt());
+        let json = serde_json::to_string(&original).expect("serialize should succeed");
+        let roundtripped: super::HookSpec =
+            serde_json::from_str(&json).expect("roundtrip should deserialize");
+        assert_eq!(original, roundtripped);
+    }
+
+    #[test]
+    fn interpolate_replaces_known_tokens_and_preserves_unknown() {
+        let ctx = super::HookInterpolationContext {
+            tool_name: Some("Write".to_string()),
+            tool_input: Some(r#"{"path":"foo.rs"}"#.to_string()),
+            cwd: Some("/workspace".to_string()),
+            date: Some("2026-04-22".to_string()),
+            model: Some("claude-sonnet".to_string()),
+        };
+        let result = super::interpolate(
+            "{tool_name} ran in {cwd} on {date} ({model}) with {tool_input}; {unknown_token}",
+            &ctx,
+        );
+        assert!(result.contains("Write"));
+        assert!(result.contains("/workspace"));
+        assert!(result.contains("2026-04-22"));
+        assert!(result.contains("claude-sonnet"));
+        assert!(result.contains(r#"{"path":"foo.rs"}"#));
+        // Unknown tokens must be left literal.
+        assert!(result.contains("{unknown_token}"));
+    }
+
+    #[test]
+    fn prompt_hook_fires_and_message_contains_label_and_body() {
+        let runner = HookRunner::new(crate::PluginHooks {
+            pre_tool_use: vec![super::HookSpec::Tagged {
+                kind: super::HookKind::Prompt,
+                body: "verify {tool_name} compiled".to_string(),
+            }],
+            post_tool_use: Vec::new(),
+        });
+        let result = runner.run_pre_tool_use("Write", r#"{"file":"src/lib.rs"}"#);
+        assert!(!result.is_denied(), "prompt hook must not deny");
+        let messages = result.messages();
+        assert_eq!(messages.len(), 1);
+        let msg = &messages[0];
+        assert!(msg.contains("[hook: PreToolUse →"), "label missing: {msg}");
+        assert!(msg.contains("verify Write compiled"), "interpolation failed: {msg}");
+    }
+
+    #[test]
+    fn prompt_hook_empty_body_warns_not_silently_skips() {
+        let runner = HookRunner::new(crate::PluginHooks {
+            pre_tool_use: vec![super::HookSpec::Tagged {
+                kind: super::HookKind::Prompt,
+                body: String::new(),
+            }],
+            post_tool_use: Vec::new(),
+        });
+        let result = runner.run_pre_tool_use("Read", r#"{}"#);
+        // Empty body → Warn outcome → message present, not denied.
+        assert!(!result.is_denied());
+        assert!(!result.messages().is_empty(), "empty body should produce a warning message");
+    }
+
+    #[test]
+    fn json_roundtrip_for_prompt_and_command_variants() {
+        let specs: Vec<super::HookSpec> = serde_json::from_str(
+            r#"[
+                "./hooks/pre.sh",
+                {"type":"command","body":"./hooks/post.sh"},
+                {"type":"prompt","body":"please verify the change"}
+            ]"#,
+        )
+        .expect("mixed array should deserialize");
+
+        assert_eq!(specs.len(), 3);
+        assert!(!specs[0].is_prompt());
+        assert!(!specs[1].is_prompt());
+        assert!(specs[2].is_prompt());
+
+        let json = serde_json::to_string(&specs).expect("serialize");
+        let back: Vec<super::HookSpec> = serde_json::from_str(&json).expect("roundtrip");
+        assert_eq!(specs, back);
+    }
+
+    #[test]
+    fn validate_non_empty_errors_on_empty_body() {
+        let empty_prompt = super::HookSpec::Tagged {
+            kind: super::HookKind::Prompt,
+            body: "   ".to_string(),
+        };
+        assert!(
+            empty_prompt.validate_non_empty().is_err(),
+            "whitespace-only body should be an error"
+        );
+        let valid = super::HookSpec::Command("./hooks/pre.sh".to_string());
+        assert!(valid.validate_non_empty().is_ok());
     }
 }

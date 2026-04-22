@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::process::Command;
 
+use plugins::{interpolate, HookInterpolationContext, HookSpec};
 use serde_json::json;
 
 use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
@@ -106,13 +107,13 @@ impl HookRunner {
     fn run_commands(
         &self,
         event: HookEvent,
-        commands: &[String],
+        specs: &[HookSpec],
         tool_name: &str,
         tool_input: &str,
         tool_output: Option<&str>,
         is_error: bool,
     ) -> HookRunResult {
-        if commands.is_empty() {
+        if specs.is_empty() {
             return HookRunResult::allow(Vec::new());
         }
 
@@ -126,20 +127,35 @@ impl HookRunner {
         })
         .to_string();
 
+        let ctx = HookInterpolationContext {
+            tool_name: Some(tool_name.to_string()),
+            tool_input: Some(tool_input.to_string()),
+            cwd: std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string()),
+            date: Some(current_date_iso()),
+            model: None,
+        };
+
         let mut messages = Vec::new();
 
-        for command in commands {
-            match Self::run_command(
-                command,
-                HookCommandRequest {
-                    event,
-                    tool_name,
-                    tool_input,
-                    tool_output,
-                    is_error,
-                    payload: &payload,
-                },
-            ) {
+        for spec in specs {
+            let outcome = if spec.is_prompt() {
+                run_prompt_spec(spec, event, tool_name, &ctx)
+            } else {
+                Self::run_command(
+                    spec.body(),
+                    HookCommandRequest {
+                        event,
+                        tool_name,
+                        tool_input,
+                        tool_output,
+                        is_error,
+                        payload: &payload,
+                    },
+                )
+            };
+            match outcome {
                 HookCommandOutcome::Allow { message } => {
                     if let Some(message) = message {
                         messages.push(message);
@@ -218,6 +234,69 @@ enum HookCommandOutcome {
     Allow { message: Option<String> },
     Deny { message: Option<String> },
     Warn { message: String },
+}
+
+/// Run a prompt-type hook spec: interpolate variables and wrap with a label.
+fn run_prompt_spec(
+    spec: &HookSpec,
+    event: HookEvent,
+    tool_name: &str,
+    ctx: &HookInterpolationContext,
+) -> HookCommandOutcome {
+    let body = spec.body();
+    if body.trim().is_empty() {
+        return HookCommandOutcome::Warn {
+            message: format!(
+                "{} prompt hook for `{tool_name}` has an empty body; skipping",
+                event.as_str()
+            ),
+        };
+    }
+    let interpolated = interpolate(body, ctx);
+    let labeled = format!("[hook: {} → '{}']\n{interpolated}", event.as_str(), body);
+    HookCommandOutcome::Allow {
+        message: Some(labeled),
+    }
+}
+
+/// Return today's date in ISO 8601 (YYYY-MM-DD) from the system clock.
+fn current_date_iso() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = secs / 86_400;
+    let mut year = 1970u32;
+    let mut remaining = days;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining < days_in_year {
+            break;
+        }
+        remaining -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap_year(year);
+    let month_days: [u32; 12] = [
+        31,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut month = 1u32;
+    for &md in &month_days {
+        if remaining < u64::from(md) {
+            break;
+        }
+        remaining -= u64::from(md);
+        month += 1;
+    }
+    let day = remaining + 1;
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+const fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 fn parse_tool_input(tool_input: &str) -> serde_json::Value {
@@ -302,11 +381,12 @@ impl CommandWithStdin {
 mod tests {
     use super::{HookRunResult, HookRunner};
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
+    use plugins::{HookKind, HookSpec};
 
     #[test]
     fn allows_exit_code_zero_and_captures_stdout() {
         let runner = HookRunner::new(RuntimeHookConfig::new(
-            vec![shell_snippet("printf 'pre ok'")],
+            vec![HookSpec::Command(shell_snippet("printf 'pre ok'"))],
             Vec::new(),
         ));
 
@@ -318,7 +398,9 @@ mod tests {
     #[test]
     fn denies_exit_code_two() {
         let runner = HookRunner::new(RuntimeHookConfig::new(
-            vec![shell_snippet("printf 'blocked by hook'; exit 2")],
+            vec![HookSpec::Command(shell_snippet(
+                "printf 'blocked by hook'; exit 2",
+            ))],
             Vec::new(),
         ));
 
@@ -332,7 +414,9 @@ mod tests {
     fn warns_for_other_non_zero_statuses() {
         let runner = HookRunner::from_feature_config(&RuntimeFeatureConfig::default().with_hooks(
             RuntimeHookConfig::new(
-                vec![shell_snippet("printf 'warning hook'; exit 1")],
+                vec![HookSpec::Command(shell_snippet(
+                    "printf 'warning hook'; exit 1",
+                ))],
                 Vec::new(),
             ),
         ));
@@ -344,6 +428,44 @@ mod tests {
             .messages()
             .iter()
             .any(|message| message.contains("allowing tool execution to continue")));
+    }
+
+    #[test]
+    fn prompt_hook_injects_message_without_denying() {
+        let runner = HookRunner::new(RuntimeHookConfig::new(
+            vec![HookSpec::Tagged {
+                kind: HookKind::Prompt,
+                body: "verify {tool_name} still compiles".to_string(),
+            }],
+            Vec::new(),
+        ));
+
+        let result = runner.run_pre_tool_use("Write", r#"{"file":"src/main.rs"}"#);
+
+        assert!(!result.is_denied(), "prompt hook must not deny");
+        let msgs = result.messages();
+        assert_eq!(msgs.len(), 1);
+        assert!(
+            msgs[0].contains("[hook: PreToolUse →"),
+            "label missing: {}",
+            msgs[0]
+        );
+        assert!(
+            msgs[0].contains("verify Write still compiles"),
+            "interpolation failed: {}",
+            msgs[0]
+        );
+    }
+
+    #[test]
+    fn prompt_hook_from_commands_constructor() {
+        // Ensure RuntimeHookConfig::from_commands keeps working for callers
+        // that build configs from plain string lists.
+        let config = RuntimeHookConfig::from_commands(
+            vec!["printf 'ok'".to_string()],
+            Vec::new(),
+        );
+        assert!(!config.pre_tool_use()[0].is_prompt());
     }
 
     #[cfg(windows)]
