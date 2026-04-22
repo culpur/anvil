@@ -2,40 +2,53 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.1.2-blue)
+![Version](https://img.shields.io/badge/version-2.2.7-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-394%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-618%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
-Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 90 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
+Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
 
 ---
 
-## What's New in v2.1.2
+## What's New in v2.2.7
 
-### Credential Auto-Detection & Vault Import
-Anvil now **automatically detects credentials** across environment variables, dotfiles, `.env` files, SSH keys, and TLS certificates. Provider API keys are auto-vaulted; others prompt for confirmation. Run `/vault scan` for a full sweep.
+### Cross-OS installers with SHA256 verification
+`install.sh` and `install.ps1` both fetch the SHA256 from `anvilhub.culpur.net/sha256/` as the primary source, fall back to the GitHub release, and **refuse to install on dual failure**. No more silent-skip on integrity check. Windows gets a PowerShell installer at parity with the shell script, including PATH wiring and first-run wizard launch.
 
-### Network Egress Control
-Configurable **domain allowlist** for tool network access. Default: only AI provider APIs. Tools cannot exfiltrate data to unauthorized endpoints. Manage with `/security egress`.
+### `anvil upgrade`, `--check`, `--setup`, `--uninstall`
+The binary now ships its own lifecycle. `anvil upgrade` self-updates with SHA256 verification. `anvil --check` prints an install health checklist. `anvil --setup` re-runs the first-run wizard. `anvil --uninstall` removes the binary and completions cleanly.
 
-### Signed Session Transcripts
-Every session generates an **HMAC-SHA256 signed audit trail** in `~/.anvil/audit/`. Tamper-evident transcripts for compliance and forensics. Verify with `/audit verify`.
+### Shell completions for every shell
+Bash, zsh, fish, and PowerShell completion files ship in `install/completions/` and cover all 101 slash commands, subcommands, global flags, provider names, model names, and output formats. Type `anvil /v<TAB>` and get `/vault`, `/version`, `/vim`, `/voice`.
 
-### Conversation Branching
-Type `/fork <name>` to snapshot the current conversation and try a different approach. Switch between branches with `/fork switch N`. Never lose a good conversation thread.
+### Curated Ollama model menu
+First-run wizard now shows a vetted list: Llama 3.1 / 3.3, Qwen 3 and Qwen 2.5-Coder, Mistral Nemo, Gemma 3, Phi 4, Code Llama, Codestral. Per-model confirmation before pulling anything — nothing downloads without your explicit yes.
 
-### Enhanced Markdown Export
-`/export md` produces clean, readable Markdown with proper code blocks, tool call formatting, and a token usage summary.
+### TUI scrollback + text selection
+Press Shift to pass mouse events through to your terminal emulator. Select and copy directly from the scrollback ring buffer. No more losing output to the screen-clear.
 
-### Clickable URLs & Browser Auto-Open
-System messages now render **clickable hyperlinks** via OSC 8. `/remote-control` automatically opens the viewer URL in your default browser.
+### Windows-specific fixes
+`HOME` / `PATH` / `PATHEXT` handling works correctly on Windows 10/11. In-place respawn adds `.exe`. cmd.exe-aware install detection. Shortcut and completion installation no longer assumes Unix paths.
 
-### Expanded Cost Tracking
-Per-provider pricing for **OpenAI** (GPT-4o, o3, GPT-4o-mini), **xAI** (Grok-3, Grok-3-mini), and Ollama ($0). Running cost total in the status bar.
+### QMD cross-platform discovery
+QMD helper now discovers its Unix socket or named pipe on whatever host you're on. No more hard-coded `/tmp` paths.
+
+### Ollama tool-use reliability
+Multi-format tool-call parser (Anthropic, OpenAI, XML, JSON-fence, natural-language) with fail-loud on ambiguous responses. Local inference now matches cloud-provider tool-use behavior.
+
+### Release-pipeline hardening
+The release MCP now audits every binary's embedded version string before uploading. The v2.2.6 bug (where the Windows exe shipped labeled as 2.2.1) is impossible to reproduce — the build aborts if any binary's version doesn't match the tag.
 
 ### Previous Releases
+- **v2.2.5**: Intelligent memory system — 6-tier architecture, self-improving knowledge base
+- **v2.2.4**: Security hardening — 17 audit findings resolved, constant-time HMAC, zero warnings
+- **v2.2.3**: Six major features — interactive widget editor, agent types, MCP config panel
+- **v2.2.2**: Customizable widget-based status line with 8 presets
+- **v2.2.1**: URL rendering fix, context-aware vault form
+- **v2.2.0**: Typed credential vault — 21 credential types, category tabs, visual manager
+- **v2.1.2**: Credential auto-detection, egress control, signed transcripts
 - **v2.1.1**: Live streaming responses, remote control, thinking mode
 - **v2.1.0**: AES-256-GCM encrypted vault, file sandbox, modular architecture
 - **v2.0.0**: Full Claude Code parity
@@ -65,7 +78,16 @@ irm https://anvilhub.culpur.net/install.ps1 | iex
 ### Self-update
 
 ```bash
-anvil --update
+anvil upgrade          # preferred — SHA256 verified, atomic swap
+anvil --update         # legacy alias, same behavior
+```
+
+### Install health check
+
+```bash
+anvil --check          # prints a per-dependency readiness checklist
+anvil --setup          # re-runs the first-run wizard
+anvil --uninstall      # removes the binary + completions
 ```
 
 ### Manual download
@@ -82,9 +104,22 @@ https://github.com/culpur/anvil/releases/latest
 | macOS Intel | `anvil-x86_64-apple-darwin` |
 | Linux x86_64 | `anvil-x86_64-unknown-linux-gnu` |
 | Linux ARM64 | `anvil-aarch64-unknown-linux-gnu` |
-| Windows x86_64 | `anvil-x86_64-pc-windows-msvc.exe` |
+| Windows x86_64 | `anvil-x86_64-pc-windows-gnu.exe` |
 
-Each binary ships with a `.sha256` checksum file at the same URL.
+Every binary is published with a sibling `.sha256` checksum file on the GitHub release, and an out-of-band copy at `https://anvilhub.culpur.net/sha256/<binary>.sha256`. The installers and `anvil upgrade` check both sources and abort on failure — no unverified binary ever lands on disk.
+
+### Shell completions
+
+Completion scripts ship in `install/completions/` and are wired automatically by `install.sh` / `install.ps1`:
+
+| Shell | Path |
+|---|---|
+| bash | `install/completions/anvil.bash` |
+| zsh | `install/completions/anvil.zsh` (add to `$fpath`) |
+| fish | `install/completions/anvil.fish` (drop in `~/.config/fish/completions/`) |
+| PowerShell | `install/completions/anvil.ps1` (dotted into `$PROFILE`) |
+
+All four cover the full surface: 101 slash commands, every subcommand, global flags, provider names, and model names.
 
 ---
 
