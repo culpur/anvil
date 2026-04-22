@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::diagnostics::PluginLoadDiagnostic;
 use crate::hooks::HookSpec;
 use crate::PluginError;
 
@@ -177,6 +178,18 @@ pub struct PluginCommandManifest {
 // Raw (pre-validation) types
 // ---------------------------------------------------------------------------
 
+/// Raw hook container that stores each hook entry as an opaque `Value` so that
+/// unknown variants (e.g. `{"type":"future_variant","body":"..."}`) do not fail
+/// deserialization of the entire array.  Per-element conversion is done in
+/// `build_plugin_manifest` where diagnostics can be accumulated.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RawPluginHooks {
+    #[serde(rename = "PreToolUse", default)]
+    pub pre_tool_use: Vec<Value>,
+    #[serde(rename = "PostToolUse", default)]
+    pub post_tool_use: Vec<Value>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RawPluginManifest {
     pub name: String,
@@ -187,7 +200,7 @@ pub(crate) struct RawPluginManifest {
     #[serde(rename = "defaultEnabled", default)]
     pub default_enabled: bool,
     #[serde(default)]
-    pub hooks: PluginHooks,
+    pub hooks: RawPluginHooks,
     #[serde(default)]
     pub lifecycle: PluginLifecycle,
     #[serde(default)]
@@ -315,11 +328,24 @@ impl Display for PluginManifestValidationError {
 pub(crate) const MANIFEST_FILE_NAME: &str = "plugin.json";
 pub(crate) const MANIFEST_RELATIVE_PATH: &str = ".anvil-plugin/plugin.json";
 
+/// Load and validate a plugin manifest from a directory, returning the manifest
+/// on success.  Any hook-level warnings (unknown variants) are discarded; use
+/// `load_plugin_from_directory_with_diagnostics` when the caller needs them.
 pub fn load_plugin_from_directory(root: &Path) -> Result<PluginManifest, PluginError> {
+    load_manifest_from_directory(root).map(|(manifest, _diagnostics)| manifest)
+}
+
+/// Load and validate a plugin manifest from a directory, returning both the
+/// manifest and any per-hook-entry diagnostics collected during loading.
+pub(crate) fn load_plugin_from_directory_with_diagnostics(
+    root: &Path,
+) -> Result<(PluginManifest, Vec<PluginLoadDiagnostic>), PluginError> {
     load_manifest_from_directory(root)
 }
 
-fn load_manifest_from_directory(root: &Path) -> Result<PluginManifest, PluginError> {
+fn load_manifest_from_directory(
+    root: &Path,
+) -> Result<(PluginManifest, Vec<PluginLoadDiagnostic>), PluginError> {
     let manifest_path = plugin_manifest_path(root)?;
     load_manifest_from_path(root, &manifest_path)
 }
@@ -327,7 +353,7 @@ fn load_manifest_from_directory(root: &Path) -> Result<PluginManifest, PluginErr
 fn load_manifest_from_path(
     root: &Path,
     manifest_path: &Path,
-) -> Result<PluginManifest, PluginError> {
+) -> Result<(PluginManifest, Vec<PluginLoadDiagnostic>), PluginError> {
     let contents = fs::read_to_string(manifest_path).map_err(|error| {
         PluginError::NotFound(format!(
             "plugin manifest not found at {}: {error}",
@@ -359,16 +385,32 @@ pub(crate) fn plugin_manifest_path(root: &Path) -> Result<PathBuf, PluginError> 
 pub(crate) fn build_plugin_manifest(
     root: &Path,
     raw: RawPluginManifest,
-) -> Result<PluginManifest, PluginError> {
+) -> Result<(PluginManifest, Vec<PluginLoadDiagnostic>), PluginError> {
     let mut errors = Vec::new();
+    let mut load_diagnostics: Vec<PluginLoadDiagnostic> = Vec::new();
 
     validate_required_manifest_field("name", &raw.name, &mut errors);
     validate_required_manifest_field("version", &raw.version, &mut errors);
     validate_required_manifest_field("description", &raw.description, &mut errors);
 
     let permissions = build_manifest_permissions(&raw.permissions, &mut errors);
-    validate_hook_spec_entries(root, raw.hooks.pre_tool_use.iter(), "hook", &mut errors);
-    validate_hook_spec_entries(root, raw.hooks.post_tool_use.iter(), "hook", &mut errors);
+
+    // Convert raw Value arrays into typed HookSpec vecs, recording per-element
+    // failures as UnknownHookVariant diagnostics instead of hard errors.
+    let (pre_tool_use, pre_diagnostics) =
+        build_hook_specs_lenient(&raw.name, "PreToolUse", &raw.hooks.pre_tool_use);
+    let (post_tool_use, post_diagnostics) =
+        build_hook_specs_lenient(&raw.name, "PostToolUse", &raw.hooks.post_tool_use);
+    load_diagnostics.extend(pre_diagnostics);
+    load_diagnostics.extend(post_diagnostics);
+
+    let hooks = PluginHooks {
+        pre_tool_use,
+        post_tool_use,
+    };
+
+    validate_hook_spec_entries(root, hooks.pre_tool_use.iter(), "hook", &mut errors);
+    validate_hook_spec_entries(root, hooks.post_tool_use.iter(), "hook", &mut errors);
     validate_command_entries(
         root,
         raw.lifecycle.init.iter(),
@@ -388,17 +430,48 @@ pub(crate) fn build_plugin_manifest(
         return Err(PluginError::ManifestValidation(errors));
     }
 
-    Ok(PluginManifest {
-        name: raw.name,
-        version: raw.version,
-        description: raw.description,
-        permissions,
-        default_enabled: raw.default_enabled,
-        hooks: raw.hooks,
-        lifecycle: raw.lifecycle,
-        tools,
-        commands,
-    })
+    Ok((
+        PluginManifest {
+            name: raw.name,
+            version: raw.version,
+            description: raw.description,
+            permissions,
+            default_enabled: raw.default_enabled,
+            hooks,
+            lifecycle: raw.lifecycle,
+            tools,
+            commands,
+        },
+        load_diagnostics,
+    ))
+}
+
+/// Attempt to deserialize each `Value` in `raw_entries` as a `HookSpec`.
+/// Entries that fail are dropped and a `UnknownHookVariant` diagnostic is
+/// recorded in their place — the rest of the array continues to load.
+fn build_hook_specs_lenient(
+    plugin_name: &str,
+    event: &str,
+    raw_entries: &[Value],
+) -> (Vec<HookSpec>, Vec<PluginLoadDiagnostic>) {
+    let mut specs = Vec::new();
+    let mut diagnostics = Vec::new();
+
+    for (index, value) in raw_entries.iter().enumerate() {
+        match serde_json::from_value::<HookSpec>(value.clone()) {
+            Ok(spec) => specs.push(spec),
+            Err(err) => {
+                diagnostics.push(PluginLoadDiagnostic::UnknownHookVariant {
+                    plugin: plugin_name.to_string(),
+                    event: event.to_string(),
+                    index,
+                    detail: err.to_string(),
+                });
+            }
+        }
+    }
+
+    (specs, diagnostics)
 }
 
 fn validate_required_manifest_field(

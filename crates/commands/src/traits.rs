@@ -117,6 +117,42 @@ pub fn bundled_catalogue() -> &'static TraitCatalogue {
     })
 }
 
+// ── Formatting ────────────────────────────────────────────────────────────────
+
+/// Format a human-readable listing of all traits in the catalogue.
+#[must_use]
+pub fn format_traits_listing(catalogue: &TraitCatalogue) -> String {
+    let all = catalogue.all();
+    if all.is_empty() {
+        return "No traits found in catalogue.".to_string();
+    }
+
+    // Group by dimension, preserving insertion order via stable sort.
+    let mut sorted = all;
+    sorted.sort_by(|a, b| a.dimension.cmp(&b.dimension).then(a.name.cmp(&b.name)));
+
+    let mut by_dim: Vec<(String, Vec<&Trait>)> = Vec::new();
+    for t in sorted {
+        if let Some(group) = by_dim.iter_mut().find(|(d, _)| d == &t.dimension) {
+            group.1.push(t);
+        } else {
+            by_dim.push((t.dimension.clone(), vec![t]));
+        }
+    }
+
+    let mut lines = vec!["Available agent traits:".to_string()];
+    for (dim, traits) in by_dim {
+        lines.push(format!("\n  [{dim}]"));
+        for t in traits {
+            let first_line = t.prompt_fragment.lines().next().unwrap_or("");
+            lines.push(format!("    {:<20} — {}", t.name, first_line));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Usage: /agent compose <trait>[,<trait>...] \"<task>\"".to_string());
+    lines.join("\n")
+}
+
 // ── Composition ──────────────────────────────────────────────────────────────
 
 /// A fully composed agent ready for use as a system prompt.

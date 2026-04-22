@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::hooks::{sanitize_hook_command, HookKind, HookSpec};
+use crate::diagnostics::PluginLoadDiagnostic;
 use crate::manifest::{
-    is_literal_command, plugin_manifest_path, PluginHooks, PluginLifecycle, PluginToolDefinition,
-    PluginToolManifest, load_plugin_from_directory,
+    is_literal_command, load_plugin_from_directory_with_diagnostics, plugin_manifest_path,
+    PluginHooks, PluginLifecycle, PluginToolDefinition, PluginToolManifest,
 };
 use crate::tools::PluginTool;
 use crate::{
@@ -44,13 +45,19 @@ pub fn builtin_plugins() -> Vec<PluginDefinition> {
     })]
 }
 
-pub(crate) fn load_plugin_definition(
+/// Load a plugin definition from `root`, returning the definition and any
+/// per-hook-entry diagnostics that were collected during manifest parsing.
+///
+/// Returns `Err` only for system-level failures (permission denied, OOM, etc.)
+/// or for manifests that are structurally invalid JSON / violate the required
+/// schema fields.  Unknown hook variants are captured as diagnostics instead.
+pub(crate) fn load_plugin_definition_with_diagnostics(
     root: &Path,
     kind: PluginKind,
     source: String,
     marketplace: &str,
-) -> Result<PluginDefinition, PluginError> {
-    let manifest = load_plugin_from_directory(root)?;
+) -> Result<(PluginDefinition, Vec<PluginLoadDiagnostic>), PluginError> {
+    let (manifest, diagnostics) = load_plugin_from_directory_with_diagnostics(root)?;
     let metadata = PluginMetadata {
         id: plugin_id(&manifest.name, marketplace),
         name: manifest.name,
@@ -64,7 +71,7 @@ pub(crate) fn load_plugin_definition(
     let hooks = resolve_hooks(root, &manifest.hooks);
     let lifecycle = resolve_lifecycle(root, &manifest.lifecycle);
     let tools = resolve_tools(root, &metadata.id, &metadata.name, &manifest.tools);
-    Ok(match kind {
+    let definition = match kind {
         PluginKind::Builtin => PluginDefinition::Builtin(BuiltinPlugin {
             metadata,
             hooks,
@@ -83,7 +90,21 @@ pub(crate) fn load_plugin_definition(
             lifecycle,
             tools,
         }),
-    })
+    };
+    Ok((definition, diagnostics))
+}
+
+/// Convenience wrapper that drops per-hook diagnostics, for callers that do
+/// not participate in the diagnostic pipeline (e.g. `install`, `update`).
+#[allow(dead_code)]
+pub(crate) fn load_plugin_definition(
+    root: &Path,
+    kind: PluginKind,
+    source: String,
+    marketplace: &str,
+) -> Result<PluginDefinition, PluginError> {
+    load_plugin_definition_with_diagnostics(root, kind, source, marketplace)
+        .map(|(definition, _diagnostics)| definition)
 }
 
 pub(crate) fn discover_plugin_dirs(root: &Path) -> Result<Vec<PathBuf>, PluginError> {

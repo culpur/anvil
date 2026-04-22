@@ -67,7 +67,7 @@ impl SkillOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SkillRoot {
+pub struct SkillRoot {
     pub(crate) source: DefinitionSource,
     pub(crate) path: PathBuf,
     pub(crate) origin: SkillOrigin,
@@ -169,7 +169,7 @@ pub(crate) fn discover_definition_roots(
     roots
 }
 
-pub(crate) fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
+pub fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
     for ancestor in cwd.ancestors() {
@@ -348,7 +348,7 @@ const fn bundled_skill_defs() -> &'static [BundledSkillDef] {
     ]
 }
 
-pub(crate) fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSummary>> {
+pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillSummary>> {
     let mut skills = Vec::new();
     let mut active_sources = BTreeMap::<String, DefinitionSource>::new();
 

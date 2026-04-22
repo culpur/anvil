@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod hooks;
 pub mod loader;
 pub mod manifest;
@@ -911,7 +912,7 @@ mod tests {
 
     #[test]
     fn discovers_builtin_and_bundled_plugins() {
-        let manager = PluginManager::new(PluginManagerConfig::new(temp_dir("discover")));
+        let mut manager = PluginManager::new(PluginManagerConfig::new(temp_dir("discover")));
         let plugins = manager.list_plugins().expect("plugins should list");
         assert!(plugins
             .iter()
@@ -977,7 +978,7 @@ mod tests {
 
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let installed = manager
             .list_installed_plugins()
@@ -1003,7 +1004,7 @@ mod tests {
     #[test]
     fn default_bundled_root_loads_repo_bundles_as_installed_plugins() {
         let config_home = temp_dir("default-bundled-home");
-        let manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
 
         let installed = manager
             .list_installed_plugins()
@@ -1039,7 +1040,7 @@ mod tests {
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         config.install_root = Some(config_home.join("plugins").join("installed"));
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let mut registry = InstalledPluginRegistry::default();
         registry.plugins.insert(
@@ -1099,7 +1100,7 @@ mod tests {
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         config.install_root = Some(install_root);
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let mut registry = InstalledPluginRegistry::default();
         registry.plugins.insert(
@@ -1145,7 +1146,7 @@ mod tests {
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         config.install_root = Some(install_root);
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let mut registry = InstalledPluginRegistry::default();
         registry.plugins.insert(
@@ -1201,7 +1202,7 @@ mod tests {
         let mut reloaded_config = PluginManagerConfig::new(&config_home);
         reloaded_config.bundled_root = Some(bundled_root.clone());
         reloaded_config.enabled_plugins = load_enabled_plugins(&manager.settings_path());
-        let reloaded_manager = PluginManager::new(reloaded_config);
+        let mut reloaded_manager = PluginManager::new(reloaded_config);
         let reloaded = reloaded_manager
             .list_installed_plugins()
             .expect("bundled plugins should still be listed");
@@ -1234,7 +1235,7 @@ mod tests {
         let mut reloaded_config = PluginManagerConfig::new(&config_home);
         reloaded_config.bundled_root = Some(bundled_root.clone());
         reloaded_config.enabled_plugins = load_enabled_plugins(&manager.settings_path());
-        let reloaded_manager = PluginManager::new(reloaded_config);
+        let mut reloaded_manager = PluginManager::new(reloaded_config);
         let reloaded = reloaded_manager
             .list_installed_plugins()
             .expect("bundled plugins should still be listed");
@@ -1378,7 +1379,7 @@ mod tests {
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         config.install_root = Some(install_root);
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let installed = manager
             .list_installed_plugins()
@@ -1409,7 +1410,7 @@ mod tests {
         let mut config = PluginManagerConfig::new(&config_home);
         config.bundled_root = Some(bundled_root.clone());
         config.install_root = Some(install_root);
-        let manager = PluginManager::new(config);
+        let mut manager = PluginManager::new(config);
 
         let installed = manager
             .list_installed_plugins()
@@ -1420,5 +1421,196 @@ mod tests {
 
         let _ = fs::remove_dir_all(config_home);
         let _ = fs::remove_dir_all(bundled_root);
+    }
+
+    // -----------------------------------------------------------------------
+    // materialize_bundled_plugins tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn materialize_creates_expected_directory_structure() {
+        use crate::manager::materialize_bundled_plugins;
+
+        let config_home = temp_dir("materialize-create");
+        let bundled = materialize_bundled_plugins(&config_home)
+            .expect("materialization should succeed");
+
+        // The materialized path must exist.
+        assert!(bundled.exists(), "bundled dir should exist");
+
+        // The fingerprint file must be present.
+        assert!(
+            bundled.join(".fingerprint").exists(),
+            "fingerprint file should exist"
+        );
+
+        // Both embedded plugins should be present as directories.
+        assert!(
+            bundled.join("example-bundled").exists(),
+            "example-bundled should be extracted"
+        );
+        assert!(
+            bundled.join("sample-hooks").exists(),
+            "sample-hooks should be extracted"
+        );
+
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn materialize_is_idempotent() {
+        use crate::manager::materialize_bundled_plugins;
+
+        let config_home = temp_dir("materialize-idempotent");
+
+        // First call extracts.
+        let path1 = materialize_bundled_plugins(&config_home)
+            .expect("first materialization should succeed");
+
+        // Record modification time of the fingerprint file.
+        let fp_path = path1.join(".fingerprint");
+        let mtime1 = fs::metadata(&fp_path)
+            .expect("fingerprint should exist")
+            .modified()
+            .expect("mtime should be available");
+
+        // Small sleep to ensure mtime would change if re-extracted.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Second call must be a no-op (fingerprint matches).
+        let path2 = materialize_bundled_plugins(&config_home)
+            .expect("second materialization should succeed");
+        assert_eq!(path1, path2);
+
+        let mtime2 = fs::metadata(&fp_path)
+            .expect("fingerprint should still exist")
+            .modified()
+            .expect("mtime should be available");
+
+        assert_eq!(mtime1, mtime2, "fingerprint should not be re-written on no-op");
+
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn materialize_re_extracts_when_fingerprint_differs() {
+        use crate::manager::materialize_bundled_plugins;
+
+        let config_home = temp_dir("materialize-stale");
+
+        // First extraction.
+        let bundled = materialize_bundled_plugins(&config_home)
+            .expect("first materialization should succeed");
+
+        // Corrupt the fingerprint to simulate an outdated extraction.
+        fs::write(bundled.join(".fingerprint"), "stale-fingerprint-value")
+            .expect("should write stale fingerprint");
+
+        // Second call should detect the mismatch and re-extract.
+        let bundled2 = materialize_bundled_plugins(&config_home)
+            .expect("re-materialization should succeed");
+
+        // Fingerprint should now match the embedded tree again.
+        let fp = fs::read_to_string(bundled2.join(".fingerprint"))
+            .expect("fingerprint should exist after re-extraction");
+        assert_ne!(fp.trim(), "stale-fingerprint-value", "fingerprint should be updated");
+        assert_eq!(fp.trim().len(), 64, "fingerprint should be a 64-char hex SHA-256");
+
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn materialize_leaves_no_tmp_directories_on_success() {
+        use crate::manager::materialize_bundled_plugins;
+
+        let config_home = temp_dir("materialize-atomic");
+        materialize_bundled_plugins(&config_home)
+            .expect("materialization should succeed");
+
+        // No `.tmp-*` directories should remain.
+        let plugins_dir = config_home.join("plugins");
+        if plugins_dir.exists() {
+            let tmp_dirs: Vec<_> = fs::read_dir(&plugins_dir)
+                .expect("plugins dir should be readable")
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".tmp-")
+                })
+                .collect();
+            assert!(
+                tmp_dirs.is_empty(),
+                "no .tmp- directories should remain after successful extraction"
+            );
+        }
+
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn bundled_root_constant_not_used_as_runtime_path() {
+        // Verify that CARGO_MANIFEST_DIR is no longer used by PluginManager
+        // to form a runtime path.  The `bundled_root()` associated function
+        // that previously returned an absolute source-tree path has been
+        // removed; callers now receive a runtime-materialized path via
+        // `materialize_bundled_plugins`.
+        //
+        // The simplest observable proof: constructing a PluginManager with a
+        // fresh config_home that does NOT have a bundled_root override must
+        // still successfully discover the embedded bundled plugins.
+        let config_home = temp_dir("no-cargo-manifest-dir");
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+
+        // Must not reference the developer's source tree.
+        let plugins = manager.list_installed_plugins()
+            .expect("should discover plugins without source tree");
+        assert!(
+            plugins.iter().any(|p| p.metadata.id == "example-bundled@bundled"),
+            "example-bundled should load from materialized path"
+        );
+        assert!(
+            plugins.iter().any(|p| p.metadata.id == "sample-hooks@bundled"),
+            "sample-hooks should load from materialized path"
+        );
+
+        // All bundled plugin paths must live under config_home, not under any
+        // CARGO_MANIFEST_DIR-derived path.
+        for plugin in &plugins {
+            if plugin.metadata.kind == PluginKind::Bundled {
+                let root = plugin.metadata.root.as_ref().expect("bundled plugin should have a root");
+                assert!(
+                    root.starts_with(&config_home),
+                    "bundled plugin root {:?} should be under config_home {:?}",
+                    root,
+                    config_home
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn discover_plugins_loads_bundled_from_materialized_path() {
+        // End-to-end regression: PluginManager with a fresh tempdir config_home
+        // and no bundled_root override must materialize and load bundled plugins.
+        let config_home = temp_dir("e2e-materialized");
+        let mut manager = PluginManager::new(PluginManagerConfig::new(&config_home));
+
+        let plugins = manager.discover_plugins()
+            .expect("discover_plugins should succeed with materialized bundled tree");
+
+        assert!(
+            plugins.iter().any(|p| p.metadata().kind == PluginKind::Bundled),
+            "at least one bundled plugin should be discovered via materialization"
+        );
+        assert!(
+            plugins.iter().any(|p| p.metadata().id == "example-bundled@bundled"),
+            "example-bundled should be discovered"
+        );
+
+        let _ = fs::remove_dir_all(config_home);
     }
 }

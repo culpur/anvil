@@ -30,5 +30,8 @@ tools = { path = "../tools" }
 open = "5.3.3"
 dirs-next = "2.0.0"
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

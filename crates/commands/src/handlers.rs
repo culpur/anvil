@@ -441,6 +441,58 @@ pub fn handle_slash_command(
             message: "/restart is not yet implemented here. In TUI mode, /restart will respawn the Anvil process (available in Phase 5).".to_string(),
             session: session.clone(),
         }),
+        SlashCommand::Agent { .. } => Some(SlashCommandResult {
+            message: "/agent is not yet implemented here. Use /agent in the TUI to compose a temporary agent with traits.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::OutputStyle { style } => Some(SlashCommandResult {
+            message: format!(
+                "Output style: {}",
+                style.as_deref().unwrap_or("(current)")
+            ),
+            session: session.clone(),
+        }),
+        SlashCommand::Skill { subcommand } => {
+            use crate::agents::{discover_skill_roots, load_skills_from_roots};
+            use crate::{format_suggestions, match_triggers, SkillSubcommand};
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let message = match subcommand {
+                SkillSubcommand::List => {
+                    crate::agents::handle_skills_slash_command(None, &cwd)
+                        .unwrap_or_else(|e| format!("Error listing skills: {e}"))
+                }
+                SkillSubcommand::Suggest { prompt } => {
+                    let prompt_text = prompt.unwrap_or_default();
+                    if prompt_text.is_empty() {
+                        "No prompt provided. Usage: /skill suggest <prompt>".to_string()
+                    } else {
+                        let roots = discover_skill_roots(&cwd);
+                        let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                        let skill_refs: Vec<&crate::agents::SkillSummary> = skills.iter().collect();
+                        let matches = match_triggers(&prompt_text, &skill_refs);
+                        format_suggestions(&matches, &prompt_text)
+                    }
+                }
+                SkillSubcommand::Load { name } => {
+                    if name.trim().is_empty() {
+                        "Usage: /skill load <name>. Use /skill list to browse installed skills.".to_string()
+                    } else {
+                        let roots = discover_skill_roots(&cwd);
+                        let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                        if skills.iter().any(|s| s.name.eq_ignore_ascii_case(name.trim())) {
+                            format!(
+                                "Skill '{name}' queued for injection into the next turn.                                  Use /skill load in an interactive session for full injection."
+                            )
+                        } else {
+                            format!(
+                                "No such skill '{name}'. Use /skill list to browse installed skills."
+                            )
+                        }
+                    }
+                }
+            };
+            Some(SlashCommandResult { message, session: session.clone() })
+        }
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),

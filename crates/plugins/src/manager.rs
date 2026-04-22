@@ -3,20 +3,42 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use include_dir::{include_dir, Dir};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
+use crate::diagnostics::PluginLoadDiagnostic;
 use crate::loader::{
-    builtin_plugins, copy_dir_all, discover_plugin_dirs, load_plugin_definition, plugin_id,
-    sanitize_plugin_id, BUNDLED_MARKETPLACE, EXTERNAL_MARKETPLACE,
+    builtin_plugins, copy_dir_all, discover_plugin_dirs, load_plugin_definition_with_diagnostics,
+    plugin_id, sanitize_plugin_id, BUNDLED_MARKETPLACE, EXTERNAL_MARKETPLACE,
 };
 use crate::manifest::{load_plugin_from_directory, PluginManifest};
 use crate::marketplace::{materialize_source, parse_install_source, resolve_local_source};
-use crate::registry::{describe_install_source, InstalledPluginRecord, InstalledPluginRegistry, PluginInstallSource};
+use crate::registry::{
+    describe_install_source, InstalledPluginRecord, InstalledPluginRegistry, PluginInstallSource,
+};
 use crate::tools::PluginTool;
 use crate::{
     Plugin, PluginDefinition, PluginError, PluginHooks, PluginKind, PluginMetadata, PluginRegistry,
     PluginSummary, RegisteredPlugin,
 };
+
+// ---------------------------------------------------------------------------
+// Embedded bundled plugin tree
+// ---------------------------------------------------------------------------
+
+/// The bundled plugin tree embedded in the binary at compile time.
+///
+/// `env!("CARGO_MANIFEST_DIR")` is resolved at compile time to the crate
+/// root, so the bundled directory is baked into the binary and the produced
+/// binary never relies on the developer's source path existing at runtime.
+/// On first launch (or when the tree fingerprint changes) the embedded tree
+/// is extracted to `<config_home>/plugins/bundled/` by
+/// `materialize_bundled_plugins`.
+static BUNDLED_PLUGINS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/bundled");
+
+/// Filename of the SHA-256 fingerprint stored inside the materialized tree.
+const BUNDLED_FINGERPRINT_FILE: &str = ".fingerprint";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -75,18 +97,66 @@ pub struct UpdateOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManager {
     pub(crate) config: PluginManagerConfig,
+    /// Diagnostics accumulated during the most recent `discover_plugins` run.
+    diagnostics: Vec<PluginLoadDiagnostic>,
+    /// Keys already printed to stderr; prevents duplicate stderr output.
+    emitted_keys: BTreeSet<String>,
 }
 
 impl PluginManager {
     #[must_use]
-    pub const fn new(config: PluginManagerConfig) -> Self {
-        Self { config }
+    pub fn new(config: PluginManagerConfig) -> Self {
+        Self {
+            config,
+            diagnostics: Vec::new(),
+            emitted_keys: BTreeSet::new(),
+        }
     }
 
+    // -----------------------------------------------------------------------
+    // Diagnostic API
+    // -----------------------------------------------------------------------
+
+    /// Drain and return diagnostics accumulated since the last call.
+    ///
+    /// Each unique `dedup_key()` is returned at most once across the lifetime
+    /// of this `PluginManager`.
     #[must_use]
-    pub fn bundled_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bundled")
+    pub fn take_diagnostics(&mut self) -> Vec<PluginLoadDiagnostic> {
+        std::mem::take(&mut self.diagnostics)
     }
+
+    /// Print accumulated diagnostics to stderr with `[plugin warning]` prefix.
+    /// Each unique key is printed at most once per `PluginManager` lifetime.
+    pub fn print_startup_diagnostics(&mut self) {
+        let diags = std::mem::take(&mut self.diagnostics);
+        for diag in diags {
+            let key = diag.dedup_key();
+            if self.emitted_keys.insert(key) {
+                eprintln!("{}", diag.display_line());
+            }
+        }
+    }
+
+    fn push_diagnostic(&mut self, diag: PluginLoadDiagnostic) {
+        let key = diag.dedup_key();
+        if !self.emitted_keys.contains(&key) {
+            // Check for duplicate within current pending batch too.
+            if !self.diagnostics.iter().any(|d| d.dedup_key() == key) {
+                self.diagnostics.push(diag);
+            }
+        }
+    }
+
+    fn push_diagnostics(&mut self, diags: Vec<PluginLoadDiagnostic>) {
+        for diag in diags {
+            self.push_diagnostic(diag);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Path helpers
+    // -----------------------------------------------------------------------
 
     #[must_use]
     pub fn install_root(&self) -> PathBuf {
@@ -111,9 +181,14 @@ impl PluginManager {
         self.config.config_home.join(SETTINGS_FILE_NAME)
     }
 
-    pub fn plugin_registry(&self) -> Result<PluginRegistry, PluginError> {
+    // -----------------------------------------------------------------------
+    // Discovery
+    // -----------------------------------------------------------------------
+
+    pub fn plugin_registry(&mut self) -> Result<PluginRegistry, PluginError> {
+        let plugins = self.discover_plugins()?;
         Ok(PluginRegistry::new(
-            self.discover_plugins()?
+            plugins
                 .into_iter()
                 .map(|plugin| {
                     let enabled = self.is_enabled(plugin.metadata());
@@ -123,15 +198,21 @@ impl PluginManager {
         ))
     }
 
-    pub fn list_plugins(&self) -> Result<Vec<PluginSummary>, PluginError> {
+    pub fn list_plugins(&mut self) -> Result<Vec<PluginSummary>, PluginError> {
         Ok(self.plugin_registry()?.summaries())
     }
 
-    pub fn list_installed_plugins(&self) -> Result<Vec<PluginSummary>, PluginError> {
+    pub fn list_installed_plugins(&mut self) -> Result<Vec<PluginSummary>, PluginError> {
         Ok(self.installed_plugin_registry()?.summaries())
     }
 
-    pub fn discover_plugins(&self) -> Result<Vec<PluginDefinition>, PluginError> {
+    /// Discover all plugins, collecting per-plugin diagnostics rather than
+    /// failing the entire run when a single manifest is broken.
+    ///
+    /// Returns `Err` only for system-level failures (I/O on the plugin root
+    /// directory itself, registry corruption, etc.).
+    pub fn discover_plugins(&mut self) -> Result<Vec<PluginDefinition>, PluginError> {
+        self.diagnostics.clear();
         self.sync_bundled_plugins()?;
         let mut plugins = builtin_plugins();
         plugins.extend(self.discover_installed_plugins()?);
@@ -139,11 +220,11 @@ impl PluginManager {
         Ok(plugins)
     }
 
-    pub fn aggregated_hooks(&self) -> Result<PluginHooks, PluginError> {
+    pub fn aggregated_hooks(&mut self) -> Result<PluginHooks, PluginError> {
         self.plugin_registry()?.aggregated_hooks()
     }
 
-    pub fn aggregated_tools(&self) -> Result<Vec<PluginTool>, PluginError> {
+    pub fn aggregated_tools(&mut self) -> Result<Vec<PluginTool>, PluginError> {
         self.plugin_registry()?.aggregated_tools()
     }
 
@@ -151,6 +232,10 @@ impl PluginManager {
         let path = resolve_local_source(source)?;
         load_plugin_from_directory(&path)
     }
+
+    // -----------------------------------------------------------------------
+    // Mutation
+    // -----------------------------------------------------------------------
 
     pub fn install(&mut self, source: &str) -> Result<InstallOutcome, PluginError> {
         let install_source = parse_install_source(source)?;
@@ -271,7 +356,11 @@ impl PluginManager {
         })
     }
 
-    fn discover_installed_plugins(&self) -> Result<Vec<PluginDefinition>, PluginError> {
+    // -----------------------------------------------------------------------
+    // Internal discovery helpers (fault-isolated)
+    // -----------------------------------------------------------------------
+
+    fn discover_installed_plugins(&mut self) -> Result<Vec<PluginDefinition>, PluginError> {
         let mut registry = self.load_registry()?;
         let mut plugins = Vec::new();
         let mut seen_ids = BTreeSet::<String>::new();
@@ -288,10 +377,30 @@ impl PluginManager {
                 || install_path.display().to_string(),
                 |record| describe_install_source(&record.source),
             );
-            let plugin = load_plugin_definition(&install_path, kind, source, kind.marketplace())?;
-            if seen_ids.insert(plugin.metadata().id.clone()) {
-                seen_paths.insert(install_path);
-                plugins.push(plugin);
+            match load_plugin_definition_with_diagnostics(
+                &install_path,
+                kind,
+                source,
+                kind.marketplace(),
+            ) {
+                Ok((plugin, diags)) => {
+                    self.push_diagnostics(diags);
+                    if seen_ids.insert(plugin.metadata().id.clone()) {
+                        seen_paths.insert(install_path);
+                        plugins.push(plugin);
+                    }
+                }
+                Err(PluginError::NotFound(_)) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestMissing {
+                        dir: install_path,
+                    });
+                }
+                Err(error) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestParse {
+                        dir: install_path,
+                        detail: error.to_string(),
+                    });
+                }
             }
         }
 
@@ -305,15 +414,30 @@ impl PluginManager {
                 stale_registry_ids.push(record.id.clone());
                 continue;
             }
-            let plugin = load_plugin_definition(
+            match load_plugin_definition_with_diagnostics(
                 &record.install_path,
                 record.kind,
                 describe_install_source(&record.source),
                 record.kind.marketplace(),
-            )?;
-            if seen_ids.insert(plugin.metadata().id.clone()) {
-                seen_paths.insert(record.install_path.clone());
-                plugins.push(plugin);
+            ) {
+                Ok((plugin, diags)) => {
+                    self.push_diagnostics(diags);
+                    if seen_ids.insert(plugin.metadata().id.clone()) {
+                        seen_paths.insert(record.install_path.clone());
+                        plugins.push(plugin);
+                    }
+                }
+                Err(PluginError::NotFound(_)) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestMissing {
+                        dir: record.install_path.clone(),
+                    });
+                }
+                Err(error) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestParse {
+                        dir: record.install_path.clone(),
+                        detail: error.to_string(),
+                    });
+                }
             }
         }
 
@@ -328,25 +452,38 @@ impl PluginManager {
     }
 
     fn discover_external_directory_plugins(
-        &self,
+        &mut self,
         existing_plugins: &[PluginDefinition],
     ) -> Result<Vec<PluginDefinition>, PluginError> {
         let mut plugins = Vec::new();
 
-        for directory in &self.config.external_dirs {
+        for directory in &self.config.external_dirs.clone() {
             for root in discover_plugin_dirs(directory)? {
-                let plugin = load_plugin_definition(
+                match load_plugin_definition_with_diagnostics(
                     &root,
                     PluginKind::External,
                     root.display().to_string(),
                     EXTERNAL_MARKETPLACE,
-                )?;
-                if existing_plugins
-                    .iter()
-                    .chain(plugins.iter())
-                    .all(|existing| existing.metadata().id != plugin.metadata().id)
-                {
-                    plugins.push(plugin);
+                ) {
+                    Ok((plugin, diags)) => {
+                        self.push_diagnostics(diags);
+                        if existing_plugins
+                            .iter()
+                            .chain(plugins.iter())
+                            .all(|existing| existing.metadata().id != plugin.metadata().id)
+                        {
+                            plugins.push(plugin);
+                        }
+                    }
+                    Err(PluginError::NotFound(_)) => {
+                        self.push_diagnostic(PluginLoadDiagnostic::ManifestMissing { dir: root });
+                    }
+                    Err(error) => {
+                        self.push_diagnostic(PluginLoadDiagnostic::ManifestParse {
+                            dir: root,
+                            detail: error.to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -354,10 +491,11 @@ impl PluginManager {
         Ok(plugins)
     }
 
-    fn installed_plugin_registry(&self) -> Result<PluginRegistry, PluginError> {
+    fn installed_plugin_registry(&mut self) -> Result<PluginRegistry, PluginError> {
         self.sync_bundled_plugins()?;
+        let plugins = self.discover_installed_plugins()?;
         Ok(PluginRegistry::new(
-            self.discover_installed_plugins()?
+            plugins
                 .into_iter()
                 .map(|plugin| {
                     let enabled = self.is_enabled(plugin.metadata());
@@ -367,12 +505,16 @@ impl PluginManager {
         ))
     }
 
-    fn sync_bundled_plugins(&self) -> Result<(), PluginError> {
-        let bundled_root = self
-            .config
-            .bundled_root
-            .clone()
-            .unwrap_or_else(Self::bundled_root);
+    fn sync_bundled_plugins(&mut self) -> Result<(), PluginError> {
+        // When a test or caller supplies an explicit bundled_root override, use
+        // it directly (points at a real directory on disk, e.g. a temp dir).
+        // Otherwise, materialize the embedded tree from the binary into the
+        // user's config directory — this is the normal production path.
+        let bundled_root = if let Some(override_root) = &self.config.bundled_root {
+            override_root.clone()
+        } else {
+            materialize_bundled_plugins(&self.config.config_home)?
+        };
         let bundled_plugins = discover_plugin_dirs(&bundled_root)?;
         let mut registry = self.load_registry()?;
         let mut changed = false;
@@ -380,7 +522,22 @@ impl PluginManager {
         let mut active_bundled_ids = BTreeSet::new();
 
         for source_root in bundled_plugins {
-            let manifest = load_plugin_from_directory(&source_root)?;
+            let manifest = match load_plugin_from_directory(&source_root) {
+                Ok(m) => m,
+                Err(PluginError::NotFound(_)) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestMissing {
+                        dir: source_root,
+                    });
+                    continue;
+                }
+                Err(error) => {
+                    self.push_diagnostic(PluginLoadDiagnostic::ManifestParse {
+                        dir: source_root,
+                        detail: error.to_string(),
+                    });
+                    continue;
+                }
+            };
             let plugin_id = plugin_id(&manifest.name, BUNDLED_MARKETPLACE);
             active_bundled_ids.insert(plugin_id.clone());
             let install_path = install_root.join(sanitize_plugin_id(&plugin_id));
@@ -462,7 +619,7 @@ impl PluginManager {
             })
     }
 
-    fn ensure_known_plugin(&self, plugin_id: &str) -> Result<(), PluginError> {
+    fn ensure_known_plugin(&mut self, plugin_id: &str) -> Result<(), PluginError> {
         if self.plugin_registry()?.contains(plugin_id) {
             Ok(())
         } else {
@@ -484,13 +641,14 @@ impl PluginManager {
         }
     }
 
-    pub(crate) fn store_registry(&self, registry: &InstalledPluginRegistry) -> Result<(), PluginError> {
+    pub(crate) fn store_registry(
+        &self,
+        registry: &InstalledPluginRegistry,
+    ) -> Result<(), PluginError> {
         let path = self.registry_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        // Write to a sibling temp file then atomically rename to avoid partial writes
-        // corrupting the registry if the process is interrupted mid-write.
         let tmp_path = path.with_extension("json.tmp");
         fs::write(&tmp_path, serde_json::to_string_pretty(registry)?)?;
         fs::rename(&tmp_path, &path)?;
@@ -514,6 +672,119 @@ impl PluginManager {
             }
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bundled-plugin materialization
+// ---------------------------------------------------------------------------
+
+/// Extract the embedded bundled plugin tree to `<config_home>/plugins/bundled/`
+/// if the tree has changed since the last extraction (detected via SHA-256
+/// fingerprint) or has not been extracted yet.
+///
+/// Returns the path to the materialized directory. Repeated calls with the
+/// same embedded tree are near-zero-cost (fingerprint read + compare only).
+///
+/// Extraction is atomic: the new tree is written to a sibling
+/// `.tmp-<pid>` directory and renamed on success so a partial write never
+/// leaves the bundled directory in a corrupt state.
+///
+/// # Errors
+///
+/// Returns a `PluginError::Io` if filesystem operations fail.
+pub fn materialize_bundled_plugins(config_home: &Path) -> Result<PathBuf, PluginError> {
+    let dest = config_home.join("plugins").join("bundled");
+    let fingerprint_path = dest.join(BUNDLED_FINGERPRINT_FILE);
+    let current_fp = compute_embedded_fingerprint();
+
+    // Fast path: the tree is already up to date.
+    if let Ok(stored) = fs::read_to_string(&fingerprint_path) {
+        if stored.trim() == current_fp {
+            return Ok(dest);
+        }
+    }
+
+    // Slow path: extract to a temp directory then atomically rename.
+    let tmp_dest = config_home
+        .join("plugins")
+        .join(format!(".tmp-{}", std::process::id()));
+
+    if tmp_dest.exists() {
+        fs::remove_dir_all(&tmp_dest)?;
+    }
+    extract_dir(&BUNDLED_PLUGINS, &tmp_dest, &PathBuf::new())?;
+
+    // Write the fingerprint inside the temp tree before renaming.
+    fs::write(tmp_dest.join(BUNDLED_FINGERPRINT_FILE), &current_fp)?;
+
+    // Atomically replace the old tree.
+    if dest.exists() {
+        fs::remove_dir_all(&dest)?;
+    }
+    fs::rename(&tmp_dest, &dest)?;
+
+    Ok(dest)
+}
+
+/// Compute a deterministic SHA-256 fingerprint over the embedded file tree.
+///
+/// Files are visited in sorted path order so the fingerprint is stable across
+/// platforms and does not depend on directory enumeration order.
+fn compute_embedded_fingerprint() -> String {
+    let mut hasher = Sha256::new();
+    let mut paths: Vec<&include_dir::File<'_>> = BUNDLED_PLUGINS.files().collect();
+    // Sort by path for determinism.
+    paths.sort_by_key(|f| f.path());
+    for file in paths {
+        hasher.update(file.path().to_string_lossy().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(file.contents());
+        hasher.update(b"\0");
+    }
+    // Recurse into subdirectories (depth-first, sorted).
+    fn hash_dir(dir: &Dir<'_>, hasher: &mut Sha256) {
+        let mut subdirs: Vec<&Dir<'_>> = dir.dirs().collect();
+        subdirs.sort_by_key(|d| d.path());
+        for subdir in subdirs {
+            let mut files: Vec<&include_dir::File<'_>> = subdir.files().collect();
+            files.sort_by_key(|f| f.path());
+            for file in files {
+                hasher.update(file.path().to_string_lossy().as_bytes());
+                hasher.update(b"\0");
+                hasher.update(file.contents());
+                hasher.update(b"\0");
+            }
+            hash_dir(subdir, hasher);
+        }
+    }
+    hash_dir(&BUNDLED_PLUGINS, &mut hasher);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Recursively write the contents of an embedded `Dir` to `dest / rel_path`.
+fn extract_dir(dir: &Dir<'_>, base: &Path, _rel: &PathBuf) -> Result<(), PluginError> {
+    // Write files in this directory level.
+    for file in dir.files() {
+        let out_path = base.join(file.path());
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&out_path, file.contents())?;
+        // Restore executable bit for shell scripts on Unix.
+        #[cfg(unix)]
+        if out_path
+            .extension()
+            .is_some_and(|ext| ext == "sh")
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&out_path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    // Recurse.
+    for subdir in dir.dirs() {
+        extract_dir(subdir, base, &PathBuf::new())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
