@@ -155,12 +155,33 @@ impl AnvilTui {
     ) -> io::Result<(Self, TuiSender)> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        crossterm::execute!(
-            stdout,
-            terminal::EnterAlternateScreen,
-            crossterm::event::EnableMouseCapture,
-            crossterm::event::EnableBracketedPaste
-        )?;
+
+        // Mouse capture is OFF by default so the user's terminal handles text
+        // selection natively (drag-to-select copies normally, no modifier
+        // required). Mouse capture stole that on every terminal — even the
+        // Shift+Drag pass-through only worked on iTerm2/Windows Terminal/Linux
+        // VTEs, never on macOS Terminal.app.
+        //
+        // Users who want mouse-wheel scrolling in chat / configure overlay can
+        // opt back in with ANVIL_TUI_MOUSE=1.
+        let mouse_capture = std::env::var("ANVIL_TUI_MOUSE")
+            .ok()
+            .as_deref()
+            .map_or(false, |v| matches!(v, "1" | "true" | "yes" | "on"));
+        if mouse_capture {
+            crossterm::execute!(
+                stdout,
+                terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture,
+                crossterm::event::EnableBracketedPaste
+            )?;
+        } else {
+            crossterm::execute!(
+                stdout,
+                terminal::EnterAlternateScreen,
+                crossterm::event::EnableBracketedPaste
+            )?;
+        }
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
@@ -175,11 +196,16 @@ impl AnvilTui {
 
         // ── Platform selection/scrollback hint ───────────────────────────────
         // Printed once at startup so users know the key conventions without
-        // reading documentation.
-        #[cfg(target_os = "macos")]
-        let sel_hint = "Hold Option and drag to select text";
-        #[cfg(not(target_os = "macos"))]
-        let sel_hint = "Hold Shift and drag to select text";
+        // reading documentation. With mouse capture off (the default), normal
+        // drag-to-select works in every terminal — no modifier required.
+        let sel_hint = if mouse_capture {
+            #[cfg(target_os = "macos")]
+            { "Hold Option and drag to select text" }
+            #[cfg(not(target_os = "macos"))]
+            { "Hold Shift and drag to select text" }
+        } else {
+            "Drag to select text  •  Set ANVIL_TUI_MOUSE=1 to enable mouse-wheel scroll"
+        };
 
         initial_tab.log.push(LogEntry::System(format!(
             "{sel_hint}  •  PageUp to scroll back  •  End to return to live view"
@@ -710,41 +736,14 @@ impl AnvilTui {
             // Clear the content area first.
             frame.render_widget(ratatui::widgets::Clear, content_area);
 
-            // Truncate each line to content_area.width.
-            let max_col = content_area.width as usize;
-            let visible_lines: Vec<Line<'static>> = visible_lines
-                .into_iter()
-                .map(|line| {
-                    let total: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
-                    if total <= max_col {
-                        line
-                    } else {
-                        let mut remaining = max_col.saturating_sub(1);
-                        let mut new_spans: Vec<Span<'static>> = Vec::new();
-                        for span in line.spans {
-                            if remaining == 0 {
-                                break;
-                            }
-                            let chars: usize = span.content.chars().count();
-                            if chars <= remaining {
-                                remaining -= chars;
-                                new_spans.push(span);
-                            } else {
-                                let truncated: String = span.content.chars().take(remaining).collect();
-                                new_spans.push(Span::styled(
-                                    format!("{truncated}…"),
-                                    span.style,
-                                ));
-                                remaining = 0;
-                            }
-                        }
-                        Line::from(new_spans)
-                    }
-                })
-                .collect();
-
-            let content_widget =
-                Paragraph::new(Text::from(visible_lines)).style(Style::default().fg(Color::White));
+            // Soft-wrap chat lines at content_area.width instead of right-
+            // truncating with `…`. Right-truncation lost the tail of every
+            // long prompt and assistant response — the user couldn't see
+            // their own message past column N. trim:false keeps explicit
+            // leading whitespace (indentation in tool output, code blocks).
+            let content_widget = Paragraph::new(Text::from(visible_lines))
+                .style(Style::default().fg(Color::White))
+                .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(content_widget, content_area);
 
             // ── agent panel ──────────────────────────────────────────────────
@@ -1248,14 +1247,15 @@ impl AnvilTui {
                         }
                 }
                 let label = if is_error { "error" } else { "ok" };
-                let first_line = summary
-                    .lines()
-                    .next()
-                    .map(|l| truncate_str(l, 120))
-                    .unwrap_or_default();
-                if !first_line.is_empty() {
+                // Build a meaningful one-line summary instead of the raw JSON's
+                // first character. Without this, JSON-returning tools (bash,
+                // TeamCreate, anything that returns `{"foo":...}`) all showed
+                // up as `{name} [ok]: {` — completely useless to the user.
+                let pretty = crate::format_tool::tool_result_summary(&name, &summary, is_error);
+                let pretty = truncate_str(&pretty, 200);
+                if !pretty.is_empty() {
                     self.active_tab_mut().log.push(LogEntry::System(format!(
-                        "{name} [{label}]: {first_line}"
+                        "{name} [{label}]: {pretty}"
                     )));
                 }
             }

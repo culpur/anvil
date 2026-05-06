@@ -13,6 +13,96 @@ use api::{
 use crate::render::TerminalRenderer;
 use runtime::{AssistantEvent, RuntimeError, TokenUsage};
 
+/// One-line summary of a tool's result, suitable for the TUI's compact
+/// post-call line `{name} [{status}]: {summary}`. Without this, the summary
+/// was the first line of the raw JSON output — for tools that return
+/// `{"key": "value"}` the first line is just `{`, telling the user
+/// absolutely nothing.
+pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> String {
+    if is_error {
+        return truncate_for_summary(output.trim(), 200);
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(output) {
+        Ok(v) => v,
+        Err(_) => return truncate_for_summary(output.trim(), 200),
+    };
+
+    match name {
+        "bash" | "Bash" => {
+            // Bash result: {"stdout": "...", "stderr": "...", "interrupted": bool, ...}
+            let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = parsed.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let body = if !stdout.trim().is_empty() { stdout } else { stderr };
+            let lines = body.lines().filter(|l| !l.trim().is_empty()).count();
+            let first = first_visible_line(body);
+            if first.is_empty() {
+                "(no output)".to_string()
+            } else if lines > 1 {
+                format!("{} (+{} more line{})", truncate_for_summary(first, 140), lines - 1, if lines - 1 == 1 { "" } else { "s" })
+            } else {
+                truncate_for_summary(first, 200)
+            }
+        }
+        "read_file" | "Read" => {
+            // Returns {"content": "...", "lines": N} or similar
+            let lines = parsed.get("lines").and_then(|v| v.as_u64())
+                .or_else(|| parsed.get("content").and_then(|v| v.as_str()).map(|s| s.lines().count() as u64))
+                .unwrap_or(0);
+            format!("{lines} line{}", if lines == 1 { "" } else { "s" })
+        }
+        "write_file" | "Write" => {
+            let path = extract_tool_path(&parsed);
+            if path == "?" || path.is_empty() {
+                "wrote file".to_string()
+            } else {
+                format!("wrote {path}")
+            }
+        }
+        "edit_file" | "Edit" => {
+            let path = extract_tool_path(&parsed);
+            if path == "?" || path.is_empty() {
+                "applied edit".to_string()
+            } else {
+                format!("edited {path}")
+            }
+        }
+        "glob_search" | "Glob" => {
+            let count = parsed.get("matches").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            format!("{count} match{}", if count == 1 { "" } else { "es" })
+        }
+        "grep_search" | "Grep" => {
+            let count = parsed.get("matches").and_then(|v| v.as_array()).map_or(0, |a| a.len());
+            format!("{count} match{}", if count == 1 { "" } else { "es" })
+        }
+        // For team/task/MCP tools where the result is typically a free-form
+        // string OR a small JSON object, try plain-string first, then known
+        // top-level keys ("message", "summary", "id", "name"), else fall back
+        // to a compact key-summary so the user sees SOMETHING meaningful.
+        _ => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(s.trim(), 200);
+            }
+            for key in &["message", "summary", "result", "name", "id", "status"] {
+                if let Some(v) = parsed.get(key).and_then(|v| v.as_str()) {
+                    if !v.trim().is_empty() {
+                        return truncate_for_summary(&format!("{key}={}", v), 200);
+                    }
+                }
+            }
+            // Last resort: list the top-level keys so the user knows roughly
+            // what the tool returned (e.g. "keys: id, name, members").
+            if let Some(obj) = parsed.as_object() {
+                if obj.is_empty() {
+                    return "(empty result)".to_string();
+                }
+                let keys: Vec<_> = obj.keys().take(6).map(String::as_str).collect();
+                return truncate_for_summary(&format!("keys: {}", keys.join(", ")), 200);
+            }
+            truncate_for_summary(output.trim(), 200)
+        }
+    }
+}
+
 pub(crate) fn tool_call_detail(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));

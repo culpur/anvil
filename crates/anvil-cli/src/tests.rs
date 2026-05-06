@@ -18,7 +18,7 @@ use super::providers::{
 use super::format_tool::{push_output_block, response_to_events};
 use super::help::print_help_to;
 use commands::resume_supported_slash_commands;
-use crate::format_tool::{format_tool_call_start, format_tool_result};
+use crate::format_tool::{format_tool_call_start, format_tool_result, tool_result_summary};
 use api::{MessageResponse, OutputContentBlock, Usage};
 use plugins::{PluginTool, PluginToolDefinition, PluginToolPermission};
 use runtime::{AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PermissionMode};
@@ -881,6 +881,67 @@ fn tool_rendering_truncates_raw_generic_output_for_display_only() {
     assert!(!rendered.contains("raw 119"));
     assert!(rendered.contains("full result preserved in session"));
     assert!(output.contains("raw 119"));
+}
+
+#[test]
+fn tool_result_summary_extracts_bash_stdout_first_line() {
+    // Bug from screenshot: bash result was rendering as `bash [ok]: {` because
+    // the JSON output's first line was just the opening brace.
+    let json = r#"{"stdout":"hello world\nsecond line","stderr":"","interrupted":false}"#;
+    let summary = tool_result_summary("bash", json, false);
+    assert!(
+        summary.contains("hello world"),
+        "expected stdout in summary, got: {summary}"
+    );
+    assert!(
+        !summary.starts_with('{'),
+        "summary must not start with literal JSON brace, got: {summary}"
+    );
+    assert!(
+        summary.contains("+1 more line"),
+        "should signal multi-line, got: {summary}"
+    );
+}
+
+#[test]
+fn tool_result_summary_falls_back_to_known_keys_for_generic_tools() {
+    // TeamCreate / TeamAddMember / MCP tools return free-form JSON. The
+    // generic fallback should pull out a meaningful field rather than `{`.
+    let json = r#"{"id":"team-42","name":"backend-fleet","members":3}"#;
+    let summary = tool_result_summary("TeamCreate", json, false);
+    assert!(
+        summary.contains("backend-fleet") || summary.contains("team-42"),
+        "expected name or id in summary, got: {summary}"
+    );
+    assert!(
+        !summary.trim().starts_with('{'),
+        "summary must not be raw JSON brace, got: {summary}"
+    );
+}
+
+#[test]
+fn tool_result_summary_lists_keys_for_unknown_shape() {
+    let json = r#"{"foo":42,"bar":[1,2,3],"baz":{"nested":true}}"#;
+    let summary = tool_result_summary("MystyTool", json, false);
+    assert!(
+        summary.starts_with("keys:"),
+        "expected key listing fallback, got: {summary}"
+    );
+    assert!(summary.contains("foo"));
+    assert!(summary.contains("bar"));
+}
+
+#[test]
+fn tool_result_summary_handles_empty_bash_output() {
+    let json = r#"{"stdout":"","stderr":"","interrupted":false}"#;
+    let summary = tool_result_summary("bash", json, false);
+    assert_eq!(summary, "(no output)");
+}
+
+#[test]
+fn tool_result_summary_passes_through_error_text() {
+    let summary = tool_result_summary("anything", "EACCES: permission denied", true);
+    assert!(summary.contains("permission denied"));
 }
 
 #[test]
