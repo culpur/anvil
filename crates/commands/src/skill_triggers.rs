@@ -140,6 +140,66 @@ fn is_word_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
+/// Filter `skills` by a user-supplied query string for the type-to-filter
+/// search box on the `/skill suggest` picker.
+///
+/// Matching is **case-insensitive substring** against either:
+///   1. The skill's `name`, or
+///   2. Any of the skill's declared `triggers`.
+///
+/// An empty / whitespace-only `query` is a no-op: every skill is returned in
+/// the original order.  Otherwise, the input order of `skills` is preserved
+/// among the survivors.
+///
+/// This deliberately does NOT use the whole-word matcher used by
+/// [`match_triggers`].  The picker filter is a search affordance (the user is
+/// typing a partial token to narrow a long list), not a behavioural decision
+/// about whether to load a skill, so substring is the correct UX.
+///
+/// # Examples
+///
+/// ```rust
+/// use commands::skill_triggers::filter_skills;
+/// use commands::agents::{SkillSummary, DefinitionSource, SkillOrigin};
+///
+/// fn s(name: &str) -> SkillSummary {
+///     SkillSummary {
+///         name: name.to_string(),
+///         description: None,
+///         triggers: vec![],
+///         source: DefinitionSource::Bundled,
+///         shadowed_by: None,
+///         origin: SkillOrigin::SkillsDir,
+///     }
+/// }
+/// let all = [s("file"), s("git"), s("filesystem")];
+/// let refs: Vec<&SkillSummary> = all.iter().collect();
+/// let hits = filter_skills("fil", &refs);
+/// assert_eq!(hits.len(), 2);
+/// ```
+#[must_use]
+pub fn filter_skills<'a>(query: &str, skills: &[&'a SkillSummary]) -> Vec<&'a SkillSummary> {
+    let q = query.trim();
+    if q.is_empty() {
+        return skills.to_vec();
+    }
+    let q_lower = q.to_ascii_lowercase();
+
+    skills
+        .iter()
+        .copied()
+        .filter(|skill| {
+            if skill.name.to_ascii_lowercase().contains(&q_lower) {
+                return true;
+            }
+            skill
+                .triggers
+                .iter()
+                .any(|t| t.to_ascii_lowercase().contains(&q_lower))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,5 +360,73 @@ mod tests {
         let s = make_skill("code-review", &["code review"]);
         let r = match_triggers("look at this code please", &[&s]);
         assert!(r.is_empty());
+    }
+
+    // ── filter_skills (picker type-to-filter) ────────────────────────────────
+
+    fn skill_named(name: &str) -> SkillSummary {
+        make_skill(name, &[])
+    }
+
+    #[test]
+    fn filter_skills_substring_returns_two_of_three() {
+        // Spec: filter_skills("fil", &[file, git, filesystem]) == 2
+        let file = skill_named("file");
+        let git = skill_named("git");
+        let filesystem = skill_named("filesystem");
+        let all = [&file, &git, &filesystem];
+        let hits = filter_skills("fil", &all);
+        assert_eq!(hits.len(), 2, "expected 2 hits, got: {:?}", hits.iter().map(|s| &s.name).collect::<Vec<_>>());
+        let names: Vec<&str> = hits.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"file"));
+        assert!(names.contains(&"filesystem"));
+        assert!(!names.contains(&"git"));
+    }
+
+    #[test]
+    fn filter_skills_empty_query_returns_all() {
+        let a = skill_named("alpha");
+        let b = skill_named("beta");
+        let all = [&a, &b];
+        assert_eq!(filter_skills("", &all).len(), 2);
+        assert_eq!(filter_skills("   ", &all).len(), 2);
+    }
+
+    #[test]
+    fn filter_skills_is_case_insensitive() {
+        let a = skill_named("FileSystem");
+        let all = [&a];
+        assert_eq!(filter_skills("file", &all).len(), 1);
+        assert_eq!(filter_skills("SYS", &all).len(), 1);
+    }
+
+    #[test]
+    fn filter_skills_matches_trigger_keywords() {
+        // Skill "security-audit" has trigger "owasp" — searching "owa" should hit
+        // the skill even though its name doesn't contain "owa".
+        let s = make_skill("security-audit", &["audit", "owasp"]);
+        let all = [&s];
+        let hits = filter_skills("owa", &all);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "security-audit");
+    }
+
+    #[test]
+    fn filter_skills_no_matches_returns_empty() {
+        let a = skill_named("alpha");
+        let b = skill_named("beta");
+        let all = [&a, &b];
+        assert!(filter_skills("zzz", &all).is_empty());
+    }
+
+    #[test]
+    fn filter_skills_preserves_input_order() {
+        let z = skill_named("zfile");
+        let a = skill_named("afile");
+        let m = skill_named("mfile");
+        let all = [&z, &a, &m];
+        let hits = filter_skills("file", &all);
+        let names: Vec<&str> = hits.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["zfile", "afile", "mfile"]);
     }
 }

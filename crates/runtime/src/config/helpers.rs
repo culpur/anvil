@@ -20,10 +20,19 @@ pub fn read_optional_json_object(
         return Ok(Some(BTreeMap::new()));
     }
 
+    // Match the legacy `.anvil.json` branch: a JSON parse error in a
+    // settings file should not nuke every other settings file that
+    // loaded successfully.  Warn to stderr and skip the broken file
+    // rather than returning an error that aborts the whole load.
     let parsed = match JsonValue::parse(&contents) {
         Ok(parsed) => parsed,
-        Err(_error) if is_legacy_config => return Ok(None),
-        Err(error) => return Err(ConfigError::Parse(format!("{}: {error}", path.display()))),
+        Err(error) => {
+            eprintln!(
+                "anvil: ignoring malformed settings file {}: {error}",
+                path.display()
+            );
+            return Ok(None);
+        }
     };
     let Some(object) = parsed.as_object() else {
         if is_legacy_config {
@@ -195,5 +204,44 @@ pub fn optional_string_map(
                 .map(Some)
         }
         None => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// BUG-34/35 parity: a malformed `settings.json` (e.g. trailing
+    /// comma) must not return Err — that would abort every other
+    /// settings file in the load chain.  Match the legacy `.anvil.json`
+    /// branch and treat it as "skip with warning".
+    #[test]
+    fn read_optional_json_object_skips_malformed_settings_file() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("settings.json");
+        // Garbage that no JSON parser will accept.
+        fs::write(&path, "{\"model\": opus garbage").expect("write malformed settings");
+
+        let result = read_optional_json_object(&path)
+            .expect("malformed settings.json must not return Err");
+        assert!(
+            result.is_none(),
+            "malformed settings file should be treated as absent, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn read_optional_json_object_returns_object_for_valid_settings() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"model":"opus"}"#).expect("write valid settings");
+
+        let result = read_optional_json_object(&path).expect("valid settings should parse");
+        let object = result.expect("valid object should be Some");
+        assert_eq!(
+            object.get("model"),
+            Some(&JsonValue::String("opus".to_string()))
+        );
     }
 }

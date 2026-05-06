@@ -282,6 +282,43 @@ pub(super) const fn configure_set_selected(state: &mut ConfigureState, new: usiz
     }
 }
 
+/// A small integer fingerprint of `state` that changes whenever the *screen*
+/// changes (e.g. MainMenu → Models, or PresetPicker → WidgetPicker), but does
+/// NOT change when only `selected` advances.  Used by the TUI to decide when
+/// to reset the scroll viewport.
+pub(super) fn configure_screen_tag(state: &ConfigureState) -> u8 {
+    match state {
+        ConfigureState::Inactive => 0,
+        ConfigureState::MainMenu { .. } => 1,
+        ConfigureState::Providers { .. } => 2,
+        ConfigureState::ProviderDetail { .. } => 3,
+        ConfigureState::Models { .. } => 4,
+        ConfigureState::Context { .. } => 5,
+        ConfigureState::Search { .. } => 6,
+        ConfigureState::Permissions { .. } => 7,
+        ConfigureState::Display { .. } => 8,
+        ConfigureState::Integrations { .. } => 9,
+        ConfigureState::LanguageTheme { .. } => 10,
+        ConfigureState::Vault { .. } => 11,
+        ConfigureState::Notifications { .. } => 12,
+        ConfigureState::Failover { .. } => 13,
+        ConfigureState::Ssh { .. } => 14,
+        ConfigureState::DockerK8s { .. } => 15,
+        ConfigureState::Database { .. } => 16,
+        ConfigureState::MemoryArchive { .. } => 17,
+        ConfigureState::PluginsCron { .. } => 18,
+        ConfigureState::StatusLineEditor { sub, .. } => match sub {
+            StatusLineEditorSub::Overview => 20,
+            StatusLineEditorSub::PresetPicker => 21,
+            StatusLineEditorSub::LineList => 22,
+            StatusLineEditorSub::LineDetail { .. } => 23,
+            StatusLineEditorSub::WidgetPicker { .. } => 24,
+            StatusLineEditorSub::SeparatorEdit { .. } => 25,
+        },
+        ConfigureState::EditingValue { .. } => 30,
+    }
+}
+
 /// Return the number of navigable items for a given configure state.
 pub(super) fn configure_item_count(state: &ConfigureState, data: &ConfigureData) -> usize {
     match state {

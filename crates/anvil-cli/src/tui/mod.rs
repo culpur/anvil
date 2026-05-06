@@ -11,6 +11,7 @@ pub mod configure_types;
 pub(super) mod completion;
 pub(super) mod helpers;
 pub(super) mod layout;
+pub(super) mod list_viewport;
 pub(super) mod scrollback;
 pub(super) mod state;
 pub(super) mod widgets;
@@ -27,7 +28,7 @@ pub use widgets::init_ollama_model_cache;
 use configure_types::{
     ConfigureState,
     configure_breadcrumb, configure_selected, configure_set_selected,
-    configure_item_count, section_state_from_name,
+    configure_item_count, configure_screen_tag, section_state_from_name,
     configure_action_for, configure_data_notify_value, mask_sensitive,
 };
 use helpers::{strip_ansi, truncate_str, permission_mode_display, prev_char_boundary, next_char_boundary};
@@ -108,6 +109,13 @@ pub struct AnvilTui {
     pub(super) configure_state: ConfigureState,
     /// Snapshot of live config values shown in the configure menu.
     pub(super) configure_data: ConfigureData,
+    /// Scroll viewport for the active configure-overlay screen.
+    /// Reset to top whenever `configure_state` transitions to a new screen.
+    pub(super) configure_viewport: list_viewport::ListViewport,
+    /// Discriminant of the last `configure_state` we drew, used to decide when
+    /// to reset `configure_viewport` (we don't compare full state because some
+    /// variants carry a `Box<StatusLineConfig>` that's expensive to clone-eq).
+    pub(super) configure_screen_tag: u8,
     /// Active colour theme — loaded from ~/.anvil/theme.json at startup.
     pub theme: Theme,
     /// Whether extended thinking mode is enabled.
@@ -193,6 +201,8 @@ impl AnvilTui {
                 last_archive_status: String::new(),
                 configure_state: ConfigureState::Inactive,
                 configure_data: ConfigureData::default(),
+                configure_viewport: list_viewport::ListViewport::new(),
+                configure_screen_tag: 0,
                 theme: Theme::load(),
                 thinking_enabled: false,
                 relay_tx: None,
@@ -399,6 +409,25 @@ impl AnvilTui {
             .iter()
             .map(|c| (c.insert.clone(), c.hint.clone(), c.is_header, c.is_free_text))
             .collect();
+        // Run selection-follow on the completion popup viewport so the
+        // highlighted row is always on-screen even when the match list is
+        // longer than the popup's render cap.
+        if completion_visible {
+            // Popup body fits at most 12 rows (height ceiling preserved
+            // below); selection-follow against that constant.
+            const POPUP_BODY_HEIGHT: usize = 12;
+            let total = completion_matches.len();
+            let mut vp = list_viewport::ListViewport::new();
+            // Restore the prior offset by scrolling down — we don't keep a
+            // dedicated `ListViewport` field on `CompletionPopup` to avoid
+            // serializing it; the raw offset round-trips fine.
+            let prior = tab.completion.view_offset;
+            vp = vp.scroll_down(prior, total, POPUP_BODY_HEIGHT);
+            vp = vp.follow_selection(completion_selected, total, POPUP_BODY_HEIGHT);
+            self.active_tab_mut().completion.view_offset =
+                vp.offset(total, POPUP_BODY_HEIGHT);
+        }
+        let completion_view_offset = self.active_tab().completion.view_offset;
         // Snapshot tab bar state.
         let tab_infos: Vec<(usize, String, bool, bool)> = self
             .tabs
@@ -415,6 +444,15 @@ impl AnvilTui {
         let update_available = self.update_available.clone();
         let configure_state = self.configure_state.clone();
         let configure_data = self.configure_data.clone();
+        // Reset configure viewport when the active screen changes (e.g.
+        // navigating from MainMenu → Models picker, or PresetPicker →
+        // WidgetPicker).  Comparing screen tag avoids re-running on every
+        // keystroke.
+        let new_screen_tag = configure_screen_tag(&configure_state);
+        if new_screen_tag != self.configure_screen_tag {
+            self.configure_viewport.reset();
+            self.configure_screen_tag = new_screen_tag;
+        }
         let theme = self.theme.clone();
         let agent_panel_visible = self.agent_panel_visible;
         let agent_rows = self.agent_rows.clone();
@@ -434,6 +472,23 @@ impl AnvilTui {
             let (lines, _) = tab.scrollback.lines_in_range(anchor, approx_content_height + 4);
             Some(lines)
         };
+
+        // For the configure overlay, run selection-follow against the
+        // estimated viewport so the highlighted item is on-screen, and
+        // persist the resulting offset back to `self.configure_viewport`.
+        // The closure below borrows `self` immutably via `configure_viewport`.
+        if configure_state != ConfigureState::Inactive {
+            let total_items = configure_item_count(&configure_state, &configure_data);
+            // Header ≈ 4 lines (blank, breadcrumb, separator, blank).
+            let total_lines_est = total_items.saturating_add(4);
+            let sel = configure_selected(&configure_state);
+            // Selection lives at line `sel + 4` in the rendered output.
+            let sel_line = sel.saturating_add(4);
+            self.configure_viewport = self
+                .configure_viewport
+                .follow_selection(sel_line, total_lines_est, approx_content_height);
+        }
+        let configure_viewport = self.configure_viewport;
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -608,7 +663,13 @@ impl AnvilTui {
                 let max_scroll = total_lines.saturating_sub(visible_height);
                 scroll.min(max_scroll)
             } else {
-                0
+                // Configure overlay: long screens (MainMenu, PresetPicker,
+                // WidgetPicker, etc.) used to silently truncate.  We now scroll
+                // the rendered output using `configure_viewport`, which the
+                // outer code has already aligned to keep the selected item
+                // on-screen.  We re-clamp here against the *real* viewport
+                // size (the pre-render estimate may have been off by a row).
+                configure_viewport.offset(total_lines, visible_height)
             };
 
             // ── Scrollback / live view selection ─────────────────────────────
@@ -968,7 +1029,11 @@ impl AnvilTui {
 
             // ─── Completion popup overlay ────────────────────────────────
             if completion_visible && !completion_matches.is_empty() {
-                let popup_height = (completion_matches.len() as u16).min(12) + 2;
+                // Body capped at 12 visible rows; longer match lists scroll
+                // with `view_offset` (FEAT-36).
+                const POPUP_BODY_HEIGHT: usize = 12;
+                let visible = completion_matches.len().min(POPUP_BODY_HEIGHT);
+                let popup_height = visible as u16 + 2;
                 let popup_width = (width as u16).min(60);
                 let popup_y = footer_area.y.saturating_sub(popup_height);
                 let popup_area = ratatui::layout::Rect {
@@ -978,10 +1043,16 @@ impl AnvilTui {
                     height: popup_height,
                 };
 
-                let items: Vec<Line<'static>> = completion_matches
+                // Slice the visible window using the persisted offset.
+                let start = completion_view_offset.min(
+                    completion_matches.len().saturating_sub(visible),
+                );
+                let end = (start + visible).min(completion_matches.len());
+                let items: Vec<Line<'static>> = completion_matches[start..end]
                     .iter()
                     .enumerate()
-                    .map(|(i, item)| {
+                    .map(|(rel_i, item)| {
+                        let i = start + rel_i;
                         let insert: &str = item.0.as_str();
                         let hint: &str = item.1.as_str();
                         let is_header: bool = item.2;
@@ -1645,6 +1716,18 @@ impl AnvilTui {
             KeyCode::Down => {
                 self.configure_move(1);
             }
+            KeyCode::PageUp => {
+                self.configure_page(-1);
+            }
+            KeyCode::PageDown => {
+                self.configure_page(1);
+            }
+            KeyCode::Home => {
+                self.configure_jump_home();
+            }
+            KeyCode::End => {
+                self.configure_jump_end();
+            }
             KeyCode::Enter => {
                 return self.configure_select();
             }
@@ -1654,6 +1737,76 @@ impl AnvilTui {
             _ => {}
         }
         Ok(ReadResult::Continue)
+    }
+
+    /// Page selection by `direction * approx_height` rows.  Positive direction
+    /// moves toward the bottom of the list, negative toward the top.
+    /// Selection is clamped to `[0, count - 1]`; the rendering pass picks up
+    /// the new offset via `follow_selection`.
+    fn configure_page(&mut self, direction: i32) {
+        let count = configure_item_count(&self.configure_state, &self.configure_data);
+        if count == 0 {
+            return;
+        }
+        let approx_height = self
+            .terminal
+            .size()
+            .map(|s| s.height.saturating_sub(6) as usize)
+            .unwrap_or(18);
+        // Subtract 4 for the header lines so a single PgDn shifts selection
+        // by one *body* page rather than overshooting.  Minimum step is 1.
+        let step = approx_height.saturating_sub(4).max(1);
+        let selected = configure_selected(&self.configure_state);
+        let new_selected = if direction < 0 {
+            selected.saturating_sub(step)
+        } else {
+            (selected + step).min(count - 1)
+        };
+        configure_set_selected(&mut self.configure_state, new_selected);
+    }
+
+    /// Jump selection to the first item.
+    fn configure_jump_home(&mut self) {
+        if configure_item_count(&self.configure_state, &self.configure_data) == 0 {
+            return;
+        }
+        configure_set_selected(&mut self.configure_state, 0);
+    }
+
+    /// Jump selection to the last item.
+    fn configure_jump_end(&mut self) {
+        let count = configure_item_count(&self.configure_state, &self.configure_data);
+        if count == 0 {
+            return;
+        }
+        configure_set_selected(&mut self.configure_state, count - 1);
+    }
+
+    /// Mouse-wheel scroll of the configure overlay.  Negative deltas scroll
+    /// up (toward the top of the list); positive deltas scroll down.
+    /// Selection is NOT moved — the wheel is for inspection, not navigation
+    /// (matches the Claude Code behaviour that `/skills` and `/agents`
+    /// dialogs adopted in v2.1.121).
+    pub(super) fn configure_scroll_wheel(&mut self, delta: i32) {
+        let total_items = configure_item_count(&self.configure_state, &self.configure_data);
+        if total_items == 0 {
+            return;
+        }
+        let approx_height = self
+            .terminal
+            .size()
+            .map(|s| s.height.saturating_sub(6) as usize)
+            .unwrap_or(18);
+        let total_lines = total_items.saturating_add(4);
+        if delta < 0 {
+            self.configure_viewport = self
+                .configure_viewport
+                .scroll_up((-delta) as usize);
+        } else {
+            self.configure_viewport = self
+                .configure_viewport
+                .scroll_down(delta as usize, total_lines, approx_height);
+        }
     }
 
     /// Move the selected item index by `delta` (-1 = up, +1 = down).

@@ -49,12 +49,12 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig, LspServerEntry,
-    McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig, McpRemoteServerConfig,
-    McpSdkServerConfig, McpServerConfig, McpStdioServerConfig, McpTransport,
-    McpWebSocketServerConfig, OAuthConfig, OutputStyle, ResolvedPermissionMode, RuntimeConfig,
-    RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig,
-    ANVIL_SETTINGS_SCHEMA_NAME,
+    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig,
+    LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
+    McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
+    McpTransport, McpWebSocketServerConfig, OAuthConfig, OutputStyle, ResolvedPermissionMode,
+    RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
+    ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
@@ -65,7 +65,10 @@ pub use file_ops::{
     write_file, EditFileOutput, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
     ReadFileOutput, SandboxMode, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
-pub use hooks::{HookEvent, HookRunResult, HookRunner};
+pub use hooks::{
+    HookEvent, HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker,
+    RuntimeHookSpec,
+};
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
     scoped_mcp_config_hash, unwrap_ccr_proxy_url,

@@ -2,13 +2,14 @@
 #![allow(unsafe_code)]
 
 use std::collections::VecDeque;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use runtime::{
     load_oauth_credentials, save_oauth_credentials, OAuthConfig, OAuthRefreshRequest,
     OAuthTokenExchangeRequest,
 };
 use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::error::ApiError;
 
@@ -16,9 +17,10 @@ use super::common::{
     self, expect_success, read_env_non_empty, request_id_from_headers, DEFAULT_INITIAL_BACKOFF,
     DEFAULT_MAX_BACKOFF, DEFAULT_MAX_RETRIES,
 };
+use super::openai_compat::resolve_stream_dead_air_timeout;
 use super::{Provider, ProviderFuture};
 use crate::sse::SseParser;
-use crate::types::{MessageRequest, MessageResponse, StreamEvent};
+use crate::types::{CacheControl, MessageRequest, MessageResponse, StreamEvent};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -235,6 +237,8 @@ impl AnvilApiClient {
             parser: SseParser::new(),
             pending: VecDeque::new(),
             done: false,
+            last_chunk_at: Instant::now(),
+            dead_air_timeout: resolve_stream_dead_air_timeout(),
         })
     }
 
@@ -308,11 +312,76 @@ impl AnvilApiClient {
         }
 
         request_builder = self.auth.apply(request_builder);
-        request_builder = request_builder.json(request);
+        // Bug #26: serialize the request through the Anthropic-specific wire
+        // builder so we can attach `cache_control` markers to the system
+        // prompt and the last tool definition.  The breakpoints tell the
+        // Anthropic API to cache up to and including those blocks; with a
+        // 1h TTL the cache survives long agentic sessions and we stop
+        // re-billing the full system+tools prefix on every turn.
+        let payload = build_messages_request_body(request);
+        request_builder = request_builder.json(&payload);
         request_builder.send().await.map_err(ApiError::from)
     }
 
 
+}
+
+/// Build the JSON body sent to `POST /v1/messages` for the Anthropic API.
+///
+/// This is a thin pass-through over `MessageRequest` with two
+/// Anthropic-specific transformations:
+///
+///   1. The `system` field is upgraded from a plain string to a typed content
+///      block array carrying a `cache_control` breakpoint.  This makes the
+///      cached prefix include the system prompt itself.
+///   2. The LAST entry in the `tools` array gets a `cache_control` marker.
+///      Anthropic caches *up to and including* the breakpoint, so marking the
+///      tail tool definition caches the whole tools array (and, transitively,
+///      the system prompt above it) in one cache entry.
+///
+/// Both breakpoints use TTL `"1h"` so the cache survives long-running agent
+/// sessions.  When the request has no system prompt or no tools, the
+/// corresponding breakpoint is silently skipped — there is nothing meaningful
+/// to cache.
+///
+/// This function is gated to the Anthropic provider on purpose: OpenAI-compat
+/// and Ollama backends would reject `cache_control` keys, so the wire format
+/// is built locally rather than embedded in the shared `MessageRequest` type.
+fn build_messages_request_body(request: &MessageRequest) -> Value {
+    // Start from the standard serde-serialized envelope so we inherit any
+    // future field changes for free.
+    let mut payload = serde_json::to_value(request).unwrap_or_else(|_| json!({}));
+
+    let cache_control = CacheControl::ephemeral_with_ttl("1h");
+    let cache_control_value =
+        serde_json::to_value(&cache_control).unwrap_or_else(|_| json!({"type": "ephemeral"}));
+
+    // (1) Upgrade `system: "..."` → array of content blocks with cache_control
+    //     on the (single) text block.  The Anthropic API accepts both shapes;
+    //     the array form is the only one that supports per-block markers.
+    if let Some(system_text) = payload
+        .get("system")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    {
+        payload["system"] = json!([{
+            "type": "text",
+            "text": system_text,
+            "cache_control": cache_control_value.clone(),
+        }]);
+    }
+
+    // (2) Attach cache_control to the LAST tool definition.  Anthropic caches
+    //     up to (and including) the breakpoint, so this single marker covers
+    //     every tool above it as well.
+    if let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut)
+        && let Some(last) = tools.last_mut()
+        && let Some(obj) = last.as_object_mut()
+    {
+        obj.insert("cache_control".to_string(), cache_control_value);
+    }
+
+    payload
 }
 
 impl AuthSource {
@@ -538,6 +607,14 @@ pub struct MessageStream {
     parser: SseParser,
     pending: VecDeque<StreamEvent>,
     done: bool,
+    /// Wall-clock time of the last successful chunk receipt.  Used by the
+    /// dead-air timer below to surface a distinctive stall error instead of
+    /// hanging on an indefinitely-stalled upstream connection.
+    last_chunk_at: Instant,
+    /// Maximum allowed gap between chunks before we surface
+    /// `ApiError::StreamStalled`.  Mirrors the OpenAI-compat path
+    /// (Bug #82) and is configurable via `ANVIL_STREAM_DEAD_AIR_MS`.
+    dead_air_timeout: Duration,
 }
 
 impl MessageStream {
@@ -561,12 +638,29 @@ impl MessageStream {
                 return Ok(None);
             }
 
-            match self.response.chunk().await? {
-                Some(chunk) => {
+            // Bug #15 fix: apply a dead-air timeout to the chunk read so a
+            // stalled Anthropic stream surfaces `StreamStalled` instead of
+            // hanging forever.  Mirrors the OpenAI-compat path verbatim — the
+            // timer resets on every chunk (including thinking_delta), which is
+            // wake-from-sleep safe because `Instant` advances monotonically
+            // regardless of system clock skew.
+            let chunk_result =
+                tokio::time::timeout(self.dead_air_timeout, self.response.chunk()).await;
+
+            match chunk_result {
+                Ok(Ok(Some(chunk))) => {
+                    self.last_chunk_at = Instant::now();
                     self.pending.extend(self.parser.push(&chunk)?);
                 }
-                None => {
+                Ok(Ok(None)) => {
                     self.done = true;
+                }
+                Ok(Err(http_err)) => {
+                    return Err(ApiError::from(http_err));
+                }
+                Err(_timeout) => {
+                    let elapsed_ms = self.last_chunk_at.elapsed().as_millis() as u64;
+                    return Err(ApiError::StreamStalled { elapsed_ms });
                 }
             }
         }
@@ -989,5 +1083,246 @@ mod tests {
             headers.get("authorization").and_then(|v| v.to_str().ok()),
             Some("Bearer proxy-token")
         );
+    }
+
+    // ─── Bug #26: prompt-cache breakpoints on Anthropic wire format ────────
+
+    #[test]
+    fn wire_body_attaches_cache_control_to_system_prompt() {
+        use crate::types::{ToolDefinition};
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some("you are a careful coding assistant".to_string()),
+            tools: Some(vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: Some("Read a file".to_string()),
+                input_schema: serde_json::json!({"type": "object"}),
+            }]),
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request);
+        // System prompt should be the array form so the cache_control marker
+        // can hang off the text block.
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must serialize as content-block array when present");
+        assert_eq!(system_array.len(), 1);
+        let block = &system_array[0];
+        assert_eq!(block["type"], serde_json::json!("text"));
+        assert_eq!(block["text"], serde_json::json!("you are a careful coding assistant"));
+        assert_eq!(
+            block["cache_control"],
+            serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    #[test]
+    fn wire_body_attaches_cache_control_to_last_tool_only() {
+        use crate::types::ToolDefinition;
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some("sys".to_string()),
+            tools: Some(vec![
+                ToolDefinition {
+                    name: "first_tool".to_string(),
+                    description: Some("first".to_string()),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+                ToolDefinition {
+                    name: "second_tool".to_string(),
+                    description: Some("second".to_string()),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+            ]),
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request);
+        let tools = body
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .expect("tools array must be present");
+        assert_eq!(tools.len(), 2);
+        // First tool: NO cache_control marker.
+        assert!(
+            tools[0].get("cache_control").is_none(),
+            "only the last tool should carry cache_control; got {:?}",
+            tools[0]
+        );
+        // Second (last) tool: cache_control with 1h TTL.
+        assert_eq!(
+            tools[1]["cache_control"],
+            serde_json::json!({"type": "ephemeral", "ttl": "1h"}),
+            "last tool must carry the cache breakpoint with 1h TTL"
+        );
+    }
+
+    #[test]
+    fn wire_body_omits_cache_control_when_no_system_or_tools() {
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![crate::types::InputMessage::user_text("hi")],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request);
+        // Neither field should appear (they are skip-serialize-if-none) and
+        // therefore no cache_control marker is added.
+        assert!(body.get("system").is_none());
+        assert!(body.get("tools").is_none());
+        let serialized = serde_json::to_string(&body).expect("serialize body");
+        assert!(
+            !serialized.contains("cache_control"),
+            "unexpected cache_control in payload: {serialized}"
+        );
+    }
+
+    #[test]
+    fn wire_body_full_payload_round_trips_with_breakpoints() {
+        use crate::types::ToolDefinition;
+        // End-to-end shape assertion: the serialized JSON must contain the
+        // exact `"cache_control":{"type":"ephemeral","ttl":"1h"}` substring
+        // both on the system block and on the last tool entry.
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some("system text".to_string()),
+            tools: Some(vec![
+                ToolDefinition {
+                    name: "alpha".to_string(),
+                    description: Some("first".to_string()),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+                ToolDefinition {
+                    name: "omega".to_string(),
+                    description: Some("last".to_string()),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+            ]),
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request);
+        let serialized = serde_json::to_string(&body).expect("serialize body");
+
+        // Two cache_control breakpoints must be present.
+        let occurrences = serialized.matches("\"cache_control\"").count();
+        assert_eq!(
+            occurrences, 2,
+            "exactly two cache_control breakpoints expected (system + last tool); got {occurrences} in {serialized}"
+        );
+        // serde_json orders object keys deterministically but the serializer
+        // does not guarantee a stable order between `type` and `ttl`; assert
+        // on parsed JSON so the test is order-independent.
+        let expected_marker = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        let system_block_marker = body["system"][0]["cache_control"].clone();
+        assert_eq!(
+            system_block_marker, expected_marker,
+            "system cache_control marker mismatch: {serialized}"
+        );
+        let last_tool_marker = body["tools"][1]["cache_control"].clone();
+        assert_eq!(
+            last_tool_marker, expected_marker,
+            "last-tool cache_control marker mismatch: {serialized}"
+        );
+    }
+
+    // ─── Bug #15: Anthropic streaming dead-air timer ───────────────────────
+
+    /// Spawn a tiny HTTP server that emits one SSE chunk and then keeps the
+    /// connection open without writing more bytes — simulating an upstream
+    /// stall.  The dead-air timer should surface `ApiError::StreamStalled`
+    /// rather than hanging indefinitely.
+    fn spawn_stalling_sse_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind sse listener");
+        let address = listener.local_addr().expect("local addr");
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept connection");
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer).expect("read request");
+            // Send a chunked-transfer-encoding response with one SSE frame
+            // and then *do not* close the connection or send any more bytes.
+            // The HTTP keep-alive plus chunked framing means reqwest will
+            // happily wait forever for the next chunk — the dead-air timer
+            // is the only thing that can break us out.
+            let initial_frame =
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+            let chunk_size_hex = format!("{:X}", initial_frame.len());
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n{chunk_size_hex}\r\n{initial_frame}\r\n",
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write initial sse chunk");
+            // Park forever — the timeout test will outlive this thread.
+            thread::sleep(Duration::from_secs(60));
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        });
+        format!("http://{address}")
+    }
+
+    #[test]
+    fn anthropic_stream_surfaces_stalled_error_after_dead_air_timeout() {
+        let _guard = env_lock();
+        // Configure a tight dead-air timeout so the test finishes quickly.
+        unsafe { std::env::set_var("ANVIL_STREAM_DEAD_AIR_MS", "300"); }
+
+        let base_url = spawn_stalling_sse_server();
+        let client = AnvilApiClient::new("test-key").with_base_url(base_url);
+
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 64,
+            messages: vec![crate::types::InputMessage::user_text("hi")],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: true,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let outcome: Result<(), crate::error::ApiError> = runtime.block_on(async move {
+            let mut stream = client.stream_message(&request).await?;
+            // Drain events until the stream stalls.  We expect at least one
+            // event (the message_start delivered before the stall) and then
+            // a StreamStalled error from the timer.
+            loop {
+                stream.next_event().await?;
+            }
+        });
+
+        unsafe { std::env::remove_var("ANVIL_STREAM_DEAD_AIR_MS"); }
+
+        match outcome {
+            Err(crate::error::ApiError::StreamStalled { elapsed_ms }) => {
+                // Elapsed should be at least the configured timeout
+                // (300 ms).  Allow generous slack so a slow CI machine
+                // doesn't flake.
+                assert!(
+                    elapsed_ms >= 200,
+                    "elapsed_ms ({elapsed_ms}) should be near or above the configured 300ms timeout"
+                );
+            }
+            Err(other) => panic!("expected StreamStalled, got: {other:?}"),
+            Ok(()) => panic!("stream should have stalled, got a clean termination"),
+        }
     }
 }

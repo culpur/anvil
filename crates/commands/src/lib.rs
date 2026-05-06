@@ -11,7 +11,7 @@ pub mod subcommands;
 pub mod traits;
 
 pub use agents::{discover_skill_roots, handle_agents_slash_command, handle_skills_slash_command, load_skill_body, load_skills_from_roots};
-pub use skill_triggers::{match_triggers, TriggerMatch};
+pub use skill_triggers::{filter_skills, match_triggers, TriggerMatch};
 pub use traits::{
     bundled_catalogue, compose_agent, compose_agent_with_options, format_traits_listing,
     ComposeError, ComposeOptions, ComposedAgent, Trait, TraitCatalogue,
@@ -488,7 +488,7 @@ impl SlashCommand {
             "clear" => Self::Clear {
                 confirm: parts.next() == Some("--confirm"),
             },
-            "cost" => Self::Cost,
+            "cost" | "usage" | "stats" => Self::Cost,
             "resume" => Self::Resume {
                 session_path: parts.next().map(ToOwned::to_owned),
             },
@@ -1127,6 +1127,8 @@ mod tests {
             Some(SlashCommand::Clear { confirm: true })
         );
         assert_eq!(SlashCommand::parse("/cost"), Some(SlashCommand::Cost));
+        assert_eq!(SlashCommand::parse("/usage"), Some(SlashCommand::Cost));
+        assert_eq!(SlashCommand::parse("/stats"), Some(SlashCommand::Cost));
         assert_eq!(
             SlashCommand::parse("/resume session.json"),
             Some(SlashCommand::Resume {
@@ -1229,6 +1231,7 @@ mod tests {
             "/plugin [list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]"
         ));
         assert!(help.contains("aliases: /plugins, /marketplace"));
+        assert!(help.contains("aliases: /usage, /stats"));
         assert!(help.contains("/agents"));
         assert!(help.contains("/skills"));
         // v2.2.6: added mcp, productivity, knowledge, daily, think, focus, loop,
@@ -1242,7 +1245,10 @@ mod tests {
 
     #[test]
     fn suggests_close_slash_commands() {
-        let suggestions = suggest_slash_commands("stats", 3);
+        // `/stats` is an alias of `/cost` (CC parity FEAT-28), so a near-exact
+        // typo for `stats` resolves directly to `/cost`. Use a different typo
+        // to exercise the fuzzy suggester for `/status`.
+        let suggestions = suggest_slash_commands("statu", 3);
         assert!(!suggestions.is_empty());
         assert_eq!(suggestions[0], "/status");
     }

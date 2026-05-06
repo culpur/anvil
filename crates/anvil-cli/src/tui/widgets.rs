@@ -39,6 +39,7 @@ pub(super) fn update_completions(input: &str) -> CompletionPopup {
         visible: true,
         matches: completions.into_iter().map(completion_to_item).collect(),
         selected: 0,
+        view_offset: 0,
     }
 }
 

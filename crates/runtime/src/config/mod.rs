@@ -165,24 +165,38 @@ impl ConfigLoader {
             let Some(value) = read_optional_json_object(&entry.path)? else {
                 continue;
             };
-            merge_mcp_servers(&mut mcp_servers, entry.source, &value, &entry.path)?;
+            merge_mcp_servers(&mut mcp_servers, entry.source, &value, &entry.path);
             deep_merge_objects(&mut merged, &value);
             loaded_entries.push(entry);
         }
 
         let merged_value = JsonValue::Object(merged.clone());
 
+        // Each top-level section is parsed with partial-tolerance: a
+        // malformed section is logged and replaced with its default,
+        // rather than aborting the entire load.  This matches Claude
+        // Code's settings.json handling — a stray comma in `oauth`
+        // must not nuke `mcpServers`, and so on.
         let feature_config = RuntimeFeatureConfig {
-            hooks: parse_optional_hooks_config(&merged_value)?,
-            plugins: parse_optional_plugin_config(&merged_value)?,
+            hooks: tolerate_section("hooks", parse_optional_hooks_config(&merged_value)),
+            plugins: tolerate_section("plugins", parse_optional_plugin_config(&merged_value)),
             mcp: McpConfigCollection {
                 servers: mcp_servers,
             },
-            lsp: parse_optional_lsp_config(&merged_value, &self.cwd)?,
-            oauth: parse_optional_oauth_config(&merged_value, "merged settings.oauth")?,
+            lsp: tolerate_section(
+                "lsp",
+                parse_optional_lsp_config(&merged_value, &self.cwd),
+            ),
+            oauth: tolerate_section(
+                "oauth",
+                parse_optional_oauth_config(&merged_value, "merged settings.oauth"),
+            ),
             model: parse_optional_model(&merged_value),
-            permission_mode: parse_optional_permission_mode(&merged_value)?,
-            sandbox: parse_optional_sandbox_config(&merged_value)?,
+            permission_mode: tolerate_section(
+                "permissionMode",
+                parse_optional_permission_mode(&merged_value),
+            ),
+            sandbox: tolerate_section("sandbox", parse_optional_sandbox_config(&merged_value)),
             output_style: parse_optional_output_style(&merged_value),
         };
 
@@ -191,6 +205,20 @@ impl ConfigLoader {
             loaded_entries,
             feature_config,
         })
+    }
+}
+
+/// Unwrap a section parse result, defaulting on error with a stderr
+/// warning so a single malformed block does not poison the whole load.
+fn tolerate_section<T: Default>(section: &str, result: Result<T, ConfigError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "anvil: ignoring malformed {section} block in settings.json: {error}"
+            );
+            T::default()
+        }
     }
 }
 
@@ -735,7 +763,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_mcp_server_shapes() {
+    fn skips_invalid_mcp_server_shapes_but_keeps_valid_ones() {
+        // Partial-tolerance (BUG-34/35 parity): one bad mcpServers entry
+        // must not invalidate the rest of settings.json.  The load
+        // should succeed, the bad entry is dropped, and any sibling
+        // valid entry is preserved.
         let root = temp_dir();
         let cwd = root.join("project");
         let home = root.join("home").join(".anvil");
@@ -743,16 +775,24 @@ mod tests {
         fs::create_dir_all(&cwd).expect("project dir");
         fs::write(
             home.join("settings.json"),
-            r#"{"mcpServers":{"broken":{"type":"http","url":123}}}"#,
+            r#"{"mcpServers":{
+                "broken":{"type":"http","url":123},
+                "good":{"command":"uvx","args":["good"]}
+            }}"#,
         )
-        .expect("write broken settings");
+        .expect("write mixed settings");
 
-        let error = ConfigLoader::new(&cwd, &home)
+        let loaded = ConfigLoader::new(&cwd, &home)
             .load()
-            .expect_err("config should fail");
-        assert!(error
-            .to_string()
-            .contains("mcpServers.broken: missing string field url"));
+            .expect("config should load despite a malformed mcp server");
+        assert!(
+            loaded.mcp().get("broken").is_none(),
+            "broken server entry should be skipped"
+        );
+        assert!(
+            loaded.mcp().get("good").is_some(),
+            "valid sibling server entry should still load"
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -799,6 +839,93 @@ mod tests {
             .load()
             .expect("config should load");
         assert_eq!(loaded.output_style(), super::OutputStyle::Precise);
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    /// BUG-34/35 parity: a malformed `hooks` block must not nuke
+    /// `mcpServers`.  Both sections live in the same settings.json
+    /// file; the `load()` should succeed with mcp populated and hooks
+    /// empty (default).
+    #[test]
+    fn malformed_hooks_does_not_nuke_mcp_servers() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home config dir");
+        fs::create_dir_all(&cwd).expect("project dir");
+
+        // hooks.PreToolUse is a string instead of an array — the hooks
+        // section parser will return Err.  mcpServers is well-formed.
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "hooks": {"PreToolUse": "not-an-array"},
+              "mcpServers": {
+                "good": {"command": "uvx", "args": ["good"]}
+              }
+            }"#,
+        )
+        .expect("write mixed settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config should load despite a malformed hooks block");
+
+        assert!(
+            loaded.mcp().get("good").is_some(),
+            "mcpServers should still load when hooks is malformed"
+        );
+        assert!(
+            loaded.hooks().pre_tool_use().is_empty(),
+            "malformed hooks block should fall back to default (empty)"
+        );
+        assert!(
+            loaded.hooks().post_tool_use().is_empty(),
+            "malformed hooks block should fall back to default (empty)"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    /// BUG-34/35 parity: a settings.json with a JSON syntax error
+    /// (e.g. stray trailing comma) must not abort the whole load.
+    /// Other settings files in the chain should still apply.
+    #[test]
+    fn malformed_user_settings_json_does_not_abort_load() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(cwd.join(".anvil")).expect("project config dir");
+        fs::create_dir_all(&home).expect("home config dir");
+
+        // User settings.json: invalid JSON (unterminated value /
+        // garbage tail).  The bundled JsonValue parser tolerates
+        // trailing commas, so we use unmistakable garbage instead.
+        fs::write(
+            home.join("settings.json"),
+            r#"{"model": haiku, garbage"#,
+        )
+        .expect("write malformed user settings");
+
+        // Project settings.json: well-formed.
+        fs::write(
+            cwd.join(".anvil").join("settings.json"),
+            r#"{"model": "opus", "mcpServers": {"proj": {"command": "uvx", "args": ["p"]}}}"#,
+        )
+        .expect("write valid project settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("malformed user settings should not abort load");
+
+        // Project file's contents survived even though the user file
+        // was malformed and skipped.
+        assert_eq!(loaded.model(), Some("opus"));
+        assert!(
+            loaded.mcp().get("proj").is_some(),
+            "project mcp server should load despite malformed user settings"
+        );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

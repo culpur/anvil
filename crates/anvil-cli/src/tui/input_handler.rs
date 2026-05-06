@@ -52,12 +52,26 @@ impl AnvilTui {
                     {
                         // Pass through — do not consume.
                     } else {
+                        // Mouse-wheel routing: when the configure overlay is
+                        // open, the wheel scrolls the overlay's list viewport
+                        // (FEAT-36) so long pickers no longer truncate.
+                        // Otherwise it falls through to the chat scrollback.
+                        let in_configure = self.configure_state
+                            != super::configure_types::ConfigureState::Inactive;
                         match mouse.kind {
                             crossterm::event::MouseEventKind::ScrollUp => {
-                                self.scroll_up(3);
+                                if in_configure {
+                                    self.configure_scroll_wheel(-3);
+                                } else {
+                                    self.scroll_up(3);
+                                }
                             }
                             crossterm::event::MouseEventKind::ScrollDown => {
-                                self.scroll_down(3);
+                                if in_configure {
+                                    self.configure_scroll_wheel(3);
+                                } else {
+                                    self.scroll_down(3);
+                                }
                             }
                             _ => {}
                         }

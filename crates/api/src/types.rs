@@ -16,6 +16,57 @@ pub struct MessageRequest {
     pub stream: bool,
 }
 
+/// Anthropic prompt-caching breakpoint marker.
+///
+/// Attaching a `CacheControl` to a content block (system prompt, last tool
+/// definition, or message turn) tells the Anthropic API to cache *up to and
+/// including* that block.  Subsequent requests that re-send the same prefix
+/// hit the cache instead of re-billing the full input.
+///
+/// Bug #26: this type is currently consumed only by the Anthropic
+/// provider's wire-format builder.  Other providers (OpenAI-compat, Ollama)
+/// would reject `cache_control` keys, so it lives off the public
+/// `MessageRequest` envelope and is injected on the wire only when the
+/// Anthropic provider is in use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CacheControl {
+    #[serde(rename = "type")]
+    pub type_: CacheControlKind,
+    /// Optional TTL hint.  Omitted on the wire when `None`; the Anthropic API
+    /// then defaults to `"5m"`.  Anvil sets `"1h"` explicitly so the cache
+    /// survives across long sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheControlKind {
+    Ephemeral,
+}
+
+impl CacheControl {
+    /// Construct an ephemeral breakpoint with the given TTL string ("5m" or
+    /// "1h" per Anthropic's documentation).
+    #[must_use]
+    pub fn ephemeral_with_ttl(ttl: impl Into<String>) -> Self {
+        Self {
+            type_: CacheControlKind::Ephemeral,
+            ttl: Some(ttl.into()),
+        }
+    }
+
+    /// Construct an ephemeral breakpoint with no explicit TTL — Anthropic
+    /// defaults to 5 minutes when `ttl` is omitted.
+    #[must_use]
+    pub const fn ephemeral() -> Self {
+        Self {
+            type_: CacheControlKind::Ephemeral,
+            ttl: None,
+        }
+    }
+}
+
 impl MessageRequest {
     #[must_use]
     pub const fn with_streaming(mut self) -> Self {

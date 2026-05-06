@@ -113,31 +113,56 @@ impl McpConfigCollection {
     }
 }
 
+/// Merge the `mcpServers` block from one settings file into the
+/// running collection.
+///
+/// Partial-tolerance (BUG-34/35 parity): malformed entries are
+/// logged to stderr and skipped rather than aborting the load.
+/// Because every error path is a warn-and-skip, this function is
+/// infallible and never returns an error.
 pub fn merge_mcp_servers(
     target: &mut BTreeMap<String, ScopedMcpServerConfig>,
     source: ConfigSource,
     root: &BTreeMap<String, JsonValue>,
     path: &std::path::Path,
-) -> Result<(), ConfigError> {
+) {
     let Some(mcp_servers) = root.get("mcpServers") else {
-        return Ok(());
+        return;
     };
-    let servers = expect_object(mcp_servers, &format!("{}: mcpServers", path.display()))?;
+    // If `mcpServers` itself is the wrong shape, log and skip the
+    // whole block rather than aborting the entire load.
+    let Some(servers) = mcp_servers.as_object() else {
+        eprintln!(
+            "anvil: ignoring malformed mcpServers block in {}: expected JSON object",
+            path.display()
+        );
+        return;
+    };
     for (name, value) in servers {
-        let parsed = parse_mcp_server_config(
+        // Per-entry tolerance: one bad server should not nuke every
+        // other server in the same file.
+        match parse_mcp_server_config(
             name,
             value,
             &format!("{}: mcpServers.{name}", path.display()),
-        )?;
-        target.insert(
-            name.clone(),
-            ScopedMcpServerConfig {
-                scope: source,
-                config: parsed,
-            },
-        );
+        ) {
+            Ok(parsed) => {
+                target.insert(
+                    name.clone(),
+                    ScopedMcpServerConfig {
+                        scope: source,
+                        config: parsed,
+                    },
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "anvil: skipping malformed mcpServers.{name} in {}: {error}",
+                    path.display()
+                );
+            }
+        }
     }
-    Ok(())
 }
 
 pub fn parse_mcp_server_config(

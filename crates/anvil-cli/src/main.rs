@@ -22,6 +22,7 @@ mod screensaver;
 mod session;
 mod tui;
 mod check;
+mod project;
 mod setup;
 mod uninstall;
 mod skill_eval;
@@ -265,6 +266,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::SkillEval { args } => {
             skill_eval::run_skill_eval(args)?;
         }
+        CliAction::Project { opts } => {
+            let anvil_home = ::runtime::default_config_home();
+            let mut stdout = std::io::stdout().lock();
+            project::run_purge(&anvil_home, &opts, &mut stdout)
+                .map_err(|e| format!("project purge failed: {e}"))?;
+        }
     }
     Ok(())
 }
@@ -324,6 +331,10 @@ enum CliAction {
     /// Run a three-arm skill evaluation.
     SkillEval {
         args: skill_eval::SkillEvalArgs,
+    },
+    /// Per-workspace state management (CC parity FEAT-39).
+    Project {
+        opts: project::PurgeOptions,
     },
 }
 
@@ -570,6 +581,21 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         }
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
+        "project" => {
+            // `anvil project purge [path] [flags]` (CC parity FEAT-39).
+            // We currently support only the `purge` action; future actions
+            // (e.g. `project list`, `project info`) would dispatch here too.
+            match rest.get(1).map(String::as_str) {
+                Some("purge") => {
+                    let opts = project::parse_purge_args(&rest[2..])?;
+                    Ok(CliAction::Project { opts })
+                }
+                Some(other) => Err(format!(
+                    "unknown `anvil project` action: {other} (expected: purge)"
+                )),
+                None => Err("missing action for `anvil project` (try: purge)".to_string()),
+            }
+        }
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {

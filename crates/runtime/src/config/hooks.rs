@@ -74,6 +74,11 @@ pub fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig
 /// Bare strings become `HookSpec::Command`.  Tagged objects (e.g.
 /// `{"type":"prompt","body":"..."}`) deserialize via `serde_json` into their
 /// respective `HookSpec` variant.
+///
+/// Partial-tolerance: a single malformed entry is logged to stderr and
+/// skipped rather than aborting the entire array.  This matches Claude
+/// Code's settings.json parsing behavior — one bad hook should not wipe
+/// out every other valid hook in the same array.
 fn parse_hook_spec_array(
     object: &std::collections::BTreeMap<String, JsonValue>,
     key: &str,
@@ -89,18 +94,20 @@ fn parse_hook_spec_array(
     };
     // Re-serialize each element through serde_json so the existing
     // HookSpec serde(untagged) logic handles both bare strings and tagged objects.
-    array
-        .iter()
-        .map(|item| {
-            // Convert our internal JsonValue to a serde_json::Value via render().
-            let json_str = item.render();
-            serde_json::from_str::<HookSpec>(&json_str).map_err(|e| {
-                ConfigError::Parse(format!(
-                    "{context}: field {key} contains an invalid hook entry: {e}"
-                ))
-            })
-        })
-        .collect()
+    let mut hooks = Vec::with_capacity(array.len());
+    for item in array {
+        // Convert our internal JsonValue to a serde_json::Value via render().
+        let json_str = item.render();
+        match serde_json::from_str::<HookSpec>(&json_str) {
+            Ok(spec) => hooks.push(spec),
+            Err(error) => {
+                eprintln!(
+                    "anvil: skipping malformed hook entry in {context}.{key}: {error}"
+                );
+            }
+        }
+    }
+    Ok(hooks)
 }
 
 fn extend_unique(target: &mut Vec<HookSpec>, values: &[HookSpec]) {
@@ -112,5 +119,40 @@ fn extend_unique(target: &mut Vec<HookSpec>, values: &[HookSpec]) {
 fn push_unique(target: &mut Vec<HookSpec>, value: HookSpec) {
     if !target.iter().any(|existing| existing == &value) {
         target.push(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    /// BUG-34/35 parity: a malformed entry sandwiched between two
+    /// valid entries must not invalidate the whole array.  The two
+    /// valid hooks survive, the bad one is dropped with a stderr
+    /// warning.
+    #[test]
+    fn parse_hook_spec_array_keeps_valid_entries_around_a_malformed_one() {
+        let mut object = BTreeMap::new();
+        // First entry: valid bare-string command.
+        // Second entry: number — neither a bare string nor a tagged
+        // object, so HookSpec deserialization will fail.
+        // Third entry: valid bare-string command.
+        let parsed = JsonValue::parse(
+            r#"{"PreToolUse":["./hooks/pre.sh", 12345, "./hooks/also-pre.sh"]}"#,
+        )
+        .expect("seed JSON parses");
+        for (key, value) in parsed.as_object().expect("object root") {
+            object.insert(key.clone(), value.clone());
+        }
+
+        let hooks = parse_hook_spec_array(&object, "PreToolUse", "test")
+            .expect("tolerant parse should not error");
+        assert_eq!(hooks.len(), 2, "two valid hooks should survive");
+        assert_eq!(hooks[0], HookSpec::Command("./hooks/pre.sh".to_string()));
+        assert_eq!(
+            hooks[1],
+            HookSpec::Command("./hooks/also-pre.sh".to_string())
+        );
     }
 }

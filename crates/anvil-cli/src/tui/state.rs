@@ -314,6 +314,11 @@ pub(crate) struct CompletionPopup {
     pub visible: bool,
     pub matches: Vec<CompletionItem>,
     pub selected: usize,
+    /// Top-of-viewport offset for the popup list.  Updated by Up/Down so the
+    /// `selected` row always stays visible (FEAT-36 — long completion lists
+    /// like `/vault store ` (21 entries) used to clip rows beyond the
+    /// 12-row cap).
+    pub view_offset: usize,
 }
 
 #[derive(Debug, Clone, Default)]

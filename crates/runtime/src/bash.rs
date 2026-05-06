@@ -1,6 +1,8 @@
 use std::env;
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -64,8 +66,58 @@ pub struct BashCommandOutput {
     pub sandbox_status: Option<SandboxStatus>,
 }
 
+/// Resolve the working directory for a Bash invocation, with fallback if the
+/// process's `cwd` has been deleted or moved (CC parity BUG-17). Without this,
+/// every Bash call after a `rm -rf $PWD` fails identically and the tool is
+/// permanently broken until the session restarts.
+///
+/// Order: `env::current_dir()` → `$HOME` → `/tmp`. On fallback, also calls
+/// `set_current_dir` so subsequent Anvil internals also recover, and emits
+/// a one-shot warning to stderr (gated by `WARNED_CWD_FALLBACK`).
+fn resolve_cwd_with_fallback() -> io::Result<PathBuf> {
+    if let Ok(cwd) = env::current_dir() {
+        return Ok(cwd);
+    }
+    let candidates = default_cwd_candidates();
+    pick_first_usable_cwd(&candidates).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "current working directory is gone and no fallback is available ($HOME, /tmp both inaccessible)",
+        )
+    })
+}
+
+fn default_cwd_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::with_capacity(2);
+    if let Some(home) = env::var_os("HOME") {
+        let p = PathBuf::from(home);
+        if !p.as_os_str().is_empty() {
+            out.push(p);
+        }
+    }
+    out.push(PathBuf::from("/tmp"));
+    out
+}
+
+fn pick_first_usable_cwd(candidates: &[PathBuf]) -> Option<PathBuf> {
+    for candidate in candidates {
+        if candidate.is_dir() && env::set_current_dir(candidate).is_ok() {
+            if !WARNED_CWD_FALLBACK.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "anvil: working directory was deleted or moved; falling back to {}",
+                    candidate.display()
+                );
+            }
+            return Some(candidate.clone());
+        }
+    }
+    None
+}
+
+static WARNED_CWD_FALLBACK: AtomicBool = AtomicBool::new(false);
+
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
-    let cwd = env::current_dir()?;
+    let cwd = resolve_cwd_with_fallback()?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
     if input.run_in_background.unwrap_or(false) {
@@ -240,8 +292,23 @@ fn prepare_sandbox_dirs(cwd: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{execute_bash, BashCommandInput};
+    use super::{default_cwd_candidates, execute_bash, BashCommandInput};
     use crate::sandbox::FilesystemIsolationMode;
+    use std::path::PathBuf;
+
+    #[test]
+    fn cwd_fallback_candidates_always_includes_tmp() {
+        // /tmp is the always-present last-resort fallback regardless of $HOME.
+        // (Avoid mutating $HOME here — Rust 2024 makes env::set_var unsafe and
+        // the bash module's lints forbid unsafe blocks. The HOME-driven path
+        // is exercised in real-world use; the contract we assert here is the
+        // /tmp guarantee.)
+        let candidates = default_cwd_candidates();
+        assert!(
+            candidates.contains(&PathBuf::from("/tmp")),
+            "expected /tmp in candidates, got {candidates:?}"
+        );
+    }
 
     #[test]
     fn executes_simple_command() {

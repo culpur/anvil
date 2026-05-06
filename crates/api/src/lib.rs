@@ -28,8 +28,9 @@ pub use providers::{
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{
-    ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
-    ImageSource, ImageSourceKind, InputContentBlock, InputMessage, MessageDelta, MessageDeltaEvent,
-    MessageRequest, MessageResponse, MessageStartEvent, MessageStopEvent, OutputContentBlock,
-    StreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
+    CacheControl, CacheControlKind, ContentBlockDelta, ContentBlockDeltaEvent,
+    ContentBlockStartEvent, ContentBlockStopEvent, ImageSource, ImageSourceKind, InputContentBlock,
+    InputMessage, MessageDelta, MessageDeltaEvent, MessageRequest, MessageResponse,
+    MessageStartEvent, MessageStopEvent, OutputContentBlock, StreamEvent, ToolChoice,
+    ToolDefinition, ToolResultContentBlock, Usage,
 };

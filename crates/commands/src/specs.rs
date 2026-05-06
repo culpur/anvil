@@ -151,7 +151,7 @@ Examples:
     },
     SlashCommandSpec {
         name: "cost",
-        aliases: &[],
+        aliases: &["usage", "stats"],
         summary: "Show cumulative token usage for this session",
         argument_hint: None,
         resume_supported: true,
