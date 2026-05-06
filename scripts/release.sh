@@ -154,19 +154,25 @@ NOTES="## Anvil $TAG
 ### Installation
 \`\`\`bash
 # macOS/Linux
-curl -LO https://github.com/culpur/anvil-source/releases/download/$TAG/anvil-\$(uname -m)-\$(uname -s | tr A-Z a-z)
+curl -LO https://github.com/culpur/anvil/releases/download/$TAG/anvil-\$(uname -m)-\$(uname -s | tr A-Z a-z)
 chmod +x anvil-*
 sudo mv anvil-* /usr/local/bin/anvil
 \`\`\`
 
 ### Built locally via Culpur CI/CD pipeline (Docker cross-compilation)."
 
-# Create or update release
-if gh release view "$TAG" >/dev/null 2>&1; then
-    echo "  Release $TAG exists — uploading assets..."
-    gh release upload "$TAG" "$OUTPUT_DIR"/anvil-* --clobber
+# Create or update release on the PUBLIC repo (culpur/anvil) — that's where
+# users download from. The private culpur/anvil-source repo only holds source
+# code; binaries don't go there. Always pass --repo explicitly so this never
+# silently follows whichever remote the cwd happens to track.
+PUBLIC_REPO="culpur/anvil"
+if gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+    echo "  Release $TAG exists on $PUBLIC_REPO — uploading assets..."
+    gh release upload "$TAG" --repo "$PUBLIC_REPO" "$OUTPUT_DIR"/anvil-* --clobber
 else
+    echo "  Creating release $TAG on $PUBLIC_REPO..."
     gh release create "$TAG" \
+        --repo "$PUBLIC_REPO" \
         --title "Anvil $TAG" \
         --notes "$NOTES" \
         "$OUTPUT_DIR"/anvil-*
