@@ -2,15 +2,46 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.9-blue)
+![Version](https://img.shields.io/badge/version-2.2.10-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-837%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-842%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
 
 ---
+
+## What's New in v2.2.10 — TUI usability patch
+
+Three fixes for issues visible in real v2.2.9 sessions on macOS Terminal.app.
+
+### Long lines wrap instead of truncating with `…`
+The chat content paragraph used to right-truncate every line at the
+terminal edge — long prompts and assistant responses lost their tails.
+v2.2.10 uses ratatui's built-in word-wrap so messages flow to the next
+line cleanly.
+
+### Native drag-to-select works in every terminal
+Mouse capture stole text selection on macOS Terminal.app and many other
+emulators. The Shift+Drag pass-through workaround only worked on iTerm2,
+Windows Terminal, and Linux VTEs. v2.2.10 disables mouse capture by
+default — drag-to-select with no modifier works everywhere now.
+
+If you want mouse-wheel scrolling in chat / configure overlay, opt back
+in with `ANVIL_TUI_MOUSE=1`.
+
+### Tool-result lines tell you what actually happened
+`bash [ok]: {`, `TeamCreate [ok]: {`, `TeamAddMember [ok]: {` told the
+user nothing. v2.2.10 parses each tool's JSON output per-tool:
+
+- `bash` shows the first non-empty stdout line + multi-line indicator
+- `read_file` shows line count
+- `write_file` / `edit_file` show the path
+- `glob_search` / `grep_search` show match count
+- generic tools fall back to `name=…`, `id=…`, or list top-level keys
+
+You'll see `bash [ok]: ls -la (+12 more lines)` instead of `bash [ok]: {`.
 
 ## What's New in v2.2.9
 
@@ -77,6 +108,7 @@ CC v2.1.118 parity — three names, same handler.
 
 ### Previous Releases
 
+- **v2.2.9**: Anthropic prompt caching (1h TTL on system + last tool), `anvil project purge`, MCP-tool hooks, `--plugin-dir <zip>` / `--plugin-url`, OAuth paste-code fallback, `alwaysLoad: true` on MCP servers, settings.json partial-tolerance, bash CWD vanish recovery, Anthropic stream dead-air timer, `/usage` and `/stats` aliases, scrollable TUI overlays — Claude Code v2.1.118 → v2.1.131 parity catch-up
 - **v2.2.8**: Trait-based agent composition (`/agent compose`), skill front-matter triggers (suggest-not-auto), prompt-type hooks, three-arm skill-eval harness, `precise`/`condensed` output styles, plugin loader forward-compat, embedded bundled plugins
 - **v2.2.7**: Cross-OS installers with SHA256 verification, `anvil upgrade`, shell completions, curated Ollama menu, Windows env fixes, release-pipeline hardening
 - **v2.2.6**: 17 web config panels, full Status Line editor in browser, AnvilHub installer, deep hierarchical autocomplete, 8 previously-broken TUI handlers restored
