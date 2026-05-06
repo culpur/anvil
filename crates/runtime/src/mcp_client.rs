@@ -52,6 +52,11 @@ pub struct McpClientBootstrap {
     pub tool_prefix: String,
     pub signature: Option<String>,
     pub transport: McpClientTransport,
+    /// FEAT-41 (Claude Code v2.1.121 parity): when `true`, all tools
+    /// discovered from this server skip tool-search deferral and are
+    /// exposed to the model immediately at session start.  Sourced
+    /// directly from the server config's `alwaysLoad` JSON field.
+    pub always_load: bool,
 }
 
 impl McpClientBootstrap {
@@ -63,6 +68,7 @@ impl McpClientBootstrap {
             tool_prefix: mcp_tool_prefix(server_name),
             signature: mcp_server_signature(&config.config),
             transport: McpClientTransport::from_config(&config.config),
+            always_load: config.always_load(),
         }
     }
 }
@@ -136,6 +142,7 @@ mod tests {
                 command: "uvx".to_string(),
                 args: vec!["mcp-server".to_string()],
                 env: BTreeMap::from([("TOKEN".to_string(), "secret".to_string())]),
+                always_load: false,
             }),
         };
 
@@ -175,6 +182,7 @@ mod tests {
                     ),
                     xaa: Some(true),
                 }),
+                always_load: false,
             }),
         };
 
@@ -204,12 +212,14 @@ mod tests {
                 url: "wss://vendor.example/mcp".to_string(),
                 headers: BTreeMap::new(),
                 headers_helper: None,
+                always_load: false,
             }),
         };
         let sdk = ScopedMcpServerConfig {
             scope: ConfigSource::Local,
             config: McpServerConfig::Sdk(McpSdkServerConfig {
                 name: "sdk-server".to_string(),
+                always_load: false,
             }),
         };
 
@@ -230,5 +240,42 @@ mod tests {
             }
             other => panic!("expected sdk transport, got {other:?}"),
         }
+    }
+
+    // FEAT-41: bootstraps must surface the `alwaysLoad` flag from
+    // config so the tool-registration path can split discovered
+    // tools between the deferred and always-available toolsets.
+    #[test]
+    fn bootstrap_propagates_always_load_from_config() {
+        let opt_in = ScopedMcpServerConfig {
+            scope: ConfigSource::User,
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "uvx".to_string(),
+                args: vec!["mcp-server".to_string()],
+                env: BTreeMap::new(),
+                always_load: true,
+            }),
+        };
+        let opt_out = ScopedMcpServerConfig {
+            scope: ConfigSource::User,
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "uvx".to_string(),
+                args: vec!["mcp-server".to_string()],
+                env: BTreeMap::new(),
+                always_load: false,
+            }),
+        };
+
+        let opt_in_bootstrap = McpClientBootstrap::from_scoped_config("hot", &opt_in);
+        let opt_out_bootstrap = McpClientBootstrap::from_scoped_config("cold", &opt_out);
+
+        assert!(
+            opt_in_bootstrap.always_load,
+            "alwaysLoad: true must propagate to bootstrap"
+        );
+        assert!(
+            !opt_out_bootstrap.always_load,
+            "default (alwaysLoad omitted/false) must keep bootstrap deferred"
+        );
     }
 }

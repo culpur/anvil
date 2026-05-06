@@ -348,6 +348,7 @@ mod tests {
                 command: "/bin/sh".to_string(),
                 args: vec![script_path.to_string_lossy().into_owned()],
                 env: BTreeMap::from([("MCP_TEST_TOKEN".to_string(), "secret-value".to_string())]),
+                always_load: false,
             }),
         };
         McpClientBootstrap::from_scoped_config("stdio server", &config)
@@ -392,6 +393,15 @@ mod tests {
         label: &str,
         log_path: &Path,
     ) -> ScopedMcpServerConfig {
+        manager_server_config_with_always_load(script_path, label, log_path, false)
+    }
+
+    fn manager_server_config_with_always_load(
+        script_path: &Path,
+        label: &str,
+        log_path: &Path,
+        always_load: bool,
+    ) -> ScopedMcpServerConfig {
         ScopedMcpServerConfig {
             scope: ConfigSource::Local,
             config: McpServerConfig::Stdio(McpStdioServerConfig {
@@ -404,6 +414,7 @@ mod tests {
                         log_path.to_string_lossy().into_owned(),
                     ),
                 ]),
+                always_load,
             }),
         }
     }
@@ -443,6 +454,7 @@ mod tests {
             scope: ConfigSource::Local,
             config: McpServerConfig::Sdk(crate::config::McpSdkServerConfig {
                 name: "sdk-server".to_string(),
+                always_load: false,
             }),
         };
         let bootstrap = McpClientBootstrap::from_scoped_config("sdk server", &config);
@@ -714,7 +726,74 @@ mod tests {
             assert_eq!(tools[0].raw_name, "echo");
             assert_eq!(tools[0].qualified_name, mcp_tool_name("alpha", "echo"));
             assert_eq!(tools[0].tool.name, "echo");
+            assert!(
+                !tools[0].always_load,
+                "default config (alwaysLoad omitted) should yield deferred tools"
+            );
             assert!(manager.unsupported_servers().is_empty());
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    // FEAT-41 (Claude Code v2.1.121 parity): a server configured
+    // with `alwaysLoad: true` propagates that flag through to every
+    // discovered `ManagedMcpTool`.  Consumers (providers.rs) read
+    // `ManagedMcpTool::always_load` to decide whether the tool is
+    // exposed to the model immediately or kept behind tool-search.
+    #[test]
+    fn manager_marks_discovered_tools_with_server_always_load_flag() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_manager_mcp_server_script();
+            let root = script_path.parent().expect("script parent");
+            let hot_log = root.join("hot.log");
+            let cold_log = root.join("cold.log");
+            let servers = BTreeMap::from([
+                (
+                    "hot".to_string(),
+                    manager_server_config_with_always_load(
+                        &script_path,
+                        "hot",
+                        &hot_log,
+                        true,
+                    ),
+                ),
+                (
+                    "cold".to_string(),
+                    manager_server_config_with_always_load(
+                        &script_path,
+                        "cold",
+                        &cold_log,
+                        false,
+                    ),
+                ),
+            ]);
+            let mut manager = McpServerManager::from_servers(&servers);
+
+            let tools = manager.discover_tools().await.expect("discover tools");
+
+            let hot = tools
+                .iter()
+                .find(|tool| tool.server_name == "hot")
+                .expect("hot server should yield a tool");
+            let cold = tools
+                .iter()
+                .find(|tool| tool.server_name == "cold")
+                .expect("cold server should yield a tool");
+
+            assert!(
+                hot.always_load,
+                "alwaysLoad: true server's tool must be flagged for immediate availability"
+            );
+            assert!(
+                !cold.always_load,
+                "default server's tool must remain deferred (alwaysLoad=false)"
+            );
 
             manager.shutdown().await.expect("shutdown");
             cleanup_script(&script_path);
@@ -795,6 +874,7 @@ mod tests {
                         headers: BTreeMap::new(),
                         headers_helper: None,
                         oauth: None,
+                        always_load: false,
                     }),
                 },
             ),
@@ -804,6 +884,7 @@ mod tests {
                     scope: ConfigSource::Local,
                     config: McpServerConfig::Sdk(McpSdkServerConfig {
                         name: "sdk-server".to_string(),
+                        always_load: false,
                     }),
                 },
             ),
@@ -815,6 +896,7 @@ mod tests {
                         url: "wss://example.test/mcp".to_string(),
                         headers: BTreeMap::new(),
                         headers_helper: None,
+                        always_load: false,
                     }),
                 },
             ),

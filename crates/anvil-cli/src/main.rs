@@ -383,6 +383,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut allowed_tool_values = Vec::new();
     let mut rest = Vec::new();
     let mut index = 0;
+    // FEAT-42: --plugin-url accumulates URLs; --plugin-sha256 attaches to the
+    // *next* --plugin-url and may also appear as `--plugin-url URL --plugin-sha256 HEX`
+    // in either order.  We collect raw flags here and resolve them once the
+    // arg loop is done so order doesn't matter.
+    let mut plugin_dirs: Vec<String> = Vec::new();
+    let mut plugin_urls: Vec<(String, Option<String>)> = Vec::new();
+    let mut pending_sha256: Option<String> = None;
 
     while index < args.len() {
         match args[index].as_str() {
@@ -477,11 +484,86 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 allowed_tool_values.push(flag[16..].to_string());
                 index += 1;
             }
+            // FEAT-42: --plugin-dir <path>.  Path may be a directory (existing
+            // behaviour) or a `.zip` archive (extracted to a session temp dir).
+            "--plugin-dir" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --plugin-dir".to_string())?;
+                plugin_dirs.push(value.clone());
+                index += 2;
+            }
+            flag if flag.starts_with("--plugin-dir=") => {
+                plugin_dirs.push(flag[13..].to_string());
+                index += 1;
+            }
+            // FEAT-42: --plugin-url <https://...> fetches a plugin .zip for
+            // the current session.  Optional --plugin-sha256 HEX verifies it.
+            "--plugin-url" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --plugin-url".to_string())?;
+                plugin_urls.push((value.clone(), pending_sha256.take()));
+                index += 2;
+            }
+            flag if flag.starts_with("--plugin-url=") => {
+                plugin_urls.push((flag[13..].to_string(), pending_sha256.take()));
+                index += 1;
+            }
+            "--plugin-sha256" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --plugin-sha256".to_string())?;
+                // Attach to the most recent --plugin-url if one is already
+                // registered without a hash; otherwise, defer to the next.
+                if let Some(last) = plugin_urls.last_mut()
+                    && last.1.is_none()
+                {
+                    last.1 = Some(value.clone());
+                } else {
+                    pending_sha256 = Some(value.clone());
+                }
+                index += 2;
+            }
+            flag if flag.starts_with("--plugin-sha256=") => {
+                let value = flag[16..].to_string();
+                if let Some(last) = plugin_urls.last_mut()
+                    && last.1.is_none()
+                {
+                    last.1 = Some(value);
+                } else {
+                    pending_sha256 = Some(value);
+                }
+                index += 1;
+            }
             other => {
                 rest.push(other.to_string());
                 index += 1;
             }
         }
+    }
+
+    // FEAT-42: resolve session plugin sources.  Errors here are surfaced as
+    // CLI errors so the operator sees `https-only`, `zip too large`, etc.
+    // up front rather than as a silent no-load.
+    if !plugin_dirs.is_empty() || !plugin_urls.is_empty() {
+        plugins::sweep_stale_session_dirs();
+    }
+    for raw in plugin_dirs {
+        let path = PathBuf::from(&raw);
+        let prepared = plugins::prepare_plugin_dir_source(&path)
+            .map_err(|error| format!("--plugin-dir {raw}: {error}"))?;
+        plugins::register_session_source(prepared);
+    }
+    for (url, sha256) in plugin_urls {
+        let prepared = plugins::prepare_plugin_url_source(&url, sha256.as_deref())
+            .map_err(|error| format!("--plugin-url {url}: {error}"))?;
+        plugins::register_session_source(prepared);
+    }
+    if let Some(stranded) = pending_sha256 {
+        return Err(format!(
+            "--plugin-sha256 {stranded} has no matching --plugin-url"
+        ));
     }
 
     if wants_version {

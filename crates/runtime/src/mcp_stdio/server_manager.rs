@@ -21,6 +21,12 @@ pub struct ManagedMcpTool {
     pub qualified_name: String,
     pub raw_name: String,
     pub tool: McpTool,
+    /// FEAT-41: mirrors `McpClientBootstrap::always_load`. Consumers
+    /// of `discover_tools()` use this flag to split discovered tools
+    /// between the always-available toolset and the deferred
+    /// tool-search index.  `false` (default) means the tool is only
+    /// reachable through `ToolSearch`.
+    pub always_load: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,6 +182,14 @@ impl McpServerManager {
         for server_name in server_names {
             self.ensure_server_ready(&server_name).await?;
             self.clear_routes_for_server(&server_name);
+            // FEAT-41: cache the bootstrap's always_load decision
+            // once per server so every discovered tool inherits the
+            // same flag without repeated lookups.
+            let always_load = self
+                .servers
+                .get(&server_name)
+                .map(|server| server.bootstrap.always_load)
+                .unwrap_or(false);
 
             let mut cursor = None;
             loop {
@@ -230,6 +244,7 @@ impl McpServerManager {
                         qualified_name,
                         raw_name: tool.name.clone(),
                         tool,
+                        always_load,
                     });
                 }
 

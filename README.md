@@ -2,15 +2,98 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.8-blue)
+![Version](https://img.shields.io/badge/version-2.2.9-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-756%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-837%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
 
 ---
+
+## What's New in v2.2.9
+
+### Anthropic prompt caching — every request now caches at 1h TTL
+Anvil never sent `cache_control` to Anthropic, which meant every turn
+re-billed the full system prompt + tool definitions at full input rate.
+v2.2.9 injects two cache breakpoints (`{type:"ephemeral", ttl:"1h"}`) on
+every Anthropic request — one on the system prompt, one on the last tool
+definition. For long sessions, the cost reduction is substantial.
+
+### `anvil project purge`
+Wipe per-workspace state without touching the vault, settings, or OAuth
+credentials. `anvil project purge [path] [--dry-run|-n] [--yes|-y]
+[--all]`. Removes `~/.anvil/sessions/<hash>/`, `daily/<hash>/`,
+`private/<hash>.enc`, `file-history/<hash>/`. Useful when archiving a
+project or before publishing a previously-private repo.
+
+### Hooks can invoke MCP tools directly
+`{"type":"mcp_tool","server":"culpur-infra","tool":"redact","input":{...}}`.
+Powerful for vault-scrubber-as-hook, post-tool redaction, etc. All MCP
+failure modes (no invoker, server unavailable, transport error) become
+warnings — never deny — so an unhealthy MCP server can't crash a turn.
+
+### `--plugin-dir <zip>` and `--plugin-url <https-url>`
+Try plugins without installing. HTTPS-only, magic-byte-validated zip
+extraction, path-traversal-safe, 50 MiB cap, optional
+`--plugin-sha256 HEX` for integrity verification.
+
+### `alwaysLoad: true` on MCP servers
+Tools from frequently-used servers (e.g. `culpur-infra`, `qmd`) skip
+ToolSearch deferral and are immediately available — no extra discovery
+round-trip per session.
+
+### OAuth login works from SSH/WSL/containers
+`anvil login` now races the localhost callback against a stdin paste
+prompt — whichever completes first wins. If `TcpListener::bind` fails,
+auto-fall-back to paste-only with manual-redirect URL. Accepts bare codes,
+`code#state=…` suffixes, and full callback URLs.
+
+### `settings.json` is field-tolerant
+A stray comma, malformed hook entry, or wrong-shape oauth block no longer
+nukes the entire settings file. Bad sections warn-and-skip; good sections
+still apply.
+
+### Bash tool survives a vanished CWD
+`rm -rf $PWD` mid-session no longer breaks every subsequent Bash call.
+Anvil falls back to `$HOME` → `/tmp`, calls `set_current_dir()` so the
+process recovers, and emits a one-shot stderr warning.
+
+### Anthropic streaming has a dead-air timer
+The OpenAI-compat path got a 5-min dead-air timeout in v2.2.8; the
+Anthropic path was overlooked. v2.2.9 fixes that — uses `Instant::now()`
+(monotonic, wake-from-sleep safe), resets on every chunk including
+`thinking_delta`. Override via `ANVIL_STREAM_DEAD_AIR_MS`.
+
+### TUI dialogs scroll on overflow
+The `/configure` overlay (MainMenu 17, WidgetPicker 36, PresetPicker 16,
+Notifications 10, Search) and the slash-command completion popup (21+
+entries) now route PgUp/PgDn/Home/End/mouse-wheel through a new
+`ListViewport` primitive — no more invisibly-truncated screens.
+
+### `/usage` and `/stats` aliases for `/cost`
+CC v2.1.118 parity — three names, same handler.
+
+### Previous Releases
+
+- **v2.2.8**: Trait-based agent composition (`/agent compose`), skill front-matter triggers (suggest-not-auto), prompt-type hooks, three-arm skill-eval harness, `precise`/`condensed` output styles, plugin loader forward-compat, embedded bundled plugins
+- **v2.2.7**: Cross-OS installers with SHA256 verification, `anvil upgrade`, shell completions, curated Ollama menu, Windows env fixes, release-pipeline hardening
+- **v2.2.6**: 17 web config panels, full Status Line editor in browser, AnvilHub installer, deep hierarchical autocomplete, 8 previously-broken TUI handlers restored
+- **v2.2.5**: Intelligent memory system — 6-tier architecture, self-improving knowledge base
+- **v2.2.4**: Security hardening — 17 audit findings resolved, constant-time HMAC, zero warnings
+- **v2.2.3**: Six major features — interactive widget editor, agent types, MCP config panel
+- **v2.2.2**: Customizable widget-based status line with 8 presets
+- **v2.2.1**: URL rendering fix, context-aware vault form
+- **v2.2.0**: Typed credential vault — 21 credential types, category tabs, visual manager
+- **v2.1.2**: Credential auto-detection, egress control, signed transcripts
+- **v2.1.1**: Live streaming responses, remote control, thinking mode
+- **v2.1.0**: AES-256-GCM encrypted vault, file sandbox, modular architecture
+- **v2.0.0**: Full Claude Code parity
+
+---
+
+<!-- v2.2.8 details retained below for context -->
 
 ## What's New in v2.2.8
 

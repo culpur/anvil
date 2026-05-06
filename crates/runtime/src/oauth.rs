@@ -304,6 +304,88 @@ pub fn parse_oauth_callback_request_target(target: &str) -> Result<OAuthCallback
     parse_oauth_callback_query(query)
 }
 
+/// Parse a value pasted by the user when the browser callback can't reach
+/// localhost (WSL2, SSH, container without published ports).
+///
+/// Accepts two shapes and returns `(code, state_opt)`:
+///
+/// * A bare authorization code, e.g. `abc123-def456` or
+///   `abc123-def456#state=xyz` (the `#state=` suffix is what
+///   `https://platform.claude.com/oauth/code/callback` shows the user).
+/// * The full callback URL, e.g.
+///   `http://localhost:39817/callback?code=abc123&state=xyz`. In that case
+///   `code` and `state` are extracted from the query string.
+///
+/// Returns `Err` for empty or obviously malformed input (whitespace inside
+/// the bare token, or a URL without a `code=` parameter).
+pub fn parse_pasted_oauth_code(input: &str) -> Result<(String, Option<String>), String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("empty paste".to_string());
+    }
+
+    // Full URL form: anything that has a scheme (http://, https://) and a
+    // query string. The bare-code form may also contain `?` so we look for
+    // `://` to disambiguate.
+    if trimmed.contains("://") {
+        let (_, query) = trimmed
+            .split_once('?')
+            .ok_or_else(|| "pasted URL is missing the '?code=...' query".to_string())?;
+        // Strip a fragment if the provider appended one.
+        let query = query.split('#').next().unwrap_or(query);
+        let params = parse_oauth_callback_query(query)?;
+        let code = params
+            .code
+            .ok_or_else(|| "pasted URL did not include a 'code' parameter".to_string())?;
+        if code.is_empty() {
+            return Err("pasted URL had an empty 'code' parameter".to_string());
+        }
+        return Ok((code, params.state));
+    }
+
+    // Some providers display `<code>#state=<state>` or `<code>?state=<state>`
+    // on the manual-callback page; accept either as a bare paste.
+    let (code_part, state_part) = if let Some((c, rest)) = trimmed.split_once('#') {
+        (c, Some(rest))
+    } else if let Some((c, rest)) = trimmed.split_once('?') {
+        (c, Some(rest))
+    } else {
+        (trimmed, None)
+    };
+
+    if code_part.is_empty() {
+        return Err("pasted code is empty".to_string());
+    }
+    // A bare auth code is opaque but always URL-safe: ASCII letters, digits,
+    // and a small set of separator chars. Anything else (whitespace, control
+    // chars, slashes) means the user pasted something we don't recognise.
+    if !code_part
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'))
+    {
+        return Err("pasted value is not a recognised OAuth code or callback URL".to_string());
+    }
+
+    let state = match state_part {
+        None => None,
+        Some(rest) => {
+            // Look for `state=...` in the suffix; ignore any other params.
+            let mut found = None;
+            for pair in rest.split('&').filter(|p| !p.is_empty()) {
+                if let Some((k, v)) = pair.split_once('=')
+                    && k == "state"
+                {
+                    found = Some(percent_decode(v)?);
+                    break;
+                }
+            }
+            found
+        }
+    };
+
+    Ok((code_part.to_string(), state))
+}
+
 pub fn parse_oauth_callback_query(query: &str) -> Result<OAuthCallbackParams, String> {
     let mut params = BTreeMap::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
@@ -475,8 +557,9 @@ mod tests {
     use super::{
         clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
         generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
-        OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
+        parse_oauth_callback_request_target, parse_pasted_oauth_code, save_oauth_credentials,
+        OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest,
+        OAuthTokenSet,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -607,5 +690,87 @@ mod tests {
         assert_eq!(params.code.as_deref(), Some("abc"));
         assert_eq!(params.state.as_deref(), Some("xyz"));
         assert!(parse_oauth_callback_request_target("/wrong?code=abc").is_err());
+    }
+
+    #[test]
+    fn parse_pasted_oauth_code_accepts_bare_code() {
+        let (code, state) =
+            parse_pasted_oauth_code("abc123-def456").expect("bare code parses");
+        assert_eq!(code, "abc123-def456");
+        assert_eq!(state, None);
+
+        // Whitespace around the bare code should be tolerated.
+        let (code, state) =
+            parse_pasted_oauth_code("   abc.123_DEF~456   \n").expect("padded bare code parses");
+        assert_eq!(code, "abc.123_DEF~456");
+        assert_eq!(state, None);
+    }
+
+    #[test]
+    fn parse_pasted_oauth_code_accepts_full_callback_url() {
+        let (code, state) = parse_pasted_oauth_code(
+            "http://localhost:39817/callback?code=abc123&state=xyz",
+        )
+        .expect("full URL parses");
+        assert_eq!(code, "abc123");
+        assert_eq!(state.as_deref(), Some("xyz"));
+
+        // Manual-redirect URL with percent-encoded state.
+        let (code, state) = parse_pasted_oauth_code(
+            "https://platform.claude.com/oauth/code/callback?code=AC_456&state=stat%2Fbar",
+        )
+        .expect("manual redirect URL parses");
+        assert_eq!(code, "AC_456");
+        assert_eq!(state.as_deref(), Some("stat/bar"));
+
+        // Trailing fragment is ignored.
+        let (code, state) = parse_pasted_oauth_code(
+            "http://localhost:39817/callback?code=abc&state=zz#anchor",
+        )
+        .expect("URL with fragment parses");
+        assert_eq!(code, "abc");
+        assert_eq!(state.as_deref(), Some("zz"));
+    }
+
+    #[test]
+    fn parse_pasted_oauth_code_extracts_state_from_bare_suffix() {
+        let (code, state) =
+            parse_pasted_oauth_code("abc123#state=xyz").expect("hash suffix parses");
+        assert_eq!(code, "abc123");
+        assert_eq!(state.as_deref(), Some("xyz"));
+
+        let (code, state) =
+            parse_pasted_oauth_code("abc123?state=xyz").expect("question suffix parses");
+        assert_eq!(code, "abc123");
+        assert_eq!(state.as_deref(), Some("xyz"));
+    }
+
+    #[test]
+    fn parse_pasted_oauth_code_rejects_malformed_input() {
+        assert!(parse_pasted_oauth_code("").is_err());
+        assert!(parse_pasted_oauth_code("    ").is_err());
+        // URL without a query string.
+        assert!(parse_pasted_oauth_code("http://localhost:39817/callback").is_err());
+        // URL with query but no `code` param.
+        assert!(
+            parse_pasted_oauth_code("http://localhost:39817/callback?state=xyz").is_err()
+        );
+        // Random text with whitespace inside (not a URL, not a bare code).
+        assert!(parse_pasted_oauth_code("not a code").is_err());
+        // Forward slashes are illegal in a bare code.
+        assert!(parse_pasted_oauth_code("path/to/code").is_err());
+    }
+
+    #[test]
+    fn parse_pasted_oauth_code_state_mismatch_rejection() {
+        // The function itself returns the parsed state; the caller is
+        // expected to compare it against the generated value. This test
+        // documents that contract.
+        let (_, state) = parse_pasted_oauth_code(
+            "http://localhost:39817/callback?code=abc&state=they-sent-this",
+        )
+        .expect("URL parses");
+        let expected = "we-generated-this";
+        assert_ne!(state.as_deref(), Some(expected));
     }
 }

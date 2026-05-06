@@ -187,6 +187,64 @@ fn rejects_unknown_allowed_tools() {
     assert!(error.contains("unsupported tool in --allowedTools: teleport"));
 }
 
+// FEAT-42 -----------------------------------------------------------------
+// CLI-level smoke tests for --plugin-dir / --plugin-url.  Heavy lifting
+// (zip extraction, traversal rejection, https-only enforcement) is
+// covered in `plugins::session_plugins::tests`; here we just verify
+// parse_args wires the flags to the right surface and surfaces a useful
+// error when validation fails up front.
+
+#[test]
+fn rejects_plugin_url_with_http_scheme() {
+    let error = parse_args(&[
+        "--plugin-url".to_string(),
+        "http://example.com/plugin.zip".to_string(),
+    ])
+    .expect_err("http:// must be rejected before any network I/O");
+    assert!(
+        error.contains("HTTPS") || error.contains("https"),
+        "got: {error}"
+    );
+}
+
+#[test]
+fn rejects_plugin_sha256_without_url() {
+    let error = parse_args(&[
+        "--plugin-sha256".to_string(),
+        "0".repeat(64),
+    ])
+    .expect_err("--plugin-sha256 without a URL must be rejected");
+    assert!(error.contains("--plugin-sha256"));
+    assert!(error.contains("--plugin-url"));
+}
+
+#[test]
+fn rejects_plugin_dir_pointing_at_nonexistent_path() {
+    let error = parse_args(&[
+        "--plugin-dir".to_string(),
+        "/definitely/does/not/exist/anvil-feat42".to_string(),
+    ])
+    .expect_err("--plugin-dir on a missing path must be rejected");
+    assert!(error.contains("--plugin-dir"));
+}
+
+#[test]
+fn plugin_dir_passthrough_directory_yields_repl_action() {
+    // Use the workspace root — we know it exists.
+    let workspace_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|crates| crates.parent())
+            .expect("workspace root")
+            .to_path_buf();
+    let action = parse_args(&[
+        "--plugin-dir".to_string(),
+        workspace_root.to_string_lossy().into_owned(),
+    ])
+    .expect("--plugin-dir on a directory should parse cleanly");
+    assert!(matches!(action, CliAction::Repl { .. }));
+}
+
 #[test]
 fn parses_system_prompt_options() {
     let args = vec![

@@ -196,3 +196,14 @@ BUG-15 (idle timeout post-sleep), BUG-17 (bash CWD vanish), BUG-21 (skill re-fir
 FEAT-28 (`/usage` consolidator), FEAT-30 (MCP-tool hooks), FEAT-34 (skill filter), FEAT-36 (scrollable dialogs), FEAT-39 (`anvil project purge`), FEAT-40 (paste-code OAuth), FEAT-41 (`always_load` MCP).
 
 These get filed individually as tasks below.
+
+---
+
+## v2.2.9 outcome (2026-05-06)
+
+Shipped under v2.2.9: 4 bug fixes (BUG-15, BUG-17, BUG-26, BUG-34/35) plus
+7 features (FEAT-28, FEAT-30, FEAT-34, FEAT-36, FEAT-39, FEAT-40, FEAT-41,
+FEAT-42 — the FEAT-34 picker UI is logic-only pending an interactive
+picker dialog). Cleared as not-applicable: BUG-19, BUG-20, BUG-21, BUG-28,
+BUG-31. Remaining BUG/FEAT items are tracked in tasks #279/#280 for v2.3+
+scoping. See `RELEASE-NOTES-v2.2.9.md` for the user-facing release scope.

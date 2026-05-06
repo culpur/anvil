@@ -5,6 +5,7 @@ pub mod manifest;
 pub mod marketplace;
 pub mod manager;
 pub mod registry;
+pub mod session_plugins;
 pub mod tools;
 
 use std::collections::BTreeMap;
@@ -27,6 +28,10 @@ pub use manifest::{
 pub use manager::{InstallOutcome, PluginManager, PluginManagerConfig, UpdateOutcome};
 pub use registry::{
     describe_install_source, InstalledPluginRecord, InstalledPluginRegistry, PluginInstallSource,
+};
+pub use session_plugins::{
+    prepare_plugin_dir_source, prepare_plugin_url_source, register_session_source,
+    session_source_dirs, sweep_stale_session_dirs, PreparedPluginSource,
 };
 pub use tools::PluginTool;
 

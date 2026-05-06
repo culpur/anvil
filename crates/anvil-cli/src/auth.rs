@@ -10,12 +10,16 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use api::AnvilApiClient;
 use runtime::{
     clear_oauth_credentials, generate_pkce_pair, generate_state, loopback_redirect_uri,
-    load_oauth_credentials, parse_oauth_callback_request_target, save_oauth_credentials,
-    ConfigLoader, OAuthAuthorizationRequest, OAuthConfig, OAuthTokenExchangeRequest,
+    load_oauth_credentials, parse_oauth_callback_request_target, parse_pasted_oauth_code,
+    save_oauth_credentials, ConfigLoader, OAuthAuthorizationRequest, OAuthCallbackParams,
+    OAuthConfig, OAuthTokenExchangeRequest,
 };
 
 use crate::DEFAULT_OAUTH_CALLBACK_PORT;
@@ -380,13 +384,35 @@ pub(crate) fn run_ollama_setup() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run the Anthropic OAuth browser login flow.
+///
+/// Tries to bind a localhost callback listener and, in parallel, prompts the
+/// user to paste the auth code. The first path to deliver a valid `(code,
+/// state)` pair wins. If the listener can't bind (port in use, no permission,
+/// WSL2/SSH/container without published ports), the flow falls back to
+/// paste-only mode and the prompt is the only path.
 pub(crate) fn run_anthropic_login() -> Result<(), Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let config = ConfigLoader::default_for(&cwd).load()?;
     let default_oauth = default_oauth_config();
     let oauth = config.oauth().unwrap_or(&default_oauth);
     let callback_port = oauth.callback_port.unwrap_or(DEFAULT_OAUTH_CALLBACK_PORT);
-    let redirect_uri = loopback_redirect_uri(callback_port);
+
+    // Try binding the loopback listener first. If it fails we go paste-only,
+    // which still works for users whose browser callback can't reach the host
+    // running Anvil (SSH, WSL2 without port-forward, container without
+    // published ports).
+    let listener = TcpListener::bind(("127.0.0.1", callback_port)).ok();
+    let redirect_uri = if listener.is_some() {
+        loopback_redirect_uri(callback_port)
+    } else {
+        // Fall back to the provider's manual-redirect endpoint when we have
+        // one configured; otherwise reuse the loopback URI for state-shape
+        // compatibility (the user will paste the code regardless).
+        oauth
+            .manual_redirect_url
+            .clone()
+            .unwrap_or_else(|| loopback_redirect_uri(callback_port))
+    };
     let pkce = generate_pkce_pair()?;
     let state = generate_state()?;
     let authorize_url =
@@ -394,25 +420,25 @@ pub(crate) fn run_anthropic_login() -> Result<(), Box<dyn std::error::Error>> {
             .build_url();
 
     println!("Starting Anvil OAuth login (Anthropic)...");
-    println!("Listening for callback on {redirect_uri}");
+    if listener.is_some() {
+        println!("Listening for callback on {redirect_uri}");
+    } else {
+        println!(
+            "Could not bind localhost:{callback_port} for the OAuth callback."
+        );
+        println!("Falling back to paste-the-code mode (this is normal under SSH, WSL2, or containers).");
+    }
     if let Err(error) = open_browser(&authorize_url) {
         eprintln!("warning: failed to open browser automatically: {error}");
-        println!("Open this URL manually:\n{authorize_url}");
     }
+    println!("\nIf the browser doesn't open or the redirect can't reach this machine,");
+    println!("open this URL manually:\n{authorize_url}");
+    println!(
+        "\nThen paste the code or full callback URL from the browser's address bar here."
+    );
+    println!("(Press Ctrl+C to abort.)\n");
 
-    let callback = wait_for_oauth_callback(callback_port)?;
-    if let Some(error) = callback.error {
-        let description = callback
-            .error_description
-            .unwrap_or_else(|| "authorization failed".to_string());
-        return Err(io::Error::other(format!("{error}: {description}")).into());
-    }
-    let code = callback.code.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include code")
-    })?;
-    let returned_state = callback.state.ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "callback did not include state")
-    })?;
+    let (code, returned_state) = await_oauth_response(listener, &state)?;
     if returned_state != state {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "oauth state mismatch").into());
     }
@@ -430,6 +456,133 @@ pub(crate) fn run_anthropic_login() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     println!("Anvil OAuth login complete.");
     Ok(())
+}
+
+/// One side of the race in `await_oauth_response`: either a successful
+/// `(code, state)` pair or an error message.
+enum OAuthRaceOutcome {
+    Ok(String, String),
+    Err(String),
+}
+
+/// Race the loopback listener (if any) against a stdin paste prompt and
+/// return the first valid `(code, state)` pair. Both paths validate that the
+/// returned state matches `expected_state` so a mismatched paste fails fast.
+fn await_oauth_response(
+    listener: Option<TcpListener>,
+    expected_state: &str,
+) -> Result<(String, String), Box<dyn std::error::Error>> {
+    let (tx, rx) = mpsc::channel::<OAuthRaceOutcome>();
+
+    // Listener thread (only if we managed to bind).
+    if let Some(listener) = listener {
+        let tx_listener = tx.clone();
+        let expected = expected_state.to_string();
+        thread::spawn(move || {
+            let outcome = match accept_oauth_callback(&listener) {
+                Ok(callback) => listener_callback_to_outcome(callback, &expected),
+                Err(e) => OAuthRaceOutcome::Err(format!("listener error: {e}")),
+            };
+            // It's fine if the receiver is gone — the paste path won.
+            let _ = tx_listener.send(outcome);
+        });
+    }
+
+    // Paste prompt thread. Reads lines from stdin until one parses; an empty
+    // line just re-prompts so a typo doesn't kill the listener path.
+    let tx_paste = tx.clone();
+    let expected = expected_state.to_string();
+    thread::spawn(move || {
+        let stdin = io::stdin();
+        loop {
+            let mut prompt = io::stdout();
+            let _ = write!(prompt, "Paste code or callback URL: ");
+            let _ = prompt.flush();
+            let mut line = String::new();
+            match stdin.read_line(&mut line) {
+                Ok(0) => {
+                    // EOF (Ctrl+D): give up on the paste path silently so
+                    // the listener can still win.
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = tx_paste.send(OAuthRaceOutcome::Err(format!(
+                        "stdin read error: {e}"
+                    )));
+                    return;
+                }
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            match parse_pasted_oauth_code(&line) {
+                Ok((code, Some(state))) => {
+                    if state == expected {
+                        let _ = tx_paste.send(OAuthRaceOutcome::Ok(code, state));
+                    } else {
+                        let _ = tx_paste.send(OAuthRaceOutcome::Err(
+                            "pasted state did not match the value Anvil generated. Aborting."
+                                .to_string(),
+                        ));
+                    }
+                    return;
+                }
+                Ok((code, None)) => {
+                    // Bare code with no state: trust it but keep the
+                    // expected state so the token exchange round-trips.
+                    let _ = tx_paste.send(OAuthRaceOutcome::Ok(code, expected.clone()));
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Could not parse pasted value: {e}. Try again or press Ctrl+C.");
+                }
+            }
+        }
+    });
+
+    // Drop our own sender so the channel disconnects when both worker
+    // threads have returned.
+    drop(tx);
+
+    // Block until somebody reports an outcome. recv_timeout lets us notice
+    // disconnection promptly even if both paths bailed out.
+    loop {
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(OAuthRaceOutcome::Ok(code, state)) => return Ok((code, state)),
+            Ok(OAuthRaceOutcome::Err(message)) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, message).into());
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No outcome yet; loop and wait again.
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other("OAuth login aborted (no callback received)").into());
+            }
+        }
+    }
+}
+
+fn listener_callback_to_outcome(
+    callback: OAuthCallbackParams,
+    expected_state: &str,
+) -> OAuthRaceOutcome {
+    if let Some(error) = callback.error {
+        let description = callback
+            .error_description
+            .unwrap_or_else(|| "authorization failed".to_string());
+        return OAuthRaceOutcome::Err(format!("{error}: {description}"));
+    }
+    let Some(code) = callback.code else {
+        return OAuthRaceOutcome::Err("callback did not include code".to_string());
+    };
+    let Some(returned_state) = callback.state else {
+        return OAuthRaceOutcome::Err("callback did not include state".to_string());
+    };
+    if returned_state != expected_state {
+        return OAuthRaceOutcome::Err("oauth state mismatch".to_string());
+    }
+    OAuthRaceOutcome::Ok(code, returned_state)
 }
 
 /// Clear saved OAuth credentials (logout).
@@ -461,11 +614,14 @@ pub(crate) fn open_browser(url: &str) -> io::Result<()> {
     ))
 }
 
-/// Listen on the OAuth callback port and parse the redirect parameters.
-pub(crate) fn wait_for_oauth_callback(
-    port: u16,
+/// Accept a single OAuth callback request on an already-bound listener.
+///
+/// The race-with-paste flow binds the listener up front (so it can decide
+/// whether to fall back to paste-only mode) and then hands the listener here
+/// to wait for the redirected request.
+fn accept_oauth_callback(
+    listener: &TcpListener,
 ) -> Result<runtime::OAuthCallbackParams, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
     let (mut stream, _) = listener.accept()?;
     let mut buffer = [0_u8; 4096];
     let bytes_read = stream.read(&mut buffer)?;

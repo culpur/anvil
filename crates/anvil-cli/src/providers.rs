@@ -76,6 +76,11 @@ pub(crate) fn build_plugin_manager(
         .iter()
         .map(|path| resolve_plugin_path(cwd, loader.config_home(), path))
         .collect();
+    // FEAT-42: append session-only plugin sources resolved from
+    // --plugin-dir <path-or-zip> and --plugin-url <https-url>.
+    plugin_config
+        .external_dirs
+        .extend(plugins::session_source_dirs());
     plugin_config.install_root = plugin_settings
         .install_root()
         .map(|path| resolve_plugin_path(cwd, loader.config_home(), path));

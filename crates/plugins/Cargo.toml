@@ -10,6 +10,12 @@ include_dir.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+# FEAT-42: zip extraction for `--plugin-dir <foo.zip>` and `--plugin-url`.
+# `default-features = false` keeps this lean (deflate only, no bzip2/zstd/etc.).
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+# FEAT-42: HTTPS fetch for `--plugin-url`. Blocking client matches the
+# synchronous CLI bootstrap path; rustls avoids native OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [lints]
 workspace = true
