@@ -105,6 +105,24 @@ DOCKERFILE
     ls -lh "$OUTPUT_DIR"/anvil-*
 fi
 
+# ─── Phase 1.5: Regenerate sha256 manifests ─────────────────────────────────
+# Each binary gets a paired `<binary>.sha256` manifest. These are uploaded
+# alongside the binary to GitHub releases AND served from anvilhub.culpur.net
+# so `anvil upgrade` can verify downloads. If we forget to regenerate them
+# after rebuilding, every user upgrading hits a sha256 mismatch (incident
+# 2026-05-06: stale v2.2.8 manifests paired with v2.2.9 binaries).
+
+echo
+echo "▸ Phase 1.5: Regenerate sha256 manifests..."
+for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe; do
+    if [ ! -f "$f" ]; then continue; fi
+    name=$(basename "$f")
+    shasum -a 256 "$f" | awk -v n="$name" '{print $1"  "n}' > "$f.sha256"
+    echo "  ✓ $name.sha256 → $(awk '{print $1}' "$f.sha256" | head -c 16)…"
+done
+
 # ─── Phase 2: Test ───────────────────────────────────────────────────────────
 
 echo
@@ -114,6 +132,26 @@ for f in "$OUTPUT_DIR"/anvil-*; do
     size=$(ls -lh "$f" | awk '{print $5}')
     filetype=$(file -b "$f" | head -c 60)
     echo "  ✓ $name ($size) — $filetype"
+done
+
+# ─── Phase 2.5: Sanity-check binary↔manifest pairing ────────────────────────
+# Refuses to release if any binary's actual hash doesn't match what's in
+# its companion .sha256 file. Catches the failure mode where someone hand-
+# edits a manifest, or a copy step drops the wrong file.
+
+echo
+echo "▸ Phase 2.5: Verify each binary's hash matches its manifest..."
+for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe; do
+    if [ ! -f "$f" ]; then continue; fi
+    actual=$(shasum -a 256 "$f" | awk '{print $1}')
+    expected=$(awk '{print $1}' "$f.sha256")
+    if [ "$actual" != "$expected" ]; then
+        echo "  ✗ $(basename "$f"): actual=$actual manifest=$expected — ABORTING release"
+        exit 1
+    fi
+    echo "  ✓ $(basename "$f")"
 done
 
 if [ "$BUILD_ONLY" = true ]; then
