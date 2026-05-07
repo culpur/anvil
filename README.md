@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.9-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.10-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![5 Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -160,7 +160,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 
 
-### v2.2.9 &mdash; April 22, 2026
+### v2.2.10 &mdash; April 22, 2026
 
 **PAI-inspired composition, learning, and robustness.**
 
@@ -172,9 +172,9 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Plugin loader is forward-compatible &mdash; a single bad manifest no longer crashes the entire binary. `PluginLoadDiagnostic` surfaces per-plugin warnings on stderr.
 - &#10003; Bundled plugins are now embedded in the binary via `include_dir` &mdash; Homebrew users' bundled plugins are visible; developers' installed binaries no longer depend on their live source tree.
 - &#10003; Claude-Code-parity bug fixes: 429 `Retry-After` minimum; 5-min stream dead-air timeout; configurable request timeout (`ANVIL_API_TIMEOUT_MS`); `/model` warns on mid-conversation switch; DangerFullAccess stability invariants.
-- &#10003; 756 tests passing (+198 vs v2.2.9)
+- &#10003; 756 tests passing (+198 vs v2.2.10)
 
-### v2.2.9 &mdash; April 21, 2026
+### v2.2.10 &mdash; April 21, 2026
 
 **Cross-OS installers, `anvil upgrade`, shell completions, curated Ollama menu, Windows fixes, release-pipeline hardening.**
 
@@ -187,12 +187,12 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; QMD cross-platform discovery &mdash; no more hard-coded Unix socket paths
 - &#10003; Ollama tool-use: multi-format parser (Anthropic, OpenAI, XML, JSON-fence, natural language) with fail-loud on ambiguity
 - &#10003; Remote-control 503 fixed &mdash; `anvil-relay-ws` now a declared pm2 app in the passage ecosystem
-- &#10003; Release pipeline: per-binary embedded-version audit gate &mdash; makes the v2.2.9 Windows-exe-labeled-as-2.2.1 class of bug impossible
+- &#10003; Release pipeline: per-binary embedded-version audit gate &mdash; makes the v2.2.10 Windows-exe-labeled-as-2.2.1 class of bug impossible
 - &#10003; 618 tests passing, zero warnings
 
-### v2.2.9 &mdash; April 20, 2026
+### v2.2.10 &mdash; April 20, 2026
 
-**Command Parity, Deep Autocomplete, Web Config, AnvilHub Installer** &mdash; the biggest web UI release since v2.2.9
+**Command Parity, Deep Autocomplete, Web Config, AnvilHub Installer** &mdash; the biggest web UI release since v2.2.10
 
 - &#10003; 17 web config panels &mdash; vault, notifications, SSH, Docker/K8s, memory, and more
 - &#10003; Full Status Line editor in browser &mdash; 36 widgets, 16 presets, drag-and-drop, live preview
@@ -202,7 +202,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; New commands &mdash; `/tab`, `/fork`, `/share`, `/audit`, `/restart`
 - &#10003; Self-respawn on macOS/Linux after plugin installs
 
-### v2.2.9 &mdash; April 19, 2026
+### v2.2.10 &mdash; April 19, 2026
 
 **Six Major Features** &mdash; interactive editor, productivity, MCP, history, plugins, agents.
 
@@ -214,7 +214,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Plugin System UI &mdash; web viewer management panel with config toggles
 - &#10003; Agent Panel Expansion &mdash; web viewer agent management buttons
 
-### v2.2.9 &mdash; April 16, 2026
+### v2.2.10 &mdash; April 16, 2026
 
 **Security Hardening + Optimization** &mdash; 17 audit findings fixed.
 
@@ -223,7 +223,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; 110 functions made const fn, zero compiler warnings
 - &#10003; RC widget: live client count with connect/disconnect signals
 
-### v2.2.9 &mdash; April 15, 2026
+### v2.2.10 &mdash; April 15, 2026
 
 **Six Major Features** &mdash; interactive editor, productivity, MCP, history, plugins, agents.
 
@@ -231,7 +231,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Code Productivity Dashboard &mdash; live git diff tracking
 - &#10003; MCP Server Manager, Session History Browser, Plugin UI, Agent Panel
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **Customizable Widget-Based Status Line** &mdash; 8 presets for different workflows.
 
@@ -241,7 +241,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Web viewer config panel gains Status Line preset selector
 - &#10003; Dynamic footer height &mdash; 2-line presets maximize content area
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **URL rendering fix, context-aware vault, CI/CD automation.**
 
@@ -249,7 +249,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Context-aware vault &mdash; vault auto-selects credentials based on active project context
 - &#10003; CI/CD automation &mdash; `/cicd` command scaffolds pipelines for GitHub Actions and GitLab CI
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **Typed Credential Vault** &mdash; the vault is now the single source of truth for ALL sensitive data.
 
@@ -261,7 +261,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; `/vault inject` &mdash; load vault secrets into shell env for any subprocess
 - &#10003; Audit trail v2 &mdash; every vault access logged with timestamp, operation, and credential type
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **Browser configuration panel, Gemini provider, slash command execution in web viewer.**
 
@@ -270,7 +270,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Slash commands execute from web viewer
 - &#10003; 30+ commands with subcommand completions
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **Focus view, context warnings, stalled stream recovery.**
 
@@ -279,7 +279,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Stalled stream handling &mdash; detects and recovers from stuck token streams
 - &#10003; `/loop` and `/proactive` &mdash; recurring prompt loops and proactive agent nudges
 
-### v2.2.9 &mdash; April 14, 2026
+### v2.2.10 &mdash; April 14, 2026
 
 **Credential scanner, egress control, conversation branching &mdash; 16 new features.**
 
@@ -292,7 +292,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Expanded cost tracking &mdash; OpenAI, xAI, Ollama pricing
 - &#10003; Smart context compaction &mdash; preserves recent messages and code blocks
 
-### v2.2.9 &mdash; April 13, 2026
+### v2.2.10 &mdash; April 13, 2026
 
 **Live streaming, remote control, and thinking mode.**
 
@@ -300,31 +300,31 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Remote control &mdash; `/remote-control` to share sessions via browser
 - &#10003; Thinking mode &mdash; `/think` enables extended reasoning
 
-### v2.2.9 &mdash; April 8, 2026
+### v2.2.10 &mdash; April 8, 2026
 
 **Security-first release** &mdash; encrypted vault, file sandbox, permission modes.
 
-### v2.2.9 &mdash; April 7, 2026
+### v2.2.10 &mdash; April 7, 2026
 
 **Claude Code parity** &mdash; multi-agent system, TUI tabs, context management.
 
-### v2.2.9 &mdash; April 7, 2026
+### v2.2.10 &mdash; April 7, 2026
 
 Multi-agent system &mdash; 7 agent types with task orchestration.
 
-### v2.2.9 &mdash; April 7, 2026
+### v2.2.10 &mdash; April 7, 2026
 
 VS Code extension, 21 new features.
 
-### v2.2.9 &mdash; April 7, 2026
+### v2.2.10 &mdash; April 7, 2026
 
 Internationalization &mdash; 7 languages, 20 features.
 
-### v2.2.9a &mdash; April 3, 2026
+### v2.2.10a &mdash; April 3, 2026
 
 Cross-compilation CI pipeline &mdash; 5-platform builds.
 
-### v2.2.9 &mdash; April 2, 2026
+### v2.2.10 &mdash; April 2, 2026
 
 **Initial release.** Terminal-native AI coding assistant with credential vault and TUI.
 
