@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 plugins = { path = "../plugins" }
-runtime = { path = "../runtime" }
+runtime = { path = "../runtime", default-features = false }
 serde_json.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
