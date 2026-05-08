@@ -208,20 +208,62 @@ impl AnvilApiClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse, ApiError> {
+        let t0 = Instant::now();
         let request = MessageRequest {
             stream: false,
             ..request.clone()
         };
-        let response = self.send_with_retry(&request).await?;
-        let request_id = request_id_from_headers(response.headers());
-        let mut response = response
-            .json::<MessageResponse>()
-            .await
-            .map_err(ApiError::from)?;
-        if response.request_id.is_none() {
-            response.request_id = request_id;
+        let http_response = self.send_with_retry(&request).await;
+        let duration_ms = t0.elapsed().as_millis() as u64;
+
+        match http_response {
+            Ok(response) => {
+                let status_code = response.status().as_u16();
+                let request_id = request_id_from_headers(response.headers());
+                let mut parsed = response
+                    .json::<MessageResponse>()
+                    .await
+                    .map_err(ApiError::from)?;
+                if parsed.request_id.is_none() {
+                    parsed.request_id = request_id;
+                }
+                runtime::otel::api_request(
+                    "anthropic",
+                    &request.model,
+                    status_code,
+                    0,
+                    duration_ms,
+                    u64::from(parsed.usage.input_tokens),
+                    u64::from(parsed.usage.output_tokens),
+                );
+                Ok(parsed)
+            }
+            Err(err) => {
+                // Extract HTTP status code if the error carries one (e.g. after
+                // retries are exhausted the final Api error has the status).
+                let status_code = match &err {
+                    ApiError::Api { status, .. } => status.as_u16(),
+                    ApiError::RetriesExhausted { last_error, .. } => {
+                        if let ApiError::Api { status, .. } = last_error.as_ref() {
+                            status.as_u16()
+                        } else {
+                            0
+                        }
+                    }
+                    _ => 0,
+                };
+                runtime::otel::api_request(
+                    "anthropic",
+                    &request.model,
+                    status_code,
+                    self.max_retries,
+                    duration_ms,
+                    0,
+                    0,
+                );
+                Err(err)
+            }
         }
-        Ok(response)
     }
 
     pub async fn stream_message(

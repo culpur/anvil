@@ -487,6 +487,10 @@ pub(crate) fn build_runtime_with_tui_slot(
 
     let (feature_config, mut tool_registry, runtime_config) = build_runtime_plugin_state()?;
 
+    // Initialise OTel once from the merged config.  The call is idempotent:
+    // when `otel.enabled` is false (the default) it returns immediately.
+    runtime::otel::init_tracer(runtime_config.otel());
+
     // Build and initialize the MCP server manager, then inject discovered tools
     let mcp_manager = {
         let mut manager = McpServerManager::from_runtime_config(&runtime_config);
@@ -597,7 +601,7 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
             &mut stdin,
         );
 
-        match response {
+        let decision = match response {
             Ok(line) => {
                 let normalized = line.trim().to_ascii_lowercase();
                 match normalized.as_str() {
@@ -613,7 +617,17 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
             Err(error) => runtime::PermissionPromptDecision::Deny {
                 reason: format!("permission approval failed: {error}"),
             },
-        }
+        };
+
+        // Emit OTel permission_decision event (no-op when disabled).
+        let decision_str = match &decision {
+            runtime::PermissionPromptDecision::Allow
+            | runtime::PermissionPromptDecision::AllowAlways => "allow",
+            runtime::PermissionPromptDecision::Deny { .. } => "deny",
+        };
+        runtime::otel::permission_decision(&request.tool_name, decision_str, "user");
+
+        decision
     }
 }
 

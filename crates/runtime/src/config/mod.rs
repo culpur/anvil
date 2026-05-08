@@ -3,6 +3,7 @@ pub mod hooks;
 pub mod lsp;
 pub mod mcp;
 pub mod oauth;
+pub mod otel;
 pub mod output_style;
 pub mod plugins;
 pub mod profile;
@@ -22,6 +23,7 @@ use hooks::parse_optional_hooks_config;
 use lsp::parse_optional_lsp_config;
 use mcp::merge_mcp_servers;
 use oauth::parse_optional_oauth_config;
+use otel::parse_optional_otel_config;
 use plugins::parse_optional_plugin_config;
 use profile::{parse_active_profile, parse_profiles};
 use sandbox::parse_optional_sandbox_config;
@@ -35,6 +37,7 @@ pub use mcp::{
     McpTransport, McpWebSocketServerConfig, ScopedMcpServerConfig,
 };
 pub use oauth::OAuthConfig;
+pub use otel::OtelConfig;
 pub use output_style::{BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only};
 pub use plugins::RuntimePluginConfig;
 pub use profile::ProfileOverride;
@@ -80,6 +83,7 @@ pub struct RuntimeFeatureConfig {
     mcp: McpConfigCollection,
     lsp: LspConfig,
     oauth: Option<OAuthConfig>,
+    otel: OtelConfig,
     model: Option<String>,
     permission_mode: Option<ResolvedPermissionMode>,
     sandbox: SandboxConfig,
@@ -204,6 +208,7 @@ impl ConfigLoader {
                 "oauth",
                 parse_optional_oauth_config(&merged_value, "merged settings.oauth"),
             ),
+            otel: tolerate_section("otel", parse_optional_otel_config(&merged_value)),
             model: parse_optional_model(&merged_value),
             permission_mode: tolerate_section(
                 "permissionMode",
@@ -306,6 +311,11 @@ impl RuntimeConfig {
     #[must_use]
     pub const fn oauth(&self) -> Option<&OAuthConfig> {
         self.feature_config.oauth.as_ref()
+    }
+
+    #[must_use]
+    pub const fn otel(&self) -> &OtelConfig {
+        &self.feature_config.otel
     }
 
     #[must_use]
@@ -444,6 +454,11 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub const fn oauth(&self) -> Option<&OAuthConfig> {
         self.oauth.as_ref()
+    }
+
+    #[must_use]
+    pub const fn otel(&self) -> &OtelConfig {
+        &self.otel
     }
 
     #[must_use]

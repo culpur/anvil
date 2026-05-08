@@ -5,9 +5,29 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Opt-in OpenTelemetry support.  Included in default builds; absent when
+# --no-default-features is passed (produces a smaller, zero-telemetry binary).
+default = ["otel"]
+otel = [
+    "opentelemetry",
+    "opentelemetry_sdk",
+    "opentelemetry-otlp",
+    "tracing-opentelemetry",
+    "tracing",
+    "tracing-subscriber",
+]
+
 [dependencies]
 indexmap.workspace = true
 schemars.workspace = true
+# OTel — only compiled when the `otel` feature is enabled.
+opentelemetry        = { version = "0.27", features = ["trace"], optional = true }
+opentelemetry_sdk    = { version = "0.27", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp   = { version = "0.27", features = ["http-proto", "reqwest-client", "reqwest-rustls"], optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+tracing              = { version = "0.1", optional = true }
+tracing-subscriber   = { version = "0.3", features = ["env-filter"], optional = true }
 sha2 = "0.10"
 glob = "0.3"
 lsp = { path = "../lsp" }

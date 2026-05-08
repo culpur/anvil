@@ -75,10 +75,13 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
         let mut failure_count: usize = 0;
 
         for (tool_use_id, tool_name, input) in pending_tool_uses {
+            // Emit tool_use event before execution (no-op when OTel is disabled).
+            crate::otel::tool_use(&tool_name, &tool_use_id, "", "");
+
             let start = std::time::Instant::now();
             let result_message = evaluate_and_execute(
-                tool_use_id,
-                tool_name,
+                tool_use_id.clone(),
+                tool_name.clone(),
                 &input,
                 permission_policy,
                 prompter,
@@ -98,6 +101,18 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             } else {
                 success_count += 1;
             }
+
+            // Emit tool_result event (no-op when OTel is disabled).
+            let output_size = result_message.blocks.iter()
+                .find_map(|b| {
+                    if let ContentBlock::ToolResult { output, .. } = b {
+                        Some(output.len() as u64)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            crate::otel::tool_result(&tool_name, &tool_use_id, !is_err, elapsed_ms, output_size);
 
             session.messages.push(result_message.clone());
             tool_results.push(result_message);

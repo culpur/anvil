@@ -3,6 +3,7 @@ mod bootstrap;
 pub mod effort;
 pub mod goals;
 pub mod hub;
+pub mod otel;
 pub mod share;
 pub mod theme;
 pub mod cron;
@@ -54,7 +55,7 @@ pub use config::{
     default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig,
     LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
     McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
-    McpTransport, McpWebSocketServerConfig, OAuthConfig,
+    McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
     BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,
     ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
     ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,

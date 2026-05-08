@@ -9,8 +9,12 @@ publish.workspace = true
 name = "anvil"
 path = "src/main.rs"
 
+[features]
+default = ["otel"]
+otel = ["runtime/otel", "api/otel"]
+
 [dependencies]
-api = { path = "../api" }
+api = { path = "../api", default-features = false }
 base64 = "0.22"
 commands = { path = "../commands" }
 rust-i18n.workspace = true
@@ -21,7 +25,7 @@ pulldown-cmark = "0.13"
 ratatui = "0.30"
 rpassword = "7"
 rustyline = "15"
-runtime = { path = "../runtime" }
+runtime = { path = "../runtime", default-features = false }
 plugins = { path = "../plugins" }
 serde_json.workspace = true
 syntect = "5"

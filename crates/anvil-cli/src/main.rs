@@ -1900,11 +1900,16 @@ fn run_repl(
     let cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
 
     // Use the full-screen TUI only when stdout is an actual terminal.
-    if io::stdout().is_terminal() {
+    let result = if io::stdout().is_terminal() {
         run_repl_tui(cli)
     } else {
         run_repl_plain(cli)
-    }
+    };
+
+    // Flush any buffered OTel spans before the process exits.
+    runtime::otel::shutdown();
+
+    result
 }
 
 /// Full-screen TUI REPL loop.
@@ -3153,6 +3158,23 @@ impl LiveCli {
             session_start: Instant::now(),
         };
         cli.persist_session()?;
+        // Emit session_start OTel event (no-op when disabled).
+        {
+            let provider_name = match api::detect_provider_kind(&cli.model) {
+                api::ProviderKind::AnvilApi => "anthropic",
+                api::ProviderKind::Xai => "xai",
+                api::ProviderKind::OpenAi => "openai",
+                api::ProviderKind::Gemini => "gemini",
+                api::ProviderKind::Ollama => "ollama",
+            };
+            runtime::otel::session_start(
+                &cli.session.id,
+                &cli.model,
+                provider_name,
+                "normal",
+                "default",
+            );
+        }
         Ok(cli)
     }
 
@@ -4234,6 +4256,7 @@ impl LiveCli {
                                 ) {
                                     Ok(rt) => {
                                         self.runtime = rt;
+                                        runtime::otel::skill_activated(&name, "user");
                                         (format!("Skill '{name}' loaded — active for the next turn."), false)
                                     }
                                     Err(e) => (format!("skill load: runtime rebuild failed: {e}"), false),
@@ -5981,8 +6004,27 @@ impl LiveCli {
         };
 
         let tokens_used = self.runtime.usage().cumulative_usage().total_tokens();
-        let duration_secs = self.session_start.elapsed().as_secs();
+        let duration_ms = self.session_start.elapsed().as_millis() as u64;
+        let duration_secs = duration_ms / 1000;
         let messages_count = messages.len();
+
+        // Count tool-use blocks across all messages for OTel.
+        let tool_count = messages.iter().flat_map(|m| &m.blocks).filter(|b| {
+            matches!(b, runtime::ContentBlock::ToolUse { .. })
+        }).count() as u64;
+
+        // Emit session_end OTel event (no-op when disabled).
+        {
+            let cost = self.runtime.usage().cumulative_usage();
+            let cost_str = format!("{:.6}", cost.total_tokens() as f64 * 0.000_003);
+            runtime::otel::session_end(
+                &self.session.id,
+                duration_ms,
+                u64::from(tokens_used),
+                &cost_str,
+                tool_count,
+            );
+        }
 
         let summary = SessionSummary {
             session_id: self.session.id.clone(),
