@@ -4,7 +4,7 @@ use crate::json::JsonValue;
 
 use super::{
     helpers::{optional_string, optional_string_array, optional_string_map},
-    output_style::OutputStyle,
+    output_style::{output_style_from_str_builtin_only, OutputStyle},
     ConfigError, ResolvedPermissionMode,
 };
 use super::helpers::expect_object;
@@ -46,7 +46,7 @@ impl ProfileOverride {
     /// Apply this override on top of `base_output_style`.
     #[must_use]
     pub fn effective_output_style(&self, base: OutputStyle) -> OutputStyle {
-        self.output_style.unwrap_or(base)
+        self.output_style.clone().unwrap_or(base)
     }
 
     /// Apply this override on top of `base_permission_mode`.
@@ -111,7 +111,7 @@ fn parse_single_profile(
     let effort_level = optional_string(object, "effort_level", &ctx)?.map(ToOwned::to_owned);
 
     let output_style = optional_string(object, "output_style", &ctx)?
-        .and_then(OutputStyle::from_str);
+        .map(|s| output_style_from_str_builtin_only(s));
 
     let permission_mode = if let Some(mode_str) = optional_string(object, "permission_mode", &ctx)? {
         Some(parse_permission_mode_label(mode_str, &format!("{ctx}.permission_mode"))?)
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(work.model.as_deref(), Some("claude-opus-4-7"));
         assert_eq!(work.provider.as_deref(), Some("anvilApi"));
         assert_eq!(work.effort_level.as_deref(), Some("high"));
-        assert_eq!(work.output_style, Some(OutputStyle::Precise));
+        assert_eq!(work.output_style, Some(OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Precise)));
         assert_eq!(work.permission_mode, Some(ResolvedPermissionMode::ReadOnly));
         assert_eq!(work.enabled_plugins, vec!["security-audit"]);
         assert_eq!(
@@ -292,12 +292,12 @@ mod tests {
     #[test]
     fn profile_output_style_overrides_base() {
         let profile = ProfileOverride {
-            output_style: Some(OutputStyle::Condensed),
+            output_style: Some(OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Condensed)),
             ..Default::default()
         };
         assert_eq!(
-            profile.effective_output_style(OutputStyle::Precise),
-            OutputStyle::Condensed
+            profile.effective_output_style(OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Precise)),
+            OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Condensed)
         );
     }
 
@@ -305,8 +305,8 @@ mod tests {
     fn profile_output_style_falls_through_to_base() {
         let profile = ProfileOverride::default();
         assert_eq!(
-            profile.effective_output_style(OutputStyle::Condensed),
-            OutputStyle::Condensed
+            profile.effective_output_style(OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Condensed)),
+            OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Condensed)
         );
     }
 
@@ -353,12 +353,12 @@ mod tests {
         // effort_level (W2)
         assert_eq!(ci.effort_level.as_deref(), Some("low"));
         // output_style (W7)
-        assert_eq!(ci.output_style, Some(OutputStyle::Condensed));
+        assert_eq!(ci.output_style, Some(OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Condensed)));
         // permission_mode
         assert_eq!(ci.permission_mode, Some(ResolvedPermissionMode::WorkspaceWrite));
 
         // Base-config fallthrough when profile field is unset
-        let base_output_style = OutputStyle::Precise;
+        let base_output_style = OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Precise);
         let ci_no_style = ProfileOverride {
             effort_level: Some("low".to_string()),
             permission_mode: Some(ResolvedPermissionMode::WorkspaceWrite),
@@ -366,7 +366,7 @@ mod tests {
         };
         assert_eq!(
             ci_no_style.effective_output_style(base_output_style),
-            OutputStyle::Precise,
+            OutputStyle::BuiltIn(crate::config::output_style::BuiltInStyle::Precise),
             "unset output_style in profile must fall through to base"
         );
     }

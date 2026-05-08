@@ -5693,13 +5693,14 @@ impl LiveCli {
                       GOAL_DESCRIPTION_MAX};
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let mut mgr = GoalManager::new(&cwd);
+        let mut mgr = GoalManager::new(cwd);
 
         let raw = args.unwrap_or("").trim();
 
         // No args → alias for list
         if raw.is_empty() || raw == "list" || raw == "ls" {
-            return format_goal_list(&mgr.list());
+            let goals = mgr.list().unwrap_or_default();
+            return format_goal_list(&goals);
         }
 
         let mut iter = raw.splitn(2, char::is_whitespace);
@@ -5720,7 +5721,7 @@ impl LiveCli {
                         "Goal created: {}\nStatus: {}\n{}",
                         goal.id, goal.status, goal.description
                     ),
-                    Err(GoalError::DescriptionTooLong { len }) => format!(
+                    Err(GoalError::DescriptionTooLong { len, .. }) => format!(
                         "Description too long ({len} chars). Maximum is {GOAL_DESCRIPTION_MAX} chars."
                     ),
                     Err(e) => format!("Error: {e}"),

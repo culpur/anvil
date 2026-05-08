@@ -400,7 +400,6 @@ mod tests {
                 DynamicEnumSource::InstalledAgents
                 | DynamicEnumSource::InstalledSkills
                 | DynamicEnumSource::Sessions
-<<<<<<< HEAD
                 | DynamicEnumSource::InstalledOllamaModels
                 | DynamicEnumSource::Goals
                 | DynamicEnumSource::Profiles => vec![],

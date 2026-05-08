@@ -1255,8 +1255,8 @@ mod tests {
         //         remote-control (8 previously-missing) + tab, fork, share, audit (4 ghost)
         //         + restart (Phase 5 placeholder) = +13 total
         // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
-        // v2.2.11 W4: +1 (profile)
-        assert_eq!(slash_command_specs().len(), 106);
+        // v2.2.11 W4: +1 (profile), W3: +1 (goal) = 107 total
+        assert_eq!(slash_command_specs().len(), 107);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }

@@ -493,6 +493,25 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message, session: session.clone() })
         }
+        SlashCommand::Goal { action } => {
+            let msg = match action.as_deref() {
+                None | Some("list") => {
+                    "/goal list — goal tracking is handled in the TUI. \
+                     Use /goal new \"<description>\" to create a goal."
+                        .to_string()
+                }
+                Some(other) => {
+                    format!(
+                        "/goal {other} — goal management is not yet implemented in non-TUI mode. \
+                         Use /goal in an interactive session."
+                    )
+                }
+            };
+            Some(SlashCommandResult {
+                message: msg,
+                session: session.clone(),
+            })
+        }
         SlashCommand::Profile { action } => {
             let msg = match action.as_deref() {
                 None | Some("list") => {
