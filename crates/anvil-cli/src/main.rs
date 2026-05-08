@@ -72,8 +72,8 @@ use runtime::{
     pricing_for_model, render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
     ConfigLoader, ConversationRuntime, CronDaemon,
-    EffortLevel, HistoryArchiver, OutputStyle,
-    PermissionMode, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
+    EffortLevel, HistoryArchiver, NotificationKind, NotificationPayload, OutputStyle,
+    PermissionMode, PolicyCheckError, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
 use serde_json::json;
@@ -1897,6 +1897,19 @@ fn run_repl(
     // cache, so startup_vault_init is a no-op in that case.
     startup_vault_init();
 
+    // Enforce the admin requirements policy (requirements.toml) before
+    // entering the REPL.  A violation is a hard error: print it to stderr
+    // and exit with code 1.  A missing or malformed policy file is silently
+    // ignored (see requirements::load_from_paths).
+    let cwd = env::current_dir()?;
+    let loader = ConfigLoader::default_for(&cwd);
+    if let Err(PolicyCheckError::Violations(violations)) = loader.load_checked() {
+        for v in &violations {
+            eprintln!("{}", v.render());
+        }
+        std::process::exit(1);
+    }
+
     let cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
 
     // Use the full-screen TUI only when stdout is an actual terminal.
@@ -3349,6 +3362,14 @@ impl LiveCli {
                         output: usage.output_tokens,
                     });
                     tx.send(TuiEvent::TurnDone);
+                    // Fire Notification(completion) hook after turn completes.
+                    self.runtime.run_notification_hooks(&NotificationPayload {
+                        kind: NotificationKind::Completion,
+                        message: format!(
+                            "Turn complete ({} input / {} output tokens)",
+                            usage.input_tokens, usage.output_tokens
+                        ),
+                    });
                     self.persist_session()?;
                     // Check whether we should auto-compact and archive.
                     if let Some(msg) = self.maybe_auto_compact() {
@@ -3371,7 +3392,13 @@ impl LiveCli {
                     Ok(())
                 }
                 Err(error) => {
-                    tx.send(TuiEvent::System(format!("Error: {error}")));
+                    let err_msg = format!("Error: {error}");
+                    // Fire Notification(error) hook before displaying the error.
+                    self.runtime.run_notification_hooks(&NotificationPayload {
+                        kind: NotificationKind::Error,
+                        message: err_msg.clone(),
+                    });
+                    tx.send(TuiEvent::System(err_msg));
                     tx.send(TuiEvent::TurnDone);
                     Err(Box::new(error))
                 }
@@ -5836,19 +5863,15 @@ impl LiveCli {
             }
             "show" => {
                 let id_opt = if rest.is_empty() { None } else { Some(rest) };
-                let goal_opt = match id_opt {
-                    Some(id) => mgr.get(id),
-                    None => mgr.active_goal(),
-                };
-                match goal_opt {
-                    Some(goal) => format_goal_show(&goal),
-                    None => {
-                        if id_opt.is_some() {
-                            format!("Goal not found: {}", id_opt.unwrap())
-                        } else {
-                            "No active goal. Use /goal list to see all goals.".to_string()
-                        }
+                match mgr.show(id_opt) {
+                    Ok(goal) => format_goal_show(&goal),
+                    Err(GoalError::NoActiveGoal) => {
+                        "No active goal. Use /goal list to see all goals.".to_string()
                     }
+                    Err(GoalError::GoalNotFound(id) | GoalError::NotFound(id)) => {
+                        format!("Goal not found: {id}")
+                    }
+                    Err(e) => format!("Error: {e}"),
                 }
             }
             other => format!(

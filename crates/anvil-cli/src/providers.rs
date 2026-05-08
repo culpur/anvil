@@ -39,9 +39,9 @@ use crate::render::{
 };
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, ConfigLoader, ContentBlock,
-    ConversationMessage, ConversationRuntime, LspManager, LspServerConfig,
-    McpServerManager, MessageRole, PermissionMode, PermissionPolicy, RuntimeError,
-    Session, TokenUsage, ToolError, ToolExecutor,
+    ConversationMessage, ConversationRuntime, HookRunner, LspManager, LspServerConfig,
+    McpServerManager, MessageRole, NotificationKind, NotificationPayload, PermissionMode,
+    PermissionPolicy, RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
 };
 use serde_json::json;
 use tools::{GlobalToolRegistry, McpToolDefinition};
@@ -589,6 +589,23 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
         } else {
             request.input.clone()
         };
+
+        // Fire Notification(permission_prompt) hook before showing the prompt.
+        {
+            let runner = env::current_dir()
+                .ok()
+                .and_then(|cwd| ConfigLoader::default_for(&cwd).load().ok())
+                .map(|cfg| HookRunner::from_feature_config(cfg.feature_config()))
+                .unwrap_or_default();
+            let _ = runner.run_notification(&NotificationPayload {
+                kind: NotificationKind::PermissionPrompt,
+                message: format!(
+                    "Permission required for tool `{}` (requires: {})",
+                    request.tool_name,
+                    request.required_mode.as_str()
+                ),
+            });
+        }
 
         let mut stdout = io::stdout();
         let mut stdin = io::BufReader::new(io::stdin());

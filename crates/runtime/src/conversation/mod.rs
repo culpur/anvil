@@ -13,6 +13,7 @@ use crate::hooks::{
     CwdChangedPayload, HookRunResult, HookRunner, NotificationPayload,
 };
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
+use crate::permissions::reviewer::Reviewer;
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -105,6 +106,8 @@ pub struct ConversationRuntime<C, T> {
     max_iterations: usize,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
+    /// W8 reviewer gate — compiled once from `ReviewerConfig`.
+    reviewer: Reviewer,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -140,6 +143,7 @@ where
         feature_config: RuntimeFeatureConfig,
     ) -> Self {
         let usage_tracker = UsageTracker::from_session(&session);
+        let reviewer = Reviewer::new(feature_config.reviewer());
         Self {
             session,
             api_client,
@@ -149,6 +153,7 @@ where
             max_iterations: usize::MAX,
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(&feature_config),
+            reviewer,
         }
     }
 
@@ -193,6 +198,7 @@ where
             &mut self.usage_tracker,
             &self.hook_runner,
             prompter,
+            &self.reviewer,
         )
     }
 

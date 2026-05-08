@@ -53,6 +53,7 @@ url = "2"
 hex = "0.4.3"
 dirs-next = "2.0.0"
 which = "6"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 
 [dev-dependencies]
 tempfile = "3"

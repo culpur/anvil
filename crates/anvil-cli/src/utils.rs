@@ -1426,12 +1426,22 @@ pub(crate) fn resolve_export_path(
 }
 
 pub(crate) fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    Ok(load_system_prompt(
-        env::current_dir()?,
+    let cwd = env::current_dir()?;
+    let mut sections = load_system_prompt(
+        cwd.clone(),
         DEFAULT_DATE,
         env::consts::OS,
         "unknown",
-    )?)
+    )?;
+
+    // Prepend the active-goal fragment when a goal is active for this project.
+    let mgr = runtime::GoalManager::new(cwd);
+    if let Ok(Some(goal)) = mgr.active_goal() {
+        let fragment = runtime::build_active_goal_prompt_fragment(&goal);
+        sections.insert(0, fragment);
+    }
+
+    Ok(sections)
 }
 
 

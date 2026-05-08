@@ -5,7 +5,8 @@
 /// struct.  We compose the top-level object from the concrete typed sub-structs
 /// that the config loader does deserialise (via `schemars::schema_for!`).
 ///
-/// Draft: JSON Schema draft 2019-09 (schemars 0.8 default).
+/// Draft: JSON Schema draft 2020-12 (structural output is schemars 0.8 / draft-07
+/// compatible; all features in use are cross-compatible between drafts).
 use std::io;
 use std::path::Path;
 
@@ -18,7 +19,7 @@ use serde_json::Value;
 
 /// Build the full Anvil config JSON Schema as a `serde_json::Value`.
 ///
-/// The returned document is a JSON Schema draft 2019-09 object whose `title`
+/// The returned document is a JSON Schema draft 2020-12 object whose `title`
 /// is `"Anvil Configuration"`.  It is intended to be published at
 /// `https://anvilhub.culpur.net/config-schema.json` so editors can validate
 /// `~/.anvil/config.json` (and the settings.json family) in real time.
@@ -331,14 +332,104 @@ fn build_root_schema() -> RootSchema {
     )
     .unwrap_or(Schema::Bool(true));
 
-    // --- profiles (permissive until W4 lands) ----------------------------
-    let profiles_schema = Schema::Object(SchemaObject {
-        metadata: desc(
-            "Named profile overrides. Schema will tighten when the profiles workstream lands.",
-        ),
+    // --- profiles: ProfileOverride per-entry schema ----------------------
+    // W4 (profiles workstream) has landed; tighten to the actual struct shape.
+    // ProfileOverride fields (all optional in JSON):
+    //   model, provider, effort_level, output_style, permission_mode,
+    //   enabled_plugins, enabled_mcp_servers, env.
+    let effort_level_enum = Schema::Object(SchemaObject {
+        metadata: desc("Effort level override for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        enum_values: Some(vec![
+            Value::String("low".to_string()),
+            Value::String("medium".to_string()),
+            Value::String("high".to_string()),
+            Value::String("xhigh".to_string()),
+        ]),
+        ..Default::default()
+    });
+
+    let profile_output_style_enum = Schema::Object(SchemaObject {
+        metadata: desc("Output style override for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        enum_values: Some(vec![
+            Value::String("precise".to_string()),
+            Value::String("condensed".to_string()),
+        ]),
+        ..Default::default()
+    });
+
+    let profile_permission_mode_enum = Schema::Object(SchemaObject {
+        metadata: desc("Permission mode override for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        enum_values: Some(vec![
+            Value::String("default".to_string()),
+            Value::String("plan".to_string()),
+            Value::String("read-only".to_string()),
+            Value::String("acceptEdits".to_string()),
+            Value::String("auto".to_string()),
+            Value::String("workspace-write".to_string()),
+            Value::String("dontAsk".to_string()),
+            Value::String("danger-full-access".to_string()),
+        ]),
+        ..Default::default()
+    });
+
+    let mut profile_entry_props = PropMap::new();
+    profile_entry_props.insert("model".to_string(), Schema::Object(SchemaObject {
+        metadata: desc("Override the model for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        ..Default::default()
+    }));
+    profile_entry_props.insert("provider".to_string(), Schema::Object(SchemaObject {
+        metadata: desc("Override the provider for this profile (e.g. \"anvilApi\", \"ollama\", \"openai\")."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        ..Default::default()
+    }));
+    profile_entry_props.insert("effort_level".to_string(), effort_level_enum);
+    profile_entry_props.insert("output_style".to_string(), profile_output_style_enum);
+    profile_entry_props.insert("permission_mode".to_string(), profile_permission_mode_enum);
+    profile_entry_props.insert("enabled_plugins".to_string(), Schema::Object(SchemaObject {
+        metadata: desc("User-installed plugin names to enable for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Array))),
+        array: Some(Box::new(ArrayValidation {
+            items: Some(SingleOrVec::Single(Box::new(string_schema()))),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }));
+    profile_entry_props.insert("enabled_mcp_servers".to_string(), Schema::Object(SchemaObject {
+        metadata: desc("MCP server names to activate for this profile."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Array))),
+        array: Some(Box::new(ArrayValidation {
+            items: Some(SingleOrVec::Single(Box::new(string_schema()))),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }));
+    profile_entry_props.insert("env".to_string(), Schema::Object(SchemaObject {
+        metadata: desc("Environment variable remappings for this profile."),
         instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
         object: Some(Box::new(ObjectValidation {
-            additional_properties: Some(Box::new(Schema::Bool(true))),
+            additional_properties: Some(Box::new(string_schema())),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }));
+
+    // ProfileOverride entry: no additional properties beyond the defined fields.
+    let profile_entry_schema = object_schema(
+        desc("A named profile override. All fields are optional and fall through to the base config when absent."),
+        profile_entry_props,
+        vec![],
+        false,
+    );
+
+    let profiles_schema = Schema::Object(SchemaObject {
+        metadata: desc("Named profile overrides keyed by profile name."),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+        object: Some(Box::new(ObjectValidation {
+            additional_properties: Some(Box::new(profile_entry_schema)),
             ..Default::default()
         })),
         ..Default::default()
@@ -406,8 +497,15 @@ fn build_root_schema() -> RootSchema {
         ..Default::default()
     };
 
+    // schemars 0.8 generates draft-07 structural output but we publish the
+    // document under the draft 2020-12 URI.  The features used (type, enum,
+    // properties, additionalProperties, items, oneOf, anyOf) are all compatible
+    // between draft-07 and draft 2020-12; no structural changes are needed.
+    // Known limitation: schemars 0.8 does not natively output `prefixItems`
+    // (2020-12 tuple syntax); if tuples are added to the schema in the future
+    // this note must be revisited.
     RootSchema {
-        meta_schema: Some("http://json-schema.org/draft-07/schema#".to_string()),
+        meta_schema: Some("https://json-schema.org/draft/2020-12/schema".to_string()),
         schema: root_object,
         definitions: Default::default(),
     }
@@ -474,6 +572,79 @@ mod tests {
         assert!(!json_str.is_empty());
         let reparsed: Value = serde_json::from_str(&json_str).expect("must be valid JSON");
         assert!(reparsed.is_object());
+    }
+
+    /// The `$schema` field in the emitted schema must declare draft 2020-12.
+    #[test]
+    fn schema_uses_draft_2020_12() {
+        let schema = emit_schema();
+        let schema_uri = schema
+            .pointer("/$schema")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(
+            schema_uri,
+            "https://json-schema.org/draft/2020-12/schema",
+            "schema must declare draft 2020-12; got: {schema_uri}"
+        );
+    }
+
+    /// A profile entry with an unknown field must be rejected by the schema
+    /// because `additionalProperties` is `false` on the ProfileOverride entry.
+    #[test]
+    fn schema_validates_profile_with_invalid_field_rejects() {
+        let schema = emit_schema();
+
+        // Pull out the `additionalProperties` of the profiles schema — this is
+        // the ProfileOverride entry schema.  Confirm it is NOT `true` (the old
+        // permissive value) and that `additionalProperties` is `false`.
+        let profile_entry = schema
+            .pointer("/properties/profiles/additionalProperties")
+            .expect("profiles additionalProperties must exist");
+
+        // Must not be a bare boolean `true` (the old permissive schema).
+        assert_ne!(
+            profile_entry,
+            &serde_json::Value::Bool(true),
+            "profiles additionalProperties must not be `true`"
+        );
+
+        // Must be an object schema (not a boolean).
+        assert!(
+            profile_entry.is_object(),
+            "profiles additionalProperties must be an object schema"
+        );
+
+        // The entry schema must declare `additionalProperties: false` to block
+        // unknown fields like `unknown_field`.
+        let inner_additional = profile_entry.pointer("/additionalProperties");
+        assert_eq!(
+            inner_additional,
+            Some(&serde_json::Value::Bool(false)),
+            "ProfileOverride entry schema must have additionalProperties: false"
+        );
+
+        // Must have the expected fields defined in properties.
+        let props = profile_entry
+            .pointer("/properties")
+            .and_then(|v| v.as_object())
+            .expect("ProfileOverride entry must have a properties object");
+
+        for field in &[
+            "model",
+            "provider",
+            "effort_level",
+            "output_style",
+            "permission_mode",
+            "enabled_plugins",
+            "enabled_mcp_servers",
+            "env",
+        ] {
+            assert!(
+                props.contains_key(*field),
+                "ProfileOverride schema missing field: {field}"
+            );
+        }
     }
 
     /// `write_schema_to` writes a file containing valid JSON.

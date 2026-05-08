@@ -4,8 +4,13 @@ use crate::hooks::{
     FileChangeAction, FileChangedPayload, HookPermissionDecision, HookRunResult, HookRunner,
     PermissionDeniedPayload, PermissionDeniedSource, PermissionRequestPayload,
 };
-use crate::permissions::{PermissionOutcome, PermissionPolicy, PermissionPrompter};
+use crate::permissions::{
+    PermissionOutcome, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
+    PermissionRequest,
+};
+use crate::permissions::reviewer::{Recommendation, Reviewer};
 use crate::session::ConversationMessage;
+use crate::otel;
 
 use super::ToolExecutor;
 
@@ -24,6 +29,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     hook_runner: &HookRunner,
     executor: &mut T,
+    reviewer: &Reviewer,
 ) -> ConversationMessage {
     // v2.2.11: fire PermissionRequest hooks before the policy gate.
     // A hook may inject a decision to short-circuit the normal prompt.
@@ -33,22 +39,87 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
         requested_mode: policy.active_mode().as_str().to_string(),
     });
 
+    // W8: Run the reviewer before the approval prompt (or before any
+    // policy decision that doesn't involve a human prompter).
+    //
+    // The reviewer is a synchronous deterministic scanner — no LLM, no
+    // network.  It fires after PermissionRequest hooks so that hook-injected
+    // Allow decisions bypass the reviewer (the hook has already made a
+    // deliberate choice).
+    let review = reviewer.review(&tool_name, input);
+
     // First valid hook decision short-circuits the permission system.
     let permission_outcome = match hook_permission.decision {
-        Some(HookPermissionDecision::Allow) => PermissionOutcome::Allow,
-        Some(HookPermissionDecision::Deny) => PermissionOutcome::Deny {
-            reason: hook_permission
-                .messages
-                .first()
-                .cloned()
-                .unwrap_or_else(|| format!("PermissionRequest hook denied tool `{tool_name}`")),
-        },
-        // Ask/Defer: fall through to normal policy evaluation.
+        Some(HookPermissionDecision::Allow) => {
+            otel::permission_decision(&tool_name, "allow", "hook");
+            PermissionOutcome::Allow
+        }
+        Some(HookPermissionDecision::Deny) => {
+            otel::permission_decision(&tool_name, "deny", "hook");
+            PermissionOutcome::Deny {
+                reason: hook_permission
+                    .messages
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("PermissionRequest hook denied tool `{tool_name}`")),
+            }
+        }
+        // Ask/Defer/None: fall through to reviewer gate → normal policy evaluation.
         Some(HookPermissionDecision::Ask) | Some(HookPermissionDecision::Defer) | None => {
-            if let Some(prompt) = prompter.as_mut() {
-                policy.authorize(&tool_name, input, Some(*prompt))
-            } else {
-                policy.authorize(&tool_name, input, None)
+            // W8 reviewer gate:
+            //   - Deny recommendation → auto-deny without prompting.
+            //   - Warn recommendation → annotate the input seen by the prompter.
+            //   - Allow (no match) → pass through unchanged.
+            match &review.recommendation {
+                Recommendation::Deny { reason } => {
+                    otel::permission_decision(&tool_name, "deny", "policy");
+                    PermissionOutcome::Deny {
+                        reason: reason.clone(),
+                    }
+                }
+                Recommendation::Warn { warning } => {
+                    // Annotate the prompt by wrapping the prompter.
+                    let annotated_input = format!("[{warning}]\n\n{input}");
+                    let has_prompter = prompter.is_some();
+                    let outcome = if let Some(p) = prompter.as_mut() {
+                        let mut annotating = AnnotatingPrompter {
+                            inner: *p,
+                            annotated_input: &annotated_input,
+                        };
+                        policy.authorize(&tool_name, input, Some(&mut annotating))
+                    } else {
+                        policy.authorize(&tool_name, input, None)
+                    };
+                    let source = if has_prompter { "user" } else { "policy" };
+                    match &outcome {
+                        PermissionOutcome::Allow => {
+                            otel::permission_decision(&tool_name, "allow", source);
+                        }
+                        PermissionOutcome::Deny { .. } => {
+                            otel::permission_decision(&tool_name, "deny", source);
+                        }
+                    }
+                    outcome
+                }
+                Recommendation::Allow => {
+                    // No reviewer match — normal policy path.
+                    let has_prompter = prompter.is_some();
+                    let outcome = if let Some(p) = prompter.as_mut() {
+                        policy.authorize(&tool_name, input, Some(*p))
+                    } else {
+                        policy.authorize(&tool_name, input, None)
+                    };
+                    let source = if has_prompter { "user" } else { "policy" };
+                    match &outcome {
+                        PermissionOutcome::Allow => {
+                            otel::permission_decision(&tool_name, "allow", source);
+                        }
+                        PermissionOutcome::Deny { .. } => {
+                            otel::permission_decision(&tool_name, "deny", source);
+                        }
+                    }
+                    outcome
+                }
             }
         }
     };
@@ -59,6 +130,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             if pre_hook_result.is_denied() {
                 // v2.2.11: PreToolUse denial also fires PermissionDenied.
                 let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
+                otel::permission_decision(&tool_name, "deny", "hook");
                 let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
                     tool: tool_name.clone(),
                     input: input.to_string(),
@@ -109,6 +181,9 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             // v2.2.11: fire PermissionDenied after policy/user denial.
             let source = if hook_permission.decision == Some(HookPermissionDecision::Deny) {
                 PermissionDeniedSource::Hook
+            } else if matches!(review.recommendation, Recommendation::Deny { .. }) {
+                // W8: reviewer auto-denied via policy.
+                PermissionDeniedSource::User
             } else {
                 PermissionDeniedSource::User
             };
@@ -120,6 +195,29 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             });
             ConversationMessage::tool_result(tool_use_id, tool_name, reason, true)
         }
+    }
+}
+
+/// A `PermissionPrompter` wrapper that replaces the `input` field presented
+/// to the inner prompter with a reviewer-annotated version.
+///
+/// This lets the user see the reviewer warning in the approval prompt without
+/// altering the actual `input` string passed to the tool executor.
+struct AnnotatingPrompter<'a> {
+    inner: &'a mut dyn PermissionPrompter,
+    /// Replacement input with warning prepended.
+    annotated_input: &'a str,
+}
+
+impl PermissionPrompter for AnnotatingPrompter<'_> {
+    fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        let annotated = PermissionRequest {
+            tool_name: request.tool_name.clone(),
+            input: self.annotated_input.to_string(),
+            current_mode: request.current_mode,
+            required_mode: request.required_mode,
+        };
+        self.inner.decide(&annotated)
     }
 }
 

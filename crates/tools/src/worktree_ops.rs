@@ -4,8 +4,28 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 use serde_json::json;
+use runtime::{ConfigLoader, CwdChangedPayload, HookRunner};
 
 use crate::to_pretty_json;
+
+/// Fire `CwdChanged` hooks after a successful `set_current_dir`.
+///
+/// # Limitation
+/// The `HookRunner` is freshly constructed from the on-disk config at the new
+/// cwd.  If the session's in-memory runner carries runtime-only extras (e.g.
+/// MCP-tool hooks) they will not fire here.  A full solution would require
+/// threading the session's `HookRunner` down through the tool executor; that
+/// refactor is deferred to a future stream.
+fn fire_cwd_changed(old_cwd: &std::path::Path, new_cwd: &std::path::Path) {
+    let runner = match ConfigLoader::default_for(new_cwd).load() {
+        Ok(cfg) => HookRunner::from_feature_config(cfg.feature_config()),
+        Err(_) => HookRunner::default(),
+    };
+    let _ = runner.run_cwd_changed(&CwdChangedPayload {
+        old_cwd: old_cwd.display().to_string(),
+        new_cwd: new_cwd.display().to_string(),
+    });
+}
 
 /// Persistent state for an active worktree session.
 #[derive(Debug, Clone)]
@@ -108,6 +128,7 @@ pub(crate) fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, St
     // Move the process working directory into the new worktree.
     std::env::set_current_dir(&worktree_path)
         .map_err(|e| format!("cannot cd into worktree: {e}"))?;
+    fire_cwd_changed(&current, &worktree_path);
 
     *state = Some(WorktreeState {
         worktree_path: worktree_path.clone(),
@@ -143,6 +164,7 @@ pub(crate) fn run_exit_worktree(input: ExitWorktreeInput) -> Result<String, Stri
     // run in the main repo context.
     std::env::set_current_dir(&ws.original_dir)
         .map_err(|e| format!("cannot restore original directory: {e}"))?;
+    fire_cwd_changed(&ws.worktree_path, &ws.original_dir);
 
     let mut cleaned_up = false;
     let cleanup_message;

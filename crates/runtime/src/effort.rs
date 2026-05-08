@@ -30,7 +30,10 @@
 use serde::{Deserialize, Serialize};
 
 /// The four effort tiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The ordering is `Low < Medium < High < Xhigh` and is used by the
+/// requirements policy engine to compare against a configured ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     Low,

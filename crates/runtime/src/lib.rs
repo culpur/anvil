@@ -1,6 +1,7 @@
 mod bash;
 mod bootstrap;
 pub mod effort;
+pub mod requirements;
 pub mod goals;
 pub mod hub;
 pub mod otel;
@@ -57,8 +58,8 @@ pub use config::{
     McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
     McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
     BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,
-    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
-    ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
+    PolicyCheckError, ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig,
+    RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
 pub use config::schema::{emit_schema as emit_config_schema, write_schema_to as write_config_schema_to};
@@ -101,9 +102,10 @@ pub use oauth::{
     OAuthTokenExchangeRequest, OAuthTokenSet, PkceChallengeMethod, PkceCodePair,
 };
 pub use permissions::{
-    PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
-    PermissionPrompter, PermissionRequest,
+    BlockAction, PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
+    PermissionPrompter, PermissionRequest, ReviewResult, ReviewerConfig, ReviewerMode,
 };
+pub use permissions::reviewer::{Recommendation, Reviewer};
 pub use permission_memory::{PermissionMemory, PermissionMemoryEntry, PermissionScope};
 pub use keybindings::KeybindingsConfig;
 pub use content_filter::{ContentFilter, ContentFilterConfig, FilterResult, FilterSeverity};
@@ -154,6 +156,10 @@ pub use vault::{Credential, CredentialType, TotpCode, TotpEntry, VaultError, Vau
 pub use vault_session::{
     init_session_vault, vault_is_initialized, vault_is_session_unlocked,
     vault_session_get, vault_session_upsert, with_session_vault, with_session_vault_mut,
+};
+pub use requirements::{
+    load_from_paths as load_requirements, validate as validate_requirements,
+    PolicyViolation, RequirementsPolicy,
 };
 
 #[cfg(test)]

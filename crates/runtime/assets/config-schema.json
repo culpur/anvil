@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
   "description": "Schema for ~/.anvil/config.json and the settings.json family. Published at https://anvilhub.culpur.net/config-schema.json.",
   "properties": {
@@ -296,21 +296,77 @@
     },
     "output_style": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "User-selectable response style.\n\n`Precise` is the default and matches the model's natural voice. `Condensed` prepends the bundled `terse` skill body to every system prompt turn, activating token-economical response rules with Auto-Clarity.\n\nPolicy (2026-04-22): - `Precise` is ALWAYS the default. A user who has never set `output_style` gets `Precise`. - `Condensed` is strictly opt-in; it is never auto-applied from trigger keywords or heuristics. - This axis is orthogonal to `/skill load terse`.",
+      "definitions": {
+        "BuiltInStyle": {
+          "description": "The two hard-wired response styles shipped with Anvil.\n\nPolicy (2026-04-22): - `Precise` is ALWAYS the default. A user who has never set `output_style` gets `Precise`. - `Condensed` is strictly opt-in; it is never auto-applied from trigger keywords or heuristics. - This axis is orthogonal to `/skill load terse`.",
+          "oneOf": [
+            {
+              "description": "Natural model voice — no extra instructions prepended. (default)",
+              "enum": [
+                "precise"
+              ],
+              "type": "string"
+            },
+            {
+              "description": "Token-economical mode — the bundled `terse` skill body is prepended to the system prompt for every turn. Auto-Clarity rules still apply.",
+              "enum": [
+                "condensed"
+              ],
+              "type": "string"
+            }
+          ]
+        },
+        "CustomStyle": {
+          "description": "A user-defined output style loaded from `~/.anvil/output-styles/<name>.md`.\n\nFile format: ```text --- name: Tutor description: Explanatory style with code commentary ---\n\nYou are a patient teacher. After every code block, explain what changed in 1-2 sentences. Never use jargon without first defining it. ```\n\nThe YAML frontmatter `name` and `description` fields are required.  Files missing either field are silently skipped (bad files must not crash the registry build).  The body is the system-prompt fragment prepended before the user turn when this style is active.",
+          "properties": {
+            "description": {
+              "description": "One-line description shown in `/output-style list`.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The canonical identifier (taken from frontmatter, not the filename).",
+              "type": "string"
+            },
+            "prompt_fragment": {
+              "description": "Raw system-prompt fragment; prepended to the model's system prompt.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "description",
+            "name",
+            "prompt_fragment"
+          ],
+          "type": "object"
+        }
+      },
+      "description": "User-selectable response style — either a built-in variant or a custom user-defined style loaded from `~/.anvil/output-styles/`.\n\nWhen a custom style name matches a built-in name (e.g. the user creates `~/.anvil/output-styles/precise.md`), the user file wins for the session but the built-in semantic is replaced by the file's `prompt_fragment`.",
       "oneOf": [
         {
-          "description": "Natural model voice — no extra instructions prepended. (default)",
-          "enum": [
-            "precise"
+          "additionalProperties": false,
+          "description": "One of the two hard-wired styles.",
+          "properties": {
+            "BuiltIn": {
+              "$ref": "#/definitions/BuiltInStyle"
+            }
+          },
+          "required": [
+            "BuiltIn"
           ],
-          "type": "string"
+          "type": "object"
         },
         {
-          "description": "Token-economical mode — the bundled `terse` skill body is prepended to the system prompt for every turn. Auto-Clarity rules still apply.",
-          "enum": [
-            "condensed"
+          "additionalProperties": false,
+          "description": "A user-defined style loaded from disk.",
+          "properties": {
+            "Custom": {
+              "$ref": "#/definitions/CustomStyle"
+            }
+          },
+          "required": [
+            "Custom"
           ],
-          "type": "string"
+          "type": "object"
         }
       ],
       "title": "OutputStyle"
@@ -373,8 +429,75 @@
       "type": "object"
     },
     "profiles": {
-      "additionalProperties": true,
-      "description": "Named profile overrides. Schema will tighten when the profiles workstream lands.",
+      "additionalProperties": {
+        "additionalProperties": false,
+        "description": "A named profile override. All fields are optional and fall through to the base config when absent.",
+        "properties": {
+          "effort_level": {
+            "description": "Effort level override for this profile.",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "type": "string"
+          },
+          "enabled_mcp_servers": {
+            "description": "MCP server names to activate for this profile.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "enabled_plugins": {
+            "description": "User-installed plugin names to enable for this profile.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variable remappings for this profile.",
+            "type": "object"
+          },
+          "model": {
+            "description": "Override the model for this profile.",
+            "type": "string"
+          },
+          "output_style": {
+            "description": "Output style override for this profile.",
+            "enum": [
+              "precise",
+              "condensed"
+            ],
+            "type": "string"
+          },
+          "permission_mode": {
+            "description": "Permission mode override for this profile.",
+            "enum": [
+              "default",
+              "plan",
+              "read-only",
+              "acceptEdits",
+              "auto",
+              "workspace-write",
+              "dontAsk",
+              "danger-full-access"
+            ],
+            "type": "string"
+          },
+          "provider": {
+            "description": "Override the provider for this profile (e.g. \"anvilApi\", \"ollama\", \"openai\").",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "description": "Named profile overrides keyed by profile name.",
       "type": "object"
     },
     "sandbox": {

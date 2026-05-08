@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::effort::EffortLevel;
 use crate::json::JsonValue;
+use crate::permissions::{BlockAction, ReviewerConfig, ReviewerMode};
 use crate::sandbox::SandboxConfig;
 
 use helpers::{deep_merge_objects, read_optional_json_object};
@@ -91,6 +92,8 @@ pub struct RuntimeFeatureConfig {
     /// Persisted effort level from `settings.json` (`"effort_level": "high"`).
     /// Absent in config → `None`; the caller falls back to `EffortLevel::Medium`.
     effort_level: Option<EffortLevel>,
+    /// Reviewer gate config (disabled by default).
+    reviewer: ReviewerConfig,
 }
 
 #[derive(Debug)]
@@ -217,6 +220,10 @@ impl ConfigLoader {
             sandbox: tolerate_section("sandbox", parse_optional_sandbox_config(&merged_value)),
             output_style: parse_optional_output_style(&merged_value),
             effort_level: parse_optional_effort_level(&merged_value),
+            reviewer: tolerate_section(
+                "permissions.reviewer",
+                parse_optional_reviewer_config(&merged_value),
+            ),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -235,7 +242,48 @@ impl ConfigLoader {
             active_profile: config_active_profile,
         })
     }
+
+    /// Load config and validate it against the admin requirements policy.
+    ///
+    /// Callers that want policy enforcement (i.e. the main CLI entry point)
+    /// should use this instead of `load()`.  All other call sites (tooling,
+    /// tests, subcommand helpers) continue to use `load()` so their existing
+    /// error-handling paths are not disturbed.
+    ///
+    /// On policy violation the caller receives
+    /// `Err(PolicyCheckError::Violations(violations))`.  On a plain config
+    /// load error it receives `Err(PolicyCheckError::Config(err))`.
+    pub fn load_checked(&self) -> Result<RuntimeConfig, PolicyCheckError> {
+        let config = self.load().map_err(PolicyCheckError::Config)?;
+        let (policy, policy_source) = crate::requirements::load_from_paths();
+        crate::requirements::validate(&config, &policy, &policy_source)
+            .map_err(PolicyCheckError::Violations)?;
+        Ok(config)
+    }
 }
+
+/// Error type returned by [`ConfigLoader::load_checked`].
+#[derive(Debug)]
+pub enum PolicyCheckError {
+    Config(ConfigError),
+    Violations(Vec<crate::requirements::PolicyViolation>),
+}
+
+impl Display for PolicyCheckError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Config(e) => write!(f, "{e}"),
+            Self::Violations(v) => {
+                for violation in v {
+                    writeln!(f, "{}", violation.render())?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for PolicyCheckError {}
 
 /// Unwrap a section parse result, defaulting on error with a stderr
 /// warning so a single malformed block does not poison the whole load.
@@ -416,6 +464,11 @@ impl RuntimeConfig {
     pub const fn effort_level(&self) -> Option<EffortLevel> {
         self.feature_config.effort_level
     }
+
+    #[must_use]
+    pub const fn reviewer(&self) -> &ReviewerConfig {
+        &self.feature_config.reviewer
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -485,6 +538,11 @@ impl RuntimeFeatureConfig {
     pub const fn effort_level(&self) -> Option<EffortLevel> {
         self.effort_level
     }
+
+    #[must_use]
+    pub const fn reviewer(&self) -> &ReviewerConfig {
+        &self.reviewer
+    }
 }
 
 #[must_use]
@@ -515,6 +573,89 @@ fn parse_optional_effort_level(root: &JsonValue) -> Option<EffortLevel> {
         .and_then(|object| object.get("effort_level"))
         .and_then(JsonValue::as_str)
         .and_then(EffortLevel::from_str)
+}
+
+/// Parse `permissions.reviewer` from the merged config JSON.
+///
+/// Returns `Ok(ReviewerConfig::default())` when the key is absent.
+/// Returns `Err` when the key is present but malformed (triggers
+/// `tolerate_section` to log a warning and use the default).
+fn parse_optional_reviewer_config(
+    root: &JsonValue,
+) -> Result<ReviewerConfig, ConfigError> {
+    let Some(reviewer_obj) = root
+        .as_object()
+        .and_then(|o| o.get("permissions"))
+        .and_then(JsonValue::as_object)
+        .and_then(|o| o.get("reviewer"))
+        .and_then(JsonValue::as_object)
+    else {
+        return Ok(ReviewerConfig::default());
+    };
+
+    let enabled = reviewer_obj
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+
+    let mode = match reviewer_obj
+        .get("mode")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("auto_review")
+    {
+        "auto_review" => ReviewerMode::AutoReview,
+        "manual" => ReviewerMode::Manual,
+        "off" => ReviewerMode::Off,
+        other => {
+            return Err(ConfigError::Parse(format!(
+                "permissions.reviewer.mode: unknown value {other:?}"
+            )));
+        }
+    };
+
+    let block_action = match reviewer_obj
+        .get("block_action")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("ask")
+    {
+        "ask" => BlockAction::Ask,
+        "deny" => BlockAction::Deny,
+        other => {
+            return Err(ConfigError::Parse(format!(
+                "permissions.reviewer.block_action: unknown value {other:?}"
+            )));
+        }
+    };
+
+    let extra_destructive_patterns = reviewer_obj
+        .get("destructive_patterns")
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let extra_credential_patterns = reviewer_obj
+        .get("credential_patterns")
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Ok(ReviewerConfig {
+        enabled,
+        mode,
+        block_action,
+        extra_destructive_patterns,
+        extra_credential_patterns,
+    })
 }
 
 fn parse_optional_permission_mode(

@@ -10,6 +10,7 @@ use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
 use crate::hooks::{HookRunner, PostToolBatchPayload};
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
+use crate::permissions::reviewer::Reviewer;
 use crate::session::Session;
 
 /// Run the inner agentic loop for one turn.
@@ -27,6 +28,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     usage_tracker: &mut UsageTracker,
     hook_runner: &HookRunner,
     prompter: &mut Option<&mut dyn PermissionPrompter>,
+    reviewer: &Reviewer,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
     let mut tool_results = Vec::new();
@@ -87,6 +89,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
                 prompter,
                 hook_runner,
                 tool_executor,
+                reviewer,
             );
             let elapsed_ms = start.elapsed().as_millis() as u64;
             durations_ms.push(elapsed_ms);

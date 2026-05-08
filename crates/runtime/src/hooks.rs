@@ -1381,6 +1381,171 @@ mod tests {
         assert_eq!(mock.calls().len(), 1);
     }
 
+    // ─── v2.2.11 new-event tests ─────────────────────────────────────────────
+
+    #[test]
+    fn session_start_dispatches_to_registered_hooks() {
+        let mut runner = HookRunner::default();
+        runner.session_start_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'session-start'")),
+        ));
+        let result = runner.run_session_start();
+        assert!(!result.is_denied(), "SessionStart must not deny");
+        assert_eq!(result.messages(), &["session-start".to_string()]);
+    }
+
+    #[test]
+    fn session_end_dispatches_to_registered_hooks() {
+        let mut runner = HookRunner::default();
+        runner.session_end_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'session-end'")),
+        ));
+        let result = runner.run_session_end();
+        assert!(!result.is_denied(), "SessionEnd must not deny");
+        assert_eq!(result.messages(), &["session-end".to_string()]);
+    }
+
+    #[test]
+    fn file_changed_payload_carries_path_and_action() {
+        use super::{FileChangeAction, FileChangedPayload};
+        let mut runner = HookRunner::default();
+        runner.file_changed_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'file-ok'")),
+        ));
+        let result = runner.run_file_changed(&FileChangedPayload {
+            path: "/tmp/foo.rs".to_string(),
+            action: FileChangeAction::Edit,
+        });
+        assert!(!result.is_denied());
+        assert_eq!(result.messages(), &["file-ok".to_string()]);
+    }
+
+    #[test]
+    fn file_changed_action_serializes_correctly() {
+        use super::FileChangeAction;
+        assert_eq!(FileChangeAction::Edit.as_str(), "edit");
+        assert_eq!(FileChangeAction::Write.as_str(), "write");
+        assert_eq!(FileChangeAction::Create.as_str(), "create");
+        assert_eq!(FileChangeAction::Delete.as_str(), "delete");
+    }
+
+    #[test]
+    fn cwd_changed_payload_carries_old_and_new() {
+        use super::CwdChangedPayload;
+        let mut runner = HookRunner::default();
+        runner.cwd_changed_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'cwd-ok'")),
+        ));
+        let result = runner.run_cwd_changed(&CwdChangedPayload {
+            old_cwd: "/old/path".to_string(),
+            new_cwd: "/new/path".to_string(),
+        });
+        assert!(!result.is_denied(), "CwdChanged must not deny");
+        assert_eq!(result.messages(), &["cwd-ok".to_string()]);
+    }
+
+    #[test]
+    fn permission_request_hook_can_inject_decision() {
+        use super::{HookPermissionDecision, PermissionRequestPayload};
+        let mut runner = HookRunner::default();
+        // Hook that returns a JSON decision via stdout (exit 0 = allow).
+        runner.permission_request_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet(
+                r#"printf '{"permissionDecision":"allow"}'"#,
+            )),
+        ));
+        let result = runner.run_permission_request(&PermissionRequestPayload {
+            tool: "bash".to_string(),
+            input: r#"{"command":"ls"}"#.to_string(),
+            requested_mode: "plan".to_string(),
+        });
+        assert_eq!(
+            result.decision,
+            Some(HookPermissionDecision::Allow),
+            "hook should inject Allow decision"
+        );
+    }
+
+    #[test]
+    fn permission_request_hook_decision_short_circuits_prompt() {
+        use super::{HookPermissionDecision, PermissionRequestPayload};
+        let mut runner = HookRunner::default();
+        // exit 2 on PermissionRequest = inject Deny decision.
+        runner.permission_request_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'denied'; exit 2")),
+        ));
+        let result = runner.run_permission_request(&PermissionRequestPayload {
+            tool: "write_file".to_string(),
+            input: r#"{"path":"/etc/passwd"}"#.to_string(),
+            requested_mode: "workspace_write".to_string(),
+        });
+        assert_eq!(
+            result.decision,
+            Some(HookPermissionDecision::Deny),
+            "exit 2 on PermissionRequest should inject Deny"
+        );
+        assert!(result.messages.contains(&"denied".to_string()));
+    }
+
+    #[test]
+    fn permission_denied_payload_carries_source_and_reason() {
+        use super::{PermissionDeniedPayload, PermissionDeniedSource};
+        let mut runner = HookRunner::default();
+        runner.permission_denied_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'denied-event'")),
+        ));
+        let result = runner.run_permission_denied(&PermissionDeniedPayload {
+            tool: "bash".to_string(),
+            input: r#"{"command":"rm -rf /"}"#.to_string(),
+            reason: "sandbox blocked".to_string(),
+            source: PermissionDeniedSource::Sandbox,
+        });
+        assert!(!result.is_denied(), "PermissionDenied is observe-only");
+        assert_eq!(result.messages(), &["denied-event".to_string()]);
+    }
+
+    #[test]
+    fn permission_denied_source_serializes() {
+        use super::PermissionDeniedSource;
+        assert_eq!(PermissionDeniedSource::Hook.as_str(), "hook");
+        assert_eq!(PermissionDeniedSource::User.as_str(), "user");
+        assert_eq!(PermissionDeniedSource::Sandbox.as_str(), "sandbox");
+    }
+
+    #[test]
+    fn post_tool_batch_payload_aggregates_durations_and_counts() {
+        use super::PostToolBatchPayload;
+        let mut runner = HookRunner::default();
+        runner.post_tool_batch_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'batch-ok'")),
+        ));
+        let result = runner.run_post_tool_batch(&PostToolBatchPayload {
+            tool_count: 3,
+            durations_ms: vec![10, 20, 30],
+            success_count: 2,
+            failure_count: 1,
+        });
+        assert!(!result.is_denied(), "PostToolBatch must not deny");
+        assert_eq!(result.messages(), &["batch-ok".to_string()]);
+    }
+
+    #[test]
+    fn notification_payload_dispatches_with_kind_and_message() {
+        use super::{NotificationKind, NotificationPayload};
+        let mut runner = HookRunner::default();
+        runner.notification_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'notify-ok'")),
+        ));
+        let result = runner.run_notification(&NotificationPayload {
+            kind: NotificationKind::Completion,
+            message: "Turn complete".to_string(),
+        });
+        assert!(!result.is_denied(), "Notification must not deny");
+        assert_eq!(result.messages(), &["notify-ok".to_string()]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     #[cfg(windows)]
     fn shell_snippet(script: &str) -> String {
         script.replace('\'', "\"")

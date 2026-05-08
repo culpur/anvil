@@ -1,3 +1,7 @@
+pub mod reviewer;
+
+pub use reviewer::{BlockAction, ReviewResult, ReviewerConfig, ReviewerMode};
+
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
