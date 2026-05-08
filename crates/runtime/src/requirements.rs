@@ -225,6 +225,50 @@ fn try_load(path: &Path) -> LoadOutcome {
     }
 }
 
+// ─── Plugin install policy helpers ────────────────────────────────────────────
+
+/// Check whether a plugin install operation is permitted under `policy`.
+///
+/// `has_url` should be `true` when the user supplied a `--plugin-url` flag
+/// (i.e. an internet-sourced install), and `false` for local-path installs.
+///
+/// Returns `Ok(())` when the operation is allowed.  Returns `Err` with a
+/// human-readable message that includes the policy file path when any
+/// applicable restriction is active.
+///
+/// When `policy_source` is an empty path (meaning no policy file was loaded),
+/// the check is a no-op — the default `RequirementsPolicy` is permissive.
+///
+/// # Errors
+/// Returns an error string when `plugin_install_disabled = true` or when
+/// `allow_url_plugins = false` and `has_url` is `true`.
+pub fn check_plugin_install_policy(
+    policy: &RequirementsPolicy,
+    policy_source: &Path,
+    has_url: bool,
+) -> Result<(), String> {
+    // When no policy file was loaded (empty source path), the default
+    // RequirementsPolicy is permissive — do not enforce anything.
+    if policy_source == Path::new("") {
+        return Ok(());
+    }
+    if policy.plugins.plugin_install_disabled {
+        return Err(format!(
+            "plugin install is disabled by policy (requirements.toml: {}). \
+             Contact your administrator.",
+            policy_source.display()
+        ));
+    }
+    if has_url && !policy.plugins.allow_url_plugins {
+        return Err(format!(
+            "--plugin-url is disabled by policy (requirements.toml: {}). \
+             Contact your administrator.",
+            policy_source.display()
+        ));
+    }
+    Ok(())
+}
+
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 /// Validate `config` against `policy`.
@@ -358,7 +402,10 @@ fn check_max_effort(
         // break the user because of an admin typo in a constraint).
         return;
     };
-    let Some(user_level) = config.effort_level() else {
+    // Use the profile-resolved effort level so that a profile override that
+    // pushes effort above the ceiling is caught even when the base config
+    // field is within the limit.
+    let Some(user_level) = config.effective_effort_level() else {
         return;
     };
     // EffortLevel ordering: Low < Medium < High < Xhigh (derived via PartialOrd).
@@ -1257,5 +1304,151 @@ require_otel_disabled = true
             "all three violations must be reported, got {}",
             violations.len()
         );
+    }
+
+    // ── W10 Gap 1 regression: profile override must not bypass max_effort ─────
+    #[test]
+    fn requirements_max_effort_rejects_profile_override_above_ceiling() {
+        // Scenario: base config has no effort_level set (or a low value), but
+        // active_profile "fast" overrides effort_level to "xhigh".  Policy says
+        // max_effort = "high".  Validation must fail.
+        let dir = unique_dir();
+        fs::create_dir_all(&dir).expect("dir");
+
+        let req_path = dir.join("requirements.toml");
+        let cwd = dir.join("project");
+        let home = dir.join("home").join(".anvil");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&home).expect("home");
+
+        // Base config: no effort_level, but active_profile = "fast" which sets
+        // effort_level = "xhigh".
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+                "active_profile": "fast",
+                "profiles": {
+                    "fast": {
+                        "effort_level": "xhigh"
+                    }
+                }
+            }"#,
+        )
+        .expect("write settings");
+
+        let config = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("config loads");
+
+        // Sanity: base effort_level should be absent, but effective is xhigh.
+        assert_eq!(
+            config.effort_level(),
+            None,
+            "base effort_level must be absent (no top-level key)"
+        );
+        assert_eq!(
+            config.effective_effort_level(),
+            Some(EffortLevel::Xhigh),
+            "effective_effort_level must be Xhigh from profile"
+        );
+
+        let (policy, source) = load_policy(
+            r#"[permissions]
+max_effort = "high"
+"#,
+            &req_path,
+        );
+        let result = validate(&config, &policy, &source);
+        assert!(
+            result.is_err(),
+            "profile-override xhigh must trip max_effort = high ceiling"
+        );
+        let violations = result.unwrap_err();
+        assert_eq!(violations.len(), 1);
+        assert!(violations[0].requirement.contains("max_effort"));
+        assert!(violations[0].user_value.contains("xhigh"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── W10 Gap 2 regression: plugin_install_disabled rejects install ─────────
+    #[test]
+    fn requirements_plugin_install_disabled_rejects_install_command() {
+        let dir = unique_dir();
+        fs::create_dir_all(&dir).expect("dir");
+
+        let req_path = dir.join("requirements.toml");
+        let (policy, source) = load_policy(
+            r#"[plugins]
+plugin_install_disabled = true
+allow_url_plugins = true
+"#,
+            &req_path,
+        );
+
+        // Both local and URL installs must be rejected.
+        let local_result = check_plugin_install_policy(&policy, &source, false);
+        assert!(
+            local_result.is_err(),
+            "plugin_install_disabled must reject local install"
+        );
+        let err_msg = local_result.unwrap_err();
+        assert!(
+            err_msg.contains("plugin install is disabled"),
+            "error message must name the restriction; got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains(&req_path.to_string_lossy().into_owned()),
+            "error message must include policy file path; got: {err_msg}"
+        );
+
+        let url_result = check_plugin_install_policy(&policy, &source, true);
+        assert!(
+            url_result.is_err(),
+            "plugin_install_disabled must also reject URL installs"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── W10 Gap 2 regression: allow_url_plugins = false rejects --plugin-url ──
+    #[test]
+    fn requirements_allow_url_plugins_false_rejects_url_flag() {
+        let dir = unique_dir();
+        fs::create_dir_all(&dir).expect("dir");
+
+        let req_path = dir.join("requirements.toml");
+        let (policy, source) = load_policy(
+            r#"[plugins]
+plugin_install_disabled = false
+allow_url_plugins = false
+"#,
+            &req_path,
+        );
+
+        // Local installs are still permitted.
+        let local_result = check_plugin_install_policy(&policy, &source, false);
+        assert!(
+            local_result.is_ok(),
+            "allow_url_plugins = false must not block local installs"
+        );
+
+        // URL installs must be rejected.
+        let url_result = check_plugin_install_policy(&policy, &source, true);
+        assert!(
+            url_result.is_err(),
+            "allow_url_plugins = false must reject --plugin-url"
+        );
+        let err_msg = url_result.unwrap_err();
+        assert!(
+            err_msg.contains("--plugin-url is disabled"),
+            "error message must name the restriction; got: {err_msg}"
+        );
+        assert!(
+            err_msg.contains(&req_path.to_string_lossy().into_owned()),
+            "error message must include policy file path; got: {err_msg}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

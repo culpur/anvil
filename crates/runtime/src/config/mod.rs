@@ -465,6 +465,22 @@ impl RuntimeConfig {
         self.feature_config.effort_level
     }
 
+    /// The profile-resolved effort level.
+    ///
+    /// If an active profile is set and its `effort_level` field is present,
+    /// the profile value takes precedence over the base config value.
+    /// Mirrors the resolution logic used elsewhere for model/output_style.
+    #[must_use]
+    pub fn effective_effort_level(&self) -> Option<EffortLevel> {
+        // Check whether the active profile overrides effort_level.
+        let profile_effort = self
+            .active_profile_override(None)
+            .and_then(|p| p.effort_level.as_deref())
+            .and_then(EffortLevel::from_str);
+        // Profile wins over base config; fall back to base if profile has no value.
+        profile_effort.or(self.feature_config.effort_level)
+    }
+
     #[must_use]
     pub const fn reviewer(&self) -> &ReviewerConfig {
         &self.feature_config.reviewer
