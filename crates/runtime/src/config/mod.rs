@@ -685,7 +685,10 @@ fn parse_permission_mode_label(
     match mode {
         "default" | "plan" | "read-only" => Ok(ResolvedPermissionMode::ReadOnly),
         "acceptEdits" | "auto" | "workspace-write" => Ok(ResolvedPermissionMode::WorkspaceWrite),
-        "dontAsk" | "danger-full-access" => Ok(ResolvedPermissionMode::DangerFullAccess),
+        "dontAsk"
+        | "danger-full-access"
+        | "bypassPermissions"
+        | "DangerFullAccess" => Ok(ResolvedPermissionMode::DangerFullAccess),
         other => Err(ConfigError::Parse(format!(
             "{context}: unsupported permission mode {other}"
         ))),

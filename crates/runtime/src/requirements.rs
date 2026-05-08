@@ -737,6 +737,50 @@ forbidden_modes = ["dontAsk"]
 
     // ── test 5 ────────────────────────────────────────────────────────────────
     #[test]
+    fn requirements_forbidden_permission_mode_rejects_bypass_permissions_string() {
+        // Regression test: previously "bypassPermissions" failed to parse and
+        // silently bypassed forbidden_modes (early return because permission_mode()
+        // was None). Now it must parse to DangerFullAccess and trigger the policy.
+        let dir = unique_dir();
+        fs::create_dir_all(&dir).expect("dir");
+
+        let req_path = dir.join("requirements.toml");
+        let cwd = dir.join("project");
+        let home = dir.join("home").join(".anvil");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&home).expect("home");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{"permissionMode": "bypassPermissions"}"#,
+        )
+        .expect("write settings");
+
+        let config = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("bypassPermissions parses to DangerFullAccess");
+        assert_eq!(
+            config.permission_mode(),
+            Some(ResolvedPermissionMode::DangerFullAccess),
+            "bypassPermissions must parse to DangerFullAccess (regression)"
+        );
+
+        let (policy, source) = load_policy(
+            r#"[permissions]
+forbidden_modes = ["bypassPermissions"]
+"#,
+            &req_path,
+        );
+        let result = validate(&config, &policy, &source);
+        assert!(
+            result.is_err(),
+            "bypassPermissions in user config must trip forbidden_modes policy"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn requirements_forbidden_permission_mode_rejects_user_config() {
         let dir = unique_dir();
         fs::create_dir_all(&dir).expect("dir");
