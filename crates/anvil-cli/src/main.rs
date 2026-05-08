@@ -13,6 +13,8 @@ mod format_tool;
 mod help;
 mod init;
 mod input;
+mod mcp_server_mode;
+mod mcp_server_tools;
 mod providers;
 mod remote_control;
 mod render;
@@ -355,6 +357,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("schema serialisation failed: {e}"))?;
             println!("{json}");
         }
+        CliAction::McpServer { read_only, tools_filter } => {
+            let config = mcp_server_mode::McpServerConfig { read_only, tools_filter };
+            let stdin = std::io::stdin().lock();
+            let stdout = std::io::stdout().lock();
+            mcp_server_mode::run_mcp_server(
+                std::io::BufReader::new(stdin),
+                stdout,
+                &config,
+            )?;
+        }
     }
     Ok(())
 }
@@ -421,6 +433,13 @@ enum CliAction {
     },
     /// Print the JSON Schema for ~/.anvil/config.json to stdout, then exit.
     EmitSchema,
+    /// Expose Anvil as an MCP server on stdio.
+    McpServer {
+        /// Refuse write/edit/bash tools when true.
+        read_only: bool,
+        /// When Some, restrict published tools to exactly this list of names.
+        tools_filter: Option<Vec<String>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -792,6 +811,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 None => Err("missing action for `anvil project` (try: purge)".to_string()),
             }
         }
+        "mcp-server" => parse_mcp_server_args(&rest[1..]),
         "prompt" => {
             let prompt = rest[1..].join(" ");
             if prompt.trim().is_empty() {
@@ -820,6 +840,73 @@ fn join_optional_args(args: &[String]) -> Option<String> {
     let joined = args.join(" ");
     let trimmed = joined.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Parse arguments for `anvil mcp-server [--read-only] [--tools <list>]`.
+fn parse_mcp_server_args(args: &[String]) -> Result<CliAction, String> {
+    let mut read_only = false;
+    let mut tools_filter: Option<Vec<String>> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--read-only" => {
+                read_only = true;
+                index += 1;
+            }
+            "--tools" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --tools".to_string())?;
+                tools_filter = Some(
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                );
+                index += 2;
+            }
+            flag if flag.starts_with("--tools=") => {
+                let value = &flag["--tools=".len()..];
+                tools_filter = Some(
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect(),
+                );
+                index += 1;
+            }
+            "--transport" => {
+                // WebSocket transport is a v2.4+ feature.  Accept the flag so
+                // callers don't get a hard error, but log a warning and ignore.
+                let transport = args.get(index + 1).map(String::as_str).unwrap_or("?");
+                if transport != "stdio" {
+                    eprintln!(
+                        "warning: --transport {transport} is not supported in this version \
+                         (only stdio is available); WebSocket transport is planned for v2.4"
+                    );
+                }
+                index += 2;
+            }
+            flag if flag.starts_with("--transport=") => {
+                let transport = &flag["--transport=".len()..];
+                if transport != "stdio" {
+                    eprintln!(
+                        "warning: --transport {transport} is not supported in this version \
+                         (only stdio is available); WebSocket transport is planned for v2.4"
+                    );
+                }
+                index += 1;
+            }
+            other => {
+                return Err(format!("unknown argument for mcp-server: {other}"));
+            }
+        }
+    }
+    Ok(CliAction::McpServer { read_only, tools_filter })
 }
 
 fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
