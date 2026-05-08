@@ -55,10 +55,17 @@ pub enum DynamicEnumSource {
     Sessions,
     /// Available models for the current provider.
     Models,
+    /// Installed local Ollama models (from /api/tags).
+    InstalledOllamaModels,
     /// Configured AI providers.
     Providers,
     /// Supported i18n language codes.
     Languages,
+    /// Active goal IDs for the current project (`/goal resume|pause|done|show`).
+    Goals,
+    /// Available output styles: built-ins plus user styles from
+    /// `~/.anvil/output-styles/`. Also includes control tokens `list` and `reset`.
+    OutputStyles,
 }
 
 // ─── Restart requirement ──────────────────────────────────────────────────────
@@ -157,6 +164,7 @@ impl CompletionContext for StaticDefaultCompletionContext {
                 "gpt-4o".into(),
                 "gpt-4o-mini".into(),
             ],
+            DynamicEnumSource::InstalledOllamaModels => vec![],
             DynamicEnumSource::Providers => {
                 vec!["anthropic".into(), "openai".into(), "ollama".into(), "xai".into()]
             }
@@ -168,6 +176,13 @@ impl CompletionContext for StaticDefaultCompletionContext {
                 "ja".into(),
                 "zh-CN".into(),
                 "ru".into(),
+            ],
+            DynamicEnumSource::Goals => vec![],
+            DynamicEnumSource::OutputStyles => vec![
+                "precise".into(),
+                "condensed".into(),
+                "list".into(),
+                "reset".into(),
             ],
         }
     }
@@ -1326,4 +1341,78 @@ pub const TAB_SUBCOMMANDS: &[SubcommandSpec] = &[
 pub const SHARE_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec { name: "stop", summary: "Stop the active share", args: &[], subcommands: &[] },
     SubcommandSpec { name: "list", summary: "List active shares", args: &[], subcommands: &[] },
+];
+
+/// Output style subcommands for `/output-style`.
+pub const OUTPUT_STYLE_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "list",
+        summary: "List all available output styles (built-ins + user styles)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "reset",
+        summary: "Reset to the default style (precise)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "precise",
+        summary: "Natural model voice — no extra instructions (default)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "condensed",
+        summary: "Token-economical terse rules, Auto-Clarity active",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "<name>",
+        summary: "Activate a user-defined style from ~/.anvil/output-styles/",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::OutputStyles)],
+        subcommands: &[],
+    },
+];
+
+/// Goal tracking subcommands for `/goal`.
+pub const GOAL_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "new",
+        summary: "Create a new goal and set it active",
+        args: &[ArgSpec::FreeText { hint: "\"<description>\"" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "list",
+        summary: "List all goals (active, paused, done)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "resume",
+        summary: "Mark a goal active by ID",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Goals)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "pause",
+        summary: "Pause the active goal (or a specific one by ID)",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Goals)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "done",
+        summary: "Mark a goal done",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Goals)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "show",
+        summary: "Show full goal details",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Goals)],
+        subcommands: &[],
+    },
 ];

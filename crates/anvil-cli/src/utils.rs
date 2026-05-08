@@ -306,13 +306,14 @@ pub(crate) fn save_output_style(style: runtime::OutputStyle) {
 }
 
 /// Read `output_style` from `~/.anvil/config.json`, defaulting to `Precise`.
+/// Only built-in names are resolved here (no disk I/O for custom styles).
 pub(crate) fn load_output_style() -> runtime::OutputStyle {
     let path = anvil_home_dir().join("config.json");
     fs::read_to_string(&path)
         .ok()
         .and_then(|data| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok())
         .and_then(|map| map.get("output_style").and_then(|v| v.as_str()).map(str::to_string))
-        .and_then(|s| runtime::OutputStyle::from_str(&s))
+        .map(|s| runtime::output_style_from_str_builtin_only(&s))
         .unwrap_or_default()
 }
 

@@ -68,8 +68,8 @@ use render::{
     ThinkingIndicator,
 };
 use runtime::{
-    format_package_detail, format_package_list, load_system_prompt, pricing_for_model,
-    render_history_context, render_qmd_context,
+    format_package_detail, format_package_list, load_system_prompt,
+    pricing_for_model, render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
     ConfigLoader, ConversationRuntime, CronDaemon,
     HistoryArchiver, OutputStyle,
@@ -1478,6 +1478,7 @@ fn run_resume_command(
         | SlashCommand::Agent { .. }
         | SlashCommand::OutputStyle { .. }
         | SlashCommand::Skill { .. }
+        | SlashCommand::Goal { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -4137,6 +4138,9 @@ impl LiveCli {
                     }
                 }
             }
+            SlashCommand::Goal { action } => {
+                (self.run_goal_command(action.as_deref()), false)
+            }
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
@@ -4203,27 +4207,58 @@ impl LiveCli {
     fn set_output_style(&mut self, style: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
         const TERSE_SKILL_BODY: &str = include_str!("../../commands/bundled/skills/terse/SKILL.md");
         const TERSE_MARKER: &str = "# terse — token-economical response style";
+        const CUSTOM_STYLE_MARKER: &str = "# __anvil_custom_output_style__";
 
         let Some(style_str) = style else {
             return Ok(format!("Output style: {}", self.output_style.as_str()));
         };
 
-        let new_style = OutputStyle::from_str(&style_str).ok_or_else(|| {
-            format!(
-                "Unknown output style '{style_str}'. Use: precise, condensed."
-            )
-        })?;
+        // ── Control tokens ────────────────────────────────────────────────────
+        if style_str.eq_ignore_ascii_case("list") {
+            let styles_dir = runtime::default_output_styles_dir();
+            let mut registry = runtime::OutputStyleRegistry::new();
+            registry.ensure_loaded(&styles_dir);
+            return Ok(registry.list_display());
+        }
+
+        if style_str.eq_ignore_ascii_case("reset") {
+            return self.set_output_style(Some("precise".to_string()));
+        }
+
+        // ── Resolve through registry (user wins on name collision) ────────────
+        let styles_dir = runtime::default_output_styles_dir();
+        let mut registry = runtime::OutputStyleRegistry::new();
+        registry.ensure_loaded(&styles_dir);
+
+        let new_style = match registry.resolve(&style_str) {
+            Some(s) => s,
+            None => {
+                return Err(format!(
+                    "Unknown output style '{style_str}'. Run `/output-style list` to see available styles."
+                )
+                .into());
+            }
+        };
 
         if new_style == self.output_style {
             return Ok(format!("Output style already set to: {}", self.output_style.as_str()));
         }
 
-        // Update system_prompt: remove any existing terse block, then prepend
-        // the full skill body when switching to Condensed.
-        self.system_prompt.retain(|s| !s.contains(TERSE_MARKER));
+        // ── Update system_prompt ──────────────────────────────────────────────
+        // Remove any existing terse block and custom style block.
+        self.system_prompt.retain(|s| !s.contains(TERSE_MARKER) && !s.contains(CUSTOM_STYLE_MARKER));
 
-        if new_style == OutputStyle::Condensed {
+        let is_condensed = matches!(
+            new_style,
+            OutputStyle::BuiltIn(runtime::BuiltInStyle::Condensed)
+        );
+        if is_condensed {
             self.system_prompt.insert(0, TERSE_SKILL_BODY.to_string());
+        } else if let Some(fragment) = new_style.prompt_fragment() {
+            // Custom style: prepend the user-defined fragment with a marker so
+            // we can reliably strip it when switching styles later.
+            let body = format!("{CUSTOM_STYLE_MARKER}\n{fragment}");
+            self.system_prompt.insert(0, body);
         }
 
         // Rebuild the runtime so the new system prompt takes effect.
@@ -4241,13 +4276,19 @@ impl LiveCli {
             self.agent_manager.clone(),
         )?;
 
+        let style_name = new_style.as_str().to_string();
+        save_output_style(new_style.clone());
         self.output_style = new_style;
-        save_output_style(new_style);
 
-        Ok(format!("Output style: {} — terse rules {} for next turn.",
-            new_style.as_str(),
-            if new_style == OutputStyle::Condensed { "active" } else { "removed" },
-        ))
+        let status = if is_condensed {
+            "terse rules active".to_string()
+        } else if self.output_style.prompt_fragment().is_some() {
+            format!("custom style '{style_name}' active")
+        } else {
+            "default voice".to_string()
+        };
+
+        Ok(format!("Output style: {style_name} — {status} for next turn."))
     }
 
     /// `/pin [path]` — pin a file persistently, or list pinned files.
@@ -5511,11 +5552,111 @@ impl LiveCli {
                 }
                 false
             }
+            SlashCommand::Goal { action } => {
+                println!("{}", self.run_goal_command(action.as_deref()));
+                false
+            }
             SlashCommand::Unknown(name) => {
                 eprintln!("{}", render_unknown_repl_command(&name));
                 false
             }
         })
+    }
+
+    // ── /goal command ─────────────────────────────────────────────────────────
+
+    /// Handle `/goal [new "<desc>"|list|resume <id>|pause [<id>]|done [<id>]|show [<id>]]`.
+    fn run_goal_command(&mut self, args: Option<&str>) -> String {
+        use runtime::{GoalManager, GoalError, format_goal_list, format_goal_show,
+                      GOAL_DESCRIPTION_MAX};
+
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mut mgr = GoalManager::new(&cwd);
+
+        let raw = args.unwrap_or("").trim();
+
+        // No args → alias for list
+        if raw.is_empty() || raw == "list" || raw == "ls" {
+            return format_goal_list(&mgr.list());
+        }
+
+        let mut iter = raw.splitn(2, char::is_whitespace);
+        let sub = iter.next().unwrap_or("list");
+        let rest = iter.next().unwrap_or("").trim();
+
+        match sub {
+            "new" => {
+                let desc = rest
+                    .trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .trim();
+                if desc.is_empty() {
+                    return "Usage: /goal new \"<description>\"".to_string();
+                }
+                match mgr.new_goal(desc) {
+                    Ok(goal) => format!(
+                        "Goal created: {}\nStatus: {}\n{}",
+                        goal.id, goal.status, goal.description
+                    ),
+                    Err(GoalError::DescriptionTooLong { len }) => format!(
+                        "Description too long ({len} chars). Maximum is {GOAL_DESCRIPTION_MAX} chars."
+                    ),
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+            "resume" => {
+                if rest.is_empty() {
+                    return "Usage: /goal resume <id>".to_string();
+                }
+                match mgr.resume(rest) {
+                    Ok(goal) => format!(
+                        "Resumed: {} ({})\n{}",
+                        goal.id, goal.status, goal.description
+                    ),
+                    Err(GoalError::GoalNotFound(id)) => format!("Goal not found: {id}"),
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+            "pause" => {
+                let id_opt = if rest.is_empty() { None } else { Some(rest) };
+                match mgr.pause(id_opt) {
+                    Ok(goal) => format!("Paused: {} ({})", goal.id, goal.status),
+                    Err(GoalError::NoActiveGoal) => "No active goal to pause.".to_string(),
+                    Err(GoalError::GoalNotFound(id)) => format!("Goal not found: {id}"),
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+            "done" => {
+                let id_opt = if rest.is_empty() { None } else { Some(rest) };
+                match mgr.done(id_opt) {
+                    Ok(goal) => format!("Done: {} ({})", goal.id, goal.status),
+                    Err(GoalError::NoActiveGoal) => "No active goal to mark done.".to_string(),
+                    Err(GoalError::GoalNotFound(id)) => format!("Goal not found: {id}"),
+                    Err(e) => format!("Error: {e}"),
+                }
+            }
+            "show" => {
+                let id_opt = if rest.is_empty() { None } else { Some(rest) };
+                let goal_opt = match id_opt {
+                    Some(id) => mgr.get(id),
+                    None => mgr.active_goal(),
+                };
+                match goal_opt {
+                    Some(goal) => format_goal_show(&goal),
+                    None => {
+                        if id_opt.is_some() {
+                            format!("Goal not found: {}", id_opt.unwrap())
+                        } else {
+                            "No active goal. Use /goal list to see all goals.".to_string()
+                        }
+                    }
+                }
+            }
+            other => format!(
+                "Unknown goal subcommand: '{other}'. \
+                 Usage: /goal [new|list|resume|pause|done|show]"
+            ),
+        }
     }
 
     // ── /agent command ────────────────────────────────────────────────────────

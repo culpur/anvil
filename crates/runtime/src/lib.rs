@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod goals;
 pub mod hub;
 pub mod share;
 pub mod theme;
@@ -52,8 +53,9 @@ pub use config::{
     default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig,
     LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
     McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
-    McpTransport, McpWebSocketServerConfig, OAuthConfig, OutputStyle, ResolvedPermissionMode,
-    RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
+    McpTransport, McpWebSocketServerConfig, OAuthConfig,
+    BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,
+    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
     ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use conversation::{
@@ -118,6 +120,11 @@ pub use team::{
     DelegationRecord, MemberStatus, TaskSnapshot, TeamManager, TeamMember, TeamStatus,
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
+pub use goals::{
+    build_active_goal_prompt_fragment, format_goal_list, format_goal_show,
+    Goal, GoalError, GoalManager, GoalStatus,
+    GOAL_DESCRIPTION_MAX, GOAL_LIST_DESCRIPTION_TRUNCATE, GOAL_STATUS_LINE_TRUNCATE,
+};
 pub use private_memory::{private_memory_project_hash, PrivateProjectMemory};
 pub use history::{ArchiveEntry, HistoryArchiver, MIN_ARCHIVE_MESSAGES};
 pub use qmd::{render_history_context, render_qmd_context, QmdClient, QmdResult, QmdStatus};

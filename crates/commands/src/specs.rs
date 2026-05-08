@@ -1849,20 +1849,64 @@ Usage:
     SlashCommandSpec {
         name: "output-style",
         aliases: &["output_style"],
-        summary: "Set response verbosity: precise (default) or condensed",
-        argument_hint: Some("[precise|condensed]"),
+        summary: "Set response style: built-in or custom (~/.anvil/output-styles/)",
+        argument_hint: Some("[<name>|list|reset]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "\
-/output-style — Control response verbosity
+/output-style — Control response verbosity and style
 
 Usage:
   /output-style             Show the current output style
-  /output-style precise     Full sentences, full explanations (default)
-  /output-style condensed   Terse, bullet-point responses (opt-in)",
-        subcommands: &[],
+  /output-style list        List all available styles (built-ins + user styles)
+  /output-style reset       Reset to the default style (precise)
+  /output-style precise     Natural model voice — no extra instructions (default)
+  /output-style condensed   Terse, bullet-point responses (opt-in)
+  /output-style <name>      Activate a user-defined style
+
+Custom styles:
+  Place Markdown files in ~/.anvil/output-styles/<name>.md with YAML frontmatter:
+
+    ---
+    name: Tutor
+    description: Explanatory style with code commentary
+    ---
+
+    You are a patient teacher. After every code block, explain what changed.
+
+  The frontmatter 'name' and 'description' fields are required.
+  The body becomes the system prompt fragment prepended for each turn.
+  If a user style has the same name as a built-in, the user file wins.",
+        subcommands: crate::subcommands::OUTPUT_STYLE_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "goal",
+        aliases: &[],
+        summary: "Manage long-running goals across sessions",
+        argument_hint: Some("[new|list|resume|pause|done|show]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "\
+/goal — Per-project goal persistence
+
+Usage:
+  /goal                            List all goals (alias for /goal list)
+  /goal new \"<description>\"       Create a goal, set it active (max 4096 chars)
+  /goal list                       Show all goals: active first, then paused, done
+  /goal resume <id>                Mark a goal active; auto-pauses current active
+  /goal pause [<id>]               Pause the active goal (or a specific one by id)
+  /goal done [<id>]                Mark active (or specified) goal done; file kept
+  /goal show [<id>]                Print full goal details and linked sessions
+
+One active goal at a time per project. Goals are scoped to the current
+project directory and persist across sessions in ~/.anvil/goals/.",
+        subcommands: crate::subcommands::GOAL_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },

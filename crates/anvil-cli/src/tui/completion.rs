@@ -102,6 +102,14 @@ impl CompletionContext for TuiCompletionContext {
                 models
             }
 
+            // ── Installed Ollama models ────────────────────────────────────
+            DynamicEnumSource::InstalledOllamaModels => {
+                super::widgets::cached_ollama_models()
+                    .into_iter()
+                    .map(|(name, _size)| name)
+                    .collect()
+            }
+
             // ── Providers ─────────────────────────────────────────────────
             DynamicEnumSource::Providers => vec![
                 "anthropic".into(),
@@ -120,6 +128,12 @@ impl CompletionContext for TuiCompletionContext {
                 "zh-CN".into(),
                 "ru".into(),
             ],
+
+            // ── Output styles ──────────────────────────────────────────────
+            DynamicEnumSource::OutputStyles => list_output_style_names(),
+
+            // ── Goals (project goal IDs) ───────────────────────────────────
+            DynamicEnumSource::Goals => vec![],
         }
     }
 }
@@ -272,6 +286,29 @@ fn list_session_ids() -> Vec<String> {
     sessions.into_iter().map(|(_, id)| id).take(20).collect()
 }
 
+// ─── Helper: output style names ──────────────────────────────────────────────
+
+/// Returns all available output style names for tab completion.
+/// Includes built-in names, user styles from `~/.anvil/output-styles/`,
+/// and the control tokens `list` and `reset`.
+pub fn list_output_style_names() -> Vec<String> {
+    let home = match dirs_home() {
+        Some(h) => h,
+        None => {
+            return vec![
+                "precise".into(),
+                "condensed".into(),
+                "list".into(),
+                "reset".into(),
+            ];
+        }
+    };
+    let styles_dir = home.join(".anvil").join("output-styles");
+    let mut registry = runtime::OutputStyleRegistry::new();
+    registry.ensure_loaded(&styles_dir);
+    registry.all_names()
+}
+
 // ─── dirs helper ─────────────────────────────────────────────────────────────
 
 fn dirs_home() -> Option<std::path::PathBuf> {
@@ -340,7 +377,12 @@ mod tests {
                 ],
                 DynamicEnumSource::InstalledAgents
                 | DynamicEnumSource::InstalledSkills
-                | DynamicEnumSource::Sessions => vec![],
+                | DynamicEnumSource::Sessions
+                | DynamicEnumSource::InstalledOllamaModels
+                | DynamicEnumSource::Goals => vec![],
+                DynamicEnumSource::OutputStyles => {
+                    vec!["precise".into(), "condensed".into(), "list".into(), "reset".into()]
+                }
             }
         }
     }

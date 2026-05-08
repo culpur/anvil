@@ -411,6 +411,12 @@ pub enum SlashCommand {
     Skill {
         subcommand: SkillSubcommand,
     },
+    /// `/goal [new "<desc>"|list|resume <id>|pause [<id>]|done [<id>]|show [<id>]]`
+    /// Goal persistence — track long-running objectives across sessions.
+    Goal {
+        /// Raw args after `/goal`.
+        action: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -790,6 +796,9 @@ impl SlashCommand {
                     }
                 }
             }
+            "goal" => Self::Goal {
+                action: remainder_after_command(trimmed, command),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1874,6 +1883,8 @@ mod tests {
                 SlashCommand::OutputStyle { .. } => "output-style",
                 // Skill dispatch (v2.2.7):
                 SlashCommand::Skill { .. } => "skill",
+                // Goal tracking (v2.2.11):
+                SlashCommand::Goal { .. } => "goal",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
             }
         }
@@ -1986,6 +1997,7 @@ mod tests {
             SlashCommand::Agent { subcommand: AgentSubcommand::Traits },
             SlashCommand::OutputStyle { style: None },
             SlashCommand::Skill { subcommand: SkillSubcommand::List },
+            SlashCommand::Goal { action: None },
         ];
 
         let specs = slash_command_specs();

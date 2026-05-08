@@ -31,7 +31,7 @@ pub use mcp::{
     McpTransport, McpWebSocketServerConfig, ScopedMcpServerConfig,
 };
 pub use oauth::OAuthConfig;
-pub use output_style::OutputStyle;
+pub use output_style::{BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only};
 pub use plugins::RuntimePluginConfig;
 
 pub const ANVIL_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
@@ -298,8 +298,8 @@ impl RuntimeConfig {
     }
 
     #[must_use]
-    pub const fn output_style(&self) -> OutputStyle {
-        self.feature_config.output_style
+    pub fn output_style(&self) -> &OutputStyle {
+        &self.feature_config.output_style
     }
 }
 
@@ -357,8 +357,8 @@ impl RuntimeFeatureConfig {
     }
 
     #[must_use]
-    pub const fn output_style(&self) -> OutputStyle {
-        self.output_style
+    pub fn output_style(&self) -> &OutputStyle {
+        &self.output_style
     }
 }
 
@@ -374,7 +374,7 @@ fn parse_optional_output_style(root: &JsonValue) -> OutputStyle {
     root.as_object()
         .and_then(|object| object.get("output_style"))
         .and_then(JsonValue::as_str)
-        .and_then(OutputStyle::from_str)
+        .map(output_style_from_str_builtin_only)
         .unwrap_or_default()
 }
 
@@ -815,7 +815,7 @@ mod tests {
         let loaded = ConfigLoader::new(&cwd, &home)
             .load()
             .expect("config should load");
-        assert_eq!(loaded.output_style(), super::OutputStyle::Condensed);
+        assert_eq!(*loaded.output_style(), super::OutputStyle::BuiltIn(super::BuiltInStyle::Condensed));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
@@ -838,7 +838,7 @@ mod tests {
         let loaded = ConfigLoader::new(&cwd, &home)
             .load()
             .expect("config should load");
-        assert_eq!(loaded.output_style(), super::OutputStyle::Precise);
+        assert_eq!(*loaded.output_style(), super::OutputStyle::BuiltIn(super::BuiltInStyle::Precise));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }
