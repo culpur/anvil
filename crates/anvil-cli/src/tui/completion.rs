@@ -134,6 +134,9 @@ impl CompletionContext for TuiCompletionContext {
 
             // ── Goals (project goal IDs) ───────────────────────────────────
             DynamicEnumSource::Goals => vec![],
+
+            // ── Named profiles (W4) ────────────────────────────────────────
+            DynamicEnumSource::Profiles => list_profile_names(),
         }
     }
 }
@@ -309,6 +312,25 @@ pub fn list_output_style_names() -> Vec<String> {
     registry.all_names()
 }
 
+/// List named profile names from `~/.anvil/settings.json` (user-level config).
+fn list_profile_names() -> Vec<String> {
+    let home = match dirs_home() {
+        Some(h) => h,
+        None => return vec![],
+    };
+    let settings_path = home.join(".anvil").join("settings.json");
+    let Ok(contents) = std::fs::read_to_string(&settings_path) else {
+        return vec![];
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return vec![];
+    };
+    val.get("profiles")
+        .and_then(|p| p.as_object())
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 // ─── dirs helper ─────────────────────────────────────────────────────────────
 
 fn dirs_home() -> Option<std::path::PathBuf> {
@@ -378,8 +400,10 @@ mod tests {
                 DynamicEnumSource::InstalledAgents
                 | DynamicEnumSource::InstalledSkills
                 | DynamicEnumSource::Sessions
+<<<<<<< HEAD
                 | DynamicEnumSource::InstalledOllamaModels
-                | DynamicEnumSource::Goals => vec![],
+                | DynamicEnumSource::Goals
+                | DynamicEnumSource::Profiles => vec![],
                 DynamicEnumSource::OutputStyles => {
                     vec!["precise".into(), "condensed".into(), "list".into(), "reset".into()]
                 }

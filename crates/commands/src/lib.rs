@@ -405,6 +405,11 @@ pub enum SlashCommand {
     OutputStyle {
         style: Option<String>,
     },
+    /// `/profile [list|use <name>|show [<name>]|create <name>|delete <name>]` — named profiles (v2.2.11 W4)
+    Profile {
+        /// Sub-command and optional target, e.g. `Some("use work")` or `Some("list")`.
+        action: Option<String>,
+    },
     /// `/skill suggest [<prompt>]` — trigger-matched skill suggestions
     /// `/skill load <name>` — prepend skill body to next system prompt
     /// `/skill list` — alias for /skills
@@ -766,6 +771,9 @@ impl SlashCommand {
             }
             "output-style" | "output_style" => Self::OutputStyle {
                 style: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "profile" => Self::Profile {
+                action: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             "skill" => {
                 let sub = parts.next().unwrap_or("suggest");
@@ -1247,7 +1255,8 @@ mod tests {
         //         remote-control (8 previously-missing) + tab, fork, share, audit (4 ghost)
         //         + restart (Phase 5 placeholder) = +13 total
         // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
-        assert_eq!(slash_command_specs().len(), 105);
+        // v2.2.11 W4: +1 (profile)
+        assert_eq!(slash_command_specs().len(), 106);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -1885,6 +1894,8 @@ mod tests {
                 SlashCommand::Skill { .. } => "skill",
                 // Goal tracking (v2.2.11):
                 SlashCommand::Goal { .. } => "goal",
+                // Named profiles (v2.2.11 W4):
+                SlashCommand::Profile { .. } => "profile",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
             }
         }
@@ -1998,6 +2009,8 @@ mod tests {
             SlashCommand::OutputStyle { style: None },
             SlashCommand::Skill { subcommand: SkillSubcommand::List },
             SlashCommand::Goal { action: None },
+            // Named profiles (v2.2.11 W4):
+            SlashCommand::Profile { action: None },
         ];
 
         let specs = slash_command_specs();

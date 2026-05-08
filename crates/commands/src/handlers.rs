@@ -493,6 +493,25 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message, session: session.clone() })
         }
+        SlashCommand::Profile { action } => {
+            let msg = match action.as_deref() {
+                None | Some("list") => {
+                    "/profile list — profile management is handled in the TUI. \
+                     Use --profile <name> at startup or set ANVIL_PROFILE to activate a profile."
+                        .to_string()
+                }
+                Some(other) => {
+                    format!(
+                        "/profile {other} — profile management is handled in the TUI. \
+                         Use --profile <name> at startup or set ANVIL_PROFILE to activate a profile."
+                    )
+                }
+            };
+            Some(SlashCommandResult {
+                message: msg,
+                session: session.clone(),
+            })
+        }
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),

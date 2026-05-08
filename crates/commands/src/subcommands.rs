@@ -66,6 +66,8 @@ pub enum DynamicEnumSource {
     /// Available output styles: built-ins plus user styles from
     /// `~/.anvil/output-styles/`. Also includes control tokens `list` and `reset`.
     OutputStyles,
+    /// Named profiles from `~/.anvil/settings.json` (or project settings).
+    Profiles,
 }
 
 // ─── Restart requirement ──────────────────────────────────────────────────────
@@ -184,6 +186,7 @@ impl CompletionContext for StaticDefaultCompletionContext {
                 "list".into(),
                 "reset".into(),
             ],
+            DynamicEnumSource::Profiles => vec![],
         }
     }
 }
@@ -1413,6 +1416,40 @@ pub const GOAL_SUBCOMMANDS: &[SubcommandSpec] = &[
         name: "show",
         summary: "Show full goal details",
         args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Goals)],
+        subcommands: &[],
+    },
+];
+
+/// /profile — named profile management (v2.2.11 W4)
+pub const PROFILE_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "list",
+        summary: "List all profiles; marks the active one",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "use",
+        summary: "Switch active profile for this session",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Profiles)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "show",
+        summary: "Print fields of a profile (or the active one)",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Profiles)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "create",
+        summary: "Create a new empty profile inheriting current effective config",
+        args: &[ArgSpec::FreeText { hint: "<name>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "delete",
+        summary: "Remove a named profile",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::Profiles)],
         subcommands: &[],
     },
 ];

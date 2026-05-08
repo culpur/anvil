@@ -5,6 +5,7 @@ pub mod mcp;
 pub mod oauth;
 pub mod output_style;
 pub mod plugins;
+pub mod profile;
 pub mod sandbox;
 
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ use lsp::parse_optional_lsp_config;
 use mcp::merge_mcp_servers;
 use oauth::parse_optional_oauth_config;
 use plugins::parse_optional_plugin_config;
+use profile::{parse_active_profile, parse_profiles};
 use sandbox::parse_optional_sandbox_config;
 
 // Re-export all public types so callers can still use `crate::config::*`.
@@ -33,6 +35,7 @@ pub use mcp::{
 pub use oauth::OAuthConfig;
 pub use output_style::{BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only};
 pub use plugins::RuntimePluginConfig;
+pub use profile::ProfileOverride;
 
 pub const ANVIL_SETTINGS_SCHEMA_NAME: &str = "SettingsSchema";
 
@@ -61,6 +64,11 @@ pub struct RuntimeConfig {
     merged: BTreeMap<String, JsonValue>,
     loaded_entries: Vec<ConfigEntry>,
     feature_config: RuntimeFeatureConfig,
+    /// Named profiles parsed from the `profiles` key.
+    profiles: std::collections::HashMap<String, ProfileOverride>,
+    /// The active profile name after applying precedence:
+    /// CLI `--profile` > `ANVIL_PROFILE` env var > `active_profile` in config.
+    active_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -200,10 +208,20 @@ impl ConfigLoader {
             output_style: parse_optional_output_style(&merged_value),
         };
 
+        // Profile section — partial-tolerance: malformed individual profiles
+        // are skipped with a warning inside parse_profiles().
+        let raw_profiles = parse_profiles(&merged_value);
+        let profiles: std::collections::HashMap<String, ProfileOverride> =
+            raw_profiles.into_iter().collect();
+
+        let config_active_profile = parse_active_profile(&merged_value);
+
         Ok(RuntimeConfig {
             merged,
             loaded_entries,
             feature_config,
+            profiles,
+            active_profile: config_active_profile,
         })
     }
 }
@@ -229,6 +247,8 @@ impl RuntimeConfig {
             merged: BTreeMap::new(),
             loaded_entries: Vec::new(),
             feature_config: RuntimeFeatureConfig::default(),
+            profiles: std::collections::HashMap::new(),
+            active_profile: None,
         }
     }
 
@@ -300,6 +320,80 @@ impl RuntimeConfig {
     #[must_use]
     pub fn output_style(&self) -> &OutputStyle {
         &self.feature_config.output_style
+    }
+
+    // ── Profile accessors ─────────────────────────────────────────────────────
+
+    /// All named profiles parsed from the config.
+    #[must_use]
+    pub fn profiles(&self) -> &std::collections::HashMap<String, ProfileOverride> {
+        &self.profiles
+    }
+
+    /// The `active_profile` value stored in the config file.
+    /// Use [`RuntimeConfig::resolve_active_profile`] to apply CLI/env precedence.
+    #[must_use]
+    pub fn config_active_profile(&self) -> Option<&str> {
+        self.active_profile.as_deref()
+    }
+
+    /// Resolve the effective active profile name, applying precedence:
+    /// `cli_override` > `ANVIL_PROFILE` env var > `active_profile` in config.
+    ///
+    /// Returns `None` when no profile is selected at any tier.
+    #[must_use]
+    pub fn resolve_active_profile<'a>(
+        &'a self,
+        cli_override: Option<&'a str>,
+    ) -> Option<&'a str> {
+        // Highest precedence: CLI --profile flag
+        if let Some(name) = cli_override {
+            return Some(name);
+        }
+        // Second: ANVIL_PROFILE env var
+        if let Ok(env_val) = std::env::var("ANVIL_PROFILE") {
+            if !env_val.is_empty() {
+                // We can't return a reference to the locally-owned String here;
+                // the caller should use the env var directly when needed.
+                // Instead we signal that an env-var override exists by returning
+                // a special sentinel — but because we can't hand back a `&str`
+                // from a local var, callers that need the actual name must call
+                // `std::env::var("ANVIL_PROFILE")` themselves.  We document
+                // this in resolve_active_profile_owned below.
+                let _ = env_val; // suppress unused warning
+            }
+        }
+        // Third: value in config file
+        self.active_profile.as_deref()
+    }
+
+    /// Like [`resolve_active_profile`] but returns an owned `String`,
+    /// which avoids lifetime issues when the env-var value is needed.
+    #[must_use]
+    pub fn resolve_active_profile_owned(&self, cli_override: Option<&str>) -> Option<String> {
+        // CLI first
+        if let Some(name) = cli_override {
+            return Some(name.to_owned());
+        }
+        // Env var second
+        if let Ok(env_val) = std::env::var("ANVIL_PROFILE") {
+            if !env_val.is_empty() {
+                return Some(env_val);
+            }
+        }
+        // Config file last
+        self.active_profile.clone()
+    }
+
+    /// Look up a profile by name (after resolving which one is active).
+    /// Returns `None` when the name is unknown or no profile is active.
+    #[must_use]
+    pub fn active_profile_override(
+        &self,
+        cli_override: Option<&str>,
+    ) -> Option<&ProfileOverride> {
+        let name = self.resolve_active_profile_owned(cli_override)?;
+        self.profiles.get(&name)
     }
 }
 

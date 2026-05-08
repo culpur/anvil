@@ -1910,6 +1910,38 @@ project directory and persist across sessions in ~/.anvil/goals/.",
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },
+    // W4 — Named profiles
+    SlashCommandSpec {
+        name: "profile",
+        aliases: &[],
+        summary: "Manage named config profiles (work, personal, client-A, …)",
+        argument_hint: Some("[list|use <name>|show [<name>]|create <name>|delete <name>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/profile — Named configuration profiles
+
+Usage:
+  /profile list             List all profiles; marks the active one
+  /profile use <name>       Switch active profile for this session only
+  /profile show [<name>]    Print fields of a profile (defaults to active)
+  /profile create <name>    Create an empty profile inheriting current config
+  /profile delete <name>    Remove a named profile
+
+Notes:
+  Profile fields override base config. Unset fields fall through to base.
+  Use --profile <name> at startup for a persistent selection.
+  ANVIL_PROFILE env var also sets the active profile (lower precedence than --profile).
+
+Overridable fields per profile:
+  model, provider, effort_level, output_style, permission_mode,
+  enabled_plugins, enabled_mcp_servers, env",
+        subcommands: crate::subcommands::PROFILE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
 ];
 
 #[must_use]

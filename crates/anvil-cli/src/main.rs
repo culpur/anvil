@@ -209,6 +209,83 @@ fn main() {
     }
 }
 
+/// Render a `/profile` command response for contexts that don't yet have a
+/// live runtime with access to the loaded profile map (resume path, plain REPL,
+/// TUI fallback).  The TUI path will eventually call into the richer live
+/// implementation; this provides a consistent baseline message.
+fn render_profile_command(action: Option<&str>) -> String {
+    // Read active profile from env (set by --profile flag or ANVIL_PROFILE).
+    let active = std::env::var("ANVIL_PROFILE")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    match action {
+        None | Some("list") => {
+            match active {
+                Some(ref name) => format!(
+                    "Active profile: {name}\n\
+                     Use /profile show to inspect its fields, or --profile <name> to change it."
+                ),
+                None => "No active profile. Use /profile create <name> to add one, \
+                         or --profile <name> at startup to activate one."
+                    .to_string(),
+            }
+        }
+        Some(rest) if rest.starts_with("use ") => {
+            let name = rest[4..].trim();
+            if name.is_empty() {
+                "Usage: /profile use <name>".to_string()
+            } else {
+                // Session-scoped switch: update the env var so resolve_active_profile_owned picks it up.
+                // SAFETY: see existing env::set_var usage in parse_args.
+                unsafe { std::env::set_var("ANVIL_PROFILE", name); }
+                format!("Active profile switched to \"{name}\" for this session.")
+            }
+        }
+        Some(rest) if rest.starts_with("show") => {
+            let arg = rest["show".len()..].trim();
+            let target = if arg.is_empty() {
+                active.as_deref().map(ToOwned::to_owned)
+            } else {
+                Some(arg.to_string())
+            };
+            match target {
+                None => "No profile specified and none active. Usage: /profile show <name>".to_string(),
+                Some(name) => format!(
+                    "Profile: {name}\n\
+                     (Full field listing requires a TUI session with the config loaded.)"
+                ),
+            }
+        }
+        Some(rest) if rest.starts_with("create ") => {
+            let name = rest[7..].trim();
+            if name.is_empty() {
+                "Usage: /profile create <name>".to_string()
+            } else {
+                format!(
+                    "To create profile \"{name}\", add it to the `profiles` section in \
+                     ~/.anvil/settings.json and restart Anvil."
+                )
+            }
+        }
+        Some(rest) if rest.starts_with("delete ") => {
+            let name = rest[7..].trim();
+            if name.is_empty() {
+                "Usage: /profile delete <name>".to_string()
+            } else {
+                format!(
+                    "To delete profile \"{name}\", remove it from the `profiles` section in \
+                     ~/.anvil/settings.json and restart Anvil."
+                )
+            }
+        }
+        Some(other) => format!(
+            "Unknown /profile sub-command: {other}\n\
+             Usage: /profile [list|use <name>|show [<name>]|create <name>|delete <name>]"
+        ),
+    }
+}
+
 fn render_cli_error(problem: &str) -> String {
     let mut lines = vec!["Error".to_string()];
     for (index, line) in problem.lines().enumerate() {
@@ -383,6 +460,11 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut allowed_tool_values = Vec::new();
     let mut rest = Vec::new();
     let mut index = 0;
+    // W4: --profile <name> sets the active profile for this session.
+    // ANVIL_PROFILE env var is also checked (lower precedence).
+    let mut cli_profile: Option<String> = std::env::var("ANVIL_PROFILE")
+        .ok()
+        .filter(|s| !s.is_empty());
     // FEAT-42: --plugin-url accumulates URLs; --plugin-sha256 attaches to the
     // *next* --plugin-url and may also appear as `--plugin-url URL --plugin-sha256 HEX`
     // in either order.  We collect raw flags here and resolve them once the
@@ -422,6 +504,18 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             flag if flag.starts_with("--model=") => {
                 model = resolve_model_alias(&flag[8..]).to_string();
+                index += 1;
+            }
+            // W4: --profile <name>  (overrides ANVIL_PROFILE env var)
+            "--profile" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --profile".to_string())?;
+                cli_profile = Some(value.clone());
+                index += 2;
+            }
+            flag if flag.starts_with("--profile=") => {
+                cli_profile = Some(flag[10..].to_string());
                 index += 1;
             }
             "--output-format" => {
@@ -564,6 +658,14 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         return Err(format!(
             "--plugin-sha256 {stranded} has no matching --plugin-url"
         ));
+    }
+
+    // W4: If --profile was specified, it wins over ANVIL_PROFILE env var.
+    // We normalise both into ANVIL_PROFILE so that the rest of the runtime
+    // (config loader + /profile commands) can read a single authoritative source.
+    if let Some(ref profile_name) = cli_profile {
+        // SAFETY: standard env manipulation; only unsafe in edition 2024.
+        unsafe { std::env::set_var("ANVIL_PROFILE", profile_name); }
     }
 
     if wants_version {
@@ -1479,6 +1581,7 @@ fn run_resume_command(
         | SlashCommand::OutputStyle { .. }
         | SlashCommand::Skill { .. }
         | SlashCommand::Goal { .. }
+        | SlashCommand::Profile { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -4152,6 +4255,10 @@ impl LiveCli {
             SlashCommand::Goal { action } => {
                 (self.run_goal_command(action.as_deref()), false)
             }
+            SlashCommand::Profile { action } => {
+                let msg = render_profile_command(action.as_deref());
+                (msg, false)
+            }
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
@@ -5565,6 +5672,10 @@ impl LiveCli {
             }
             SlashCommand::Goal { action } => {
                 println!("{}", self.run_goal_command(action.as_deref()));
+                false
+            }
+            SlashCommand::Profile { action } => {
+                println!("{}", render_profile_command(action.as_deref()));
                 false
             }
             SlashCommand::Unknown(name) => {
