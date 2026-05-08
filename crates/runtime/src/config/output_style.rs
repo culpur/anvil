@@ -1,3 +1,5 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 // ─── Built-in style ───────────────────────────────────────────────────────────
@@ -10,7 +12,8 @@ use std::path::PathBuf;
 /// - `Condensed` is strictly opt-in; it is never auto-applied from trigger
 ///   keywords or heuristics.
 /// - This axis is orthogonal to `/skill load terse`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum BuiltInStyle {
     /// Natural model voice — no extra instructions prepended. (default)
     #[default]
@@ -60,7 +63,7 @@ impl BuiltInStyle {
 /// missing either field are silently skipped (bad files must not crash the
 /// registry build).  The body is the system-prompt fragment prepended before
 /// the user turn when this style is active.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CustomStyle {
     /// The canonical identifier (taken from frontmatter, not the filename).
     pub name: String,
@@ -78,7 +81,7 @@ pub struct CustomStyle {
 /// When a custom style name matches a built-in name (e.g. the user creates
 /// `~/.anvil/output-styles/precise.md`), the user file wins for the session
 /// but the built-in semantic is replaced by the file's `prompt_fragment`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum OutputStyle {
     /// One of the two hard-wired styles.
     BuiltIn(BuiltInStyle),

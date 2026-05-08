@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -28,7 +29,7 @@ use crate::{PluginError, PluginHooks, PluginRegistry};
 /// // Prompt hook — injects text into the next model turn
 /// { "type": "prompt", "body": "verify the edit you just made still compiles" }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum HookSpec {
     /// Bare string — shell command or script path.  Backward-compatible.
@@ -80,7 +81,7 @@ impl HookSpec {
 }
 
 /// Discriminant for tagged hook entries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HookKind {
     /// Run a shell command / script path.

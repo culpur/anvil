@@ -7,6 +7,7 @@ pub mod output_style;
 pub mod plugins;
 pub mod profile;
 pub mod sandbox;
+pub mod schema;
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};

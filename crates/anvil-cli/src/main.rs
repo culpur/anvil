@@ -349,6 +349,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             project::run_purge(&anvil_home, &opts, &mut stdout)
                 .map_err(|e| format!("project purge failed: {e}"))?;
         }
+        CliAction::EmitSchema => {
+            let schema = ::runtime::emit_config_schema();
+            let json = serde_json::to_string_pretty(&schema)
+                .map_err(|e| format!("schema serialisation failed: {e}"))?;
+            println!("{json}");
+        }
     }
     Ok(())
 }
@@ -413,6 +419,8 @@ enum CliAction {
     Project {
         opts: project::PurgeOptions,
     },
+    /// Print the JSON Schema for ~/.anvil/config.json to stdout, then exit.
+    EmitSchema,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -478,6 +486,9 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             "--version" | "-V" => {
                 wants_version = true;
                 index += 1;
+            }
+            "--emit-schema" => {
+                return Ok(CliAction::EmitSchema);
             }
             "--update" => {
                 run_self_update();
@@ -693,6 +704,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
 
     match rest[0].as_str() {
         "continue" => Ok(CliAction::Continue),
+        "emit-schema" => Ok(CliAction::EmitSchema),
         "sessions" | "session-list" => Ok(CliAction::Sessions),
         "first-run" => Ok(CliAction::FirstRunWizard),
         "check" => Ok(CliAction::Check),

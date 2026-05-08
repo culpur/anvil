@@ -1,0 +1,437 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "description": "Schema for ~/.anvil/config.json and the settings.json family. Published at https://anvilhub.culpur.net/config-schema.json.",
+  "properties": {
+    "$schema": {
+      "description": "JSON Schema URI for this config file.",
+      "type": "string"
+    },
+    "enabledPlugins": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "type": "object"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Extra environment variables injected into tool subprocesses.",
+      "type": "object"
+    },
+    "hooks": {
+      "additionalProperties": false,
+      "description": "Hook commands run before/after tool use.",
+      "properties": {
+        "PostToolUse": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "anyOf": [
+              {
+                "description": "Bare string — shell command or script path.  Backward-compatible.",
+                "type": "string"
+              },
+              {
+                "description": "Explicit tagged form with a `type` discriminant.",
+                "properties": {
+                  "body": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "$ref": "#/definitions/HookKind"
+                  }
+                },
+                "required": [
+                  "body",
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "definitions": {
+              "HookKind": {
+                "description": "Discriminant for tagged hook entries.",
+                "oneOf": [
+                  {
+                    "description": "Run a shell command / script path.",
+                    "enum": [
+                      "command"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "Inject a string into the next model turn.",
+                    "enum": [
+                      "prompt"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "description": "A single hook entry in a plugin manifest.\n\nBare strings deserialize as `Command` (shell/script path), preserving backward compatibility.  Tagged objects with `\"type\": \"prompt\"` inject a message into the next model turn instead of running a subprocess.\n\n# Examples (JSON) ```json // Legacy bare-string form — still works unchanged \"PreToolUse\": [\"./hooks/pre.sh\"]\n\n// Command hook — explicit tagged form { \"type\": \"command\", \"body\": \"./hooks/pre.sh\" }\n\n// Prompt hook — injects text into the next model turn { \"type\": \"prompt\", \"body\": \"verify the edit you just made still compiles\" } ```",
+            "title": "HookSpec"
+          },
+          "type": "array"
+        },
+        "PreToolUse": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "anyOf": [
+              {
+                "description": "Bare string — shell command or script path.  Backward-compatible.",
+                "type": "string"
+              },
+              {
+                "description": "Explicit tagged form with a `type` discriminant.",
+                "properties": {
+                  "body": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "$ref": "#/definitions/HookKind"
+                  }
+                },
+                "required": [
+                  "body",
+                  "type"
+                ],
+                "type": "object"
+              }
+            ],
+            "definitions": {
+              "HookKind": {
+                "description": "Discriminant for tagged hook entries.",
+                "oneOf": [
+                  {
+                    "description": "Run a shell command / script path.",
+                    "enum": [
+                      "command"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "description": "Inject a string into the next model turn.",
+                    "enum": [
+                      "prompt"
+                    ],
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "description": "A single hook entry in a plugin manifest.\n\nBare strings deserialize as `Command` (shell/script path), preserving backward compatibility.  Tagged objects with `\"type\": \"prompt\"` inject a message into the next model turn instead of running a subprocess.\n\n# Examples (JSON) ```json // Legacy bare-string form — still works unchanged \"PreToolUse\": [\"./hooks/pre.sh\"]\n\n// Command hook — explicit tagged form { \"type\": \"command\", \"body\": \"./hooks/pre.sh\" }\n\n// Prompt hook — injects text into the next model turn { \"type\": \"prompt\", \"body\": \"verify the edit you just made still compiles\" } ```",
+            "title": "HookSpec"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "lspServers": {
+      "description": "Array of LSP server definitions.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A single LSP server configuration.",
+        "properties": {
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "extensionToLanguage": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "name"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "mcpServers": {
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "additionalProperties": true,
+            "description": "Stdio-transport MCP server (default when `type` is absent).",
+            "properties": {
+              "alwaysLoad": {
+                "description": "When true, tools bypass tool-search deferral.",
+                "type": "boolean"
+              },
+              "args": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "command": {
+                "description": "Executable path or name.",
+                "type": "string"
+              },
+              "env": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": true,
+            "description": "HTTP/SSE/WebSocket MCP server.",
+            "properties": {
+              "alwaysLoad": {
+                "type": "boolean"
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "headersHelper": {
+                "type": "string"
+              },
+              "oauth": {
+                "additionalProperties": false,
+                "description": "Per-server OAuth configuration.",
+                "properties": {
+                  "authServerMetadataUrl": {
+                    "type": "string"
+                  },
+                  "callbackPort": {
+                    "type": "integer"
+                  },
+                  "clientId": {
+                    "type": "string"
+                  },
+                  "xaa": {
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "description": "Map of MCP server name → server configuration.",
+      "type": "object"
+    },
+    "model": {
+      "description": "Default model identifier (e.g. claude-opus-4-6).",
+      "type": "string"
+    },
+    "oauth": {
+      "additionalProperties": false,
+      "description": "Global OAuth configuration for the Anthropic API.",
+      "properties": {
+        "authorizeUrl": {
+          "type": "string"
+        },
+        "callbackPort": {
+          "type": "integer"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "manualRedirectUrl": {
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenUrl": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authorizeUrl",
+        "clientId",
+        "tokenUrl"
+      ],
+      "type": "object"
+    },
+    "output_style": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "User-selectable response style.\n\n`Precise` is the default and matches the model's natural voice. `Condensed` prepends the bundled `terse` skill body to every system prompt turn, activating token-economical response rules with Auto-Clarity.\n\nPolicy (2026-04-22): - `Precise` is ALWAYS the default. A user who has never set `output_style` gets `Precise`. - `Condensed` is strictly opt-in; it is never auto-applied from trigger keywords or heuristics. - This axis is orthogonal to `/skill load terse`.",
+      "oneOf": [
+        {
+          "description": "Natural model voice — no extra instructions prepended. (default)",
+          "enum": [
+            "precise"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Token-economical mode — the bundled `terse` skill body is prepended to the system prompt for every turn. Auto-Clarity rules still apply.",
+          "enum": [
+            "condensed"
+          ],
+          "type": "string"
+        }
+      ],
+      "title": "OutputStyle"
+    },
+    "permissionMode": {
+      "description": "Explicit permission mode override.",
+      "enum": [
+        "default",
+        "plan",
+        "read-only",
+        "acceptEdits",
+        "auto",
+        "workspace-write",
+        "dontAsk",
+        "danger-full-access"
+      ],
+      "type": "string"
+    },
+    "permissions": {
+      "additionalProperties": true,
+      "description": "Legacy permissions block.",
+      "properties": {
+        "defaultMode": {
+          "description": "Explicit permission mode override.",
+          "enum": [
+            "default",
+            "plan",
+            "read-only",
+            "acceptEdits",
+            "auto",
+            "workspace-write",
+            "dontAsk",
+            "danger-full-access"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "plugins": {
+      "additionalProperties": false,
+      "description": "Plugin directory and registry paths.",
+      "properties": {
+        "bundledRoot": {
+          "type": "string"
+        },
+        "externalDirectories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "installRoot": {
+          "type": "string"
+        },
+        "registryPath": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "profiles": {
+      "additionalProperties": true,
+      "description": "Named profile overrides. Schema will tighten when the profiles workstream lands.",
+      "type": "object"
+    },
+    "sandbox": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "definitions": {
+        "FilesystemIsolationMode": {
+          "enum": [
+            "off",
+            "workspace-only",
+            "allow-list"
+          ],
+          "type": "string"
+        }
+      },
+      "properties": {
+        "allowed_mounts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "filesystem_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FilesystemIsolationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "namespace_restrictions": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "network_isolation": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "allowed_mounts"
+      ],
+      "title": "SandboxConfig",
+      "type": "object"
+    }
+  },
+  "title": "Anvil Configuration",
+  "type": "object"
+}

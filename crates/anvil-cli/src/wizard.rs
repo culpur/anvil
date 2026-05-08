@@ -129,8 +129,15 @@ pub(crate) fn wizard_save_credential_plaintext(key: &str, value: &str) -> io::Re
     fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default())
 }
 
+/// The public URL where `config-schema.json` is published.
+pub(crate) const CONFIG_SCHEMA_URL: &str = "https://anvilhub.culpur.net/config-schema.json";
+
 /// Save the wizard result to `~/.anvil/config.json`, merging with any
 /// existing keys so previously set values are preserved.
+///
+/// On a *fresh* install (no prior config file) the `$schema` pointer is
+/// injected as the first key so editors (VS Code, JetBrains) auto-fetch
+/// the schema for IntelliSense and validation.
 pub(crate) fn wizard_save_config(
     config: &serde_json::Map<String, serde_json::Value>,
 ) -> io::Result<PathBuf> {
@@ -139,16 +146,24 @@ pub(crate) fn wizard_save_config(
         .join(".anvil");
     fs::create_dir_all(&dir)?;
     let path = dir.join("config.json");
-    let mut existing = if path.exists() {
+    let is_new_config = !path.exists();
+    let mut existing = if is_new_config {
+        serde_json::Map::new()
+    } else {
         fs::read_to_string(&path)
             .ok()
             .and_then(|raw| {
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw).ok()
             })
             .unwrap_or_default()
-    } else {
-        serde_json::Map::new()
     };
+    // Inject $schema pointer on fresh installs so editors pick up validation.
+    if is_new_config {
+        existing.insert(
+            "$schema".to_string(),
+            serde_json::Value::String(CONFIG_SCHEMA_URL.to_string()),
+        );
+    }
     for (k, v) in config {
         existing.insert(k.clone(), v.clone());
     }

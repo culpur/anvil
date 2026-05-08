@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+indexmap.workspace = true
+schemars.workspace = true
 sha2 = "0.10"
 glob = "0.3"
 lsp = { path = "../lsp" }

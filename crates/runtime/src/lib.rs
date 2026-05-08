@@ -60,6 +60,7 @@ pub use config::{
     ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
+pub use config::schema::{emit_schema as emit_config_schema, write_schema_to as write_config_schema_to};
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
     ToolError, ToolExecutor, TurnSummary,
