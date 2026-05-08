@@ -60,7 +60,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anvil-cli"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "api",
  "base64",
@@ -92,7 +92,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "dirs-next",
  "reqwest",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "commands"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "plugins",
  "runtime",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "compat-harness"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "api",
  "async-trait",
@@ -731,6 +731,12 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
+
+[[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "either"
@@ -1407,6 +1413,7 @@ checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
 dependencies = [
  "autocfg",
  "hashbrown 0.12.3",
+ "serde",
 ]
 
 [[package]]
@@ -1638,7 +1645,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "lsp-types",
  "serde",
@@ -2160,10 +2167,11 @@ dependencies = [
 
 [[package]]
 name = "plugins"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "include_dir",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -2641,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -2652,6 +2660,7 @@ dependencies = [
  "glob",
  "hex",
  "hmac",
+ "indexmap 1.9.3",
  "lsp",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -2660,6 +2669,7 @@ dependencies = [
  "rand 0.8.5",
  "regex",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "sha1",
@@ -2867,6 +2877,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "dyn-clone",
+ "indexmap 1.9.3",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2925,6 +2960,17 @@ name = "serde_derive"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3002,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "async-stream",
  "axum 0.8.8",
@@ -3567,7 +3613,7 @@ dependencies = [
 
 [[package]]
 name = "tools"
-version = "2.2.10"
+version = "2.2.11"
 dependencies = [
  "api",
  "dirs-next",
