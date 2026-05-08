@@ -158,8 +158,8 @@ pub use vault_session::{
     vault_session_get, vault_session_upsert, with_session_vault, with_session_vault_mut,
 };
 pub use requirements::{
-    load_from_paths as load_requirements, validate as validate_requirements,
-    PolicyViolation, RequirementsPolicy,
+    check_plugin_install_policy, load_from_paths as load_requirements,
+    validate as validate_requirements, PolicyViolation, RequirementsPolicy,
 };
 
 #[cfg(test)]

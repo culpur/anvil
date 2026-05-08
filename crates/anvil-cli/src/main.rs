@@ -68,8 +68,8 @@ use render::{
     ThinkingIndicator,
 };
 use runtime::{
-    format_package_detail, format_package_list, load_system_prompt,
-    pricing_for_model, render_history_context, render_qmd_context,
+    check_plugin_install_policy, format_package_detail, format_package_list, load_requirements,
+    load_system_prompt, pricing_for_model, render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
     ConfigLoader, ConversationRuntime, CronDaemon,
     EffortLevel, HistoryArchiver, NotificationKind, NotificationPayload, OutputStyle,
@@ -652,6 +652,23 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
     // CLI errors so the operator sees `https-only`, `zip too large`, etc.
     // up front rather than as a silent no-load.
     if !plugin_dirs.is_empty() || !plugin_urls.is_empty() {
+        // W10: enforce requirements.toml plugin install policy before proceeding.
+        // Load the policy from the standard candidate paths; if no policy file is
+        // present this returns a default (permissive) policy with an empty source
+        // path, and check_plugin_install_policy is a no-op in that case.
+        let (policy, policy_source) = load_requirements();
+        // --plugin-dir installs count as a plain install (no URL).
+        if !plugin_dirs.is_empty() {
+            if let Err(msg) = check_plugin_install_policy(&policy, &policy_source, false) {
+                return Err(msg);
+            }
+        }
+        // --plugin-url installs carry has_url = true.
+        if !plugin_urls.is_empty() {
+            if let Err(msg) = check_plugin_install_policy(&policy, &policy_source, true) {
+                return Err(msg);
+            }
+        }
         plugins::sweep_stale_session_dirs();
     }
     for raw in plugin_dirs {
