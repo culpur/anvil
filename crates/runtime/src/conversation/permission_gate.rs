@@ -29,8 +29,8 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     // A hook may inject a decision to short-circuit the normal prompt.
     let hook_permission = hook_runner.run_permission_request(&PermissionRequestPayload {
         tool: tool_name.clone(),
-        input: serde_json::from_str(input)
-            .unwrap_or_else(|_| serde_json::Value::String(input.to_string())),
+        input: input.to_string(),
+        requested_mode: policy.active_mode().as_str().to_string(),
     });
 
     // First valid hook decision short-circuits the permission system.
@@ -61,8 +61,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
                 let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
                 let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
                     tool: tool_name.clone(),
-                    input: serde_json::from_str(input)
-                        .unwrap_or_else(|_| serde_json::Value::String(input.to_string())),
+                    input: input.to_string(),
                     reason: deny_message.clone(),
                     source: PermissionDeniedSource::Hook,
                 });
@@ -115,8 +114,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             };
             let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
                 tool: tool_name.clone(),
-                input: serde_json::from_str(input)
-                    .unwrap_or_else(|_| serde_json::Value::String(input.to_string())),
+                input: input.to_string(),
                 reason: reason.clone(),
                 source,
             });

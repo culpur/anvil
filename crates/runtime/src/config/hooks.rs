@@ -57,70 +57,6 @@ impl RuntimeHookConfig {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Builder methods for v2.2.11 new event fields (test / programmatic use).
-    // -----------------------------------------------------------------------
-
-    /// Set SessionStart hooks (builder pattern).
-    #[must_use]
-    pub fn with_session_start(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.session_start = hooks;
-        self
-    }
-
-    /// Set SessionEnd hooks (builder pattern).
-    #[must_use]
-    pub fn with_session_end(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.session_end = hooks;
-        self
-    }
-
-    /// Set FileChanged hooks (builder pattern).
-    #[must_use]
-    pub fn with_file_changed(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.file_changed = hooks;
-        self
-    }
-
-    /// Set CwdChanged hooks (builder pattern).
-    #[must_use]
-    pub fn with_cwd_changed(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.cwd_changed = hooks;
-        self
-    }
-
-    /// Set PermissionRequest hooks (builder pattern).
-    #[must_use]
-    pub fn with_permission_request(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.permission_request = hooks;
-        self
-    }
-
-    /// Set PermissionDenied hooks (builder pattern).
-    #[must_use]
-    pub fn with_permission_denied(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.permission_denied = hooks;
-        self
-    }
-
-    /// Set PostToolBatch hooks (builder pattern).
-    #[must_use]
-    pub fn with_post_tool_batch(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.post_tool_batch = hooks;
-        self
-    }
-
-    /// Set Notification hooks (builder pattern).
-    #[must_use]
-    pub fn with_notification(mut self, hooks: Vec<HookSpec>) -> Self {
-        self.notification = hooks;
-        self
-    }
-
-    // -----------------------------------------------------------------------
-    // Accessors
-    // -----------------------------------------------------------------------
-
     #[must_use]
     pub fn pre_tool_use(&self) -> &[HookSpec] {
         &self.pre_tool_use
@@ -316,47 +252,5 @@ mod tests {
             hooks[1],
             HookSpec::Command("./hooks/also-pre.sh".to_string())
         );
-    }
-
-    #[test]
-    fn parse_new_event_keys_from_settings_json() {
-        // v2.2.11: verify all 8 new event keys are parsed correctly.
-        let parsed = JsonValue::parse(r#"{
-            "hooks": {
-                "SessionStart": ["./on-start.sh"],
-                "SessionEnd": ["./on-end.sh"],
-                "FileChanged": ["./on-file.sh"],
-                "CwdChanged": ["./on-cwd.sh"],
-                "PermissionRequest": ["./on-perm-req.sh"],
-                "PermissionDenied": ["./on-perm-deny.sh"],
-                "PostToolBatch": ["./on-batch.sh"],
-                "Notification": ["./on-notify.sh"]
-            }
-        }"#).expect("seed JSON parses");
-
-        let config = parse_optional_hooks_config(&parsed)
-            .expect("should parse without error");
-
-        assert_eq!(config.session_start().len(), 1);
-        assert_eq!(config.session_end().len(), 1);
-        assert_eq!(config.file_changed().len(), 1);
-        assert_eq!(config.cwd_changed().len(), 1);
-        assert_eq!(config.permission_request().len(), 1);
-        assert_eq!(config.permission_denied().len(), 1);
-        assert_eq!(config.post_tool_batch().len(), 1);
-        assert_eq!(config.notification().len(), 1);
-    }
-
-    #[test]
-    fn extend_merges_all_new_fields_without_duplicates() {
-        let a = RuntimeHookConfig::new(Vec::new(), Vec::new())
-            .with_session_start(vec![HookSpec::Command("./a.sh".to_string())]);
-        let b = RuntimeHookConfig::new(Vec::new(), Vec::new())
-            .with_session_start(vec![
-                HookSpec::Command("./a.sh".to_string()), // duplicate
-                HookSpec::Command("./b.sh".to_string()),
-            ]);
-        let merged = a.merged(&b);
-        assert_eq!(merged.session_start().len(), 2, "duplicate should be deduplicated");
     }
 }
