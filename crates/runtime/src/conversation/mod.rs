@@ -9,7 +9,9 @@ use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
 use crate::config::RuntimeFeatureConfig;
-use crate::hooks::HookRunner;
+use crate::hooks::{
+    CwdChangedPayload, HookRunResult, HookRunner, NotificationPayload,
+};
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
@@ -235,6 +237,31 @@ where
         self.session
             .messages
             .push(ConversationMessage::user_with_blocks(blocks));
+    }
+
+    // -----------------------------------------------------------------------
+    // v2.2.11: hook dispatch helpers exposed to the TUI / CLI layer.
+    // -----------------------------------------------------------------------
+
+    /// Fire SessionStart hooks.  Returns any messages emitted by hooks.
+    pub fn run_session_start_hooks(&self) -> Vec<String> {
+        self.hook_runner.run_session_start().messages().to_vec()
+    }
+
+    /// Fire SessionEnd hooks.  Best-effort: errors degrade to warnings.
+    pub fn run_session_end_hooks(&self) -> HookRunResult {
+        self.hook_runner.run_session_end()
+    }
+
+    /// Fire CwdChanged hooks after the working directory changes.
+    pub fn run_cwd_changed_hooks(&self, old_cwd: String, new_cwd: String) -> HookRunResult {
+        self.hook_runner
+            .run_cwd_changed(&CwdChangedPayload { old_cwd, new_cwd })
+    }
+
+    /// Fire Notification hooks when the TUI shows a notification to the user.
+    pub fn run_notification_hooks(&self, payload: &NotificationPayload) -> HookRunResult {
+        self.hook_runner.run_notification(payload)
     }
 }
 

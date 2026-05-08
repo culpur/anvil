@@ -8,7 +8,7 @@ use super::{
 };
 use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
-use crate::hooks::HookRunner;
+use crate::hooks::{HookRunner, PostToolBatchPayload};
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::session::Session;
 
@@ -68,7 +68,14 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             break;
         }
 
+        // v2.2.11: track per-tool timing for PostToolBatch payload.
+        let tool_count = pending_tool_uses.len();
+        let mut durations_ms: Vec<u64> = Vec::with_capacity(tool_count);
+        let mut success_count: usize = 0;
+        let mut failure_count: usize = 0;
+
         for (tool_use_id, tool_name, input) in pending_tool_uses {
+            let start = std::time::Instant::now();
             let result_message = evaluate_and_execute(
                 tool_use_id,
                 tool_name,
@@ -78,9 +85,31 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
                 hook_runner,
                 tool_executor,
             );
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            durations_ms.push(elapsed_ms);
+
+            // Determine success/failure from the result message.
+            let is_err = result_message
+                .blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { is_error, .. } if *is_error));
+            if is_err {
+                failure_count += 1;
+            } else {
+                success_count += 1;
+            }
+
             session.messages.push(result_message.clone());
             tool_results.push(result_message);
         }
+
+        // v2.2.11: fire PostToolBatch once per completed tool batch.
+        let _ = hook_runner.run_post_tool_batch(&PostToolBatchPayload {
+            tool_count,
+            durations_ms,
+            success_count,
+            failure_count,
+        });
     }
 
     Ok(TurnSummary {

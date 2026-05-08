@@ -1857,6 +1857,14 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     let mut screensaver_state: Option<screensaver::FurnaceScreensaver> = None;
     let mut last_input_time = Instant::now();
 
+    // v2.2.11: fire SessionStart hooks after config + MCP loaded, before first prompt.
+    {
+        let msgs = cli.runtime.run_session_start_hooks();
+        for msg in msgs {
+            tui.push_system(format!("[hook] {msg}"));
+        }
+    }
+
     'outer: loop {
         // Check for background task completions.
         task_check_instant = inject_task_notifications_tui(&mut cli, &mut tui, task_check_instant);
@@ -2753,6 +2761,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // v2.2.11: fire SessionEnd hooks on clean exit.
+    let _ = cli.runtime.run_session_end_hooks();
 
     // Drop `tui` here — the Drop impl restores the terminal.
     Ok(())

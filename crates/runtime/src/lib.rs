@@ -68,8 +68,10 @@ pub use file_ops::{
     ReadFileOutput, SandboxMode, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
 pub use hooks::{
-    HookEvent, HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker,
-    RuntimeHookSpec,
+    CwdChangedPayload, FileChangeAction, FileChangedPayload, HookEvent, HookPermissionDecision,
+    HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker, NotificationKind,
+    NotificationPayload, PermissionDeniedPayload, PermissionDeniedSource,
+    PermissionRequestHookResult, PermissionRequestPayload, PostToolBatchPayload, RuntimeHookSpec,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
