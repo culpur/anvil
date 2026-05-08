@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod effort;
 pub mod goals;
 pub mod hub;
 pub mod share;
@@ -58,6 +59,7 @@ pub use config::{
     ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig,
     ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
+pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
     ToolError, ToolExecutor, TurnSummary,

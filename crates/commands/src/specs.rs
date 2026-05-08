@@ -1942,6 +1942,38 @@ Overridable fields per profile:
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },
+    SlashCommandSpec {
+        name: "effort",
+        aliases: &[],
+        summary: "Get or set the per-session reasoning effort level",
+        argument_hint: Some("[low|medium|high|xhigh]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/effort — Control model reasoning effort per session
+
+Usage:
+  /effort              Show the current effort level
+  /effort low          Minimal reasoning tokens (fast, cheap)
+  /effort medium       Balanced reasoning — default
+  /effort high         Deep reasoning (slower, higher quality)
+  /effort xhigh        Maximum reasoning budget (slowest, highest quality)
+
+Provider mapping:
+  Anthropic (Claude)   thinking.budget_tokens: low=2k, medium=8k, high=24k, xhigh=64k
+  OpenAI / xAI         reasoning.effort: low|medium|high  (xhigh → high)
+  Gemini               thinkingBudget: low=2k, medium=8k, high=24k, xhigh=-1 (dynamic)
+  Ollama / local       no-op for model; sets ANVIL_EFFORT env var for hooks and MCP servers
+
+The session override applies for all subsequent turns until /effort is called again
+or the session ends. Set a persistent default in settings.json with:
+  { \"effort_level\": \"high\" }",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
 ];
 
 #[must_use]

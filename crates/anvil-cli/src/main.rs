@@ -72,7 +72,7 @@ use runtime::{
     pricing_for_model, render_history_context, render_qmd_context,
     ArchiveEntry, BlockingHubClient, CompactionConfig, CompletedTaskInfo,
     ConfigLoader, ConversationRuntime, CronDaemon,
-    HistoryArchiver, OutputStyle,
+    EffortLevel, HistoryArchiver, OutputStyle,
     PermissionMode, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
@@ -1579,6 +1579,7 @@ fn run_resume_command(
         | SlashCommand::Restart { .. }
         | SlashCommand::Agent { .. }
         | SlashCommand::OutputStyle { .. }
+        | SlashCommand::Effort { .. }
         | SlashCommand::Skill { .. }
         | SlashCommand::Goal { .. }
         | SlashCommand::Profile { .. }
@@ -1905,8 +1906,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // Install the TUI sender so all model/tool output is routed to it.
     cli.enable_tui(sender);
 
-    // Sync thinking mode status to TUI status bar.
+    // Sync thinking mode and effort level to TUI status bar.
     tui.set_thinking_enabled(cli.thinking_enabled);
+    tui.set_effort_level(cli.effort_level.as_str());
 
     // Greet the user with a system message instead of the welcome banner.
     let session_id = cli.session_id().to_string();
@@ -2554,6 +2556,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         tui.set_thinking_enabled(cli.thinking_enabled);
+                        tui.set_effort_level(cli.effort_level.as_str());
                         continue;
                     }
                 }
@@ -2764,8 +2767,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             tui.push_system(format!("Error: {err}"));
                         }
                     }
-                    // Sync thinking mode to status bar after any command (may have toggled).
+                    // Sync thinking mode and effort level to status bar after any command.
                     tui.set_thinking_enabled(cli.thinking_enabled);
+                    tui.set_effort_level(cli.effort_level.as_str());
                     continue;
                 }
 
@@ -3059,6 +3063,8 @@ struct LiveCli {
     fast_mode: bool,
     /// Output style: Precise (default) or Condensed (prepends terse skill body).
     output_style: OutputStyle,
+    /// Per-session effort/reasoning level for API calls.
+    effort_level: EffortLevel,
     /// Sub-agent manager — tracks spawned agents and their status.
     /// Wrapped in Arc<Mutex<>> so it can be shared with `CliToolExecutor`.
     agent_manager: Arc<Mutex<agents::AgentManager>>,
@@ -3127,6 +3133,7 @@ impl LiveCli {
             },
             fast_mode: false,
             output_style: load_output_style(),
+            effort_level: runtime::resolve_effort(None, None),
             relay_session: None,
             relay_event_tx: None,
             relay_input_rx: None,
@@ -3275,6 +3282,11 @@ impl LiveCli {
                     }
                 }
             }
+
+        // Apply the session effort level to the environment so that provider
+        // wire-body builders (and any child processes / MCP servers spawned
+        // during this turn) inherit the active setting.
+        self.effort_level.apply_to_env();
 
         // Build the effective input, optionally augmented with QMD context.
         // The search runs before the API call so the model sees relevant docs
@@ -3742,6 +3754,10 @@ impl LiveCli {
             }
             SlashCommand::OutputStyle { style } => {
                 let msg = self.set_output_style(style).unwrap_or_else(|e| e.to_string());
+                (msg, false)
+            }
+            SlashCommand::Effort { level } => {
+                let msg = self.set_effort(level);
                 (msg, false)
             }
             SlashCommand::Clear { confirm } => {
@@ -4407,6 +4423,27 @@ impl LiveCli {
         };
 
         Ok(format!("Output style: {style_name} — {status} for next turn."))
+    }
+
+    /// `/effort [level]` — display or change the per-session effort level.
+    ///
+    /// With no argument, prints the current level.  With a level name
+    /// (`low | medium | high | xhigh`), updates the session override and
+    /// applies it to the environment immediately so the next turn picks it up.
+    fn set_effort(&mut self, level: Option<String>) -> String {
+        let Some(level_str) = level else {
+            return format!("Effort: {} (low | medium | high | xhigh)", self.effort_level.as_str());
+        };
+        match EffortLevel::from_str(&level_str) {
+            Some(new_level) => {
+                self.effort_level = new_level;
+                new_level.apply_to_env();
+                format!("Effort set to: {}", new_level.as_str())
+            }
+            None => format!(
+                "Unknown effort level '{level_str}'. Use: low, medium, high, xhigh."
+            ),
+        }
     }
 
     /// `/pin [path]` — pin a file persistently, or list pinned files.
@@ -5586,6 +5623,10 @@ impl LiveCli {
                     Ok(msg) => println!("{msg}"),
                     Err(e) => eprintln!("output-style error: {e}"),
                 }
+                false
+            }
+            SlashCommand::Effort { level } => {
+                println!("{}", self.set_effort(level));
                 false
             }
             SlashCommand::ReviewPr { number } => {

@@ -120,6 +120,8 @@ pub struct AnvilTui {
     pub theme: Theme,
     /// Whether extended thinking mode is enabled.
     pub(super) thinking_enabled: bool,
+    /// Active effort level for the status line display (e.g. "medium").
+    pub(super) effort_level: String,
     /// Relay broadcast sender for forwarding events to web viewers.
     pub(super) relay_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Update notification message (empty = no update available).
@@ -231,6 +233,7 @@ impl AnvilTui {
                 configure_screen_tag: 0,
                 theme: Theme::load(),
                 thinking_enabled: false,
+                effort_level: "medium".to_string(),
                 relay_tx: None,
                 update_available: String::new(),
                 agent_panel_visible: true,
@@ -1010,6 +1013,7 @@ impl AnvilTui {
                         .and_then(|v| v.get("mcpServers").and_then(|m| m.as_object()).map(|o| o.len() as u32))
                         .unwrap_or(0)
                 },
+                effort_level: self.effort_level.clone(),
                 accent: theme.accent,
                 warning: theme.warning,
                 success: theme.success,
@@ -1429,6 +1433,11 @@ impl AnvilTui {
 
     pub const fn set_thinking_enabled(&mut self, enabled: bool) {
         self.thinking_enabled = enabled;
+    }
+
+    /// Update the effort level display in the TUI status line.
+    pub fn set_effort_level(&mut self, level: &str) {
+        self.effort_level = level.to_string();
     }
 
     // ─── Status line configuration ──────────────────────────────────────────

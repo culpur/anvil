@@ -160,6 +160,8 @@ pub(super) struct StatusLineData {
     pub lines_added: u32,
     pub lines_removed: u32,
     pub mcp_server_count: u32,
+    /// Current effort level, e.g. "medium" or "high".
+    pub effort_level: String,
     // Theme colors
     pub accent: Rgb,
     pub warning: Rgb,
@@ -194,10 +196,17 @@ fn render_widget(
                 Span::styled(text, Style::default().fg(color)),
             ]
         }
-        StatusWidget::Effort => vec![
-            Span::styled("Effort: ", dim),
-            Span::styled("standard", dim),
-        ],
+        StatusWidget::Effort => {
+            let (text, color) = if data.effort_level == "medium" || data.effort_level.is_empty() {
+                (data.effort_level.as_str().to_string(), gray)
+            } else {
+                (data.effort_level.as_str().to_string(), Color::Green)
+            };
+            vec![
+                Span::styled("Effort: ", dim),
+                Span::styled(text, Style::default().fg(color)),
+            ]
+        }
         StatusWidget::Provider => vec![
             Span::styled("Provider: ", dim),
             Span::styled(data.provider.clone(), Style::default().fg(to_color(data.accent))),

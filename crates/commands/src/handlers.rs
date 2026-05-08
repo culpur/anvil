@@ -452,6 +452,13 @@ pub fn handle_slash_command(
             ),
             session: session.clone(),
         }),
+        SlashCommand::Effort { level } => Some(SlashCommandResult {
+            message: match level.as_deref() {
+                None => "/effort — use in the live REPL to get or set the reasoning effort level (low|medium|high|xhigh).".to_string(),
+                Some(l) => format!("Effort level set to: {l} (applies in the live REPL session)"),
+            },
+            session: session.clone(),
+        }),
         SlashCommand::Skill { subcommand } => {
             use crate::agents::{discover_skill_roots, load_skills_from_roots};
             use crate::{format_suggestions, match_triggers, SkillSubcommand};

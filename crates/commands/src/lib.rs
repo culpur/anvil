@@ -410,6 +410,13 @@ pub enum SlashCommand {
         /// Sub-command and optional target, e.g. `Some("use work")` or `Some("list")`.
         action: Option<String>,
     },
+    /// `/effort [low|medium|high|xhigh]` — get or set the per-session reasoning effort (v2.2.11)
+    ///
+    /// With no argument: prints the current effort level.
+    /// With an argument: sets the session-level override immediately.
+    Effort {
+        level: Option<String>,
+    },
     /// `/skill suggest [<prompt>]` — trigger-matched skill suggestions
     /// `/skill load <name>` — prepend skill body to next system prompt
     /// `/skill list` — alias for /skills
@@ -774,6 +781,9 @@ impl SlashCommand {
             },
             "profile" => Self::Profile {
                 action: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
+            "effort" => Self::Effort {
+                level: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             "skill" => {
                 let sub = parts.next().unwrap_or("suggest");
@@ -1211,6 +1221,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_effort_slash_command() {
+        assert_eq!(
+            SlashCommand::parse("/effort"),
+            Some(SlashCommand::Effort { level: None })
+        );
+        assert_eq!(
+            SlashCommand::parse("/effort low"),
+            Some(SlashCommand::Effort { level: Some("low".to_string()) })
+        );
+        assert_eq!(
+            SlashCommand::parse("/effort medium"),
+            Some(SlashCommand::Effort { level: Some("medium".to_string()) })
+        );
+        assert_eq!(
+            SlashCommand::parse("/effort high"),
+            Some(SlashCommand::Effort { level: Some("high".to_string()) })
+        );
+        assert_eq!(
+            SlashCommand::parse("/effort xhigh"),
+            Some(SlashCommand::Effort { level: Some("xhigh".to_string()) })
+        );
+    }
+
+    #[test]
     fn renders_help_from_shared_specs() {
         let help = render_slash_command_help();
         assert!(help.contains("available via anvil --resume SESSION.json"));
@@ -1255,8 +1289,8 @@ mod tests {
         //         remote-control (8 previously-missing) + tab, fork, share, audit (4 ghost)
         //         + restart (Phase 5 placeholder) = +13 total
         // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
-        // v2.2.11 W4: +1 (profile), W3: +1 (goal) = 107 total
-        assert_eq!(slash_command_specs().len(), 107);
+        // v2.2.11 W2: +1 (effort), W3: +1 (goal), W4: +1 (profile) = 108 total
+        assert_eq!(slash_command_specs().len(), 108);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -1890,6 +1924,8 @@ mod tests {
                 SlashCommand::Agent { .. } => "agent",
                 // Output style axis (v2.2.8):
                 SlashCommand::OutputStyle { .. } => "output-style",
+                // Effort/reasoning slider (v2.2.11):
+                SlashCommand::Effort { .. } => "effort",
                 // Skill dispatch (v2.2.7):
                 SlashCommand::Skill { .. } => "skill",
                 // Goal tracking (v2.2.11):
@@ -2007,6 +2043,7 @@ mod tests {
             SlashCommand::Restart { soft: false },
             SlashCommand::Agent { subcommand: AgentSubcommand::Traits },
             SlashCommand::OutputStyle { style: None },
+            SlashCommand::Effort { level: None },
             SlashCommand::Skill { subcommand: SkillSubcommand::List },
             SlashCommand::Goal { action: None },
             // Named profiles (v2.2.11 W4):

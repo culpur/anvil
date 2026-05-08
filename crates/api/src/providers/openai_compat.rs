@@ -15,6 +15,8 @@ use crate::types::{
     ToolChoice, ToolDefinition, ToolResultContentBlock, Usage,
 };
 
+use runtime::EffortLevel;
+
 use super::common::{
     self, extract_sse_data, next_sse_frame, read_env_non_empty,
     request_id_from_headers, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF, DEFAULT_MAX_RETRIES,
@@ -838,6 +840,53 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
         payload["tool_choice"] = openai_tool_choice(tool_choice);
     }
 
+    // ── Effort / reasoning injection ─────────────────────────────────────────
+    //
+    // When ANVIL_EFFORT is set the session layer has already validated the
+    // level; we inject the provider-specific knob here so the wire format
+    // matches what each API expects.
+    //
+    // OpenAI / xAI o-series and Grok: inject `reasoning.effort`.
+    // Gemini: inject `generationConfig.thinkingConfig.thinkingBudget`.
+    // Ollama: flip `think` from false → true (already in the payload above).
+    //
+    // Non-reasoning models from any provider: skip silently — the payload
+    // key is simply not added, maintaining identical wire format to pre-effort
+    // behaviour.
+    if let Some(effort) = EffortLevel::from_env() {
+        let is_openai_reasoning = request.model.starts_with("o1")
+            || request.model.starts_with("o3")
+            || request.model.starts_with("o4")
+            || request.model.contains("codex");
+        let is_xai_reasoning = request.model.starts_with("grok");
+        let is_gemini = request.model.starts_with("gemini");
+
+        if is_openai_reasoning || is_xai_reasoning {
+            payload["reasoning"] = json!({
+                "effort": effort.openai_reasoning_effort(),
+                "summary": "auto",
+            });
+        } else if is_gemini {
+            let thinking_budget = effort.gemini_thinking_budget();
+            if thinking_budget == -1 {
+                // Dynamic mode: omit the budget key so Gemini chooses adaptively.
+                payload["generationConfig"] = json!({
+                    "thinkingConfig": { "thinkingMode": "dynamic" }
+                });
+            } else {
+                payload["generationConfig"] = json!({
+                    "thinkingConfig": {
+                        "thinkingMode": "enabled",
+                        "thinkingBudget": thinking_budget
+                    }
+                });
+            }
+        } else if is_ollama_model {
+            // Override the default `think: false` that was set above.
+            payload["think"] = json!(true);
+        }
+    }
+
     payload
 }
 
@@ -1095,7 +1144,6 @@ mod tests {
         ToolResultContentBlock,
     };
     use serde_json::json;
-    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn request_translation_uses_openai_compatible_shape() {
@@ -1186,10 +1234,7 @@ mod tests {
     }
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock")
+        super::super::crate_env_lock()
     }
 
     #[test]
@@ -1446,6 +1491,132 @@ mod tests {
             DEFAULT_API_TIMEOUT_MS,
             600_000,
             "default API timeout must be 10 minutes (600_000 ms)"
+        );
+    }
+
+    // ─── Effort injection tests ─────────────────────────────────────────────
+
+    fn make_request(model: &str) -> MessageRequest {
+        MessageRequest {
+            model: model.to_string(),
+            max_tokens: 4096,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Text {
+                    text: "hello".to_string(),
+                }],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    #[test]
+    fn no_reasoning_block_when_effort_env_absent() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", None);
+        let payload = build_chat_completion_request(&make_request("o3-mini"));
+        assert!(
+            payload.get("reasoning").is_none(),
+            "reasoning must be absent when ANVIL_EFFORT is unset"
+        );
+    }
+
+    #[test]
+    fn openai_reasoning_effort_medium_injects_correct_value() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("medium"));
+        let payload = build_chat_completion_request(&make_request("o3-mini"));
+        let reasoning = payload.get("reasoning").expect("reasoning block must be present");
+        assert_eq!(reasoning["effort"], json!("medium"));
+        assert_eq!(reasoning["summary"], json!("auto"));
+    }
+
+    #[test]
+    fn openai_reasoning_effort_xhigh_maps_to_high() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("xhigh"));
+        let payload = build_chat_completion_request(&make_request("o4-mini"));
+        let reasoning = payload.get("reasoning").expect("reasoning block must be present");
+        assert_eq!(reasoning["effort"], json!("high"), "xhigh must fold to high for OpenAI");
+    }
+
+    #[test]
+    fn grok_model_gets_reasoning_effort() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("high"));
+        let payload = build_chat_completion_request(&make_request("grok-3"));
+        let reasoning = payload.get("reasoning").expect("grok model must get reasoning block");
+        assert_eq!(reasoning["effort"], json!("high"));
+    }
+
+    #[test]
+    fn non_reasoning_openai_model_does_not_get_reasoning_block() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("high"));
+        let payload = build_chat_completion_request(&make_request("gpt-4o"));
+        assert!(
+            payload.get("reasoning").is_none(),
+            "non-reasoning OpenAI models must not receive a reasoning block"
+        );
+    }
+
+    #[test]
+    fn gemini_medium_effort_injects_thinking_config() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("medium"));
+        let payload = build_chat_completion_request(&make_request("gemini-2.0-flash"));
+        let config = payload
+            .get("generationConfig")
+            .expect("generationConfig must be present for Gemini");
+        let thinking = config
+            .get("thinkingConfig")
+            .expect("thinkingConfig must be present");
+        assert_eq!(thinking["thinkingMode"], json!("enabled"));
+        assert_eq!(thinking["thinkingBudget"], json!(8192));
+    }
+
+    #[test]
+    fn gemini_xhigh_effort_uses_dynamic_mode() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("xhigh"));
+        let payload = build_chat_completion_request(&make_request("gemini-2.5-pro"));
+        let config = payload
+            .get("generationConfig")
+            .expect("generationConfig must be present");
+        let thinking = config
+            .get("thinkingConfig")
+            .expect("thinkingConfig must be present");
+        assert_eq!(thinking["thinkingMode"], json!("dynamic"));
+        assert!(
+            thinking.get("thinkingBudget").is_none(),
+            "dynamic mode must omit thinkingBudget"
+        );
+    }
+
+    #[test]
+    fn ollama_model_enables_think_when_effort_set() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", Some("high"));
+        let payload = build_chat_completion_request(&make_request("qwen3:8b"));
+        assert_eq!(
+            payload.get("think"),
+            Some(&json!(true)),
+            "Ollama model must have think=true when ANVIL_EFFORT is set"
+        );
+    }
+
+    #[test]
+    fn ollama_model_defaults_think_false_when_effort_absent() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", None);
+        let payload = build_chat_completion_request(&make_request("qwen3:8b"));
+        assert_eq!(
+            payload.get("think"),
+            Some(&json!(false)),
+            "Ollama model must have think=false when ANVIL_EFFORT is unset"
         );
     }
 }

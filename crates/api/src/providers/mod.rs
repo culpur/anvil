@@ -299,6 +299,22 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
     }
 }
 
+/// Shared environment-variable mutex for tests across this crate.
+///
+/// All tests that read or write environment variables must hold this lock for
+/// the duration of the test, including any `EnvRestore` RAII guards.  Using a
+/// single crate-level mutex (instead of per-module `OnceLock<Mutex<()>>`)
+/// prevents races when the test runner executes tests from different modules
+/// in the same OS process, since env vars are process-wide state.
+#[cfg(test)]
+pub(super) fn crate_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind};

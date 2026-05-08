@@ -5,8 +5,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use runtime::{
-    load_oauth_credentials, save_oauth_credentials, OAuthConfig, OAuthRefreshRequest,
-    OAuthTokenExchangeRequest,
+    load_oauth_credentials, save_oauth_credentials, EffortLevel,
+    OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -328,7 +328,7 @@ impl AnvilApiClient {
 
 /// Build the JSON body sent to `POST /v1/messages` for the Anthropic API.
 ///
-/// This is a thin pass-through over `MessageRequest` with two
+/// This is a thin pass-through over `MessageRequest` with three
 /// Anthropic-specific transformations:
 ///
 ///   1. The `system` field is upgraded from a plain string to a typed content
@@ -338,15 +338,22 @@ impl AnvilApiClient {
 ///      Anthropic caches *up to and including* the breakpoint, so marking the
 ///      tail tool definition caches the whole tools array (and, transitively,
 ///      the system prompt above it) in one cache entry.
+///   3. When `ANVIL_EFFORT` is set (or non-default effort is active), a
+///      `thinking` block is injected with the appropriate `budget_tokens`.
+///      The budget is capped at `max(0, request.max_tokens - 4096)` to leave
+///      room for the model's own output.  A warning is emitted to stderr when
+///      the cap is applied.  For models / effort levels where thinking is
+///      disabled (i.e. the effective budget would be 0 or the env says "low"
+///      with a special no-think override), no `thinking` block is emitted.
 ///
-/// Both breakpoints use TTL `"1h"` so the cache survives long-running agent
-/// sessions.  When the request has no system prompt or no tools, the
-/// corresponding breakpoint is silently skipped — there is nothing meaningful
-/// to cache.
+/// Both cache-control breakpoints use TTL `"1h"` so the cache survives
+/// long-running agent sessions.  When the request has no system prompt or no
+/// tools, the corresponding breakpoint is silently skipped.
 ///
 /// This function is gated to the Anthropic provider on purpose: OpenAI-compat
-/// and Ollama backends would reject `cache_control` keys, so the wire format
-/// is built locally rather than embedded in the shared `MessageRequest` type.
+/// and Ollama backends would reject `cache_control` and `thinking` keys, so
+/// the wire format is built locally rather than embedded in the shared
+/// `MessageRequest` type.
 fn build_messages_request_body(request: &MessageRequest) -> Value {
     // Start from the standard serde-serialized envelope so we inherit any
     // future field changes for free.
@@ -381,7 +388,56 @@ fn build_messages_request_body(request: &MessageRequest) -> Value {
         obj.insert("cache_control".to_string(), cache_control_value);
     }
 
+    // (3) Inject the `thinking` block when ANVIL_EFFORT is set to a non-default
+    //     level OR when the env var is present at all.
+    //
+    //     We only inject when the env var is explicitly present (any level,
+    //     including medium).  Rationale: if the user has never set ANVIL_EFFORT
+    //     we want zero behaviour change — existing sessions get no thinking
+    //     block, matching historical behaviour.  Once they do `/effort medium`
+    //     (or set ANVIL_EFFORT=medium) they opt in.
+    if let Some(effort) = EffortLevel::from_env() {
+        let budget_target = effort.anthropic_budget_tokens();
+        // Leave at least 4096 tokens for the model's output.
+        let safe_max = request.max_tokens.saturating_sub(4_096);
+        let budget = budget_target.min(safe_max);
+        if budget_target > safe_max {
+            eprintln!(
+                "[anvil] warning: effort={} targets {budget_target} thinking tokens but \
+                 max_tokens={} — capping to {budget}",
+                effort.as_str(),
+                request.max_tokens,
+            );
+        }
+        if budget > 0 {
+            payload["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": budget,
+            });
+        }
+    }
+
     payload
+}
+
+/// Build the Anthropic wire body with an explicit effort level (used in tests).
+#[cfg(test)]
+fn build_messages_request_body_with_effort(
+    request: &MessageRequest,
+    effort: Option<EffortLevel>,
+) -> Value {
+    // Temporarily override ANVIL_EFFORT so the production builder picks it up.
+    let prev = std::env::var("ANVIL_EFFORT").ok();
+    match effort {
+        Some(level) => unsafe { std::env::set_var("ANVIL_EFFORT", level.as_str()); },
+        None => unsafe { std::env::remove_var("ANVIL_EFFORT"); },
+    }
+    let result = build_messages_request_body(request);
+    match prev {
+        Some(val) => unsafe { std::env::set_var("ANVIL_EFFORT", val); },
+        None => unsafe { std::env::remove_var("ANVIL_EFFORT"); },
+    }
+    result
 }
 
 impl AuthSource {
@@ -673,7 +729,6 @@ mod tests {
     use super::common::{ALT_REQUEST_ID_HEADER, REQUEST_ID_HEADER, is_retryable_status, backoff_for_attempt};
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::{Mutex, OnceLock};
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -686,10 +741,7 @@ mod tests {
     use crate::types::{ContentBlockDelta, MessageRequest};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        super::super::crate_env_lock()
     }
 
     fn temp_config_home() -> std::path::PathBuf {
@@ -1324,5 +1376,108 @@ mod tests {
             Err(other) => panic!("expected StreamStalled, got: {other:?}"),
             Ok(()) => panic!("stream should have stalled, got a clean termination"),
         }
+    }
+
+    // ─── Effort / thinking budget injection ──────────────────────────────────
+
+    fn base_request() -> MessageRequest {
+        MessageRequest {
+            model: "claude-opus-4-6".to_string(),
+            max_tokens: 32_768,
+            messages: vec![],
+            system: Some("sys".to_string()),
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        }
+    }
+
+    #[test]
+    fn effort_env_absent_produces_no_thinking_block() {
+        let _guard = env_lock();
+        unsafe { std::env::remove_var("ANVIL_EFFORT"); }
+        let body = super::build_messages_request_body(&base_request());
+        assert!(
+            body.get("thinking").is_none(),
+            "thinking block must not appear when ANVIL_EFFORT is unset: {body}"
+        );
+    }
+
+    #[test]
+    fn effort_medium_injects_thinking_budget_8k() {
+        let _guard = env_lock();
+        let body = super::build_messages_request_body_with_effort(
+            &base_request(),
+            Some(runtime::EffortLevel::Medium),
+        );
+        let thinking = body
+            .get("thinking")
+            .and_then(|v| v.as_object())
+            .expect("thinking block must be present for medium effort");
+        assert_eq!(thinking["type"], "enabled");
+        assert_eq!(thinking["budget_tokens"].as_u64(), Some(8_192));
+    }
+
+    #[test]
+    fn effort_high_injects_thinking_budget_24k() {
+        let _guard = env_lock();
+        let body = super::build_messages_request_body_with_effort(
+            &base_request(),
+            Some(runtime::EffortLevel::High),
+        );
+        let thinking = body
+            .get("thinking")
+            .and_then(|v| v.as_object())
+            .expect("thinking block must be present for high effort");
+        assert_eq!(thinking["budget_tokens"].as_u64(), Some(24_576));
+    }
+
+    #[test]
+    fn effort_xhigh_injects_thinking_budget_64k() {
+        let _guard = env_lock();
+        let body = super::build_messages_request_body_with_effort(
+            &base_request(),
+            Some(runtime::EffortLevel::Xhigh),
+        );
+        let thinking = body
+            .get("thinking")
+            .and_then(|v| v.as_object())
+            .expect("thinking block must be present for xhigh effort");
+        // max_tokens=32768, safe_max=28672; xhigh target=65536 → capped at 28672
+        assert_eq!(thinking["budget_tokens"].as_u64(), Some(28_672));
+    }
+
+    #[test]
+    fn effort_xhigh_not_capped_for_large_model() {
+        let _guard = env_lock();
+        let mut req = base_request();
+        req.max_tokens = 128_000;
+        let body = super::build_messages_request_body_with_effort(
+            &req,
+            Some(runtime::EffortLevel::Xhigh),
+        );
+        let thinking = body
+            .get("thinking")
+            .and_then(|v| v.as_object())
+            .expect("thinking block must be present");
+        // 65536 < (128000-4096=123904) → no cap
+        assert_eq!(thinking["budget_tokens"].as_u64(), Some(65_536));
+    }
+
+    #[test]
+    fn effort_budget_zero_suppresses_thinking_block() {
+        let _guard = env_lock();
+        // max_tokens=4096 → safe_max=0 → budget capped at 0 → no block
+        let mut req = base_request();
+        req.max_tokens = 4_096;
+        let body = super::build_messages_request_body_with_effort(
+            &req,
+            Some(runtime::EffortLevel::Low),
+        );
+        // budget = min(2048, 0) = 0 → no thinking block
+        assert!(
+            body.get("thinking").is_none(),
+            "thinking block must be suppressed when budget is 0: {body}"
+        );
     }
 }

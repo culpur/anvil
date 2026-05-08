@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 
+use crate::effort::EffortLevel;
 use crate::json::JsonValue;
 use crate::sandbox::SandboxConfig;
 
@@ -82,6 +83,9 @@ pub struct RuntimeFeatureConfig {
     permission_mode: Option<ResolvedPermissionMode>,
     sandbox: SandboxConfig,
     output_style: OutputStyle,
+    /// Persisted effort level from `settings.json` (`"effort_level": "high"`).
+    /// Absent in config → `None`; the caller falls back to `EffortLevel::Medium`.
+    effort_level: Option<EffortLevel>,
 }
 
 #[derive(Debug)]
@@ -206,6 +210,7 @@ impl ConfigLoader {
             ),
             sandbox: tolerate_section("sandbox", parse_optional_sandbox_config(&merged_value)),
             output_style: parse_optional_output_style(&merged_value),
+            effort_level: parse_optional_effort_level(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -395,6 +400,11 @@ impl RuntimeConfig {
         let name = self.resolve_active_profile_owned(cli_override)?;
         self.profiles.get(&name)
     }
+
+    #[must_use]
+    pub const fn effort_level(&self) -> Option<EffortLevel> {
+        self.feature_config.effort_level
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -454,6 +464,11 @@ impl RuntimeFeatureConfig {
     pub fn output_style(&self) -> &OutputStyle {
         &self.output_style
     }
+
+    #[must_use]
+    pub const fn effort_level(&self) -> Option<EffortLevel> {
+        self.effort_level
+    }
 }
 
 #[must_use]
@@ -477,6 +492,13 @@ fn parse_optional_model(root: &JsonValue) -> Option<String> {
         .and_then(|object| object.get("model"))
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn parse_optional_effort_level(root: &JsonValue) -> Option<EffortLevel> {
+    root.as_object()
+        .and_then(|object| object.get("effort_level"))
+        .and_then(JsonValue::as_str)
+        .and_then(EffortLevel::from_str)
 }
 
 fn parse_optional_permission_mode(
