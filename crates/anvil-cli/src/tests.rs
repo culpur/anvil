@@ -736,7 +736,10 @@ fn parses_resume_and_config_slash_commands() {
             section: Some("env".to_string())
         })
     );
-    assert_eq!(SlashCommand::parse("/memory"), Some(SlashCommand::Memory));
+    assert_eq!(
+        SlashCommand::parse("/memory"),
+        Some(SlashCommand::Memory { action: None })
+    );
     assert_eq!(SlashCommand::parse("/init"), Some(SlashCommand::Init));
 }
 

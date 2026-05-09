@@ -121,7 +121,12 @@ pub enum SlashCommand {
     Config {
         section: Option<String>,
     },
-    Memory,
+    /// `/memory [show|inspect|promote|forget|why|budget|prune] [arg]`
+    /// Inspect and manage all memory tiers (CLAUDE.md, vault, nominations, cache, …).
+    Memory {
+        /// Raw sub-command and optional arg, e.g. `Some("show claude-md")`.
+        action: Option<String>,
+    },
     Init,
     Diff,
     Version,
@@ -526,7 +531,9 @@ impl SlashCommand {
             "config" => Self::Config {
                 section: parts.next().map(ToOwned::to_owned),
             },
-            "memory" => Self::Memory,
+            "memory" => Self::Memory {
+                action: remainder_after_command(trimmed, command),
+            },
             "init" => Self::Init,
             "diff" => Self::Diff,
             "version" => Self::Version,
@@ -1188,7 +1195,16 @@ mod tests {
                 section: Some("env".to_string())
             })
         );
-        assert_eq!(SlashCommand::parse("/memory"), Some(SlashCommand::Memory));
+        assert_eq!(
+            SlashCommand::parse("/memory"),
+            Some(SlashCommand::Memory { action: None })
+        );
+        assert_eq!(
+            SlashCommand::parse("/memory show claude-md"),
+            Some(SlashCommand::Memory {
+                action: Some("show claude-md".to_string())
+            })
+        );
         assert_eq!(SlashCommand::parse("/init"), Some(SlashCommand::Init));
         assert_eq!(SlashCommand::parse("/diff"), Some(SlashCommand::Diff));
         assert_eq!(SlashCommand::parse("/version"), Some(SlashCommand::Version));
@@ -1852,7 +1868,7 @@ mod tests {
                 SlashCommand::Cost => "cost",
                 SlashCommand::Resume { .. } => "resume",
                 SlashCommand::Config { .. } => "config",
-                SlashCommand::Memory => "memory",
+                SlashCommand::Memory { .. } => "memory",
                 SlashCommand::Init => "init",
                 SlashCommand::Diff => "diff",
                 SlashCommand::Version => "version",
@@ -1977,7 +1993,7 @@ mod tests {
             SlashCommand::Cost,
             SlashCommand::Resume { session_path: None },
             SlashCommand::Config { section: None },
-            SlashCommand::Memory,
+            SlashCommand::Memory { action: None },
             SlashCommand::Init,
             SlashCommand::Diff,
             SlashCommand::Version,
