@@ -1488,7 +1488,7 @@ pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
         name: "show",
         summary: "Print contents of a memory tier",
         args: &[ArgSpec::OneOf(&[
-            "claude-md",
+            "anvil-md",
             "vault",
             "private",
             "nominations",
@@ -1507,13 +1507,13 @@ pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
     },
     SubcommandSpec {
         name: "promote",
-        summary: "Accept a pending nomination into CLAUDE.md",
+        summary: "Accept a pending nomination into ANVIL.md",
         args: &[ArgSpec::FreeText { hint: "<nomination-id>" }],
         subcommands: &[],
     },
     SubcommandSpec {
         name: "forget",
-        summary: "Remove a key from CLAUDE.md or reject a pending nomination",
+        summary: "Remove a key from ANVIL.md or reject a pending nomination",
         args: &[ArgSpec::FreeText { hint: "<key>" }],
         subcommands: &[],
     },

@@ -93,7 +93,7 @@ static BUILTIN_INJECTION_PATTERNS: &[&str] = &[
 // numbers, bastion usernames — are handled by a separate encrypted tier:
 // `crates/runtime/src/private_memory.rs` (`PrivateProjectMemory`).
 //
-// CLAUDE.md write operations (and any other plaintext persistence of project
+// ANVIL.md write operations (and any other plaintext persistence of project
 // context) MUST NOT include values decrypted from `PrivateProjectMemory`.  The
 // `format_for_context()` method on that type appends a "Do not echo these values
 // to plaintext files" reminder which the model is instructed to observe.

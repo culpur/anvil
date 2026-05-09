@@ -56,15 +56,14 @@ Do NOT nominate:
 - Facts about external systems that change often (API rate limits, current queue
   depth).
 
-## Relationship to CLAUDE.md
+## Relationship to ANVIL.md
 
-Nominations are reviewed by the team lead before landing in CLAUDE.md or
-ANVIL.md. You propose; a human confirms. This prevents drift and keeps project
-memory lean.
+Nominations are reviewed by the team lead before landing in ANVIL.md. You
+propose; a human confirms. This prevents drift and keeps project memory lean.
 
 If a fact is immediately obvious as permanent (a project-wide invariant, the
-primary entry point of a binary), you may suggest adding it to CLAUDE.md
-directly — but use the `claude-md-curator` skill for that path.
+primary entry point of a binary), you may suggest adding it to ANVIL.md
+directly — but use the `anvil-md-curator` skill for that path.
 
 ## Session summary
 

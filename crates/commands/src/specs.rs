@@ -241,7 +241,7 @@ Examples:
     SlashCommandSpec {
         name: "memory",
         aliases: &[],
-        summary: "Inspect and manage all memory tiers (CLAUDE.md, vault, nominations, cache, \u{2026})",
+        summary: "Inspect and manage all memory tiers (ANVIL.md, vault, nominations, cache, \u{2026})",
         argument_hint: Some("[show|inspect|promote|forget|why|budget|prune] [arg]"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
@@ -252,14 +252,14 @@ SUBCOMMANDS
   (none)              Print a one-line count for every active memory tier
   show <tier>         Dump contents of a specific tier
   inspect <key>       Search all tiers for an entry matching <key>
-  promote <id>        Accept a pending nomination into CLAUDE.md
-  forget <key>        Remove an entry from CLAUDE.md (or reject a nomination)
+  promote <id>        Accept a pending nomination into ANVIL.md
+  forget <key>        Remove an entry from ANVIL.md (or reject a nomination)
   why                 Explain which blocks are injected into the system prompt
   budget              Show per-tier byte and estimated token usage
   prune               Remove stale entries from daily/nominations tiers
 
 TIERS
-  claude-md           CLAUDE.md / MEMORY.md project instruction files
+  anvil-md           ANVIL.md / MEMORY.md project instruction files
   vault               Encrypted credentials managed by /vault
   private             AES-encrypted per-project memory (vault-locked)
   nominations         Pending knowledge nominations awaiting /memory promote
@@ -269,7 +269,7 @@ TIERS
   goals               Long-running goal objects (/goal)
 
 EXAMPLES
-  /memory show claude-md
+  /memory show anvil-md
   /memory inspect deploy
   /memory promote abc123
   /memory forget OLLAMA_HOST

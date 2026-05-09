@@ -1,28 +1,28 @@
 ---
-name: claude-md-curator
-description: Know what belongs in CLAUDE.md versus session state versus the nominations queue, and write entries that stay useful.
-triggers: ["claude md", "project memory", "curate", "long-term"]
+name: anvil-md-curator
+description: Know what belongs in ANVIL.md versus session state versus the nominations queue, and write entries that stay useful.
+triggers: ["anvil md", "project memory", "curate", "long-term"]
 intensity_default: medium
 ---
 
-# claude-md-curator
+# anvil-md-curator
 
-CLAUDE.md (and its project-specific variant ANVIL.md) is project long-term
-memory. Every token in it is loaded into every session. Bloated or stale entries
-cost tokens; missing entries cost repeated rediscovery.
+ANVIL.md is project long-term memory. Every token in it is loaded into
+every session. Bloated or stale entries cost tokens; missing entries cost
+repeated rediscovery.
 
 ## The three tiers of memory
 
 | Tier | Home | Lifetime | Examples |
 |---|---|---|---|
-| Long-term | CLAUDE.md / ANVIL.md | Permanent (until someone edits) | Architecture, invariants, deploy patterns |
+| Long-term | ANVIL.md | Permanent (until someone edits) | Architecture, invariants, deploy patterns |
 | Nominated | nominations queue | Until reviewed and promoted or rejected | Candidates surfaced by `pattern-promote` |
 | Ephemeral | Session context only | This session | Current task, files open, command output |
 
-Never put ephemeral facts in CLAUDE.md. Never leave durable facts only in
+Never put ephemeral facts in ANVIL.md. Never leave durable facts only in
 session context.
 
-## What belongs in CLAUDE.md
+## What belongs in ANVIL.md
 
 Add an entry when the fact is:
 
@@ -41,7 +41,7 @@ Add an entry when the fact is:
    by reading files. "Never use rsync to deploy — git pull only" is invisible.
    "The function is called `is_allowed`" is not (just read the file).
 
-## What does NOT belong in CLAUDE.md
+## What does NOT belong in ANVIL.md
 
 - Current task progress, branch names, "I'm working on X".
 - File contents (use the file-cache instead).
@@ -49,7 +49,7 @@ Add an entry when the fact is:
 - Temporary workarounds ("this test is skipped because the CI is broken").
 - Anything that will be wrong in a week.
 
-## How to write a good CLAUDE.md entry
+## How to write a good ANVIL.md entry
 
 Write it as a statement a future agent (or human) can act on directly:
 
@@ -72,11 +72,11 @@ src/policy/egress.rs has a function called `is_allowed` that takes a URL.
 
 When you learn a durable fact this session:
 
-1. Check CLAUDE.md — is it already there? Is the existing entry still accurate?
+1. Check ANVIL.md — is it already there? Is the existing entry still accurate?
 2. If missing: add a concise entry under the relevant section.
 3. If stale: update the entry in place; do not leave both old and new.
 4. If you are unsure whether it is durable: use `/knowledge nominate` instead
    and let a human promote it.
 
-Do not add more than 3 new entries to CLAUDE.md in a single session without
+Do not add more than 3 new entries to ANVIL.md in a single session without
 a human review. Quality over quantity.

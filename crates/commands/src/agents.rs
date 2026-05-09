@@ -756,8 +756,8 @@ const BUNDLED_SKILL_BODIES: &[(&str, &str)] = &[
         include_str!("../bundled/skills/cache-budget/SKILL.md"),
     ),
     (
-        "claude-md-curator",
-        include_str!("../bundled/skills/claude-md-curator/SKILL.md"),
+        "anvil-md-curator",
+        include_str!("../bundled/skills/anvil-md-curator/SKILL.md"),
     ),
     (
         "silent-cat",
@@ -858,10 +858,10 @@ mod tests {
     }
 
     #[test]
-    fn bundled_skill_claude_md_curator_present() {
+    fn bundled_skill_anvil_md_curator_present() {
         assert!(
-            bundled_body("claude-md-curator").is_some(),
-            "claude-md-curator must be registered in BUNDLED_SKILL_BODIES"
+            bundled_body("anvil-md-curator").is_some(),
+            "anvil-md-curator must be registered in BUNDLED_SKILL_BODIES"
         );
     }
 
@@ -904,7 +904,7 @@ mod tests {
             "command-cache-aware",
             "pattern-promote",
             "cache-budget",
-            "claude-md-curator",
+            "anvil-md-curator",
             "silent-cat",
         ] {
             assert_valid_frontmatter(name);

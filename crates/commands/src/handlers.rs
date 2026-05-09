@@ -113,7 +113,7 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Init => Some(SlashCommandResult {
-            message: "/init is not yet implemented. To initialize Anvil in a new project, create a CLAUDE.md file in your project root with instructions for the assistant.".to_string(),
+            message: "/init is not yet implemented. To initialize Anvil in a new project, create an ANVIL.md file in your project root with instructions for the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Diff => Some(SlashCommandResult {
@@ -161,11 +161,11 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Pin { .. } => Some(SlashCommandResult {
-            message: "/pin is not yet implemented. To keep important context available, add it to your CLAUDE.md file so it is loaded at every session start.".to_string(),
+            message: "/pin is not yet implemented. To keep important context available, add it to your ANVIL.md file so it is loaded at every session start.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Unpin { .. } => Some(SlashCommandResult {
-            message: "/unpin is not yet implemented. Remove entries from your CLAUDE.md file to stop including them in future sessions.".to_string(),
+            message: "/unpin is not yet implemented. Remove entries from your ANVIL.md file to stop including them in future sessions.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Chat => Some(SlashCommandResult {
@@ -656,7 +656,7 @@ fn memory_summary() -> String {
     let home = anvil_home();
     let mut lines = vec!["Memory tier summary:".to_string()];
     let md_count = count_files_with_ext(&home.join("memory"), "md");
-    lines.push(format!("  claude-md     {} file(s) in ~/.anvil/memory/", md_count));
+    lines.push(format!("  anvil-md     {} file(s) in ~/.anvil/memory/", md_count));
     let nom_count = count_files_with_ext(&home.join("nominations"), "json");
     lines.push(format!("  nominations   {} pending nomination(s)", nom_count));
     let daily_count = count_files_with_ext(&home.join("daily"), "json");
@@ -690,7 +690,7 @@ fn memory_show(tier: Option<&str>) -> String {
         Some(t) => t,
         None => {
             return "Usage: /memory show <tier>\n\
-                Tiers: claude-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+                Tiers: anvil-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
                 .to_string()
         }
     };
@@ -699,13 +699,13 @@ fn memory_show(tier: Option<&str>) -> String {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     match tier {
-        "claude-md" => {
+        "anvil-md" => {
             let mgr = MemoryManager::new(&cwd);
             let rendered = mgr.render_for_prompt();
             if rendered.trim().is_empty() {
-                "No CLAUDE.md / MEMORY.md files found in project or global memory.".to_string()
+                "No ANVIL.md / MEMORY.md files found in project or global memory.".to_string()
             } else {
-                format!("=== claude-md contents ===\n{rendered}")
+                format!("=== anvil-md contents ===\n{rendered}")
             }
         }
         "nominations" => {
@@ -740,7 +740,7 @@ fn memory_show(tier: Option<&str>) -> String {
         "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
         other => format!(
             "Unknown tier: {other}\n\
-             Known tiers: claude-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+             Known tiers: anvil-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
         ),
     }
 }
@@ -765,7 +765,7 @@ fn memory_inspect(key: &str) -> String {
             || mem_file.description.to_ascii_lowercase().contains(&key_lower)
         {
             results.push(format!(
-                "[claude-md] {} \u{2014} {}",
+                "[anvil-md] {} \u{2014} {}",
                 mem_file.name,
                 if mem_file.description.is_empty() { "(no description)" } else { &mem_file.description }
             ));
@@ -806,9 +806,9 @@ fn memory_promote(id: &str) -> String {
     }
     let store =
         runtime::nominations::NominationStore::with_dir(anvil_home().join("nominations"));
-    match store.accept(id, "CLAUDE.md") {
+    match store.accept(id, "ANVIL.md") {
         Ok(()) => format!(
-            "Nomination '{id}' accepted and marked for promotion into CLAUDE.md."
+            "Nomination '{id}' accepted and marked for promotion into ANVIL.md."
         ),
         Err(e) => format!("Error promoting nomination '{id}': {e}"),
     }
@@ -871,7 +871,7 @@ fn memory_why() -> String {
 System prompt injection order for this session:
 
   1. Base system prompt (hardcoded assistant instructions)
-  2. CLAUDE.md files (project root, then ~/.anvil/memory/*.md)
+  2. ANVIL.md files (project root, then ~/.anvil/memory/*.md)
   3. Active goal fragment (if a goal is active via /goal)
   4. Skill body (if a skill was loaded via /skill load)
   5. File-cache known-files block (compact per-file summaries, W11)
@@ -888,7 +888,7 @@ fn memory_budget() -> String {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let tiers: &[(&str, std::path::PathBuf)] = &[
-        ("claude-md", cwd),
+        ("anvil-md", cwd),
         ("nominations", home.join("nominations")),
         ("daily", home.join("daily")),
         ("goals", home.join("goals")),
@@ -1024,7 +1024,7 @@ mod memory_tests {
     #[test]
     fn memory_summary_contains_all_tiers() {
         let result = memory_summary();
-        assert!(result.contains("claude-md"), "should mention claude-md tier");
+        assert!(result.contains("anvil-md"), "should mention anvil-md tier");
         assert!(result.contains("nominations"), "should mention nominations tier");
         assert!(result.contains("daily"), "should mention daily tier");
         assert!(result.contains("vault"), "should mention vault tier");
@@ -1088,13 +1088,13 @@ mod memory_tests {
     fn memory_why_mentions_injection_order() {
         let result = memory_why();
         assert!(result.contains("system prompt"), "should describe system prompt");
-        assert!(result.contains("CLAUDE.md"), "should mention CLAUDE.md");
+        assert!(result.contains("ANVIL.md"), "should mention ANVIL.md");
     }
 
     #[test]
     fn memory_budget_shows_tiers_and_totals() {
         let result = memory_budget();
-        assert!(result.contains("claude-md"), "should show claude-md tier");
+        assert!(result.contains("anvil-md"), "should show anvil-md tier");
         assert!(result.contains("TOTAL"), "should show total row");
         assert!(
             result.contains("Tokens") || result.contains("token"),
@@ -1112,7 +1112,7 @@ mod memory_tests {
     #[test]
     fn handle_memory_command_none_dispatches_to_summary() {
         let result = handle_memory_command(None);
-        assert!(result.contains("claude-md"), "summary should contain tier info");
+        assert!(result.contains("anvil-md"), "summary should contain tier info");
     }
 
     #[test]

@@ -90,7 +90,7 @@ without disk I/O:
 | `command-cache-aware` | Check the W12 cache before `ls`/`git`/`cat`/`grep` |
 | `pattern-promote` | Nominate repeated lookups to durable memory |
 | `cache-budget` | Audit and prune file/command caches periodically |
-| `claude-md-curator` | Rules for what belongs in CLAUDE.md vs ephemeral |
+| `anvil-md-curator` | Rules for what belongs in ANVIL.md vs ephemeral |
 | `silent-cat` | Answer "what's in X" from cache before reading the file |
 
 Bundle count is now 10 (previously 3: `code-review`, `security-audit`,
@@ -112,14 +112,14 @@ read or write:
 /memory                   summary across all tiers
 /memory show <tier>       dump one tier
 /memory inspect <key>     search every tier for a key
-/memory promote <nom-id>  accept a pending nomination → CLAUDE.md
+/memory promote <nom-id>  accept a pending nomination → ANVIL.md
 /memory forget <key>      remove an entry / reject a nomination
 /memory why               explain what's in the system prompt right now
 /memory budget            byte + estimated-token usage per tier
 /memory prune             evict stale entries
 ```
 
-Tiers covered: `claude-md`, `vault`, `private`, `nominations`, `daily`,
+Tiers covered: `anvil-md`, `vault`, `private`, `nominations`, `daily`,
 `file-cache`, `cmd-cache`, `goals`. Tab-completion is grammar-driven
 (`/memory show <Tab>` enumerates the 8 valid tier names). Detailed help
 is built into `/help memory`.
@@ -143,7 +143,7 @@ re-statements of the same fact), it emits a nomination JSON file under
 `~/.anvil/nominations/` for the user to review via `/memory promote`.
 
 **Pure suggest-not-auto.** Nothing is automatically written to
-CLAUDE.md, the vault, or any persistent store. The user is the only
+ANVIL.md, the vault, or any persistent store. The user is the only
 source of promotion authority.
 
 Path canonicalization (`/var` → `/private/var` on macOS), whitespace
@@ -232,7 +232,7 @@ brew reinstall anvil
 ```
 
 No config migration required. The token-economy caches are created on
-first use. Existing CLAUDE.md, vault, and goals files are read as-is.
+first use. Existing ANVIL.md, vault, and goals files are read as-is.
 The seven new bundled skills are available immediately via
 `/skill load token-economy` (or any of the others).
 

@@ -6,7 +6,7 @@
 //!   - Infrastructure → private project memory (encrypted)
 //!   - Knowledge → nomination (JSON, queued for review)
 //!
-//! Accepted nominations are promoted to CLAUDE.md or QMD for future sessions.
+//! Accepted nominations are promoted to ANVIL.md or QMD for future sessions.
 
 use std::fs;
 use std::io;
@@ -295,10 +295,10 @@ mod tests {
         let (store, _tmp) = test_store();
         let nom = store.create("session-1", NominationCategory::Pattern, "Uses Prisma", 0.85).unwrap();
 
-        store.accept(&nom.id, "CLAUDE.md").unwrap();
+        store.accept(&nom.id, "ANVIL.md").unwrap();
         let updated = store.get(&nom.id).unwrap();
         assert_eq!(updated.status, NominationStatus::Accepted);
-        assert_eq!(updated.promoted_to.as_deref(), Some("CLAUDE.md"));
+        assert_eq!(updated.promoted_to.as_deref(), Some("ANVIL.md"));
 
         // Pending count should be 0
         assert_eq!(store.pending_count(), 0);

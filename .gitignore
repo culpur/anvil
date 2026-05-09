@@ -8,3 +8,4 @@ target/
 *.swp
 *.swo
 .anvil-agents/
+.claude/

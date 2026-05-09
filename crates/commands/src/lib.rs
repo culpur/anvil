@@ -122,9 +122,9 @@ pub enum SlashCommand {
         section: Option<String>,
     },
     /// `/memory [show|inspect|promote|forget|why|budget|prune] [arg]`
-    /// Inspect and manage all memory tiers (CLAUDE.md, vault, nominations, cache, …).
+    /// Inspect and manage all memory tiers (ANVIL.md, vault, nominations, cache, …).
     Memory {
-        /// Raw sub-command and optional arg, e.g. `Some("show claude-md")`.
+        /// Raw sub-command and optional arg, e.g. `Some("show anvil-md")`.
         action: Option<String>,
     },
     Init,
@@ -1200,9 +1200,9 @@ mod tests {
             Some(SlashCommand::Memory { action: None })
         );
         assert_eq!(
-            SlashCommand::parse("/memory show claude-md"),
+            SlashCommand::parse("/memory show anvil-md"),
             Some(SlashCommand::Memory {
-                action: Some("show claude-md".to_string())
+                action: Some("show anvil-md".to_string())
             })
         );
         assert_eq!(SlashCommand::parse("/init"), Some(SlashCommand::Init));

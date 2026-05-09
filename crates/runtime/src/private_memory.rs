@@ -1,5 +1,5 @@
 //! Encrypted private project memory — sensitive infrastructure facts (hostnames,
-//! IPs, deploy paths, port numbers) that are too sensitive for plaintext CLAUDE.md
+//! IPs, deploy paths, port numbers) that are too sensitive for plaintext ANVIL.md
 //! but are not credentials that belong in the credential vault.
 //!
 //! Storage layout: `~/.anvil/private/{project-hash}.enc`

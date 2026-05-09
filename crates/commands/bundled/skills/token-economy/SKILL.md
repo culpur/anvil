@@ -79,7 +79,7 @@ This skill auto-chains to:
 
 - It does not prevent you from reading files. It prevents redundant reads.
 - It does not auto-truncate responses. Use the `terse` skill for that.
-- It does not manage the CLAUDE.md file. Use `claude-md-curator` for that.
+- It does not manage the ANVIL.md file. Use `anvil-md-curator` for that.
 
 ## Session start checklist
 

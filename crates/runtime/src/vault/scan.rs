@@ -300,7 +300,7 @@ pub enum SensitivityLevel {
     Credential,
     /// Infrastructure — encrypted private project memory (hostnames, IPs, ports, deploy paths)
     Infrastructure,
-    /// Knowledge — safe for nomination → review → CLAUDE.md/QMD promotion
+    /// Knowledge — safe for nomination → review → ANVIL.md/QMD promotion
     Knowledge,
 }
 

@@ -221,23 +221,23 @@ impl LiveCli {
                     return format!("Invalid nomination number. {} pending.", pending.len());
                 }
                 let nom = &pending[n - 1];
-                match store.accept(&nom.id, "CLAUDE.md") {
+                match store.accept(&nom.id, "ANVIL.md") {
                     Ok(()) => {
-                        // Append to CLAUDE.md in current directory
-                        let claude_md = std::env::current_dir()
+                        // Append to ANVIL.md in current directory
+                        let anvil_md = std::env::current_dir()
                             .unwrap_or_default()
-                            .join("CLAUDE.md");
+                            .join("ANVIL.md");
                         let entry = format!("\n- {}\n", nom.content);
                         let _ = std::fs::OpenOptions::new()
                             .create(true)
                             .append(true)
-                            .open(&claude_md)
+                            .open(&anvil_md)
                             .and_then(|mut f| {
                                 use std::io::Write;
                                 f.write_all(entry.as_bytes())
                             });
                         format!(
-                            "✓ Accepted: {}\n  Promoted to CLAUDE.md",
+                            "✓ Accepted: {}\n  Promoted to ANVIL.md",
                             nom.content
                         )
                     }
