@@ -21,7 +21,6 @@ pub mod audit;
 pub mod egress;
 pub mod vault;
 pub mod vault_session;
-pub mod auto_promote;
 pub mod file_cache;
 pub mod command_cache;
 mod compact;
@@ -163,9 +162,6 @@ pub use vault_session::{
 pub use requirements::{
     check_plugin_install_policy, load_from_paths as load_requirements,
     validate as validate_requirements, PolicyViolation, RequirementsPolicy,
-};
-pub use auto_promote::{
-    AccessKind, AutoPromoteError, AutoPromoter, AutoPromoterStats, ObservedAccess,
 };
 pub use file_cache::{
     build_known_files_block, FileCacheEntry, FileCacheError, FileCacheManager, FileCacheStats,
