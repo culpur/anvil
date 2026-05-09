@@ -372,6 +372,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         continue;
                     }
                     let contents = fs::read_to_string(skill_path)?;
+                    let body_bytes = contents.len();
                     let fm = parse_skill_frontmatter(&contents);
                     root_skills.push(SkillSummary {
                         name: fm.name
@@ -382,7 +383,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         shadowed_by: None,
                         origin: root.origin,
                         chains_to: fm.chains_to,
-                        body_bytes: None,
+                        body_bytes: Some(body_bytes),
                     });
                 }
                 SkillOrigin::LegacyCommandsDir => {
@@ -403,6 +404,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                     };
 
                     let contents = fs::read_to_string(&markdown_path)?;
+                    let body_bytes = contents.len();
                     let fallback_name = markdown_path.file_stem().map_or_else(
                         || entry.file_name().to_string_lossy().to_string(),
                         |stem| stem.to_string_lossy().to_string(),
@@ -416,7 +418,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         shadowed_by: None,
                         origin: root.origin,
                         chains_to: fm.chains_to,
-                        body_bytes: None,
+                        body_bytes: Some(body_bytes),
                     });
                 }
             }
@@ -718,7 +720,7 @@ fn render_skills_usage(unexpected: Option<&str>) -> String {
 // Skill body resolution
 // ---------------------------------------------------------------------------
 
-/// Embedded bodies for the three trigger-matched bundled skills.
+/// Embedded bodies for the trigger-matched bundled skills.
 const BUNDLED_SKILL_BODIES: &[(&str, &str)] = &[
     (
         "security-audit",
@@ -731,6 +733,35 @@ const BUNDLED_SKILL_BODIES: &[(&str, &str)] = &[
     (
         "terse",
         include_str!("../bundled/skills/terse/SKILL.md"),
+    ),
+    // W14 token-economy skills
+    (
+        "token-economy",
+        include_str!("../bundled/skills/token-economy/SKILL.md"),
+    ),
+    (
+        "file-fingerprint",
+        include_str!("../bundled/skills/file-fingerprint/SKILL.md"),
+    ),
+    (
+        "command-cache-aware",
+        include_str!("../bundled/skills/command-cache-aware/SKILL.md"),
+    ),
+    (
+        "pattern-promote",
+        include_str!("../bundled/skills/pattern-promote/SKILL.md"),
+    ),
+    (
+        "cache-budget",
+        include_str!("../bundled/skills/cache-budget/SKILL.md"),
+    ),
+    (
+        "claude-md-curator",
+        include_str!("../bundled/skills/claude-md-curator/SKILL.md"),
+    ),
+    (
+        "silent-cat",
+        include_str!("../bundled/skills/silent-cat/SKILL.md"),
     ),
 ];
 
@@ -769,4 +800,139 @@ pub fn load_skill_body(name: &str, cwd: &Path) -> Result<String, String> {
     Err(format!(
         "No such skill '{name}'. Use /skill list to browse installed skills."
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundled_body(name: &str) -> Option<&'static str> {
+        BUNDLED_SKILL_BODIES
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, body)| *body)
+    }
+
+    #[test]
+    fn bundled_skill_token_economy_present() {
+        assert!(
+            bundled_body("token-economy").is_some(),
+            "token-economy must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_file_fingerprint_present() {
+        assert!(
+            bundled_body("file-fingerprint").is_some(),
+            "file-fingerprint must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_command_cache_aware_present() {
+        assert!(
+            bundled_body("command-cache-aware").is_some(),
+            "command-cache-aware must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_pattern_promote_present() {
+        assert!(
+            bundled_body("pattern-promote").is_some(),
+            "pattern-promote must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_cache_budget_present() {
+        assert!(
+            bundled_body("cache-budget").is_some(),
+            "cache-budget must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_claude_md_curator_present() {
+        assert!(
+            bundled_body("claude-md-curator").is_some(),
+            "claude-md-curator must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    #[test]
+    fn bundled_skill_silent_cat_present() {
+        assert!(
+            bundled_body("silent-cat").is_some(),
+            "silent-cat must be registered in BUNDLED_SKILL_BODIES"
+        );
+    }
+
+    fn assert_valid_frontmatter(name: &str) {
+        let body = bundled_body(name)
+            .unwrap_or_else(|| panic!("{name} not in BUNDLED_SKILL_BODIES"));
+        let fm = parse_skill_frontmatter(body);
+        assert!(
+            fm.name.is_some(),
+            "{name}: frontmatter must have a `name:` field"
+        );
+        assert!(
+            fm.description.is_some(),
+            "{name}: frontmatter must have a `description:` field"
+        );
+        assert!(
+            !fm.triggers.is_empty(),
+            "{name}: frontmatter must declare at least one trigger"
+        );
+        let line_count = body.lines().count();
+        assert!(
+            line_count <= 200,
+            "{name}: skill body is {line_count} lines, exceeds 200-line budget"
+        );
+    }
+
+    #[test]
+    fn all_default_skills_have_valid_frontmatter() {
+        for name in &[
+            "token-economy",
+            "file-fingerprint",
+            "command-cache-aware",
+            "pattern-promote",
+            "cache-budget",
+            "claude-md-curator",
+            "silent-cat",
+        ] {
+            assert_valid_frontmatter(name);
+        }
+    }
+
+    #[test]
+    fn chain_references_resolve_token_economy_to_real_skills() {
+        let body = bundled_body("token-economy").expect("token-economy must be bundled");
+        for chain_target in &["file-fingerprint", "command-cache-aware", "pattern-promote"] {
+            assert!(
+                body.contains(chain_target),
+                "token-economy body must reference chain target '{chain_target}'"
+            );
+            assert!(
+                bundled_body(chain_target).is_some(),
+                "chain target '{chain_target}' referenced by token-economy must also be bundled"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_skill_count_is_ten() {
+        assert_eq!(
+            BUNDLED_SKILL_BODIES.len(),
+            10,
+            "expected exactly 10 bundled skills, got {}",
+            BUNDLED_SKILL_BODIES.len()
+        );
+    }
 }
