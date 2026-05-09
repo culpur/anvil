@@ -10,7 +10,7 @@ use tokio::process::Command as TokioCommand;
 use tokio::runtime::Builder;
 use tokio::time::timeout;
 
-use crate::command_cache::CommandCacheManager;
+use crate::command_cache::{is_cacheable as command_is_cacheable, CommandCacheManager};
 use crate::sandbox::{
     build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig, SandboxStatus,
@@ -163,7 +163,7 @@ async fn execute_bash_async(
     // ── command-output cache lookup ──────────────────────────────────────────
     let use_cache = !input.no_cache
         && !input.run_in_background.unwrap_or(false)
-        && CommandCacheManager::is_cacheable(&input.command);
+        && command_is_cacheable(&input.command);
 
     if use_cache {
         if let Ok(mgr) = CommandCacheManager::new(cwd.clone()) {

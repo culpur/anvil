@@ -381,7 +381,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
-                        chains_to: vec![],
+                        chains_to: fm.chains_to,
                         body_bytes: None,
                     });
                 }
@@ -415,7 +415,7 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
-                        chains_to: vec![],
+                        chains_to: fm.chains_to,
                         body_bytes: None,
                     });
                 }

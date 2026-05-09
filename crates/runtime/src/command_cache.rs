@@ -582,14 +582,6 @@ impl CommandCacheManager {
         Ok(Self { project_root, cache_dir })
     }
 
-    /// Check whether a command result is safe to cache.
-    ///
-    /// This is a pure static function — no I/O.
-    #[must_use]
-    pub fn is_cacheable(command: &str) -> bool {
-        is_cacheable(command)
-    }
-
     /// Look up a cached result for `(command, cwd)`.
     ///
     /// Returns `Some` only when:
