@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod auto_promote;
 pub mod effort;
 pub mod requirements;
 pub mod goals;
@@ -130,6 +131,9 @@ pub use team::{
     DelegationRecord, MemberStatus, TaskSnapshot, TeamManager, TeamMember, TeamStatus,
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
+pub use auto_promote::{
+    AccessKind, AutoPromoteError, AutoPromoter, AutoPromoterStats, ObservedAccess,
+};
 pub use goals::{
     build_active_goal_prompt_fragment, format_goal_list, format_goal_show,
     Goal, GoalError, GoalManager, GoalStatus,
