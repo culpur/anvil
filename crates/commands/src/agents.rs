@@ -49,6 +49,10 @@ pub struct SkillSummary {
     pub source: DefinitionSource,
     pub shadowed_by: Option<DefinitionSource>,
     pub origin: SkillOrigin,
+    /// Skills this skill chains to on completion (W13 skill-chaining engine).
+    pub chains_to: Vec<crate::skill_chaining::ChainEntry>,
+    /// Body size in bytes, for token-budget accounting in the chaining engine.
+    pub body_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +120,8 @@ pub fn handle_skills_slash_command(args: Option<&str>, cwd: &Path) -> std::io::R
                     source: DefinitionSource::Bundled,
                     shadowed_by,
                     origin: SkillOrigin::SkillsDir,
+                    chains_to: vec![],
+                    body_bytes: None,
                 });
             }
             Ok(render_skills_report(&skills))
@@ -375,6 +381,8 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
+                        chains_to: vec![],
+                        body_bytes: None,
                     });
                 }
                 SkillOrigin::LegacyCommandsDir => {
@@ -407,6 +415,8 @@ pub fn load_skills_from_roots(roots: &[SkillRoot]) -> std::io::Result<Vec<SkillS
                         source: root.source,
                         shadowed_by: None,
                         origin: root.origin,
+                        chains_to: vec![],
+                        body_bytes: None,
                     });
                 }
             }
@@ -458,6 +468,8 @@ pub(crate) struct SkillFrontmatter {
     /// Trigger keywords declared with `triggers: [word, "phrase"]`.
     /// Empty when the key is absent, preserving backwards compatibility.
     pub(crate) triggers: Vec<String>,
+    /// Chain entries declared with `chains_to:`.
+    pub(crate) chains_to: Vec<crate::skill_chaining::ChainEntry>,
 }
 
 /// Parse the YAML front-matter block at the top of a skill markdown file.
@@ -473,6 +485,7 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
             name: None,
             description: None,
             triggers: vec![],
+            chains_to: vec![],
         };
     }
 
@@ -481,6 +494,7 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
     let mut triggers: Vec<String> = vec![];
     // When Some we are inside a `triggers:` block list.
     let mut in_triggers = false;
+    let chains_to = crate::skill_chaining::parse_chains_to(contents);
 
     for line in lines {
         let trimmed = line.trim();
@@ -541,7 +555,13 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
         name,
         description,
         triggers,
+        chains_to,
     }
+}
+
+/// Public wrapper for `unquote_frontmatter_value` — used by `skill_chaining.rs` (W13).
+pub fn unquote_frontmatter_value_pub(value: &str) -> String {
+    unquote_frontmatter_value(value)
 }
 
 fn unquote_frontmatter_value(value: &str) -> String {

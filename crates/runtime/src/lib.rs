@@ -21,6 +21,9 @@ pub mod audit;
 pub mod egress;
 pub mod vault;
 pub mod vault_session;
+pub mod auto_promote;
+pub mod file_cache;
+pub mod command_cache;
 mod compact;
 mod config;
 mod content_filter;
@@ -160,6 +163,19 @@ pub use vault_session::{
 pub use requirements::{
     check_plugin_install_policy, load_from_paths as load_requirements,
     validate as validate_requirements, PolicyViolation, RequirementsPolicy,
+};
+pub use auto_promote::{
+    AccessKind, AutoPromoteError, AutoPromoter, AutoPromoterStats, ObservedAccess,
+};
+pub use file_cache::{
+    build_known_files_block, FileCacheEntry, FileCacheError, FileCacheManager, FileCacheStats,
+    LARGE_FILE_THRESHOLD_BYTES, MAX_KEY_SYMBOLS, MAX_PROMPT_BYTES, MAX_PROMPT_ENTRIES,
+    MAX_SUMMARY_LEN,
+};
+pub use command_cache::{
+    is_cacheable as command_is_cacheable, default_ttl as command_cache_default_ttl,
+    infer_touched_files as command_cache_infer_touched_files,
+    CommandCacheEntry, CommandCacheError, CommandCacheManager, CommandCacheStats,
 };
 
 #[cfg(test)]

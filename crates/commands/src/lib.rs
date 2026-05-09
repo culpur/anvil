@@ -5,13 +5,18 @@ pub mod agents;
 pub mod git;
 pub mod handlers;
 pub mod plugins;
+pub mod skill_chaining;
 pub mod skill_triggers;
 pub mod specs;
 pub mod subcommands;
 pub mod traits;
 
 pub use agents::{discover_skill_roots, handle_agents_slash_command, handle_skills_slash_command, load_skill_body, load_skills_from_roots};
-pub use skill_triggers::{filter_skills, match_triggers, TriggerMatch};
+pub use skill_chaining::{
+    ChainCandidate, ChainEvaluator, ChainEntry, ChainWhen,
+    format_chain_candidates, format_chain_hint, render_chains_graph,
+};
+pub use skill_triggers::{filter_skills, match_triggers, whole_word_match_pub, TriggerMatch};
 pub use traits::{
     bundled_catalogue, compose_agent, compose_agent_with_options, format_traits_listing,
     ComposeError, ComposeOptions, ComposedAgent, Trait, TraitCatalogue,
@@ -429,6 +434,12 @@ pub enum SlashCommand {
         /// Raw args after `/goal`.
         action: Option<String>,
     },
+    FileCache {
+        action: Option<String>,
+    },
+    CmdCache {
+        action: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -450,6 +461,8 @@ pub enum SkillSubcommand {
     Load { name: String },
     /// `/skill list`
     List,
+    /// `/skill chains`
+    Chains,
 }
 
 impl SlashCommand {
@@ -788,6 +801,7 @@ impl SlashCommand {
             "skill" => {
                 let sub = parts.next().unwrap_or("suggest");
                 match sub {
+                    "chains" => Self::Skill { subcommand: SkillSubcommand::Chains },
                     "list" => Self::Skill { subcommand: SkillSubcommand::List },
                     "load" => {
                         let name = parts.collect::<Vec<_>>().join(" ");
@@ -817,6 +831,8 @@ impl SlashCommand {
             "goal" => Self::Goal {
                 action: remainder_after_command(trimmed, command),
             },
+            "file-cache" | "fc" => Self::FileCache { action: remainder_after_command(trimmed, command) },
+            "cmd-cache" | "cc" => Self::CmdCache { action: remainder_after_command(trimmed, command) },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1930,6 +1946,8 @@ mod tests {
                 SlashCommand::Skill { .. } => "skill",
                 // Goal tracking (v2.2.11):
                 SlashCommand::Goal { .. } => "goal",
+                SlashCommand::FileCache { .. } => "file-cache",
+                SlashCommand::CmdCache { .. } => "cmd-cache",
                 // Named profiles (v2.2.11 W4):
                 SlashCommand::Profile { .. } => "profile",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
@@ -2047,6 +2065,8 @@ mod tests {
             SlashCommand::Skill { subcommand: SkillSubcommand::List },
             SlashCommand::Goal { action: None },
             // Named profiles (v2.2.11 W4):
+            SlashCommand::FileCache { action: None },
+            SlashCommand::CmdCache { action: None },
             SlashCommand::Profile { action: None },
         ];
 

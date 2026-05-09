@@ -1974,6 +1974,20 @@ or the session ends. Set a persistent default in settings.json with:
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },
+    SlashCommandSpec {
+        name: "cmd-cache",
+        aliases: &["cc"],
+        summary: "Inspect and manage the command-output cache (W12 token economy)",
+        argument_hint: Some("[list|stats|prune|forget <command>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "/cmd-cache — Command-output cache (W12 token economy)\n\nUsage:\n  /cmd-cache           List cached commands\n  /cmd-cache list      List with hit counts\n  /cmd-cache stats     Show aggregate stats\n  /cmd-cache prune     Remove stale entries\n  /cmd-cache forget <command>\n                       Drop cached output for a command",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
 ];
 
 #[must_use]

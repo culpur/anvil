@@ -1558,7 +1558,7 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_config_report(section.as_deref())?),
         }),
-        SlashCommand::Memory => Ok(ResumeCommandOutcome {
+        SlashCommand::Memory { .. } => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(render_memory_report()?),
         }),
@@ -1698,6 +1698,8 @@ fn run_resume_command(
         | SlashCommand::Effort { .. }
         | SlashCommand::Skill { .. }
         | SlashCommand::Goal { .. }
+        | SlashCommand::FileCache { .. }
+        | SlashCommand::CmdCache { .. }
         | SlashCommand::Profile { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
@@ -3482,14 +3484,33 @@ impl LiveCli {
                     // Emit skill suggestion hint as a TUI system message (non-blocking).
                     {
                         use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use commands::{ChainEvaluator, format_chain_hint};
                         let cwd = std::env::current_dir().unwrap_or_default();
                         let roots = discover_skill_roots(&cwd);
                         if let Ok(skills) = load_skills_from_roots(&roots) {
+                            // Trigger-based suggestion hint.
                             let skills_with_triggers: Vec<&commands::agents::SkillSummary> =
                                 skills.iter().filter(|s| !s.triggers.is_empty()).collect();
                             let matches = match_triggers(input, &skills_with_triggers);
                             if let Some(hint) = format_suggestions_hint(&matches) {
                                 tx.send(TuiEvent::System(hint));
+                            }
+                            // Chain-based suggestion hint for loaded skills.
+                            let loaded: Vec<commands::agents::SkillSummary> = self.loaded_skills_snapshot();
+                            if !loaded.is_empty() {
+                                let all_skills: std::collections::HashMap<String, commands::agents::SkillSummary> =
+                                    skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
+                                let evaluator = ChainEvaluator::new();
+                                let candidates = evaluator.evaluate(&loaded, &all_skills, input);
+                                for loaded_skill in &loaded {
+                                    let skill_candidates: Vec<_> = candidates.iter()
+                                        .filter(|c| c.triggered_by.eq_ignore_ascii_case(&loaded_skill.name))
+                                        .cloned()
+                                        .collect();
+                                    if let Some(hint) = format_chain_hint(&loaded_skill.name, &skill_candidates) {
+                                        tx.send(TuiEvent::System(hint));
+                                    }
+                                }
                             }
                         }
                     }
@@ -3858,7 +3879,7 @@ impl LiveCli {
                 let report = render_config_report(section.as_deref())?;
                 (report, false)
             }
-            SlashCommand::Memory => {
+            SlashCommand::Memory { .. } => {
                 let report = render_memory_report()?;
                 (report, false)
             }
@@ -4432,10 +4453,26 @@ impl LiveCli {
                             (format_suggestions(&matches, &prompt_text), false)
                         }
                     }
+                    SkillSubcommand::Chains => {
+                        let cwd = env::current_dir().unwrap_or_default();
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use commands::render_chains_graph;
+                        let roots = discover_skill_roots(&cwd);
+                        let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                        let all_skills: std::collections::HashMap<String, commands::agents::SkillSummary> =
+                            skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
+                        (render_chains_graph(&all_skills), false)
+                    }
                 }
             }
             SlashCommand::Goal { action } => {
                 (self.run_goal_command(action.as_deref()), false)
+            }
+            SlashCommand::FileCache { .. } => {
+                ("Use /file-cache list, stats, or forget <path>".to_string(), false)
+            }
+            SlashCommand::CmdCache { .. } => {
+                ("Use /cmd-cache list, stats, prune, or forget <cmd>".to_string(), false)
             }
             SlashCommand::Profile { action } => {
                 let msg = render_profile_command(action.as_deref());
@@ -5352,7 +5389,7 @@ impl LiveCli {
                 Self::print_config(section.as_deref())?;
                 false
             }
-            SlashCommand::Memory => {
+            SlashCommand::Memory { .. } => {
                 Self::print_memory()?;
                 false
             }
@@ -5448,6 +5485,15 @@ impl LiveCli {
                             let matches = mt(&effective, &skill_refs);
                             println!("{}", format_suggestions(&matches, &effective));
                         }
+                    }
+                    SkillSubcommand::Chains => {
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use commands::render_chains_graph;
+                        let roots = discover_skill_roots(&cwd);
+                        let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                        let all_skills: std::collections::HashMap<String, commands::agents::SkillSummary> =
+                            skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
+                        println!("{}", render_chains_graph(&all_skills));
                     }
                 }
                 false
@@ -5879,6 +5925,14 @@ impl LiveCli {
             }
             SlashCommand::Goal { action } => {
                 println!("{}", self.run_goal_command(action.as_deref()));
+                false
+            }
+            SlashCommand::FileCache { .. } => {
+                println!("Use /file-cache list, stats, or forget <path>");
+                false
+            }
+            SlashCommand::CmdCache { .. } => {
+                println!("Use /cmd-cache list, stats, prune, or forget <cmd>");
                 false
             }
             SlashCommand::Profile { action } => {
@@ -6421,6 +6475,26 @@ impl LiveCli {
         let cwd = env::current_dir()?;
         println!("{}", handle_skills_slash_command(args, &cwd)?);
         Ok(())
+    }
+
+    /// Return SkillSummary records for skills currently loaded in the system prompt.
+    /// Looks for `# skill:<name> —` markers inserted by `/skill load`.
+    fn loaded_skills_snapshot(&self) -> Vec<commands::agents::SkillSummary> {
+        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let roots = discover_skill_roots(&cwd);
+        let all_skills = load_skills_from_roots(&roots).unwrap_or_default();
+        let mut loaded = Vec::new();
+        for prompt_part in &self.system_prompt {
+            for skill in &all_skills {
+                let marker = format!("# skill:{} —", skill.name);
+                if prompt_part.contains(&marker) {
+                    loaded.push(skill.clone());
+                    break;
+                }
+            }
+        }
+        loaded
     }
 
     /// Emit a post-turn skill hint when the user prompt matches trigger keywords.

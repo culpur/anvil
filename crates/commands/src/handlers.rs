@@ -108,7 +108,7 @@ pub fn handle_slash_command(
             message: "/config is not yet implemented. Edit your settings.json file directly to change configuration values.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Memory => Some(SlashCommandResult {
+        SlashCommand::Memory { .. } => Some(SlashCommandResult {
             message: "/memory is not yet implemented. Memory files (CLAUDE.md, MEMORY.md) are loaded automatically at session start — edit them directly to update persistent context.".to_string(),
             session: session.clone(),
         }),
@@ -497,6 +497,13 @@ pub fn handle_slash_command(
                         }
                     }
                 }
+                SkillSubcommand::Chains => {
+                    let roots = discover_skill_roots(&cwd);
+                    let skills = load_skills_from_roots(&roots).unwrap_or_default();
+                    let all_skills: std::collections::HashMap<String, crate::agents::SkillSummary> =
+                        skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
+                    crate::skill_chaining::render_chains_graph(&all_skills)
+                }
             };
             Some(SlashCommandResult { message, session: session.clone() })
         }
@@ -537,6 +544,69 @@ pub fn handle_slash_command(
                 message: msg,
                 session: session.clone(),
             })
+        }
+        SlashCommand::FileCache { action: _ } => Some(SlashCommandResult {
+            message: "/file-cache: use /file-cache list, stats, prune, or forget <path>".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::CmdCache { action } => {
+            use runtime::CommandCacheManager;
+            use std::env;
+            let cwd = env::current_dir().unwrap_or_default();
+            let msg = match action.as_deref() {
+                None | Some("list") => match CommandCacheManager::new(cwd.clone()) {
+                    Ok(mgr) => match mgr.list() {
+                        Ok(entries) if entries.is_empty() => "Command-output cache is empty.".to_string(),
+                        Ok(entries) => {
+                            let mut lines = vec![format!("Cached commands ({}):", entries.len())];
+                            for e in entries.iter().take(20) {
+                                lines.push(format!("  [hits:{:>3}] {}", e.hits, &e.command));
+                            }
+                            if entries.len() > 20 {
+                                lines.push(format!("  … and {} more", entries.len() - 20));
+                            }
+                            lines.join("\n")
+                        }
+                        Err(e) => format!("Error listing cache: {e}"),
+                    },
+                    Err(e) => format!("Error opening cache: {e}"),
+                },
+                Some("stats") => match CommandCacheManager::new(cwd.clone()) {
+                    Ok(mgr) => match mgr.stats() {
+                        Ok(stats) => format!(
+                            "Command cache stats:\n  entries:   {}\n  hits:      {}\n  stale:     {}\n  bytes:     {}",
+                            stats.total_entries, stats.total_hits, stats.stale_entries, stats.total_size_bytes,
+                        ),
+                        Err(e) => format!("Error reading stats: {e}"),
+                    },
+                    Err(e) => format!("Error opening cache: {e}"),
+                },
+                Some("prune") => match CommandCacheManager::new(cwd.clone()) {
+                    Ok(mgr) => match mgr.prune_stale() {
+                        Ok(n) => format!("Pruned {n} stale cache entries."),
+                        Err(e) => format!("Error pruning cache: {e}"),
+                    },
+                    Err(e) => format!("Error opening cache: {e}"),
+                },
+                Some(rest) if rest.starts_with("forget ") => {
+                    let command: &str = rest.trim_start_matches("forget ").trim();
+                    if command.is_empty() {
+                        "Usage: /cmd-cache forget <command>".to_string()
+                    } else {
+                        match CommandCacheManager::new(cwd.clone()) {
+                            Ok(mgr) => match mgr.forget(command, &cwd) {
+                                Ok(()) => format!("Forgotten: {command}"),
+                                Err(e) => format!("Error: {e}"),
+                            },
+                            Err(e) => format!("Error opening cache: {e}"),
+                        }
+                    }
+                }
+                Some(other) => format!(
+                    "Unknown /cmd-cache subcommand: {other}\nUsage: /cmd-cache [list|stats|prune|forget <command>]"
+                ),
+            };
+            Some(SlashCommandResult { message: msg, session: session.clone() })
         }
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),

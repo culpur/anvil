@@ -3,13 +3,14 @@ use std::io;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command as TokioCommand;
 use tokio::runtime::Builder;
 use tokio::time::timeout;
 
+use crate::command_cache::CommandCacheManager;
 use crate::sandbox::{
     build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig, SandboxStatus,
@@ -33,6 +34,9 @@ pub struct BashCommandInput {
     pub filesystem_mode: Option<FilesystemIsolationMode>,
     #[serde(rename = "allowedMounts")]
     pub allowed_mounts: Option<Vec<String>>,
+    /// When true, skip the command-output cache for this invocation.
+    #[serde(rename = "noCache", default)]
+    pub no_cache: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -156,6 +160,44 @@ async fn execute_bash_async(
     sandbox_status: SandboxStatus,
     cwd: std::path::PathBuf,
 ) -> io::Result<BashCommandOutput> {
+    // ── command-output cache lookup ──────────────────────────────────────────
+    let use_cache = !input.no_cache
+        && !input.run_in_background.unwrap_or(false)
+        && CommandCacheManager::is_cacheable(&input.command);
+
+    if use_cache {
+        if let Ok(mgr) = CommandCacheManager::new(cwd.clone()) {
+            if let Ok(Some(cached)) = mgr.lookup(&input.command, &cwd) {
+                let return_code_interpretation = if cached.exit_code == 0 {
+                    None
+                } else {
+                    Some(format!("exit_code:{}", cached.exit_code))
+                };
+                let no_output_expected =
+                    Some(cached.stdout.trim().is_empty() && cached.stderr.trim().is_empty());
+                return Ok(BashCommandOutput {
+                    stdout: cached.stdout,
+                    stderr: cached.stderr,
+                    raw_output_path: None,
+                    interrupted: false,
+                    is_image: None,
+                    background_task_id: None,
+                    backgrounded_by_user: None,
+                    assistant_auto_backgrounded: None,
+                    dangerously_disable_sandbox: input.dangerously_disable_sandbox,
+                    return_code_interpretation,
+                    no_output_expected,
+                    structured_content: None,
+                    persisted_output_path: None,
+                    persisted_output_size: None,
+                    sandbox_status: Some(sandbox_status),
+                });
+            }
+        }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    let start = Instant::now();
     let mut command = prepare_tokio_command(&input.command, &cwd, &sandbox_status, true);
 
     let output_result = if let Some(timeout_ms) = input.timeout {
@@ -185,17 +227,32 @@ async fn execute_bash_async(
         (command.output().await?, false)
     };
 
+    let duration_ms = start.elapsed().as_millis() as u64;
     let (output, interrupted) = output_result;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let exit_code = output.status.code().unwrap_or(-1);
     let no_output_expected = Some(stdout.trim().is_empty() && stderr.trim().is_empty());
-    let return_code_interpretation = output.status.code().and_then(|code| {
-        if code == 0 {
-            None
-        } else {
-            Some(format!("exit_code:{code}"))
+    let return_code_interpretation = if exit_code == 0 {
+        None
+    } else {
+        Some(format!("exit_code:{exit_code}"))
+    };
+
+    // ── command-output cache store ───────────────────────────────────────────
+    if use_cache && exit_code == 0 && !interrupted {
+        if let Ok(mgr) = CommandCacheManager::new(cwd.clone()) {
+            let _ = mgr.store(
+                &input.command,
+                &cwd,
+                stdout.clone(),
+                stderr.clone(),
+                exit_code,
+                duration_ms,
+            );
         }
-    });
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     Ok(BashCommandOutput {
         stdout,
@@ -322,6 +379,7 @@ mod tests {
             isolate_network: Some(false),
             filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
             allowed_mounts: None,
+            no_cache: true,
         })
         .expect("bash command should execute");
 
@@ -342,6 +400,7 @@ mod tests {
             isolate_network: None,
             filesystem_mode: None,
             allowed_mounts: None,
+            no_cache: true,
         })
         .expect("bash command should execute");
 

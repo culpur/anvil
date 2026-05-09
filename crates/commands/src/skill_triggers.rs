@@ -110,6 +110,13 @@ pub fn match_triggers<'a>(prompt: &str, skills: &[&'a SkillSummary]) -> Vec<Trig
 /// This keeps multi-word trigger phrases like "code review" working: the space
 /// in the trigger is not a word constituent, so the boundary check only applies
 /// to the first character before the phrase and the first character after it.
+/// Public wrapper for skill_chaining.rs (W13).
+
+/// Public wrapper for use in skill_chaining.rs (W13).
+pub fn whole_word_match_pub(haystack: &str, needle: &str) -> bool {
+    whole_word_match(haystack, needle)
+}
+
 fn whole_word_match(haystack: &str, needle: &str) -> bool {
     let h = haystack.as_bytes();
     let n = needle.as_bytes();
@@ -210,6 +217,8 @@ mod tests {
             name: name.to_string(),
             description: None,
             triggers: triggers.iter().map(|s| s.to_ascii_lowercase()).collect(),
+            chains_to: vec![],
+            body_bytes: None,
             source: DefinitionSource::Bundled,
             shadowed_by: None,
             origin: SkillOrigin::SkillsDir,
