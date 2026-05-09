@@ -9,12 +9,18 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::memory::project_path_hash;
+
+/// Monotonic per-process counter so concurrent `write_entry_atomic` calls
+/// always produce distinct tmp filenames, even when their `subsec_nanos`
+/// readings collide.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -408,12 +414,14 @@ impl FileCacheManager {
         }
         // Use a unique tmp filename per write to avoid concurrent writers clobbering
         // each other's in-flight temp file.  The final rename is still atomic.
+        // The per-process counter guarantees uniqueness even when subsec_nanos collides.
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
         let pid = std::process::id();
-        let tmp_ext = format!("{pid}.{nanos:010}.tmp");
+        let seq = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_ext = format!("{pid}.{nanos:010}.{seq}.tmp");
         let tmp = dest.with_extension(tmp_ext);
         let json = serde_json::to_string_pretty(entry)?;
         fs::write(&tmp, &json)?;
