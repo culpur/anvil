@@ -113,7 +113,7 @@ pub use permission_memory::{PermissionMemory, PermissionMemoryEntry, PermissionS
 pub use keybindings::KeybindingsConfig;
 pub use content_filter::{ContentFilter, ContentFilterConfig, FilterResult, FilterSeverity};
 pub use prompt::{
-    load_system_prompt, prepend_bullets, ContextFile, ProjectContext, PromptBuildError,
+    load_system_prompt, load_system_prompt_with_identity, prepend_bullets, ANVIL_VERSION, ContextFile, ProjectContext, PromptBuildError,
     SystemPromptBuilder, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use remote::{

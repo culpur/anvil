@@ -41,7 +41,13 @@ impl From<ConfigError> for PromptBuildError {
 }
 
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
-pub const FRONTIER_MODEL_NAME: &str = "Opus 4.6";
+
+/// Anvil's own version, embedded at compile time from Cargo.toml.
+pub const ANVIL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Fallback label used when the runtime hasn't been told which model is active.
+/// Prefer threading the real model name through `SystemPromptBuilder::with_model_name`.
+pub const FRONTIER_MODEL_NAME: &str = "an unknown model";
 const MAX_INSTRUCTION_FILE_CHARS: usize = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
 
@@ -98,6 +104,15 @@ pub struct SystemPromptBuilder {
     output_style_prompt: Option<String>,
     os_name: Option<String>,
     os_version: Option<String>,
+    /// Active model name as the provider knows it (e.g. "qwen3.5:latest",
+    /// "claude-opus-4-7", "gpt-oss:120b-cloud"). When None, falls back to
+    /// FRONTIER_MODEL_NAME.
+    model_name: Option<String>,
+    /// Active provider label ("Ollama (local)", "Anthropic", "OpenAI",
+    /// "Ollama Cloud", "Gemini"). When None, omitted.
+    provider_name: Option<String>,
+    /// Active tab/session identifier, when the caller is in a tabbed TUI.
+    tab_id: Option<String>,
     append_sections: Vec<String>,
     project_context: Option<ProjectContext>,
     config: Option<RuntimeConfig>,
@@ -122,6 +137,29 @@ impl SystemPromptBuilder {
     pub fn with_os(mut self, os_name: impl Into<String>, os_version: impl Into<String>) -> Self {
         self.os_name = Some(os_name.into());
         self.os_version = Some(os_version.into());
+        self
+    }
+
+    /// Tell the prompt which model is currently loaded so the agent can
+    /// answer "what model are you running?" correctly.
+    #[must_use]
+    pub fn with_model_name(mut self, model_name: impl Into<String>) -> Self {
+        self.model_name = Some(model_name.into());
+        self
+    }
+
+    /// Tell the prompt which provider is serving the active model
+    /// ("Ollama (local)", "Anthropic", "OpenAI", "Ollama Cloud", "Gemini").
+    #[must_use]
+    pub fn with_provider_name(mut self, provider_name: impl Into<String>) -> Self {
+        self.provider_name = Some(provider_name.into());
+        self
+    }
+
+    /// Tell the prompt which tab/session the user is currently in.
+    #[must_use]
+    pub fn with_tab_id(mut self, tab_id: impl Into<String>) -> Self {
+        self.tab_id = Some(tab_id.into());
         self
     }
 
@@ -219,8 +257,33 @@ impl SystemPromptBuilder {
             |context| context.current_date.clone(),
         );
         let mut lines = vec!["# Environment context".to_string()];
-        lines.extend(prepend_bullets(vec![
-            format!("Model family: {FRONTIER_MODEL_NAME}"),
+        let mut bullets = vec![format!(
+            "You are Anvil v{ANVIL_VERSION}, Culpur Defense's open-source AI coding assistant CLI."
+        )];
+        if let Some(model) = &self.model_name {
+            if let Some(provider) = &self.provider_name {
+                bullets.push(format!(
+                    "Currently loaded model: `{model}` (served by {provider})."
+                ));
+            } else {
+                bullets.push(format!("Currently loaded model: `{model}`."));
+            }
+        } else {
+            bullets.push(format!(
+                "Currently loaded model: {FRONTIER_MODEL_NAME} (the runtime did not specify which model is active)."
+            ));
+        }
+        bullets.push(
+            "When asked your version, report Anvil's version. When asked what model you are, \
+             say you are Anvil v{ANVIL_VERSION} running on the loaded model — not the underlying \
+             model's own self-identification, which is unreliable across providers."
+                .to_string()
+                .replace("{ANVIL_VERSION}", ANVIL_VERSION),
+        );
+        if let Some(tab) = &self.tab_id {
+            bullets.push(format!("Active tab/session: {tab}."));
+        }
+        bullets.extend(vec![
             format!("Working directory: {cwd}"),
             format!("Date: {date}"),
             format!(
@@ -228,7 +291,8 @@ impl SystemPromptBuilder {
                 self.os_name.as_deref().unwrap_or("unknown"),
                 self.os_version.as_deref().unwrap_or("unknown")
             ),
-        ]));
+        ]);
+        lines.extend(prepend_bullets(bullets));
         lines.join("\n")
     }
 }
@@ -456,14 +520,39 @@ pub fn load_system_prompt(
     os_name: impl Into<String>,
     os_version: impl Into<String>,
 ) -> Result<Vec<String>, PromptBuildError> {
+    load_system_prompt_with_identity(cwd, current_date, os_name, os_version, None, None, None)
+}
+
+/// Like `load_system_prompt`, but with the active model name, provider label,
+/// and optional tab id threaded into the environment-context block so the
+/// agent can correctly answer "what version are you?" / "what model are you
+/// running?".
+pub fn load_system_prompt_with_identity(
+    cwd: impl Into<PathBuf>,
+    current_date: impl Into<String>,
+    os_name: impl Into<String>,
+    os_version: impl Into<String>,
+    model_name: Option<String>,
+    provider_name: Option<String>,
+    tab_id: Option<String>,
+) -> Result<Vec<String>, PromptBuildError> {
     let cwd = cwd.into();
     let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
     let config = ConfigLoader::default_for(&cwd).load()?;
-    Ok(SystemPromptBuilder::new()
+    let mut builder = SystemPromptBuilder::new()
         .with_os(os_name, os_version)
         .with_project_context(project_context)
-        .with_runtime_config(config)
-        .build())
+        .with_runtime_config(config);
+    if let Some(model) = model_name {
+        builder = builder.with_model_name(model);
+    }
+    if let Some(provider) = provider_name {
+        builder = builder.with_provider_name(provider);
+    }
+    if let Some(tab) = tab_id {
+        builder = builder.with_tab_id(tab);
+    }
+    Ok(builder.build())
 }
 
 fn render_config_section(config: &RuntimeConfig) -> String {

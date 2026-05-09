@@ -1426,12 +1426,46 @@ pub(crate) fn resolve_export_path(
 }
 
 pub(crate) fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    build_system_prompt_with_identity(None, None, None)
+}
+
+/// Best-effort friendly label for the provider serving a given model name.
+/// Returns None when the model name doesn't match a known provider pattern.
+pub(crate) fn friendly_provider_label(model: &str) -> Option<String> {
+    let kind = api::detect_provider_kind(model);
+    use api::ProviderKind;
+    match kind {
+        ProviderKind::AnvilApi => Some("Anthropic (via Anvil API)".to_string()),
+        ProviderKind::OpenAi => Some("OpenAI".to_string()),
+        ProviderKind::Gemini => Some("Gemini".to_string()),
+        ProviderKind::Xai => Some("xAI".to_string()),
+        ProviderKind::Ollama => {
+            if model.ends_with(":cloud") || model.contains("-cloud") {
+                Some("Ollama Cloud".to_string())
+            } else {
+                Some("Ollama (local)".to_string())
+            }
+        }
+    }
+}
+
+/// Like `build_system_prompt`, but threads the active model name, provider
+/// label, and tab id into the runtime's environment-context block so the agent
+/// can correctly answer "what version are you?" / "what model are you running?".
+pub(crate) fn build_system_prompt_with_identity(
+    model_name: Option<String>,
+    provider_name: Option<String>,
+    tab_id: Option<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    let mut sections = load_system_prompt(
+    let mut sections = runtime::load_system_prompt_with_identity(
         cwd.clone(),
         DEFAULT_DATE,
         env::consts::OS,
         "unknown",
+        model_name,
+        provider_name,
+        tab_id,
     )?;
 
     // Prepend the active-goal fragment when a goal is active for this project.

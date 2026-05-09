@@ -2,13 +2,235 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.10-blue)
+![Version](https://img.shields.io/badge/version-2.2.11-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-842%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1077%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
+
+---
+
+## What's New in v2.2.11 — The release that pays for itself
+
+**v2.2.11 is the biggest Anvil release since v2.0.** Fifteen workstreams,
++67 tests (1077 total), +9,700 lines of net code, and the first release
+where Anvil actively works to spend fewer tokens than the agent
+naturally would.
+
+If you're upgrading from v2.2.10, here's what changes for you, in order
+of how often you'll feel it:
+
+---
+
+### 1. Token economy: Anvil now stops paying for redundant work
+
+A typical 30-turn session reads the same handful of files four times,
+runs `git status` six times, and re-explains the project layout to the
+model on every turn. v2.2.11 stops paying for that.
+
+**File-fingerprint cache** (W11). Every file Anvil reads is fingerprinted
+with sha256 + mtime + size + first-200-line summary + detected language
++ extracted key symbols, then stored at
+`~/.anvil/projects/<project-hash>/file-cache/`. A `<known-files>` block
+is built from the cache and injected into the system prompt, so the
+model knows what files exist and what's in them **before** it ever
+calls `read_file`. Cache invalidates automatically when mtime or sha256
+change, so stale entries can't poison a session. Concurrent writers are
+safe (atomic rename + per-call unique tmp filenames after a race fix
+that took two test runs to surface). 18 tests cover the lifecycle.
+
+**Command-output cache** (W12). `bash` calls go through a TTL-bounded
+cache keyed on `(command, cwd)`. A static allowlist gates which commands
+are cacheable at all — read-only `git status`, `ls`, `cat`, `pwd`,
+`grep`, `find` etc. cache freely; anything that mutates state, hits the
+network, or runs a tool with side effects (`rm`, `apt-get`, `curl`,
+`make install`) is **never** cached even if you ask. Cached entries
+record their `touched_files`; when any touched file changes, the entry
+is invalidated on the next lookup. Hot-path detection counts session
+invocations so frequently re-run commands surface in `/memory budget`.
+27 tests.
+
+**Net effect for you:** in long sessions on a familiar codebase, you'll
+see fewer redundant `read_file` and `bash` tool calls, and the model
+will reach for facts already in the system prompt instead of asking for
+them again. The bigger your session, the bigger the savings.
+
+---
+
+### 2. Skill chaining: skills can now compose
+
+Anvil skills already had explicit triggers. v2.2.11 adds **declarative
+chains** — a skill can declare follow-up skills in its frontmatter:
+
+```yaml
+---
+name: code-review
+triggers: [review, "code review", "pr review"]
+chains_to:
+  - skill: security-audit
+    when: { mentions: ["auth", "crypto", "permission"] }
+  - skill: terse
+    when: { user_pattern: "^/quick" }
+---
+```
+
+The chain evaluator walks the graph at turn-start, **suggesting** (never
+auto-running) up to depth 3 and 25 KB of additional skill text. Cycle
+detection via `HashSet`, hard byte-budget enforcement, suggest-not-auto
+pattern preserved end-to-end. The audit pass also caught and fixed a
+real bug where parsed `chains_to:` was being discarded at filesystem-
+load sites — skill chaining was effectively dead for non-bundled skills
+until v2.2.11. It works now.
+
+---
+
+### 3. Seven default token-economy skills, bundled at compile time
+
+Bundled skill count grows from 3 (`code-review`, `security-audit`,
+`terse`) to 10. The seven new ones are loaded with zero disk I/O:
+
+| Skill | What it teaches |
+|-------|-----------------|
+| `token-economy` | Meta-skill that chains to the three cache skills |
+| `file-fingerprint` | Fingerprint files into the W11 cache after reading |
+| `command-cache-aware` | Check the W12 cache before `ls` / `git` / `cat` / `grep` |
+| `pattern-promote` | Nominate repeated lookups to durable memory |
+| `cache-budget` | Audit and prune file/command caches periodically |
+| `anvil-md-curator` | Rules for what belongs in ANVIL.md vs ephemeral state |
+| `silent-cat` | Answer "what's in X" from the cache before reading the file |
+
+`/skill load token-economy` chains in the three cache skills
+automatically. From that turn forward, the session burns fewer tokens
+on repeat lookups. Each skill is ≤200 lines, has valid frontmatter, and
+the chain references resolve to real bundled skills (a regression test
+enforces this).
+
+---
+
+### 4. `/memory` — the inspector you've been missing
+
+A new top-level slash command surfaces every memory tier Anvil can read
+or write. Eight subcommands, eight tiers, all addressable:
+
+```
+/memory                    one-line summary across every tier
+/memory show <tier>        dump one tier's contents
+/memory inspect <key>      search every tier for a key
+/memory promote <nom-id>   accept a pending nomination → ANVIL.md
+/memory forget <key>       remove an entry / reject a nomination
+/memory why                explain what's in the system prompt right now
+/memory budget             byte + estimated-token usage per tier
+/memory prune              evict stale entries
+```
+
+Tiers covered: `anvil-md`, `vault`, `private`, `nominations`, `daily`,
+`file-cache`, `cmd-cache`, `goals`. Tab-completion is grammar-driven —
+`/memory show <Tab>` enumerates the 8 valid tier names. The
+implementation is pure formatting and dispatch on top of existing
+runtime APIs, no new storage. 14 handler tests.
+
+`/memory why` is the killer one. It finally answers the question every
+agent user has wanted answered: **what exactly is the model seeing
+right now?**
+
+---
+
+### 5. AutoPromoter: durable knowledge without auto-writes
+
+`crates/runtime/src/auto_promote.rs` adds a session-scoped engine that
+counts file reads, command runs, and stated facts. When a threshold is
+crossed (5 reads of the same file, 3 runs of the same command, 2
+re-statements of the same fact), it emits a nomination JSON file under
+`~/.anvil/nominations/` for the user to review via `/memory promote`.
+
+**Pure suggest-not-auto.** Nothing is automatically written to ANVIL.md,
+the vault, or any persistent store. The user is the only source of
+promotion authority. Path canonicalization (`/var` → `/private/var` on
+macOS) and whitespace normalization (`git    status` ≡ `git status`)
+mean equivalent operations consolidate into one nomination instead of
+four. 9 tests.
+
+This is the foundation for v2.3's session continuity — durable memory
+that's curated, not accumulated.
+
+---
+
+### 6. Project instruction file is now `ANVIL.md`, not `CLAUDE.md`
+
+Anvil already loaded `ANVIL.md` (and `.anvil/ANVIL.md`,
+`ANVIL.local.md`, `.anvil/instructions.md`) — but every user-facing
+mention referenced "CLAUDE.md", a borrowed name from a different tool.
+v2.2.11 cleans that up:
+
+- The bundled curator skill is renamed `anvil-md-curator`
+- `/init`, `/pin`, `/unpin` help text says ANVIL.md
+- The `/memory` tier id is `anvil-md`
+- Nominations promote into ANVIL.md, not CLAUDE.md
+- Detailed `/help memory` describes ANVIL.md
+
+Existing ANVIL.md files are read as-is. If you've been keeping project
+instructions in a CLAUDE.md (legacy from the Claude Code era), rename
+it; Anvil will pick it up next session.
+
+---
+
+### 7. Ten parity-and-correctness workstreams (W1–W10)
+
+These don't have catchy names, but they close real gaps and are now in
+your daily path:
+
+| | What changed | Why you'll feel it |
+|---|---|---|
+| **W1** | Hook events catch-up: SessionStart/End, FileChanged, CwdChanged, PermissionRequest/Denied, PostToolBatch, Notification all reach hook handlers | You can wire workflow automation around any of these events without patching Anvil |
+| **W2** | Effort / reasoning slider (`/effort low|medium|high|max`) maps per-provider — Anthropic thinking budget, OpenAI `reasoning.effort`, Gemini `thinkingBudget` | One control across providers; no more "is it thinking on this model?" |
+| **W3** | Goal persistence — file-backed JSON at `~/.anvil/goals/<project-hash>/<id>.json` with atomic writes | Multi-session goals survive restarts. The first attempt accidentally shipped a stub; this is the redone real implementation |
+| **W4** | Named profiles — `[profiles.<name>]` config sections with active-profile selection | Switch between work/personal/sandbox configs without editing settings.json |
+| **W5** | Published JSON Schema (`anvil --emit-schema`, draft 2020-12, all keys covered) | Editor autocomplete and validation for `~/.anvil/config.json` |
+| **W6** | OpenTelemetry events — opt-in, redact-by-default, feature-flagged. `permission_decision` event newly wired (was orphaned in v2.2.10) | Real observability for self-hosted and team deployments |
+| **W7** | Custom output styles — drop a markdown file into `~/.anvil/output-styles/<name>.md`, select via `/output-style <name>` | Per-project tone/format presets without forking the binary |
+| **W8** | Reviewer-agent approval gate — deterministic regex scanner (not an LLM call) for high-risk operations | Cheap, fast, no API spend on safety checks |
+| **W9** | `anvil mcp-server` mode — Codex parity, MCP stdio transport, exposes every Anvil tool over MCP | Use Anvil's tools from inside Claude, Codex, or any MCP-aware client |
+| **W10** | `requirements.toml` admin policy floor — parsed at startup; `bypassPermissions` string now correctly parses to `DangerFullAccess` | Enforce minimum permission policies across a team or fleet |
+
+Plus three round-2 audit fixes: W3 stub-replace, W1 dead-wired hooks
+caught + tested, W6 permission_decision wiring + W5 schema tightening.
+
+---
+
+### 8. Quality bar
+
+A deep audit pass after the W1–W10 merge uncovered (and fixed):
+
+- The **`chains_to` propagation bug** (real correctness — skill chaining
+  silently dead for non-bundled skills before v2.2.11)
+- A **W11 atomic-write race** exposed by the new concurrent-store test
+  (`subsec_nanos` collisions between threads on a fast machine — fixed
+  with a process-local `AtomicU64` counter)
+- Cosmetic dupes: a redundant `CommandCacheManager::is_cacheable`
+  delegate, a dangling W13 doc-comment fragment
+
+**Workspace tests:** 1077 pass on `cargo test --workspace --release --
+--test-threads=1`. The serial-test verification caught the W11 race
+that parallel runs masked. (+67 from v2.2.10's 1010.)
+
+---
+
+### Why v2.2.11 matters
+
+Up to v2.2.10, Anvil was a faithful agent CLI. v2.2.11 is the first
+release where Anvil is **actively trying to be cheaper, more
+introspectable, and more memory-aware** than the model alone would be:
+
+- The cache layers turn redundant work into free turns
+- Skill chaining lets behaviour compose without orchestrator scripts
+- `/memory` makes the previously invisible model state inspectable
+- AutoPromoter turns lived experience into reviewable durable memory
+- W1–W10 close the door on the "this works on Claude Code but not
+  Anvil" parity drift
+
+Full release notes: **[RELEASE-NOTES-v2.2.11.md](./RELEASE-NOTES-v2.2.11.md)**.
 
 ---
 
