@@ -17,8 +17,14 @@ fn main() {
         .filter(|o| o.status.success()).map_or_else(|| "unknown".to_string(), |o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     println!("cargo:rustc-env=GIT_SHA={sha}");
 
-    // Rerun if git HEAD changes
-    println!("cargo:rerun-if-changed=.git/HEAD");
+    // Rerun if git HEAD or the ref it points at changes. .git/HEAD only changes
+    // on branch switches; commits update refs/heads/<branch>, so watch both.
+    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    if let Ok(head) = std::fs::read_to_string("../../.git/HEAD") {
+        if let Some(ref_path) = head.strip_prefix("ref: ").map(str::trim) {
+            println!("cargo:rerun-if-changed=../../.git/{ref_path}");
+        }
+    }
 }
 
 /// Get current date as YYYY-MM-DD without pulling in chrono crate
