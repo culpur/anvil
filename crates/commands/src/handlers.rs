@@ -108,8 +108,8 @@ pub fn handle_slash_command(
             message: "/config is not yet implemented. Edit your settings.json file directly to change configuration values.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Memory { .. } => Some(SlashCommandResult {
-            message: "/memory is not yet implemented. Memory files (CLAUDE.md, MEMORY.md) are loaded automatically at session start — edit them directly to update persistent context.".to_string(),
+        SlashCommand::Memory { action } => Some(SlashCommandResult {
+            message: handle_memory_command(action.as_deref()),
             session: session.clone(),
         }),
         SlashCommand::Init => Some(SlashCommandResult {
@@ -612,5 +612,518 @@ pub fn handle_slash_command(
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),
         }),
+    }
+}
+
+// ─── /memory command implementation (v2.3.0 W15) ────────────────────────────
+
+fn handle_memory_command(action: Option<&str>) -> String {
+    match action {
+        None => memory_summary(),
+        Some(rest) => {
+            let rest = rest.trim();
+            let (sub, arg) = if let Some(idx) = rest.find(char::is_whitespace) {
+                let (a, b) = rest.split_at(idx);
+                (a, b.trim())
+            } else {
+                (rest, "")
+            };
+            match sub {
+                "show"    => memory_show(if arg.is_empty() { None } else { Some(arg) }),
+                "inspect" => memory_inspect(arg),
+                "promote" => memory_promote(arg),
+                "forget"  => memory_forget(arg),
+                "why"     => memory_why(),
+                "budget"  => memory_budget(),
+                "prune"   => memory_prune(),
+                other     => format!(
+                    "Unknown /memory subcommand: {other}\n\
+                     Usage: /memory [show|inspect|promote|forget|why|budget|prune] [arg]"
+                ),
+            }
+        }
+    }
+}
+
+fn anvil_home() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(".anvil")
+}
+
+fn memory_summary() -> String {
+    let home = anvil_home();
+    let mut lines = vec!["Memory tier summary:".to_string()];
+    let md_count = count_files_with_ext(&home.join("memory"), "md");
+    lines.push(format!("  claude-md     {} file(s) in ~/.anvil/memory/", md_count));
+    let nom_count = count_files_with_ext(&home.join("nominations"), "json");
+    lines.push(format!("  nominations   {} pending nomination(s)", nom_count));
+    let daily_count = count_files_with_ext(&home.join("daily"), "json");
+    lines.push(format!("  daily         {} session file(s)", daily_count));
+    let goals_count = count_files_with_ext(&home.join("goals"), "json");
+    lines.push(format!("  goals         {} goal file(s)", goals_count));
+    if home.join("vault.bin").exists() {
+        lines.push("  vault         initialized (encrypted)".to_string());
+    } else {
+        lines.push("  vault         not initialized".to_string());
+    }
+    let private_count = count_files_with_ext(&home.join("private"), "enc");
+    if private_count > 0 {
+        lines.push(format!("  private       {} encrypted file(s)", private_count));
+    } else {
+        lines.push("  private       no files".to_string());
+    }
+    let fc_count = count_files_with_ext(&home.join("file-cache"), "json");
+    lines.push(format!("  file-cache    {} cache entries", fc_count));
+    let cc_count = count_files_with_ext(&home.join("cmd-cache"), "json");
+    lines.push(format!("  cmd-cache     {} cache entries", cc_count));
+    lines.push(String::new());
+    lines.push("Use /memory show <tier> to inspect a specific tier.".to_string());
+    lines.join("\n")
+}
+
+fn memory_show(tier: Option<&str>) -> String {
+    use runtime::{DailyStore, GoalManager, MemoryManager};
+
+    let tier = match tier {
+        Some(t) => t,
+        None => {
+            return "Usage: /memory show <tier>\n\
+                Tiers: claude-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+                .to_string()
+        }
+    };
+
+    let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    match tier {
+        "claude-md" => {
+            let mgr = MemoryManager::new(&cwd);
+            let rendered = mgr.render_for_prompt();
+            if rendered.trim().is_empty() {
+                "No CLAUDE.md / MEMORY.md files found in project or global memory.".to_string()
+            } else {
+                format!("=== claude-md contents ===\n{rendered}")
+            }
+        }
+        "nominations" => {
+            let store =
+                runtime::nominations::NominationStore::with_dir(home.join("nominations"));
+            store.format_pending()
+        }
+        "daily" => {
+            let store = DailyStore::with_dir(home.join("daily"));
+            let summary = store.today();
+            if summary.sessions.is_empty() && summary.open_items.is_empty() {
+                "No daily summary entries for today.".to_string()
+            } else {
+                store.format_summary(&summary)
+            }
+        }
+        "goals" => {
+            let mgr = GoalManager::new(cwd.clone());
+            match mgr.list() {
+                Ok(goals) if goals.is_empty() => "No active goals.".to_string(),
+                Ok(goals) => runtime::format_goal_list(&goals),
+                Err(e) => format!("Error reading goals: {e}"),
+            }
+        }
+        "vault" => "Vault contents are not shown in plain text for security reasons.\n\
+             Use /vault list to see stored credential names."
+            .to_string(),
+        "private" => "Private memory is AES-256-GCM encrypted and vault-locked.\n\
+             Unlock the vault first, then use the private memory API."
+            .to_string(),
+        "file-cache" => "File-cache details are managed via /file-cache list.".to_string(),
+        "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
+        other => format!(
+            "Unknown tier: {other}\n\
+             Known tiers: claude-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+        ),
+    }
+}
+
+fn memory_inspect(key: &str) -> String {
+    use runtime::MemoryManager;
+
+    if key.is_empty() {
+        return "Usage: /memory inspect <key>".to_string();
+    }
+
+    let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let key_lower = key.to_ascii_lowercase();
+    let mut results: Vec<String> =
+        vec![format!("Searching for '{key}' across memory tiers:\n")];
+    let mut found = false;
+
+    let mgr = MemoryManager::new(&cwd);
+    for mem_file in mgr.discover() {
+        if mem_file.name.to_ascii_lowercase().contains(&key_lower)
+            || mem_file.description.to_ascii_lowercase().contains(&key_lower)
+        {
+            results.push(format!(
+                "[claude-md] {} \u{2014} {}",
+                mem_file.name,
+                if mem_file.description.is_empty() { "(no description)" } else { &mem_file.description }
+            ));
+            found = true;
+        }
+    }
+
+    let store =
+        runtime::nominations::NominationStore::with_dir(home.join("nominations"));
+    for nom in store.list(None) {
+        if nom.content.to_ascii_lowercase().contains(&key_lower)
+            || nom.id.to_ascii_lowercase().contains(&key_lower)
+        {
+            results.push(format!(
+                "[nominations] {} ({:?}) \u{2014} {}",
+                nom.id, nom.status, nom.content
+            ));
+            found = true;
+        }
+    }
+
+    if !found {
+        results.push(format!(
+            "No entries matching '{key}' found in any searchable tier."
+        ));
+        results.push(
+            "Vault and encrypted private memory are not searched for security reasons."
+                .to_string(),
+        );
+    }
+
+    results.join("\n")
+}
+
+fn memory_promote(id: &str) -> String {
+    if id.is_empty() {
+        return "Usage: /memory promote <nomination-id>".to_string();
+    }
+    let store =
+        runtime::nominations::NominationStore::with_dir(anvil_home().join("nominations"));
+    match store.accept(id, "CLAUDE.md") {
+        Ok(()) => format!(
+            "Nomination '{id}' accepted and marked for promotion into CLAUDE.md."
+        ),
+        Err(e) => format!("Error promoting nomination '{id}': {e}"),
+    }
+}
+
+fn memory_forget(key: &str) -> String {
+    use runtime::MemoryManager;
+
+    if key.is_empty() {
+        return "Usage: /memory forget <key>".to_string();
+    }
+
+    let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let mgr = MemoryManager::new(&cwd);
+    match mgr.delete(key) {
+        Ok(()) => return format!("Removed '{key}' from memory files."),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return format!("Error deleting '{key}' from memory: {e}"),
+    }
+
+    let store =
+        runtime::nominations::NominationStore::with_dir(home.join("nominations"));
+    let key_lower = key.to_ascii_lowercase();
+    let matching: Vec<_> = store
+        .list(None)
+        .into_iter()
+        .filter(|n| {
+            n.id.to_ascii_lowercase() == key_lower
+                || n.content.to_ascii_lowercase().contains(&key_lower)
+        })
+        .collect();
+
+    if matching.is_empty() {
+        return format!("No memory entry or nomination found for '{key}'.");
+    }
+
+    let mut rejected = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    for nom in &matching {
+        match store.reject(&nom.id) {
+            Ok(()) => rejected += 1,
+            Err(e) => errors.push(format!("{}: {e}", nom.id)),
+        }
+    }
+
+    if errors.is_empty() {
+        format!("Rejected {rejected} nomination(s) matching '{key}'.")
+    } else {
+        format!(
+            "Rejected {rejected} nomination(s) matching '{key}'. Errors: {}",
+            errors.join("; ")
+        )
+    }
+}
+
+fn memory_why() -> String {
+    "\
+System prompt injection order for this session:
+
+  1. Base system prompt (hardcoded assistant instructions)
+  2. CLAUDE.md files (project root, then ~/.anvil/memory/*.md)
+  3. Active goal fragment (if a goal is active via /goal)
+  4. Skill body (if a skill was loaded via /skill load)
+  5. File-cache known-files block (compact per-file summaries, W11)
+  6. Daily task reconciliation fragment (pending tasks from yesterday)
+
+The vault, private memory, and encrypted tiers are NEVER injected automatically.
+Nominations are SUGGESTED only -- they only enter the prompt after /memory promote.
+"
+    .to_string()
+}
+
+fn memory_budget() -> String {
+    let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let tiers: &[(&str, std::path::PathBuf)] = &[
+        ("claude-md", cwd),
+        ("nominations", home.join("nominations")),
+        ("daily", home.join("daily")),
+        ("goals", home.join("goals")),
+        ("file-cache", home.join("file-cache")),
+        ("cmd-cache", home.join("cmd-cache")),
+    ];
+
+    let mut lines = vec!["Memory tier token budget (approximate):".to_string()];
+    lines.push(format!("  {:<14}  {:>10}  {:>12}", "Tier", "Bytes", "~Tokens"));
+    lines.push(format!("  {}", "-".repeat(40)));
+
+    let mut grand_bytes = 0u64;
+    for (name, dir) in tiers {
+        let bytes = dir_total_bytes(dir);
+        grand_bytes += bytes;
+        let tokens = bytes / 4;
+        lines.push(format!("  {name:<14}  {bytes:>10}  {tokens:>12}"));
+    }
+
+    lines.push(format!("  {}", "-".repeat(40)));
+    let grand_tokens = grand_bytes / 4;
+    lines.push(format!(
+        "  {:<14}  {:>10}  {:>12}",
+        "TOTAL", grand_bytes, grand_tokens
+    ));
+    lines.push(String::new());
+    lines.push(
+        "Note: vault and private memory are excluded (encrypted, not injected).".to_string(),
+    );
+    lines.join("\n")
+}
+
+fn memory_prune() -> String {
+    let home = anvil_home();
+    let mut lines = vec!["Memory prune:".to_string()];
+    let daily_pruned = prune_old_files(&home.join("daily"), 30);
+    lines.push(format!(
+        "  daily:       removed {daily_pruned} file(s) older than 30 days"
+    ));
+    let nom_pruned = prune_decided_nominations(&home.join("nominations"));
+    lines.push(format!(
+        "  nominations: removed {nom_pruned} decided nomination(s)"
+    ));
+    lines.join("\n")
+}
+
+fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
+    std::fs::read_dir(dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .map_or(false, |x| x == ext)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn dir_total_bytes(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.metadata().ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+fn prune_old_files(dir: &std::path::Path, max_age_days: u64) -> usize {
+    use std::time::{Duration, SystemTime};
+
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(max_age_days * 86_400))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+
+    let mut removed = 0usize;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(meta) = path.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if modified < cutoff && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+fn prune_decided_nominations(nom_dir: &std::path::Path) -> usize {
+    use runtime::nominations::{NominationStatus, NominationStore};
+
+    let store = NominationStore::with_dir(nom_dir.to_path_buf());
+    let decided: Vec<_> = store
+        .list(None)
+        .into_iter()
+        .filter(|n| {
+            matches!(
+                n.status,
+                NominationStatus::Accepted | NominationStatus::Rejected
+            )
+        })
+        .collect();
+
+    let mut removed = 0usize;
+    for nom in &decided {
+        let file = nom_dir.join(format!("{}.json", nom.id));
+        if std::fs::remove_file(&file).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn memory_summary_contains_all_tiers() {
+        let result = memory_summary();
+        assert!(result.contains("claude-md"), "should mention claude-md tier");
+        assert!(result.contains("nominations"), "should mention nominations tier");
+        assert!(result.contains("daily"), "should mention daily tier");
+        assert!(result.contains("vault"), "should mention vault tier");
+    }
+
+    #[test]
+    fn memory_show_unknown_tier_returns_error() {
+        let result = memory_show(Some("nonexistent-tier"));
+        assert!(result.contains("Unknown tier"), "should report unknown tier");
+    }
+
+    #[test]
+    fn memory_show_no_tier_returns_usage() {
+        let result = memory_show(None);
+        assert!(result.contains("Usage"), "should show usage when no tier given");
+    }
+
+    #[test]
+    fn memory_show_vault_tier_returns_security_message() {
+        let result = memory_show(Some("vault"));
+        assert!(
+            result.contains("security") || result.contains("encrypted"),
+            "vault show should mention security/encryption"
+        );
+    }
+
+    #[test]
+    fn memory_show_private_tier_returns_security_message() {
+        let result = memory_show(Some("private"));
+        assert!(
+            result.contains("encrypted") || result.contains("vault"),
+            "private show should mention encryption"
+        );
+    }
+
+    #[test]
+    fn memory_inspect_empty_key_returns_usage() {
+        let result = memory_inspect("");
+        assert!(result.contains("Usage"), "should show usage for empty key");
+    }
+
+    #[test]
+    fn memory_inspect_nonexistent_key_reports_not_found() {
+        let result = memory_inspect("xyzzy_nonexistent_key_99999");
+        assert!(result.contains("No entries"), "should report no entries found");
+    }
+
+    #[test]
+    fn memory_promote_empty_id_returns_usage() {
+        let result = memory_promote("");
+        assert!(result.contains("Usage"), "should show usage for empty id");
+    }
+
+    #[test]
+    fn memory_forget_empty_key_returns_usage() {
+        let result = memory_forget("");
+        assert!(result.contains("Usage"), "should show usage for empty key");
+    }
+
+    #[test]
+    fn memory_why_mentions_injection_order() {
+        let result = memory_why();
+        assert!(result.contains("system prompt"), "should describe system prompt");
+        assert!(result.contains("CLAUDE.md"), "should mention CLAUDE.md");
+    }
+
+    #[test]
+    fn memory_budget_shows_tiers_and_totals() {
+        let result = memory_budget();
+        assert!(result.contains("claude-md"), "should show claude-md tier");
+        assert!(result.contains("TOTAL"), "should show total row");
+        assert!(
+            result.contains("Tokens") || result.contains("token"),
+            "should show token estimate"
+        );
+    }
+
+    #[test]
+    fn memory_prune_returns_summary_with_both_tiers() {
+        let result = memory_prune();
+        assert!(result.contains("daily"), "should mention daily pruning");
+        assert!(result.contains("nominations"), "should mention nominations pruning");
+    }
+
+    #[test]
+    fn handle_memory_command_none_dispatches_to_summary() {
+        let result = handle_memory_command(None);
+        assert!(result.contains("claude-md"), "summary should contain tier info");
+    }
+
+    #[test]
+    fn handle_memory_command_dispatches_subcommands() {
+        let why = handle_memory_command(Some("why"));
+        assert!(why.contains("system prompt"), "why should describe injection");
+
+        let budget = handle_memory_command(Some("budget"));
+        assert!(budget.contains("TOTAL"), "budget should show totals");
+
+        let unknown = handle_memory_command(Some("explode"));
+        assert!(unknown.contains("Unknown"), "unknown subcommand should error");
     }
 }
