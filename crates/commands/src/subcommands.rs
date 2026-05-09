@@ -1480,3 +1480,59 @@ pub const PROFILE_SUBCOMMANDS: &[SubcommandSpec] = &[
         subcommands: &[],
     },
 ];
+
+// ─── /memory subcommands (v2.3.0 W15) ────────────────────────────────────────
+
+pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "show",
+        summary: "Print contents of a memory tier",
+        args: &[ArgSpec::OneOf(&[
+            "claude-md",
+            "vault",
+            "private",
+            "nominations",
+            "daily",
+            "file-cache",
+            "cmd-cache",
+            "goals",
+        ])],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "inspect",
+        summary: "Find a key across all tiers and show matching entries",
+        args: &[ArgSpec::FreeText { hint: "<key>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "promote",
+        summary: "Accept a pending nomination into CLAUDE.md",
+        args: &[ArgSpec::FreeText { hint: "<nomination-id>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "forget",
+        summary: "Remove a key from CLAUDE.md or reject a pending nomination",
+        args: &[ArgSpec::FreeText { hint: "<key>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "why",
+        summary: "Explain what is loaded into the current system prompt",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "budget",
+        summary: "Show token budget breakdown by memory tier",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "prune",
+        summary: "Remove stale entries from daily and nominations tiers",
+        args: &[],
+        subcommands: &[],
+    },
+];

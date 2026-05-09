@@ -241,13 +241,43 @@ Examples:
     SlashCommandSpec {
         name: "memory",
         aliases: &[],
-        summary: "Inspect loaded Anvil instruction memory files",
-        argument_hint: None,
+        summary: "Inspect and manage all memory tiers (CLAUDE.md, vault, nominations, cache, \u{2026})",
+        argument_hint: Some("[show|inspect|promote|forget|why|budget|prune] [arg]"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
-        detailed_help: "",
+        detailed_help: "\
+/memory — memory tier inspector and manager
 
-        subcommands: &[],
+SUBCOMMANDS
+  (none)              Print a one-line count for every active memory tier
+  show <tier>         Dump contents of a specific tier
+  inspect <key>       Search all tiers for an entry matching <key>
+  promote <id>        Accept a pending nomination into CLAUDE.md
+  forget <key>        Remove an entry from CLAUDE.md (or reject a nomination)
+  why                 Explain which blocks are injected into the system prompt
+  budget              Show per-tier byte and estimated token usage
+  prune               Remove stale entries from daily/nominations tiers
+
+TIERS
+  claude-md           CLAUDE.md / MEMORY.md project instruction files
+  vault               Encrypted credentials managed by /vault
+  private             AES-encrypted per-project memory (vault-locked)
+  nominations         Pending knowledge nominations awaiting /memory promote
+  daily               Per-session daily summaries and task reconciliation
+  file-cache          File-fingerprint cache (W11 token economy)
+  cmd-cache           Command-output cache (W12 token economy)
+  goals               Long-running goal objects (/goal)
+
+EXAMPLES
+  /memory show claude-md
+  /memory inspect deploy
+  /memory promote abc123
+  /memory forget OLLAMA_HOST
+  /memory budget
+  /memory prune
+",
+
+        subcommands: crate::subcommands::MEMORY_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
