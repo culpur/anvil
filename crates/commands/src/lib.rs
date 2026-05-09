@@ -1306,7 +1306,8 @@ mod tests {
         //         + restart (Phase 5 placeholder) = +13 total
         // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
         // v2.2.11 W2: +1 (effort), W3: +1 (goal), W4: +1 (profile) = 108 total
-        assert_eq!(slash_command_specs().len(), 108);
+        // v2.3 W11: +1 (file-cache), W12: +1 (cmd-cache) = 110 total
+        assert_eq!(slash_command_specs().len(), 110);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }

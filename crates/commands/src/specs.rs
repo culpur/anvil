@@ -1830,7 +1830,7 @@ Usage:
         name: "skill",
         aliases: &[],
         summary: "Load, suggest, or list Anvil skills",
-        argument_hint: Some("[suggest [<prompt>]|load <name>|list]"),
+        argument_hint: Some("[suggest [<prompt>]|load <name>|list|chains]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "\
@@ -1839,8 +1839,9 @@ Usage:
 Usage:
   /skill list               List all available skills
   /skill load <name>        Prepend skill body to the next system prompt turn
-  /skill suggest [<prompt>] Show trigger-matched skill suggestions for a prompt",
-        subcommands: &[],
+  /skill suggest [<prompt>] Show trigger-matched skill suggestions for a prompt
+  /skill chains             Show the skill chain graph (skills with chains_to entries)",
+        subcommands: crate::subcommands::SKILL_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
@@ -1971,6 +1972,20 @@ or the session ends. Set a persistent default in settings.json with:
         subcommands: &[],
         tui_available: true,
         web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
+        name: "file-cache",
+        aliases: &["fc"],
+        summary: "Inspect and manage the file-fingerprint cache (W11 token economy)",
+        argument_hint: Some("[list|stats|prune|forget <path>|summarize <path> <text>|known-files]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "/file-cache — File-fingerprint cache (W11 token economy)\n\nUsage:\n  /file-cache           List cached files\n  /file-cache list      Same as above\n  /file-cache stats     Show aggregate stats (entries, bytes)\n  /file-cache prune     Remove stale entries (deleted or changed files)\n  /file-cache forget <path>\n                        Drop the cache entry for a specific file\n  /file-cache summarize <path> <text>\n                        Attach a summary to a cached file entry\n  /file-cache known-files\n                        Show what would be injected into the system prompt",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },

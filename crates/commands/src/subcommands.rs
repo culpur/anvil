@@ -658,6 +658,33 @@ pub const SKILLS_SUBCOMMANDS: &[SubcommandSpec] = &[
     },
 ];
 
+pub const SKILL_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "list",
+        summary: "List all available skills",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "load",
+        summary: "Load a skill into the current session",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledSkills)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "suggest",
+        summary: "Show trigger-matched skill suggestions for a prompt",
+        args: &[ArgSpec::FreeText { hint: "[<prompt>]" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "chains",
+        summary: "Show the skill chain graph",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
 pub const BRANCH_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec {
         name: "create",
