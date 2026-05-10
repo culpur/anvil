@@ -12,6 +12,7 @@ pub(super) mod completion;
 pub(super) mod helpers;
 pub(super) mod layout;
 pub(super) mod list_viewport;
+pub(super) mod redraw;
 pub(super) mod scrollback;
 pub(super) mod state;
 pub(super) mod widgets;
@@ -146,6 +147,11 @@ pub struct AnvilTui {
     pub(super) lines_added: u32,
     /// Lines removed in current session (from git diff).
     pub(super) lines_removed: u32,
+    /// Unified redraw scheduler — coordinates dirty-region tracking and
+    /// frame-budget coalescing. Call sites that produce a visible change
+    /// should call `request_redraw(region)`; the main loop calls
+    /// `commit_redraw()` once per iteration. See `tui/redraw.rs` for design.
+    pub(super) redraw: redraw::RedrawScheduler,
 }
 
 impl AnvilTui {
@@ -245,6 +251,7 @@ impl AnvilTui {
                 status_line_config: StatusLineConfig::load(),
                 lines_added: initial_added,
                 lines_removed: initial_removed,
+                redraw: redraw::RedrawScheduler::new(),
             },
             TuiSender(tx),
         ))
@@ -378,6 +385,36 @@ impl AnvilTui {
     /// Apply a new theme to the TUI immediately (live hot-swap).
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    // ─── Redraw scheduler API ────────────────────────────────────────────────
+
+    /// Mark one or more dirty regions, deferring the actual paint until the
+    /// next `commit_redraw()`. Cheap; no I/O. Use for any state mutation that
+    /// is visible to the user (input edits, status-line changes, scrollback
+    /// appends, agent panel updates).
+    pub fn request_redraw(&mut self, region: redraw::DirtyRegions) {
+        self.redraw.request(region);
+    }
+
+    /// Mark every region dirty AND force the next `commit_redraw()` to paint
+    /// regardless of frame budget. Use after any structural change where
+    /// short-circuiting would leave stale pixels: tab switch, model switch,
+    /// modal open/close, sandbox-mode change, terminal resize.
+    pub fn request_full_redraw(&mut self) {
+        self.redraw.request_full();
+    }
+
+    /// Draw if (and only if) something is dirty AND the frame budget allows.
+    /// Returns Ok(true) if a draw fired, Ok(false) if it was deferred. Call
+    /// this once per main-loop iteration where a paint might be useful.
+    pub fn commit_redraw(&mut self) -> io::Result<bool> {
+        if self.redraw.commit_pending() {
+            self.draw()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     // ─── Draw ────────────────────────────────────────────────────────────────
