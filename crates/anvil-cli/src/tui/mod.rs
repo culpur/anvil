@@ -1271,8 +1271,21 @@ impl AnvilTui {
             }
             TuiEvent::TurnDone => {
                 self.relay_forward(runtime::relay::RelayMessage::TurnDone { tab_id });
-                // Refresh git/productivity stats after each turn (files may have changed)
+                // T4-K: snapshot diff totals BEFORE refresh so we can detect
+                // whether this turn actually changed any tracked files. If
+                // it did, surface a brief inline summary so the user sees
+                // the net delta without having to run `/diff`.
+                let prev_added = self.lines_added;
+                let prev_removed = self.lines_removed;
                 self.refresh_git_info();
+                let net_added = self.lines_added.saturating_sub(prev_added);
+                let net_removed = self.lines_removed.saturating_sub(prev_removed);
+                if net_added > 0 || net_removed > 0 {
+                    let summary = format!(
+                        "Files changed this turn: +{net_added} −{net_removed} (run /diff for full unified diff)"
+                    );
+                    self.active_tab_mut().log.push(LogEntry::System(summary));
+                }
             }
             TuiEvent::ToolCallStart { name } => {
                 self.relay_forward(runtime::relay::RelayMessage::ToolStart { tab_id, name: name.clone(), detail: String::new() });
