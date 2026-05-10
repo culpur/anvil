@@ -1532,7 +1532,7 @@ fn run_resume_command(
                 message: Some(format_compact_report(removed, kept, skipped)),
             })
         }
-        SlashCommand::Clear { confirm } => {
+        SlashCommand::Clear { confirm, all_tabs: _ } => {
             if !confirm {
                 return Ok(ResumeCommandOutcome {
                     session: session.clone(),
@@ -4030,9 +4030,23 @@ impl LiveCli {
                 let msg = self.set_effort(level);
                 (msg, false)
             }
-            SlashCommand::Clear { confirm } => {
+            SlashCommand::Clear { confirm, all_tabs } => {
                 let changed = self.clear_session(confirm)?;
-                (if changed { "Session cleared.".to_string() } else { "Use /clear --confirm to clear.".to_string() }, changed)
+                if changed {
+                    // T4-N: tell the TUI to wipe its visible display state so
+                    // the user no longer sees the just-cleared session.
+                    if let Some(tx) = self.tui_slot.lock().ok().and_then(|g| g.clone()) {
+                        tx.send(TuiEvent::WorkspaceClear { all_tabs });
+                    }
+                    let msg = if all_tabs {
+                        "Workspace cleared (all tabs).".to_string()
+                    } else {
+                        "Session cleared.".to_string()
+                    };
+                    (msg, true)
+                } else {
+                    ("Use /clear --confirm to clear.".to_string(), false)
+                }
             }
             SlashCommand::Init => {
                 run_init()?;
@@ -5463,7 +5477,7 @@ impl LiveCli {
             }
             SlashCommand::Model { model } => self.set_model(model)?,
             SlashCommand::Permissions { mode } => self.set_permissions(mode)?,
-            SlashCommand::Clear { confirm } => self.clear_session(confirm)?,
+            SlashCommand::Clear { confirm, all_tabs: _ } => self.clear_session(confirm)?,
             SlashCommand::Cost => {
                 self.print_cost();
                 false

@@ -706,11 +706,11 @@ fn normalizes_supported_permission_modes() {
 fn clear_command_requires_explicit_confirmation_flag() {
     assert_eq!(
         SlashCommand::parse("/clear"),
-        Some(SlashCommand::Clear { confirm: false })
+        Some(SlashCommand::Clear { confirm: false, all_tabs: false })
     );
     assert_eq!(
         SlashCommand::parse("/clear --confirm"),
-        Some(SlashCommand::Clear { confirm: true })
+        Some(SlashCommand::Clear { confirm: true, all_tabs: false })
     );
 }
 
@@ -724,7 +724,7 @@ fn parses_resume_and_config_slash_commands() {
     );
     assert_eq!(
         SlashCommand::parse("/clear --confirm"),
-        Some(SlashCommand::Clear { confirm: true })
+        Some(SlashCommand::Clear { confirm: true, all_tabs: false })
     );
     assert_eq!(
         SlashCommand::parse("/config"),

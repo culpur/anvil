@@ -38,6 +38,11 @@ pub enum TuiEvent {
     System(String),
     /// The turn is complete — clear the thinking indicator.
     TurnDone,
+    /// T4-N: `/clear` finished resetting the runtime — wipe the visible
+    /// display state for the active tab (or every tab when `all_tabs` is
+    /// true), so the user no longer sees messages from the discarded
+    /// session.
+    WorkspaceClear { all_tabs: bool },
 }
 
 /// A cloneable sender that model/tool code uses to push `TuiEvent`s.

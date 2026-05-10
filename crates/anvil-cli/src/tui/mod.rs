@@ -275,6 +275,44 @@ impl AnvilTui {
         &mut self.tabs[self.active_tab]
     }
 
+    /// Clear the active tab's visible display state — log, pending streaming
+    /// text, scrollback, and branches. Used by `/clear` (T4-N) so the TUI no
+    /// longer shows messages from a session that the runtime just discarded.
+    /// Tab id, name, model, session_id, and input buffer are preserved.
+    pub fn clear_active_tab_display(&mut self) {
+        let tab = self.active_tab_mut();
+        tab.log.clear();
+        tab.pending_text.clear();
+        tab.branches.clear();
+        tab.active_branch = 0;
+        tab.last_snapshot = None;
+        tab.log_len_at_snapshot = None;
+        tab.scrollback = crate::tui::scrollback::ScrollbackBuffer::new();
+        tab.scrollback_state = crate::tui::scrollback::ScrollbackState::live();
+        tab.input_tokens = 0;
+        tab.output_tokens = 0;
+        tab.has_unread = false;
+    }
+
+    /// Clear the display state of EVERY tab (workspace-wide /clear). Each tab
+    /// keeps its identity (id/name/model/session_id) but its log/scrollback/
+    /// branches/tokens are wiped. (T4-N: `/clear --all`.)
+    pub fn clear_all_tabs_display(&mut self) {
+        for tab in &mut self.tabs {
+            tab.log.clear();
+            tab.pending_text.clear();
+            tab.branches.clear();
+            tab.active_branch = 0;
+            tab.last_snapshot = None;
+            tab.log_len_at_snapshot = None;
+            tab.scrollback = crate::tui::scrollback::ScrollbackBuffer::new();
+            tab.scrollback_state = crate::tui::scrollback::ScrollbackState::live();
+            tab.input_tokens = 0;
+            tab.output_tokens = 0;
+            tab.has_unread = false;
+        }
+    }
+
     /// Add a new tab.  Returns the (0-based) index of the new tab.
     pub fn new_tab(&mut self, name: impl Into<String>, model: impl Into<String>, session_id: impl Into<String>) -> usize {
         let id = self.next_tab_id;
@@ -1332,6 +1370,13 @@ impl AnvilTui {
             }
             TuiEvent::System(msg) => {
                 self.active_tab_mut().log.push(LogEntry::System(msg));
+            }
+            TuiEvent::WorkspaceClear { all_tabs } => {
+                if all_tabs {
+                    self.clear_all_tabs_display();
+                } else {
+                    self.clear_active_tab_display();
+                }
             }
         }
     }

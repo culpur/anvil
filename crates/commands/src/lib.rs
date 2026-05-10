@@ -113,6 +113,9 @@ pub enum SlashCommand {
     },
     Clear {
         confirm: bool,
+        /// T4-N: When true, clear EVERY tab in the TUI workspace (not just
+        /// the active one). Triggered by `/clear --all` (with `--confirm`).
+        all_tabs: bool,
     },
     Cost,
     Resume {
@@ -521,8 +524,18 @@ impl SlashCommand {
             "permissions" => Self::Permissions {
                 mode: parts.next().map(ToOwned::to_owned),
             },
-            "clear" => Self::Clear {
-                confirm: parts.next() == Some("--confirm"),
+            "clear" => {
+                // Accept --confirm and --all in either order.
+                let mut confirm = false;
+                let mut all_tabs = false;
+                for arg in parts.by_ref() {
+                    match arg {
+                        "--confirm" => confirm = true,
+                        "--all" => all_tabs = true,
+                        _ => {}
+                    }
+                }
+                Self::Clear { confirm, all_tabs }
             },
             "cost" | "usage" | "stats" => Self::Cost,
             "resume" => Self::Resume {
@@ -1170,11 +1183,19 @@ mod tests {
         );
         assert_eq!(
             SlashCommand::parse("/clear"),
-            Some(SlashCommand::Clear { confirm: false })
+            Some(SlashCommand::Clear { confirm: false, all_tabs: false })
         );
         assert_eq!(
             SlashCommand::parse("/clear --confirm"),
-            Some(SlashCommand::Clear { confirm: true })
+            Some(SlashCommand::Clear { confirm: true, all_tabs: false })
+        );
+        assert_eq!(
+            SlashCommand::parse("/clear --all --confirm"),
+            Some(SlashCommand::Clear { confirm: true, all_tabs: true })
+        );
+        assert_eq!(
+            SlashCommand::parse("/clear --confirm --all"),
+            Some(SlashCommand::Clear { confirm: true, all_tabs: true })
         );
         assert_eq!(SlashCommand::parse("/cost"), Some(SlashCommand::Cost));
         assert_eq!(SlashCommand::parse("/usage"), Some(SlashCommand::Cost));
@@ -1989,7 +2010,7 @@ mod tests {
             SlashCommand::DebugToolCall,
             SlashCommand::Model { model: None },
             SlashCommand::Permissions { mode: None },
-            SlashCommand::Clear { confirm: false },
+            SlashCommand::Clear { confirm: false, all_tabs: false },
             SlashCommand::Cost,
             SlashCommand::Resume { session_path: None },
             SlashCommand::Config { section: None },
