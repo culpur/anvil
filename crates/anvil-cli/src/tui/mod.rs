@@ -48,6 +48,7 @@ use runtime::theme::StatusLineConfig;
 
 use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
+use vt100::Color as Vt100Color;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
@@ -161,6 +162,11 @@ pub struct AnvilTui {
     /// caller can fire it as the next prompt without going back through
     /// `read_input`.
     pub(super) pending_submit: Option<String>,
+    /// T5-Ssh-D: true for exactly one key cycle after the user presses
+    /// Ctrl+B in an SSH tab. The NEXT key consumed will be interpreted as an
+    /// escape command (digit → tab switch, 'q' → close SSH tab) rather than
+    /// forwarded to the remote shell.
+    pub(super) ssh_escape_pending: bool,
 }
 
 impl AnvilTui {
@@ -262,6 +268,7 @@ impl AnvilTui {
                 lines_removed: initial_removed,
                 redraw: redraw::RedrawScheduler::new(),
                 pending_submit: None,
+                ssh_escape_pending: false,
             },
             TuiSender(tx),
         ))
@@ -614,6 +621,123 @@ impl AnvilTui {
         }
         let configure_viewport = self.configure_viewport;
 
+        // T5-Ssh-D: pre-snapshot the active SSH tab's vt100 screen so the draw
+        // closure (which takes &mut Terminal) can render it without borrowing self.
+        // We build the grid as Vec<Line<'static>> here; color mapping is:
+        //   vt100::Color::Default → Color::Reset
+        //   vt100::Color::Idx(n)  → Color::Indexed(n)
+        //   vt100::Color::Rgb(r,g,b) → Color::Rgb(r,g,b)
+        let ssh_screen: Option<(Vec<Line<'static>>, Vec<Line<'static>>)> = {
+            let tab = self.active_tab();
+            if let Some(ref ssh) = tab.ssh {
+                let screen = ssh.parser.screen();
+                let (rows, cols) = screen.size();
+                let map_color = |c: Vt100Color| -> Color {
+                    match c {
+                        Vt100Color::Default => Color::Reset,
+                        Vt100Color::Idx(n) => Color::Indexed(n),
+                        Vt100Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+                    }
+                };
+                let mut grid_lines: Vec<Line<'static>> = Vec::with_capacity(rows as usize);
+                for row in 0..rows {
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    let mut run = String::new();
+                    let mut run_style = Style::default();
+                    let flush_run = |run: &mut String, style: Style, spans: &mut Vec<Span<'static>>| {
+                        if !run.is_empty() {
+                            spans.push(Span::styled(std::mem::take(run), style));
+                        }
+                    };
+                    for col in 0..cols {
+                        if let Some(cell) = screen.cell(row, col) {
+                            if cell.is_wide_continuation() {
+                                continue;
+                            }
+                            let fg = map_color(cell.fgcolor());
+                            let bg = map_color(cell.bgcolor());
+                            let mut style = Style::default().fg(fg).bg(bg);
+                            if cell.bold() {
+                                style = style.add_modifier(Modifier::BOLD);
+                            }
+                            if cell.italic() {
+                                style = style.add_modifier(Modifier::ITALIC);
+                            }
+                            if cell.underline() {
+                                style = style.add_modifier(Modifier::UNDERLINED);
+                            }
+                            if cell.inverse() {
+                                style = style.add_modifier(Modifier::REVERSED);
+                            }
+                            if style != run_style {
+                                flush_run(&mut run, run_style, &mut spans);
+                                run_style = style;
+                            }
+                            let ch = cell.contents();
+                            if ch.is_empty() {
+                                run.push(' ');
+                            } else {
+                                run.push_str(ch);
+                            }
+                        } else {
+                            if run_style != Style::default() {
+                                flush_run(&mut run, run_style, &mut spans);
+                                run_style = Style::default();
+                            }
+                            run.push(' ');
+                        }
+                    }
+                    flush_run(&mut run, run_style, &mut spans);
+                    grid_lines.push(Line::from(spans));
+                }
+                // Build the footer lines for this SSH tab.
+                let elapsed = ssh.opened_at.elapsed();
+                let elapsed_str = if elapsed.as_secs() >= 3600 {
+                    format!("{}h {}m", elapsed.as_secs() / 3600, (elapsed.as_secs() % 3600) / 60)
+                } else {
+                    format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+                };
+                let dest = ssh.destination.clone();
+                let state_label = ssh.state.label();
+                let footer_primary = Line::from(vec![
+                    Span::styled(
+                        format!(" [{state_label}] {dest}  {elapsed_str} "),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    ),
+                    Span::styled(
+                        " Ctrl+B 0-9=switch  Ctrl+B q=close ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+                let mut footer_lines: Vec<Line<'static>> = vec![footer_primary];
+                match &ssh.state {
+                    crate::tui::ssh_tab::SshConnState::AuthFailed(reason) => {
+                        footer_lines.push(Line::from(Span::styled(
+                            format!(" auth failed: {reason}"),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                    crate::tui::ssh_tab::SshConnState::Error(msg) => {
+                        footer_lines.push(Line::from(Span::styled(
+                            format!(" error: {msg}"),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                    crate::tui::ssh_tab::SshConnState::Disconnected(Some(reason)) => {
+                        footer_lines.push(Line::from(Span::styled(
+                            format!(" disconnected: {reason}"),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                    _ => {}
+                }
+                Some((grid_lines, footer_lines))
+            } else {
+                None
+            }
+        };
+        let is_ssh_tab = ssh_screen.is_some();
+
         self.terminal.draw(|frame| {
             let size = frame.area();
             let width = size.width as usize;
@@ -735,6 +859,37 @@ impl AnvilTui {
             // ── content ─────────────────────────────────────────────────────
             let content_width = content_area.width;
 
+            // T5-Ssh-D: SSH tabs render the vt100 grid + a status footer
+            // instead of the normal chat log.  The grid was pre-snapshotted
+            // above to avoid borrowing self inside this closure.
+            if is_ssh_tab {
+                if let Some((grid_lines, footer_lines)) = ssh_screen {
+                    frame.render_widget(ratatui::widgets::Clear, content_area);
+                    // Reserve the last N rows of content_area for the footer.
+                    let footer_height = footer_lines.len() as u16;
+                    let grid_height = content_area.height.saturating_sub(footer_height);
+                    let grid_area = ratatui::layout::Rect {
+                        x: content_area.x,
+                        y: content_area.y,
+                        width: content_area.width,
+                        height: grid_height,
+                    };
+                    let status_area = ratatui::layout::Rect {
+                        x: content_area.x,
+                        y: content_area.y + grid_height,
+                        width: content_area.width,
+                        height: footer_height,
+                    };
+                    let grid_widget = Paragraph::new(Text::from(grid_lines));
+                    frame.render_widget(grid_widget, grid_area);
+                    let footer_widget = Paragraph::new(Text::from(footer_lines));
+                    frame.render_widget(footer_widget, status_area);
+                }
+                // Skip the rest of the content+footer section — the SSH tab
+                // renders its own status line; the normal input box and status
+                // widgets below still render so the tab bar stays visible.
+            } else {
+
             let all_lines: Vec<Line<'static>> = if configure_state == ConfigureState::Inactive {
                 let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -843,6 +998,8 @@ impl AnvilTui {
                 .style(Style::default().fg(Color::White))
                 .wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(content_widget, content_area);
+
+            } // end else (non-SSH tab content path)
 
             // ── agent panel ──────────────────────────────────────────────────
             if let Some(panel_area) = agent_panel_area {

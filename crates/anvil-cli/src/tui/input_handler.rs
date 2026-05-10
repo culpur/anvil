@@ -23,6 +23,49 @@ impl AnvilTui {
     /// Returns `Ok(None)` when the user exits (`/exit`, Ctrl+C on empty, Ctrl+D).
     pub fn read_input(&mut self) -> io::Result<ReadResult> {
         self.active_tab_mut().think_frame = self.active_tab().think_frame.wrapping_add(1);
+
+        // T5-Ssh-D: drain all SSH tabs each frame, capped at 64 KB per tab to
+        // prevent a noisy remote (e.g. `cat /dev/urandom`) from starving the UI.
+        {
+            const MAX_BYTES_PER_FRAME: usize = 64 * 1024;
+            let mut needs_redraw = false;
+            for tab in &mut self.tabs {
+                if let Some(ref mut ssh) = tab.ssh {
+                    let mut bytes_drained: usize = 0;
+                    let mut got_stdout = false;
+                    while let Ok(chunk) = ssh.stdout_rx.try_recv() {
+                        bytes_drained += chunk.len();
+                        ssh.parser.process(&chunk);
+                        got_stdout = true;
+                        if bytes_drained >= MAX_BYTES_PER_FRAME {
+                            break;
+                        }
+                    }
+                    let got_event = ssh.drain_events();
+                    if got_stdout || got_event {
+                        needs_redraw = true;
+                    }
+                }
+            }
+            if needs_redraw {
+                self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+            }
+        }
+
+        // Propagate terminal resize to all active SSH tabs.
+        if let Ok(size) = crossterm::terminal::size() {
+            let (cols, rows) = size;
+            for tab in &mut self.tabs {
+                if let Some(ref mut ssh) = tab.ssh {
+                    // Use the full terminal size as an approximation; the exact
+                    // inner pane dimensions differ by the header/footer, but this
+                    // is close enough and avoids a layout re-run here.
+                    let _ = ssh.resize_tx.send((u32::from(cols), u32::from(rows)));
+                    ssh.parser.screen_mut().set_size(rows, cols);
+                }
+            }
+        }
+
         self.draw()?;
 
         if event::poll(Duration::from_millis(80))? {
@@ -86,6 +129,63 @@ impl AnvilTui {
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
         use super::configure_types::ConfigureState;
+
+        // T5-Ssh-D: key forwarding for active SSH tabs.
+        //
+        // Ctrl+B is the SSH-mode escape prefix (matching screen/tmux convention).
+        // It is never forwarded to the remote shell. Instead:
+        //   - Ctrl+B alone:      sets ssh_escape_pending = true and returns.
+        //   - While pending, digit '0'–'9': switch to that tab index and clear.
+        //   - While pending, 'q': close the SSH tab (drops SshTabState; the
+        //     bridge thread exits when its channels drop).
+        //   - While pending, any other key: clear and forward normally.
+        //
+        // All other keys while ssh.is_some() are encoded via key_event_to_bytes
+        // and forwarded to the remote shell; this function then returns Continue
+        // so the normal chat-mode handlers don't also process the key.
+        if self.active_tab().ssh.is_some() {
+            let is_ctrl_b = key.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key.code, KeyCode::Char('b' | 'B'));
+
+            if self.ssh_escape_pending {
+                self.ssh_escape_pending = false;
+                match key.code {
+                    KeyCode::Char(ch) if ch.is_ascii_digit() => {
+                        let n = ch as usize - '0' as usize;
+                        self.switch_tab(n.saturating_sub(1));
+                        return Ok(ReadResult::Continue);
+                    }
+                    KeyCode::Char('q' | 'Q') => {
+                        // Close the SSH tab: drop SshTabState. The bridge's
+                        // channels close and the tokio thread exits naturally.
+                        self.active_tab_mut().ssh = None;
+                        self.push_system("SSH tab closed.".to_string());
+                        return Ok(ReadResult::Continue);
+                    }
+                    _ => {
+                        // Any other key after Ctrl+B: treat as if Ctrl+B was not
+                        // pressed — fall through to normal forward path below.
+                    }
+                }
+            }
+
+            if is_ctrl_b {
+                // Arm the escape state. This key is consumed here and not forwarded.
+                self.ssh_escape_pending = true;
+                return Ok(ReadResult::Continue);
+            }
+
+            // Forward every other key to the remote shell via key_event_to_bytes.
+            let bytes = crate::tui::ssh_tab::key_event_to_bytes(key);
+            if !bytes.is_empty() {
+                if let Some(ref ssh) = self.active_tab().ssh {
+                    ssh.send_bytes(&bytes);
+                }
+                return Ok(ReadResult::Continue);
+            }
+            // Unrecognised key (empty bytes): fall through to normal handling
+            // so things like Ctrl+T (new tab) still work even in SSH mode.
+        }
 
         if self.configure_state != ConfigureState::Inactive {
             if key.modifiers.contains(KeyModifiers::CONTROL)
