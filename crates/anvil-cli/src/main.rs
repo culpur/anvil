@@ -7210,6 +7210,8 @@ impl LiveCli {
                     has_unread: false,
                     branches: Vec::new(),
                     active_branch: 0,
+                    last_snapshot: None,
+                    log_len_at_snapshot: None,
                     scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
                     scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
                 };

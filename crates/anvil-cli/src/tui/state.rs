@@ -1,4 +1,5 @@
 /// UI state types: events, tab state, log entries, completion popup.
+use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
@@ -234,10 +235,20 @@ pub(crate) struct Tab {
     pub session_id: String,
     pub completion: CompletionPopup,
     pub has_unread: bool,
-    /// Conversation branches — each is a snapshot of log at branch point.
-    pub branches: Vec<(String, Vec<LogEntry>)>,
+    /// Conversation branches — each is an Arc-shared snapshot of log at branch
+    /// point. Using Arc lets `/fork` create a branch in O(1) (refcount bump,
+    /// no element clone). The actual log only diverges on the next push, at
+    /// which point the Arc gets cloned-on-write into the live `log` Vec.
+    /// (T3-I — see #344/#411.)
+    pub branches: Vec<(String, Arc<Vec<LogEntry>>)>,
     /// Active branch index (0 = main, 1+ = branches).
     pub active_branch: usize,
+    /// T3-I: most recent Arc snapshot of `log` for structural-sharing on
+    /// repeated `/fork` and `/fork switch`. Reused when `log_len_at_snapshot`
+    /// equals `log.len()` (i.e. no pushes have happened since capture).
+    pub last_snapshot: Option<Arc<Vec<LogEntry>>>,
+    /// `log.len()` at the time `last_snapshot` was taken.
+    pub log_len_at_snapshot: Option<usize>,
     /// Ring buffer holding the last N rendered text lines for in-TUI scrollback.
     pub scrollback: ScrollbackBuffer,
     /// Current scrollback navigation state (None = live view).
@@ -269,28 +280,66 @@ impl Tab {
             has_unread: false,
             branches: Vec::new(),
             active_branch: 0,
+            last_snapshot: None,
+            log_len_at_snapshot: None,
             scrollback: ScrollbackBuffer::new(),
             scrollback_state: ScrollbackState::live(),
         }
     }
 
     /// Create a new conversation branch from the current log state.
+    ///
+    /// Branches share their snapshot via `Arc<Vec<LogEntry>>`. We track the
+    /// most recent snapshot and the live log's len at the time of capture;
+    /// if the user `/fork`s again without having pushed to log in between,
+    /// the branch reuses the existing Arc — true O(1) refcount-only fork.
+    /// If log has been mutated, we capture a fresh snapshot (one Vec clone).
+    /// (T3-I — see #344/#411.)
     pub fn create_branch(&mut self, name: &str) -> usize {
-        self.branches.push((name.to_string(), self.log.clone()));
+        let snapshot: Arc<Vec<LogEntry>> =
+            match (&self.last_snapshot, self.log_len_at_snapshot) {
+                (Some(arc), Some(len)) if len == self.log.len() => Arc::clone(arc),
+                _ => {
+                    let fresh = Arc::new(self.log.clone());
+                    self.last_snapshot = Some(Arc::clone(&fresh));
+                    self.log_len_at_snapshot = Some(self.log.len());
+                    fresh
+                }
+            };
+        self.branches.push((name.to_string(), snapshot));
         self.branches.len() // 1-indexed for display
     }
 
     /// Switch to a branch by index (1-indexed). 0 = stay on current.
+    ///
+    /// Saving the current live log into the previously-active branch slot
+    /// reuses the cached `last_snapshot` Arc when log hasn't grown since
+    /// the last capture; otherwise pays one Vec clone. Restoring is one
+    /// clone-on-read since `log` must be a Vec.
     pub fn switch_branch(&mut self, idx: usize) -> bool {
         if idx == 0 || idx > self.branches.len() {
             return false;
         }
-        // Save current log to the previously active branch slot
+        // Save current log into the previously active branch slot.
         if self.active_branch > 0 && self.active_branch <= self.branches.len() {
-            self.branches[self.active_branch - 1].1 = self.log.clone();
+            let slot_idx = self.active_branch - 1;
+            let saved: Arc<Vec<LogEntry>> =
+                match (&self.last_snapshot, self.log_len_at_snapshot) {
+                    (Some(arc), Some(len)) if len == self.log.len() => Arc::clone(arc),
+                    _ => {
+                        let fresh = Arc::new(self.log.clone());
+                        self.last_snapshot = Some(Arc::clone(&fresh));
+                        self.log_len_at_snapshot = Some(self.log.len());
+                        fresh
+                    }
+                };
+            self.branches[slot_idx].1 = saved;
         }
-        // Restore the target branch
-        self.log = self.branches[idx - 1].1.clone();
+        // Restore the target branch — clone-on-read since `log` must be mut.
+        let target = Arc::clone(&self.branches[idx - 1].1);
+        self.log = (*target).clone();
+        self.last_snapshot = Some(target);
+        self.log_len_at_snapshot = Some(self.log.len());
         self.active_branch = idx;
         true
     }
@@ -303,6 +352,70 @@ impl Tab {
             .enumerate()
             .map(|(i, (name, _))| (i + 1, name.as_str(), i + 1 == self.active_branch))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::*;
+
+    fn fresh_tab() -> Tab {
+        Tab::new(0, "test", "model", "session")
+    }
+
+    #[test]
+    fn back_to_back_forks_share_snapshot_arc() {
+        // T3-I: two /forks against an unchanged log should share the same Arc
+        // (refcount-only snapshot reuse).
+        let mut tab = fresh_tab();
+        tab.log.push(LogEntry::User("hello".to_string()));
+        tab.create_branch("a");
+        tab.create_branch("b");
+        let arc_a = Arc::clone(&tab.branches[0].1);
+        let arc_b = Arc::clone(&tab.branches[1].1);
+        assert!(
+            Arc::ptr_eq(&arc_a, &arc_b),
+            "back-to-back forks should reuse the same Arc snapshot"
+        );
+    }
+
+    #[test]
+    fn fork_after_log_push_takes_fresh_snapshot() {
+        // After a log mutation, the next /fork must NOT reuse the prior Arc.
+        let mut tab = fresh_tab();
+        tab.log.push(LogEntry::User("hello".to_string()));
+        tab.create_branch("a");
+        tab.log.push(LogEntry::User("more".to_string()));
+        tab.create_branch("b");
+        assert!(
+            !Arc::ptr_eq(&tab.branches[0].1, &tab.branches[1].1),
+            "post-mutation fork should produce a divergent snapshot"
+        );
+        assert_eq!(tab.branches[0].1.len(), 1);
+        assert_eq!(tab.branches[1].1.len(), 2);
+    }
+
+    #[test]
+    fn switch_branch_restores_log_state() {
+        let mut tab = fresh_tab();
+        tab.log.push(LogEntry::User("alpha".to_string()));
+        tab.create_branch("a"); // branch 1 captures [alpha]
+        tab.log.push(LogEntry::User("beta".to_string())); // live now [alpha, beta]
+        tab.create_branch("b"); // branch 2 captures [alpha, beta]
+        // switch back to branch 1
+        assert!(tab.switch_branch(1));
+        assert_eq!(tab.log.len(), 1);
+        // switch to branch 2
+        assert!(tab.switch_branch(2));
+        assert_eq!(tab.log.len(), 2);
+    }
+
+    #[test]
+    fn switch_branch_rejects_invalid_index() {
+        let mut tab = fresh_tab();
+        tab.create_branch("only");
+        assert!(!tab.switch_branch(0));
+        assert!(!tab.switch_branch(99));
     }
 }
 
