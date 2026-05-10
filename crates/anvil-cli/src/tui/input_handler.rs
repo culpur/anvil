@@ -150,13 +150,43 @@ impl AnvilTui {
                 }
                 Some(SshFormResult::Submit(config, alias)) => {
                     self.ssh_form = None;
-                    // Store for T5-Ssh-F wiring; push a system message for now.
                     let dest = format!("{}@{}:{}", config.user, config.host, config.port);
+                    // T5-Ssh-F: spawn the bridge and attach the SSH tab.
+                    let (cols, rows) = crossterm::terminal::size()
+                        .unwrap_or((220, 50));
+                    let channels = super::ssh_bridge::spawn_session(
+                        config.clone(),
+                        (u32::from(cols), u32::from(rows)),
+                    );
+                    let ssh_state = super::ssh_tab::SshTabState::new(
+                        dest.clone(),
+                        cols,
+                        rows,
+                        channels.stdout_rx,
+                        channels.stdin_tx,
+                        channels.resize_tx,
+                        channels.events_rx,
+                    );
+                    // Create a new tab for this SSH connection. SSH tabs use a
+                    // dummy model string and an empty session_id — they carry no
+                    // AI context.
+                    let tab_name = format!("ssh:{dest}");
+                    let idx = self.new_tab(tab_name, "ssh", "");
+                    self.tabs[idx].ssh = Some(ssh_state);
+                    self.switch_tab(idx);
                     self.push_system(format!("SSH connecting to {dest}…"));
-                    // The bridge spawn + tab creation is wired in Commit F.
-                    // For now, store the pending connect request in a temporary
-                    // field on AnvilTui (added in Commit F).
-                    let _ = (config, alias); // suppress unused-variable warning
+                    // Optionally save the alias to the vault. Failures are
+                    // non-fatal — missing vault or locked vault just silently
+                    // skips the save.
+                    if let Some(ref name) = alias {
+                        if runtime::vault_is_session_unlocked() {
+                            let name_copy = name.clone();
+                            let _ = runtime::with_session_vault(|vm| {
+                                runtime::ssh::save_ssh_alias(vm, &name_copy, &config)
+                                    .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+                            });
+                        }
+                    }
                     self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
                     return Ok(ReadResult::Continue);
                 }

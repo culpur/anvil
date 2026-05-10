@@ -3875,6 +3875,15 @@ impl LiveCli {
                 let _ = tui.draw();
                 return Ok(false);
             }
+            SlashCommand::Ssh { args } => {
+                // T5-Ssh-F: /ssh end-to-end wiring.
+                // - bare `/ssh`         → open the SSH form modal
+                // - `/ssh <alias>`      → load alias from vault and prefill form
+                // - `/ssh save <alias>` → save active SSH tab's config to vault
+                // - `/ssh list`         → list saved aliases
+                self.handle_ssh_tui_command(args.as_deref(), tui)?;
+                return Ok(false);
+            }
             SlashCommand::Focus => {
                 tui.focus_mode = !tui.focus_mode;
                 tui.push_system(if tui.focus_mode {
@@ -4253,11 +4262,11 @@ impl LiveCli {
             SlashCommand::Regex { action } => {
                 (self.run_regex_command(action.as_deref()), false)
             }
-            // T5-Ssh: embedded SSH client (Phase A — parser only; full wiring in Phase F)
-            // Supersedes the prior `/ssh` session-manager stub; the new contract
-            // delivers a real interactive SSH tab inside Anvil.
+            // T5-Ssh: embedded SSH client — REPL (non-TUI) fallback only.
+            // TUI wiring is handled in handle_repl_command_tui above.
+            // In the plain REPL we just explain that SSH needs the TUI.
             SlashCommand::Ssh { args: _ } => {
-                ("/ssh: embedded SSH client not yet wired (Phase F).".to_string(), false)
+                ("/ssh requires the TUI — run `anvil` without --print to use the embedded SSH client.".to_string(), false)
             }
             // Feature 14 — log analysis
             SlashCommand::Logs { action } => {
@@ -7732,6 +7741,169 @@ impl LiveCli {
 
     fn run_ssh_command(args: Option<&str>) -> String {
         cmd_static::run_ssh_command(args)
+    }
+
+    // ─── T5-Ssh-F: /ssh TUI dispatch ─────────────────────────────────────────
+
+    /// Handle the `/ssh` slash command in TUI mode.
+    ///
+    /// - bare `/ssh`                → open the SSH form modal
+    /// - `/ssh <alias>`             → load alias from vault and prefill form
+    /// - `/ssh save <alias>`        → save active SSH tab's config to vault
+    /// - `/ssh list`                → list saved aliases
+    fn handle_ssh_tui_command(
+        &mut self,
+        args: Option<&str>,
+        tui: &mut crate::tui::AnvilTui,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let action = args.unwrap_or("").trim();
+
+        // `/ssh save <alias>` — persist the active tab's SSH config.
+        if let Some(alias) = action.strip_prefix("save ").map(str::trim) {
+            if alias.is_empty() {
+                tui.push_system("/ssh save requires an alias name".to_string());
+                return Ok(());
+            }
+            if !runtime::vault_is_session_unlocked() {
+                tui.push_system(
+                    "/ssh save requires the vault to be unlocked. Run /vault unlock first."
+                        .to_string(),
+                );
+                return Ok(());
+            }
+            // Retrieve config from the active SSH tab.
+            let config_opt = tui
+                .active_tab()
+                .ssh
+                .as_ref()
+                .map(|s| runtime::ssh::SshConfig {
+                    host: {
+                        // destination is "user@host:port"; parse host out.
+                        let dest = &s.destination;
+                        let after_at = dest.split('@').nth(1).unwrap_or(dest);
+                        // rsplit(':') returns port first, then host
+                        let host_part = after_at.rsplit(':').nth(1).unwrap_or(after_at);
+                        host_part.to_string()
+                    },
+                    port: {
+                        let dest = &s.destination;
+                        let after_at = dest.split('@').nth(1).unwrap_or(dest);
+                        after_at
+                            .rsplit(':')
+                            .next()
+                            .and_then(|p| p.parse().ok())
+                            .unwrap_or(22)
+                    },
+                    user: {
+                        let dest = &s.destination;
+                        dest.split('@').next().unwrap_or("").to_string()
+                    },
+                    // We can't reconstruct the auth credential from the live tab
+                    // (it was consumed at connect-time). Default to Agent so the
+                    // saved alias at least has the host/port/user.
+                    auth: runtime::ssh::SshAuthMethod::Agent,
+                });
+            match config_opt {
+                None => {
+                    tui.push_system(
+                        "No active SSH tab. Connect first with /ssh".to_string(),
+                    );
+                }
+                Some(config) => {
+                    let alias_str = alias.to_string();
+                    let result = runtime::with_session_vault(|vm| {
+                        runtime::ssh::save_ssh_alias(vm, &alias_str, &config)
+                            .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+                    });
+                    match result {
+                        Ok(()) => tui.push_system(format!(
+                            "SSH alias '{alias}' saved (auth: agent)."
+                        )),
+                        Err(e) => tui.push_system(format!(
+                            "Failed to save alias '{alias}': {e}"
+                        )),
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // `/ssh list` — enumerate saved aliases.
+        if action == "list" {
+            if !runtime::vault_is_session_unlocked() {
+                tui.push_system(
+                    "/ssh list requires the vault to be unlocked.".to_string(),
+                );
+                return Ok(());
+            }
+            let result = runtime::with_session_vault(|vm| {
+                runtime::ssh::list_ssh_aliases(vm)
+                    .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+            });
+            match result {
+                Ok(aliases) if aliases.is_empty() => {
+                    tui.push_system(
+                        "No SSH aliases saved. Use /ssh save <alias> to create one."
+                            .to_string(),
+                    );
+                }
+                Ok(aliases) => {
+                    let mut msg = "Saved SSH aliases:\n".to_string();
+                    for a in &aliases {
+                        let _ = std::fmt::Write::write_fmt(
+                            &mut msg,
+                            format_args!("  {a}\n"),
+                        );
+                    }
+                    tui.push_system(msg);
+                }
+                Err(e) => tui.push_system(format!("Vault error: {e}")),
+            }
+            return Ok(());
+        }
+
+        // `/ssh <alias>` — load alias and prefill form.
+        if !action.is_empty() {
+            // Try to load from vault; fall back to treating arg as host spec.
+            let config_and_alias: Option<(runtime::ssh::SshConfig, Option<String>)> =
+                if runtime::vault_is_session_unlocked() {
+                    let alias_str = action.to_string();
+                    runtime::with_session_vault(|vm| {
+                        runtime::ssh::load_ssh_alias(vm, &alias_str)
+                            .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+                    })
+                    .ok()
+                    .map(|cfg| (cfg, Some(action.to_string())))
+                } else {
+                    None
+                };
+
+            use crate::tui::ssh_form::SshFormState;
+            let mut form = SshFormState::new();
+            if let Some((cfg, alias)) = config_and_alias {
+                form.prefill(&cfg, alias.as_deref());
+            } else {
+                // Treat the bare argument as a host spec (user@host:port).
+                let arg = action;
+                if let Some((user, rest)) = arg.split_once('@') {
+                    form.user = user.to_string();
+                    if let Some((host, port_str)) = rest.rsplit_once(':') {
+                        form.host = host.to_string();
+                        form.port_str = port_str.to_string();
+                    } else {
+                        form.host = rest.to_string();
+                    }
+                } else {
+                    form.host = arg.to_string();
+                }
+            }
+            tui.ssh_form = Some(form);
+            return Ok(());
+        }
+
+        // Bare `/ssh` — open blank form.
+        tui.ssh_form = Some(crate::tui::ssh_form::SshFormState::new());
+        Ok(())
     }
 
     // ─── Feature 14 — Log analysis ───────────────────────────────────────────

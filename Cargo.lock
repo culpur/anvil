@@ -85,6 +85,7 @@ name = "anvil-cli"
 version = "2.2.11"
 dependencies = [
  "api",
+ "async-trait",
  "base64",
  "commands",
  "compat-harness",
@@ -94,9 +95,12 @@ dependencies = [
  "open",
  "plugins",
  "pulldown-cmark",
+ "rand 0.8.5",
  "ratatui",
  "rpassword",
  "runtime",
+ "russh",
+ "russh-keys",
  "rust-i18n",
  "rustyline",
  "serde_json",
