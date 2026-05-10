@@ -1479,10 +1479,25 @@ impl AnvilTui {
                     Ok(event) => self.apply_tui_event(event),
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
+                        // T4-L: when the streaming channel disconnects without
+                        // a TurnDone, the turn was interrupted (Esc / Ctrl+C /
+                        // upstream error). Preserve any partial assistant text
+                        // and mark it visibly so the user knows the response
+                        // got cut off rather than thinking it completed.
+                        let had_partial = !self
+                            .active_tab()
+                            .pending_text
+                            .trim()
+                            .is_empty();
                         self.flush_pending_text();
                         {
                             let tab = self.active_tab_mut();
                             tab.think_label.clear();
+                            if had_partial {
+                                tab.log.push(LogEntry::System(
+                                    "↯ turn interrupted — partial response preserved above".to_string(),
+                                ));
+                            }
                         }
                         self.scroll_to_bottom();
                         self.draw()?;
