@@ -130,6 +130,39 @@ impl AnvilTui {
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
         use super::configure_types::ConfigureState;
 
+        // T5-Ssh-E: when the SSH form modal is open, all keys go to the form.
+        // Submit closes the modal and (in Commit F) kicks off the connection.
+        // Cancel closes the modal silently.
+        if self.ssh_form.is_some() {
+            use super::ssh_form::SshFormResult;
+            let result = self.ssh_form.as_mut().unwrap().handle_key(key);
+            match result {
+                None => {
+                    // Form consumed the key; nothing to do.
+                    self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+                    return Ok(ReadResult::Continue);
+                }
+                Some(SshFormResult::Cancelled) => {
+                    self.ssh_form = None;
+                    self.push_system("SSH form cancelled.".to_string());
+                    self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+                    return Ok(ReadResult::Continue);
+                }
+                Some(SshFormResult::Submit(config, alias)) => {
+                    self.ssh_form = None;
+                    // Store for T5-Ssh-F wiring; push a system message for now.
+                    let dest = format!("{}@{}:{}", config.user, config.host, config.port);
+                    self.push_system(format!("SSH connecting to {dest}…"));
+                    // The bridge spawn + tab creation is wired in Commit F.
+                    // For now, store the pending connect request in a temporary
+                    // field on AnvilTui (added in Commit F).
+                    let _ = (config, alias); // suppress unused-variable warning
+                    self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+                    return Ok(ReadResult::Continue);
+                }
+            }
+        }
+
         // T5-Ssh-D: key forwarding for active SSH tabs.
         //
         // Ctrl+B is the SSH-mode escape prefix (matching screen/tmux convention).

@@ -15,6 +15,7 @@ pub(super) mod list_viewport;
 pub(super) mod redraw;
 pub(super) mod scrollback;
 pub(super) mod ssh_bridge;
+pub(super) mod ssh_form;
 pub(super) mod ssh_tab;
 pub(super) mod state;
 pub(super) mod widgets;
@@ -167,6 +168,9 @@ pub struct AnvilTui {
     /// escape command (digit → tab switch, 'q' → close SSH tab) rather than
     /// forwarded to the remote shell.
     pub(super) ssh_escape_pending: bool,
+    /// T5-Ssh-E: active SSH connection form overlay. `Some` while the modal
+    /// is open; `None` otherwise.
+    pub(super) ssh_form: Option<ssh_form::SshFormState>,
 }
 
 impl AnvilTui {
@@ -269,6 +273,7 @@ impl AnvilTui {
                 redraw: redraw::RedrawScheduler::new(),
                 pending_submit: None,
                 ssh_escape_pending: false,
+                ssh_form: None,
             },
             TuiSender(tx),
         ))
@@ -737,6 +742,22 @@ impl AnvilTui {
             }
         };
         let is_ssh_tab = ssh_screen.is_some();
+        // T5-Ssh-E: pre-snapshot the SSH form state so the draw closure can
+        // render it without borrowing self. SshFormState is cloned here;
+        // mutations (from handle_key) happen on self.ssh_form, not on this copy.
+        let ssh_form_snapshot: Option<ssh_form::SshFormState> = self.ssh_form.as_ref().map(|f| {
+            let mut copy = ssh_form::SshFormState::new();
+            copy.host = f.host.clone();
+            copy.port_str = f.port_str.clone();
+            copy.user = f.user.clone();
+            copy.auth_index = f.auth_index;
+            copy.key_path = f.key_path.clone();
+            copy.secret = f.secret.clone();
+            copy.alias = f.alias.clone();
+            copy.focused = f.focused;
+            copy.error = f.error.clone();
+            copy
+        });
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -1380,6 +1401,11 @@ impl AnvilTui {
                 x: cursor_x.min(max_x),
                 y: cursor_y,
             });
+
+            // T5-Ssh-E: render SSH form modal on top of everything else if open.
+            if let Some(ref form) = ssh_form_snapshot {
+                form.render(frame, size);
+            }
         })?;
         Ok(())
     }
