@@ -1,5 +1,6 @@
 mod bash;
 mod bootstrap;
+pub mod ssh;
 pub mod auto_promote;
 pub mod effort;
 pub mod requirements;
