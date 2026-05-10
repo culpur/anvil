@@ -180,7 +180,7 @@ pub fn handle_slash_command(
             message: "/web is not yet implemented. Ask the assistant to fetch a URL using the WebFetch tool, or use `curl` from your terminal.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Doctor => Some(SlashCommandResult {
+        SlashCommand::Doctor { .. } => Some(SlashCommandResult {
             message: "/doctor is not yet implemented. To diagnose configuration issues, check that your API key is set, your settings.json is valid JSON, and all required tools are installed.".to_string(),
             session: session.clone(),
         }),

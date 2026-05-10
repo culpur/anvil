@@ -172,7 +172,12 @@ pub enum SlashCommand {
     Web {
         query: String,
     },
-    Doctor,
+    Doctor {
+        /// T4-M: optional sub-mode. `Some("release")` runs the release-pipeline
+        /// pre-flight self-check (clean tree, RELEASE-NOTES file present, tag
+        /// vs HEAD, brew shadow, etc). `None` runs the standard runtime check.
+        mode: Option<String>,
+    },
     Tokens,
     Provider {
         action: Option<String>,
@@ -599,7 +604,9 @@ impl SlashCommand {
                 let query = remainder_after_command(trimmed, command).unwrap_or_default();
                 Self::Web { query }
             }
-            "doctor" => Self::Doctor,
+            "doctor" => Self::Doctor {
+                mode: parts.next().map(ToOwned::to_owned),
+            },
             "tokens" => Self::Tokens,
             "provider" | "providers" => {
                 Self::Provider {
@@ -1907,7 +1914,7 @@ mod tests {
                 SlashCommand::Chat => "chat",
                 SlashCommand::Vim => "vim",
                 SlashCommand::Web { .. } => "web",
-                SlashCommand::Doctor => "doctor",
+                SlashCommand::Doctor { .. } => "doctor",
                 SlashCommand::Tokens => "tokens",
                 SlashCommand::Provider { .. } => "provider",
                 SlashCommand::Login { .. } => "login",
@@ -2032,7 +2039,7 @@ mod tests {
             SlashCommand::Chat,
             SlashCommand::Vim,
             SlashCommand::Web { query: String::new() },
-            SlashCommand::Doctor,
+            SlashCommand::Doctor { mode: None },
             SlashCommand::Tokens,
             SlashCommand::Provider { action: None },
             SlashCommand::Login { provider: None },

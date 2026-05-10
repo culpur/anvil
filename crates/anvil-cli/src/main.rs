@@ -1653,7 +1653,7 @@ fn run_resume_command(
         | SlashCommand::Chat
         | SlashCommand::Vim
         | SlashCommand::Web { .. }
-        | SlashCommand::Doctor
+        | SlashCommand::Doctor { .. }
         | SlashCommand::Tokens
         | SlashCommand::Provider { .. }
         | SlashCommand::Login { .. }
@@ -4096,8 +4096,12 @@ impl LiveCli {
             SlashCommand::Web { query } => {
                 (self.run_web_search_command(&query), false)
             }
-            SlashCommand::Doctor => {
-                (self.run_doctor(), false)
+            SlashCommand::Doctor { mode } => {
+                let out = match mode.as_deref() {
+                    Some("release") => Self::run_release_doctor(),
+                    _ => self.run_doctor(),
+                };
+                (out, false)
             }
             SlashCommand::Tokens => {
                 (self.format_tokens(), false)
@@ -4995,6 +4999,166 @@ impl LiveCli {
     }
 
     /// `/doctor` — check configuration and dependencies.
+    /// T4-M: release-pipeline pre-flight self-check.
+    ///
+    /// Runs the same gates `scripts/release.sh` enforces, before invoking the
+    /// actual build. Surfaces problems as ✓/✗ rows so the user can fix them
+    /// without burning the 5-min cross-compile cycle just to discover a
+    /// missing RELEASE-NOTES file or a dirty tree.
+    ///
+    /// Checks (each independent — one failure does not skip the rest):
+    ///   1. Cargo.toml version reads + matches a `vX.Y.Z` shape
+    ///   2. RELEASE-NOTES-vX.Y.Z.md exists and is non-trivial (>10 lines)
+    ///   3. Git working tree is clean (no uncommitted/staged changes)
+    ///   4. HEAD matches the local tag for this version (if the tag exists)
+    ///   5. The local tag matches the remote tag (if both exist)
+    ///   6. /opt/homebrew/bin/anvil is a brew symlink, not a shadowed file
+    ///   7. `gh auth status` succeeds (release upload needs it)
+    fn run_release_doctor() -> String {
+        let mut lines = vec!["Anvil Release Doctor".to_string(), String::new()];
+
+        // 1. Version from Cargo.toml
+        let workspace_root = env::current_dir().unwrap_or_default();
+        let cargo_path = workspace_root.join("Cargo.toml");
+        let version: Option<String> = fs::read_to_string(&cargo_path)
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("version = "))
+                    .and_then(|l| l.split('"').nth(1).map(str::to_string))
+            });
+        match &version {
+            Some(v) if v.split('.').count() == 3 => {
+                lines.push(format!("  ✓ Cargo.toml version: {v}"));
+            }
+            Some(v) => lines.push(format!("  ✗ Cargo.toml version not semver-shaped: {v}")),
+            None => lines.push("  ✗ Cargo.toml version not found".to_string()),
+        }
+
+        let tag = version.as_ref().map(|v| format!("v{v}"));
+
+        // 2. RELEASE-NOTES file
+        if let Some(t) = &tag {
+            let notes_path = workspace_root.join(format!("RELEASE-NOTES-{t}.md"));
+            match fs::read_to_string(&notes_path) {
+                Ok(content) => {
+                    let line_count = content.lines().count();
+                    if line_count > 10 {
+                        lines.push(format!(
+                            "  ✓ RELEASE-NOTES-{t}.md present ({line_count} lines)"
+                        ));
+                    } else {
+                        lines.push(format!(
+                            "  ✗ RELEASE-NOTES-{t}.md only {line_count} lines (write a real changelog)"
+                        ));
+                    }
+                }
+                Err(_) => lines.push(format!(
+                    "  ✗ RELEASE-NOTES-{t}.md missing — release.sh will hard-fail"
+                )),
+            }
+        }
+
+        // 3. Clean working tree
+        let dirty = Command::new("git")
+            .args(["status", "--porcelain"])
+            .output()
+            .ok()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(true);
+        lines.push(format!(
+            "  {} Working tree clean",
+            if dirty { "✗" } else { "✓" }
+        ));
+
+        // 4 + 5. Tag agreement (local HEAD vs tag, local tag vs remote)
+        if let Some(t) = &tag {
+            let local_tag_sha = Command::new("git")
+                .args(["rev-parse", "--verify", t])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            let head_sha = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+            match (&local_tag_sha, &head_sha) {
+                (Some(t_sha), Some(h_sha)) if t_sha == h_sha => {
+                    lines.push(format!("  ✓ Tag {t} points at HEAD ({})", &t_sha[..7.min(t_sha.len())]));
+                }
+                (Some(t_sha), Some(h_sha)) => {
+                    lines.push(format!(
+                        "  ✗ Tag {t} ({}) != HEAD ({}) — re-tag before releasing",
+                        &t_sha[..7.min(t_sha.len())],
+                        &h_sha[..7.min(h_sha.len())]
+                    ));
+                }
+                (None, _) => {
+                    lines.push(format!("  - Tag {t} not yet created locally (will be created during release)"));
+                }
+                _ => {}
+            }
+
+            // Remote tag
+            let remote_tag = Command::new("git")
+                .args(["ls-remote", "--tags", "origin", &format!("refs/tags/{t}")])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|s| !s.is_empty());
+            match (&local_tag_sha, &remote_tag) {
+                (Some(local_sha), Some(remote_line)) => {
+                    let remote_sha = remote_line.split_whitespace().next().unwrap_or("");
+                    if remote_sha == local_sha {
+                        lines.push(format!("  ✓ Remote tag {t} matches local"));
+                    } else {
+                        lines.push(format!(
+                            "  ✗ Remote tag {t} ({}) != local ({}) — `git push --force-with-lease origin {t}` after fixing",
+                            &remote_sha[..7.min(remote_sha.len())],
+                            &local_sha[..7.min(local_sha.len())]
+                        ));
+                    }
+                }
+                (Some(_), None) => {
+                    lines.push(format!("  - Remote tag {t} not yet pushed (release.sh will push)"));
+                }
+                _ => {}
+            }
+        }
+
+        // 6. Brew shadow check (the /opt/homebrew/bin/anvil incident)
+        let brew_path = std::path::Path::new("/opt/homebrew/bin/anvil");
+        if brew_path.exists() {
+            match fs::symlink_metadata(brew_path).map(|m| m.file_type().is_symlink()) {
+                Ok(true) => lines.push("  ✓ /opt/homebrew/bin/anvil is a brew symlink".to_string()),
+                Ok(false) => lines.push(
+                    "  ✗ /opt/homebrew/bin/anvil is a regular file shadowing brew — `rm` it then `brew link --overwrite anvil`".to_string(),
+                ),
+                Err(_) => {}
+            }
+        } else {
+            lines.push("  - /opt/homebrew/bin/anvil not present (brew install pending)".to_string());
+        }
+
+        // 7. gh auth
+        let gh_ok = Command::new("gh")
+            .args(["auth", "status"])
+            .output()
+            .ok()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        lines.push(format!(
+            "  {} gh auth status",
+            if gh_ok { "✓" } else { "✗" }
+        ));
+
+        lines.join("\n")
+    }
+
     fn run_doctor(&self) -> String {
         let mut lines = vec!["Anvil Doctor".to_string(), String::new()];
 
@@ -5684,8 +5848,12 @@ impl LiveCli {
                 println!("{}", self.run_web_search_command(&query));
                 false
             }
-            SlashCommand::Doctor => {
-                println!("{}", self.run_doctor());
+            SlashCommand::Doctor { mode } => {
+                let out = match mode.as_deref() {
+                    Some("release") => Self::run_release_doctor(),
+                    _ => self.run_doctor(),
+                };
+                println!("{}", out);
                 false
             }
             SlashCommand::Tokens => {
