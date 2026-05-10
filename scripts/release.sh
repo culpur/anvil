@@ -274,7 +274,26 @@ fi
 echo
 echo "▸ Phase 4: GitHub Release..."
 
-NOTES="## Anvil $TAG
+# Release notes are sourced from RELEASE-NOTES-<TAG>.md at the repo root.
+# This file is hand-written for each release per memory feedback-release-notes
+# ("Release notes must be written, never auto-generated from commit subject").
+# Missing the file is a HARD FAIL — we will not ship a release with an empty
+# body. v2.2.10 and v2.2.11 shipped with no narrative because release.sh
+# previously ignored these files; never again.
+RELEASE_NOTES_FILE="$PROJECT_DIR/RELEASE-NOTES-$TAG.md"
+if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+    echo "✗ FAIL: release notes not found at $RELEASE_NOTES_FILE" >&2
+    echo "  Every release MUST have a hand-written RELEASE-NOTES-<TAG>.md file" >&2
+    echo "  at the repo root. Create one before re-running this script." >&2
+    echo "  (See RELEASE-NOTES-v2.2.11.md for the expected format.)" >&2
+    exit 1
+fi
+
+# Compose the body: hand-written notes + the standard Downloads/Install
+# block appended at the bottom so users always see the install instructions.
+NOTES="$(cat "$RELEASE_NOTES_FILE")
+
+---
 
 ### Downloads
 | Platform | Binary |
