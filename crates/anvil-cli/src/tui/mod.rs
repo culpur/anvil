@@ -152,6 +152,13 @@ pub struct AnvilTui {
     /// should call `request_redraw(region)`; the main loop calls
     /// `commit_redraw()` once per iteration. See `tui/redraw.rs` for design.
     pub(super) redraw: redraw::RedrawScheduler,
+    /// Held submit while a turn is in flight (T1-#400). When the user
+    /// presses Enter while the model is responding, the input draft is
+    /// captured here and the input box clears so they can keep typing the
+    /// NEXT message. `wait_for_turn_end` returns this value (if Some) so the
+    /// caller can fire it as the next prompt without going back through
+    /// `read_input`.
+    pub(super) pending_submit: Option<String>,
 }
 
 impl AnvilTui {
@@ -252,6 +259,7 @@ impl AnvilTui {
                 lines_added: initial_added,
                 lines_removed: initial_removed,
                 redraw: redraw::RedrawScheduler::new(),
+                pending_submit: None,
             },
             TuiSender(tx),
         ))
@@ -385,6 +393,16 @@ impl AnvilTui {
     /// Apply a new theme to the TUI immediately (live hot-swap).
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// Set the active tab's input text (replacing any current draft) and
+    /// move the cursor to the end. Used by the in-flight typing path
+    /// (T1-#400) to surface a held draft after the previous turn ends.
+    pub fn set_input(&mut self, text: impl Into<String>) {
+        let s = text.into();
+        let tab = self.active_tab_mut();
+        tab.cursor = s.len();
+        tab.input = s;
     }
 
     // ─── Redraw scheduler API ────────────────────────────────────────────────
@@ -1374,16 +1392,31 @@ impl AnvilTui {
 
     /// Block until `TurnDone` arrives on the channel, processing events as they
     /// come and redrawing the TUI.  Returns when the turn finishes.
-    pub fn wait_for_turn_end(&mut self) -> io::Result<()> {
+    ///
+    /// **T1-#400**: while waiting, also polls keyboard input non-blocking so
+    /// the user can type a draft for the NEXT prompt while the current turn
+    /// is still streaming. Plain typing accumulates into the active tab's
+    /// input buffer (visible in the input box). Pressing Enter captures the
+    /// draft into `self.pending_submit`, clears the input, and continues
+    /// waiting. When the turn finishes, the captured draft (if any) is
+    /// returned so the caller can immediately fire it as the next prompt.
+    ///
+    /// Esc / Ctrl+C still cancel the in-flight turn (existing behavior is
+    /// untouched). Plain typing never cancels.
+    pub fn wait_for_turn_end(&mut self) -> io::Result<Option<String>> {
+        // Reset any stale pending_submit from a previous turn before we start
+        // accumulating a new one.
+        self.pending_submit = None;
+
         loop {
-            // Drain non-blocking first
+            // ── Drain streaming events non-blocking ──
             loop {
                 match self.rx.try_recv() {
                     Ok(TuiEvent::TurnDone) => {
                         self.apply_tui_event(TuiEvent::TurnDone);
                         self.scroll_to_bottom();
                         self.draw()?;
-                        return Ok(());
+                        return Ok(self.pending_submit.take());
                     }
                     Ok(event) => self.apply_tui_event(event),
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -1395,23 +1428,48 @@ impl AnvilTui {
                         }
                         self.scroll_to_bottom();
                         self.draw()?;
-                        return Ok(());
+                        return Ok(self.pending_submit.take());
                     }
                 }
             }
 
+            // ── Poll keyboard input non-blocking (T1-#400) ──
+            // Crossterm's event::poll(0) returns true iff an event is ready.
+            // We loop until the queue drains so a burst of keys (e.g. paste)
+            // gets absorbed in one frame.
+            while crossterm::event::poll(Duration::from_millis(0))? {
+                match crossterm::event::read()? {
+                    crossterm::event::Event::Key(key) if matches!(
+                        key.kind,
+                        crossterm::event::KeyEventKind::Press
+                            | crossterm::event::KeyEventKind::Repeat
+                    ) => {
+                        self.handle_in_flight_key(key);
+                    }
+                    crossterm::event::Event::Paste(text) => {
+                        let cleaned = text.replace('\r', "");
+                        for ch in cleaned.chars() {
+                            self.insert_char(ch);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Frame tick + draw ──
             {
                 let frame = self.active_tab().think_frame.wrapping_add(1);
                 self.active_tab_mut().think_frame = frame;
             }
             self.draw()?;
 
+            // ── Block briefly for a streaming event ──
             match self.rx.recv_timeout(Duration::from_millis(80)) {
                 Ok(TuiEvent::TurnDone) => {
                     self.apply_tui_event(TuiEvent::TurnDone);
                     self.scroll_to_bottom();
                     self.draw()?;
-                    return Ok(());
+                    return Ok(self.pending_submit.take());
                 }
                 Ok(event) => self.apply_tui_event(event),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -1423,9 +1481,58 @@ impl AnvilTui {
                     }
                     self.scroll_to_bottom();
                     self.draw()?;
-                    return Ok(());
+                    return Ok(self.pending_submit.take());
                 }
             }
+        }
+    }
+
+    /// Process a key event that arrived while a turn was in flight.
+    ///
+    /// Behavior (per user directive 2026-05-10):
+    ///   - Plain printable chars: append to the active tab's input buffer
+    ///   - Backspace: delete one char from the input buffer
+    ///   - Enter: capture the input as `pending_submit`, clear the input
+    ///   - Esc / Ctrl+C: NOT handled here — the existing cancel path stays
+    ///     in `read_input`. We deliberately ignore them so a stray Esc
+    ///     doesn't cancel a turn the user wanted to keep.
+    ///
+    /// Note: this is intentionally a much simpler key handler than the full
+    /// `handle_key`. We don't honor up/down history, completion popups,
+    /// slash commands, etc., during in-flight typing — only the basics
+    /// needed to compose a follow-up message.
+    fn handle_in_flight_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
+                // Insert at cursor (handles utf-8 char-boundary correctly)
+                self.insert_char(c);
+                self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            (KeyCode::Backspace, _) => {
+                let tab = self.active_tab_mut();
+                if tab.cursor > 0 {
+                    let prev = prev_char_boundary(&tab.input, tab.cursor);
+                    tab.input.replace_range(prev..tab.cursor, "");
+                    tab.cursor = prev;
+                }
+                self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            (KeyCode::Enter, _) => {
+                // Capture draft as pending_submit and clear input
+                let tab = self.active_tab_mut();
+                let draft = std::mem::take(&mut tab.input);
+                tab.cursor = 0;
+                let trimmed = draft.trim().to_string();
+                if !trimmed.is_empty() {
+                    self.pending_submit = Some(trimmed);
+                }
+                self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            // All other keys are ignored during in-flight typing —
+            // arrow keys, function keys, modifiers, etc.
+            _ => {}
         }
     }
 

@@ -2956,6 +2956,14 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 // thread can enter the event-drain / animation loop immediately.
                 // This enables live streaming display instead of buffering
                 // the full response before showing anything.
+                //
+                // T1-#400: wait_for_turn_end now ALSO polls keyboard input
+                // during the wait, so the user can compose the next prompt
+                // while the current turn streams. If they pressed Enter
+                // mid-turn, the captured draft is returned here as
+                // `held_submit` and we feed it back into the input loop so
+                // it auto-submits as the next turn (no user action needed).
+                let mut held_submit: Option<String> = None;
                 {
                     let cli_ref = &mut cli;
                     let input_owned = trimmed.to_string();
@@ -2969,12 +2977,26 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     *guard = Some(e.to_string());
                                 }
                         });
-                        // Main thread: animate the TUI while the turn runs.
-                        let _ = tui.wait_for_turn_end();
+                        // Main thread: animate the TUI + accept in-flight typing.
+                        if let Ok(captured) = tui.wait_for_turn_end() {
+                            held_submit = captured;
+                        }
                     });
                     if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
                         tui.push_system(format!("Turn error: {err}"));
                     }
+                }
+                // T1-#400: if user pressed Enter during the in-flight turn,
+                // surface the held draft as a system note and stash it in
+                // the input box so the NEXT iteration of the read_input loop
+                // sees it.  We don't auto-fire to keep cancel-on-misfire
+                // possible — the user can press Enter to ship it or edit
+                // first.  The held draft is already trimmed.
+                if let Some(draft) = held_submit
+                    && !draft.is_empty()
+                {
+                    tui.push_system(format!("↳ resuming with held draft: {draft}"));
+                    tui.set_input(draft);
                 }
                 // Update footer QMD/archive status after each turn
                 if cli.qmd.is_enabled()
