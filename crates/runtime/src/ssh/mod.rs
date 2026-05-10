@@ -8,12 +8,16 @@
 mod config;
 mod driver;
 mod session;
+mod vault_alias;
 
 #[cfg(test)]
 mod tests;
 
 pub use config::{SshAuthMethod, SshConfig};
 pub use session::{SshError, SshEvent, SshSession};
+pub use vault_alias::{
+    list_ssh_aliases, load_ssh_alias, save_ssh_alias, SshAliasError, SshAuthKind, SshMetadata,
+};
 
 /// Spawn an SSH session.
 ///

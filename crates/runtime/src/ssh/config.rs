@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 /// Complete configuration for a single SSH connection.
+#[derive(Debug, Clone)]
 pub struct SshConfig {
     /// Hostname or IP address of the remote server.
     pub host: String,
@@ -16,6 +17,7 @@ pub struct SshConfig {
 }
 
 /// The authentication method Anvil should use for this connection.
+#[derive(Debug, Clone)]
 pub enum SshAuthMethod {
     /// Forward a request to the running SSH agent (`SSH_AUTH_SOCK`).
     ///
