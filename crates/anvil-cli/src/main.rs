@@ -3293,6 +3293,10 @@ struct LiveCli {
     share_manager: share::ShareManager,
     /// Wall-clock start time of this session (used by daily summaries).
     session_start: Instant,
+    /// T4-O: per-turn mtime snapshot of ANVIL.md / MEMORY.md candidates.
+    /// Populated lazily on first turn; on each subsequent turn we re-stat
+    /// the same paths and rebuild the system prompt if any mtime changed.
+    instructions_mtime: std::collections::HashMap<PathBuf, std::time::SystemTime>,
 }
 
 impl LiveCli {
@@ -3359,6 +3363,7 @@ impl LiveCli {
             relay_input_rx: None,
             share_manager: share::ShareManager::new(),
             session_start: Instant::now(),
+            instructions_mtime: std::collections::HashMap::new(),
         };
         cli.persist_session()?;
         // Emit session_start OTel event (no-op when disabled).
@@ -3505,6 +3510,16 @@ impl LiveCli {
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // T4-O: hot-reload ANVIL.md / MEMORY.md if either changed since the
+        // last turn. Cheap (per-turn stat of <10 paths) and silent when
+        // nothing has changed. We rebuild the system prompt in place — any
+        // user-set output style or fast-mode prefix is re-applied below by
+        // the existing run_turn flow on the *next* turn, but the worst case
+        // is that the prefix gets dropped for one turn.
+        if self.maybe_reload_instructions() {
+            self.runtime.replace_system_prompt(self.system_prompt.clone());
+        }
+
         // Inject any pinned files at the start of each turn.
         if let Ok(pinned_path) = anvil_pinned_path()
             && let Ok(pinned) = load_pinned_paths(&pinned_path) {
@@ -5157,6 +5172,82 @@ impl LiveCli {
         ));
 
         lines.join("\n")
+    }
+
+    /// T4-O: candidate ANVIL.md / MEMORY.md / instructions paths for
+    /// hot-reload tracking. Walks from cwd up to root for ANVIL.md and adds
+    /// the user's MEMORY.md from `~/.anvil/`. Order doesn't matter — we just
+    /// need every file the system prompt depends on.
+    fn instructions_candidate_paths() -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        if let Ok(cwd) = env::current_dir() {
+            let mut cursor: Option<&Path> = Some(cwd.as_path());
+            while let Some(dir) = cursor {
+                for name in &[
+                    "ANVIL.md",
+                    "ANVIL.local.md",
+                    ".anvil/ANVIL.md",
+                    ".anvil/instructions.md",
+                ] {
+                    out.push(dir.join(name));
+                }
+                cursor = dir.parent();
+            }
+        }
+        if let Some(home) = dirs_next_home() {
+            out.push(home.join(".anvil").join("MEMORY.md"));
+            out.push(home.join(".anvil").join("ANVIL.md"));
+        }
+        out
+    }
+
+    /// T4-O: scan candidate instruction files; if any one's mtime differs
+    /// from the cached value, rebuild `self.system_prompt` from scratch and
+    /// return true. First-call seed is silent (no rebuild on the first turn
+    /// after startup — the prompt was already built from these files in
+    /// `LiveCli::new`).
+    fn maybe_reload_instructions(&mut self) -> bool {
+        let candidates = Self::instructions_candidate_paths();
+        let mut current: std::collections::HashMap<PathBuf, std::time::SystemTime> =
+            std::collections::HashMap::new();
+        for path in &candidates {
+            if let Ok(meta) = fs::metadata(path)
+                && let Ok(mtime) = meta.modified() {
+                    current.insert(path.clone(), mtime);
+                }
+        }
+
+        // First call: just seed, don't rebuild.
+        if self.instructions_mtime.is_empty() {
+            self.instructions_mtime = current;
+            return false;
+        }
+
+        // Compare. If any tracked file's mtime changed, OR any new file
+        // appeared, OR any file disappeared — we need a rebuild.
+        let changed = current.len() != self.instructions_mtime.len()
+            || current.iter().any(|(p, t)| {
+                self.instructions_mtime.get(p).map_or(true, |old| old != t)
+            });
+
+        if !changed {
+            return false;
+        }
+
+        let provider = friendly_provider_label(&self.model);
+        match build_system_prompt_with_identity(Some(self.model.clone()), provider, None) {
+            Ok(new_prompt) => {
+                self.system_prompt = new_prompt;
+                self.instructions_mtime = current;
+                eprintln!("⟳ ANVIL.md / MEMORY.md changed — system prompt reloaded");
+                true
+            }
+            Err(_) => {
+                // Don't poison the session if rebuild fails — keep the old
+                // prompt and try again next turn.
+                false
+            }
+        }
     }
 
     fn run_doctor(&self) -> String {

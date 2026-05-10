@@ -245,6 +245,12 @@ where
             .push(ConversationMessage::user_with_blocks(blocks));
     }
 
+    /// T4-O: replace the cached system prompt wholesale. Used by the CLI
+    /// hot-reload path when `ANVIL.md` or `MEMORY.md` changes on disk.
+    pub fn replace_system_prompt(&mut self, prompt: Vec<String>) {
+        self.system_prompt = prompt;
+    }
+
     // -----------------------------------------------------------------------
     // v2.2.11: hook dispatch helpers exposed to the TUI / CLI layer.
     // -----------------------------------------------------------------------
