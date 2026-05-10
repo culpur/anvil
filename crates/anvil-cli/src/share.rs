@@ -228,6 +228,7 @@ mod tests {
             log_len_at_snapshot: None,
             scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
             scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
+            ssh: None,
         }
     }
 

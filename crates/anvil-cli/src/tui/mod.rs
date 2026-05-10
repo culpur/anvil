@@ -14,6 +14,8 @@ pub(super) mod layout;
 pub(super) mod list_viewport;
 pub(super) mod redraw;
 pub(super) mod scrollback;
+pub(super) mod ssh_bridge;
+pub(super) mod ssh_tab;
 pub(super) mod state;
 pub(super) mod widgets;
 pub(super) mod input_handler;

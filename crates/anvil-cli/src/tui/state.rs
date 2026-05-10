@@ -258,6 +258,10 @@ pub(crate) struct Tab {
     pub scrollback: ScrollbackBuffer,
     /// Current scrollback navigation state (None = live view).
     pub scrollback_state: ScrollbackState,
+    /// T5-Ssh-D: when present, this tab is in SSH mode and renders the
+    /// vt100 virtual screen instead of the chat log. All chat-related
+    /// fields above are unused when `ssh.is_some()`.
+    pub ssh: Option<crate::tui::ssh_tab::SshTabState>,
 }
 
 impl Tab {
@@ -289,6 +293,7 @@ impl Tab {
             log_len_at_snapshot: None,
             scrollback: ScrollbackBuffer::new(),
             scrollback_state: ScrollbackState::live(),
+            ssh: None,
         }
     }
 
