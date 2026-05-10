@@ -22,6 +22,7 @@ mod respawn;
 mod share;
 mod screensaver;
 mod session;
+mod session_meta;
 mod tui;
 mod check;
 mod project;
@@ -1057,10 +1058,15 @@ fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
 }
 
 fn parse_resume_args(args: &[String]) -> Result<CliAction, String> {
-    let session_path = args
+    let reference = args
         .first()
-        .ok_or_else(|| "missing session path for --resume".to_string())
-        .map(PathBuf::from)?;
+        .ok_or_else(|| "missing session reference for --resume (path | ID | name)".to_string())?;
+    // T3-J: accept path, session ID, OR friendly name. We preserve the raw
+    // reference here as a PathBuf — actual resolution (path | ID | name)
+    // happens at load time via session_meta::resolve_reference_extended so
+    // unit tests and `--resume foo /cmd` parsing don't depend on the
+    // session existing on disk.
+    let session_path = PathBuf::from(reference);
     let commands = args[1..].to_vec();
     if commands
         .iter()
@@ -1112,6 +1118,23 @@ fn print_version() {
 }
 
 fn resume_session(session_path: &Path, commands: &[String]) {
+    // T3-J: if the literal path doesn't exist, treat it as a session ID
+    // or friendly name and resolve via the sidecar metadata.
+    let resolved_path: PathBuf = if session_path.exists() {
+        session_path.to_path_buf()
+    } else if let Some(reference) = session_path.to_str() {
+        match session_meta::resolve_reference_extended(reference) {
+            Ok((_id, p)) => p,
+            Err(error) => {
+                eprintln!("failed to restore session: {error}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        session_path.to_path_buf()
+    };
+    let session_path = resolved_path.as_path();
+
     let session = match Session::load_from_path(session_path) {
         Ok(session) => session,
         Err(error) => {
@@ -3030,8 +3053,42 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // v2.2.11: fire SessionEnd hooks on clean exit.
     let _ = cli.runtime.run_session_end_hooks();
 
+    // Capture the session id BEFORE we drop `tui` (and thus `cli`).
+    let exit_session_id = cli.session_id().to_string();
+
     // Drop `tui` here — the Drop impl restores the terminal.
+    drop(tui);
+
+    // T3-Exit-UX: print resume-friendly exit message AFTER the alternate
+    // screen has been torn down, so the lines persist in the user's
+    // normal scrollback rather than disappearing with the TUI.
+    print_exit_resume_banner(&exit_session_id);
+
     Ok(())
+}
+
+/// Print the post-exit "session saved + resume command" block.
+///
+/// Format (per feedback-anvil-exit-resume-ux memory):
+///   Session saved as 'auth-refactor' (id: session-1778365293)
+///     ↻  anvil --continue            # resume this session
+///     ↻  anvil --resume auth-refactor # or by name/id
+///
+/// If the session has no friendly name (no sidecar), we omit the name
+/// clause and only show the id-based --resume invocation.
+fn print_exit_resume_banner(session_id: &str) {
+    let name = session_meta::get_session_name(session_id);
+    if let Some(ref n) = name {
+        println!("Session saved as '{n}' (id: {session_id})");
+    } else {
+        println!("Session saved (id: {session_id})");
+    }
+    println!("  ↻  anvil --continue            # resume this session");
+    if let Some(ref n) = name {
+        println!("  ↻  anvil --resume {n}  # or by name/id");
+    } else {
+        println!("  ↻  anvil --resume {session_id}  # or by id");
+    }
 }
 
 /// Plain-stdout REPL loop (non-TTY / fallback).
@@ -6614,8 +6671,34 @@ impl LiveCli {
                 );
                 Ok(true)
             }
+            Some("rename") => {
+                // T3-J: set or clear the active session's friendly name.
+                // Empty `target` clears it; otherwise the name is validated
+                // (1..=64 chars of [A-Za-z0-9_-]) and uniqueness-checked
+                // by session_meta::set_session_name.
+                let new_name = target.unwrap_or("").trim();
+                match session_meta::set_session_name(&self.session.id, new_name) {
+                    Ok(()) => {
+                        if new_name.is_empty() {
+                            println!("Session name cleared (id: {})", self.session.id);
+                        } else {
+                            println!(
+                                "Session renamed\n  id    {}\n  name  {}\n  Tip   resume later with: anvil --resume {}",
+                                self.session.id, new_name, new_name,
+                            );
+                        }
+                        Ok(false)
+                    }
+                    Err(e) => {
+                        println!("Rename failed: {e}");
+                        Ok(false)
+                    }
+                }
+            }
             Some(other) => {
-                println!("Unknown /session action '{other}'. Use /session list or /session switch <session-id>.");
+                println!(
+                    "Unknown /session action '{other}'. Use /session list, /session switch <id>, or /session rename <name>.",
+                );
                 Ok(false)
             }
         }
@@ -6693,8 +6776,28 @@ impl LiveCli {
                     message_count,
                 ), true))
             }
+            Some("rename") => {
+                // T3-J TUI variant. See handle_session_command for behavior.
+                let new_name = target.unwrap_or("").trim();
+                match session_meta::set_session_name(&self.session.id, new_name) {
+                    Ok(()) => {
+                        let msg = if new_name.is_empty() {
+                            format!("Session name cleared (id: {})", self.session.id)
+                        } else {
+                            format!(
+                                "Session renamed\n  id    {}\n  name  {}\n  Tip   resume later with: anvil --resume {}",
+                                self.session.id, new_name, new_name,
+                            )
+                        };
+                        Ok((msg, false))
+                    }
+                    Err(e) => Ok((format!("Rename failed: {e}"), false)),
+                }
+            }
             Some(other) => {
-                Ok((format!("Unknown /session action '{other}'. Use /session list or /session switch <session-id>."), false))
+                Ok((format!(
+                    "Unknown /session action '{other}'. Use /session list, /session switch <id>, or /session rename <name>.",
+                ), false))
             }
         }
     }
