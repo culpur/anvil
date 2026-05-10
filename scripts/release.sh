@@ -32,6 +32,68 @@ echo "║  Anvil Release Pipeline — v${VERSION}              ║"
 echo "╚══════════════════════════════════════════════╝"
 echo
 
+# ─── Phase 0: Pre-flight (T1-A) ──────────────────────────────────────────────
+#
+# Past bug: v2.2.11 was tagged at 6e9d518, then a build.rs fix landed at
+# 9617d07 — but the tag was never moved, so the released binaries reported
+# the wrong SHA. A pre-flight check would have caught this in seconds.
+#
+# This phase aborts release if ANY of these are true:
+#   1. Working tree has uncommitted changes (release.sh would build from a
+#      different state than what's tagged).
+#   2. A local tag $TAG already exists at a commit OTHER than HEAD.
+#   3. The remote tag $TAG exists at a commit OTHER than the local tag.
+#   4. We're not on a branch tip — release.sh expects to tag HEAD.
+echo "▸ Phase 0: Pre-flight checks..."
+
+# 0.1 — uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "  ✘ Working tree has uncommitted changes."
+    echo "    Run 'git status' to see what's pending. Either commit or stash."
+    exit 1
+fi
+echo "  ✓ Working tree is clean"
+
+# 0.2 — fetch remote tags so the remote-tag check sees the truth
+git fetch --tags --quiet || {
+    echo "  ⚠ Could not fetch tags (offline?). Continuing with local view only."
+}
+
+CURRENT_HEAD=$(git rev-parse HEAD)
+
+# 0.3 — local tag must point at HEAD if it exists
+if git tag -l "$TAG" | grep -q "^${TAG}$"; then
+    LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG")
+    if [ "$LOCAL_TAG_SHA" != "$CURRENT_HEAD" ]; then
+        echo "  ✘ Local tag $TAG points at $LOCAL_TAG_SHA"
+        echo "    but HEAD is $CURRENT_HEAD."
+        echo "    Either move HEAD to the tagged commit, or delete + retag:"
+        echo "        git tag -d $TAG && git push origin :refs/tags/$TAG"
+        exit 1
+    fi
+    echo "  ✓ Local tag $TAG points at HEAD"
+fi
+
+# 0.4 — remote tag (if any) must agree with local tag
+REMOTE_TAG_SHA=$(git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | awk '{print $1}' | head -1 || true)
+if [ -n "$REMOTE_TAG_SHA" ]; then
+    LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG" 2>/dev/null || echo "")
+    if [ -z "$LOCAL_TAG_SHA" ]; then
+        echo "  ✘ Remote tag $TAG exists ($REMOTE_TAG_SHA) but no local tag."
+        echo "    Run: git fetch --tags"
+        exit 1
+    fi
+    if [ "$LOCAL_TAG_SHA" != "$REMOTE_TAG_SHA" ]; then
+        echo "  ✘ Local tag $TAG ($LOCAL_TAG_SHA)"
+        echo "    disagrees with remote tag ($REMOTE_TAG_SHA)."
+        echo "    Resolve before releasing — usually means an aborted prior"
+        echo "    release left the remote tag in a stale state."
+        exit 1
+    fi
+    echo "  ✓ Remote tag $TAG matches local"
+fi
+echo
+
 TARGETS=(
     "aarch64-apple-darwin"
     "x86_64-apple-darwin"
@@ -153,6 +215,40 @@ for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-app
     fi
     echo "  ✓ $(basename "$f")"
 done
+
+# ─── Phase 2.6: Embedded GIT_SHA must match HEAD (T1-B) ────────────────────
+#
+# Past bug: v2.2.11 release shipped binaries that reported a different
+# GIT_SHA than the tag pointed at. Root cause was build.rs caching a stale
+# rev because cargo:rerun-if-changed=.git/HEAD doesn't fire on commits to
+# the current branch (only on branch switches). build.rs is now fixed, but
+# this gate is the belt-and-suspenders: even if build.rs caches incorrectly
+# in the future, this check refuses to release a binary whose embedded SHA
+# disagrees with the tag.
+#
+# We only run the macOS-native binary (the others are cross-compiled and
+# can't execute here), but they all build from the same workspace so a
+# match here implies a match everywhere.
+echo
+echo "▸ Phase 2.6: Embedded GIT_SHA must match HEAD..."
+EXPECTED_SHA=$(git rev-parse --short HEAD)
+NATIVE_BIN="$OUTPUT_DIR/anvil-aarch64-apple-darwin"
+if [ -f "$NATIVE_BIN" ] && [ -x "$NATIVE_BIN" ]; then
+    EMBEDDED_SHA=$("$NATIVE_BIN" --version 2>/dev/null | awk '/Git SHA/ {print $3}' | head -1)
+    if [ -z "$EMBEDDED_SHA" ]; then
+        echo "  ⚠ Could not extract Git SHA from $NATIVE_BIN — skipping check"
+    elif [ "$EMBEDDED_SHA" != "$EXPECTED_SHA" ]; then
+        echo "  ✘ Native binary reports Git SHA $EMBEDDED_SHA"
+        echo "    but HEAD is $EXPECTED_SHA."
+        echo "    This usually means build.rs cached a stale rev. Try:"
+        echo "        cargo clean -p anvil-cli && bash scripts/release.sh"
+        exit 1
+    else
+        echo "  ✓ Native binary embeds Git SHA $EMBEDDED_SHA (matches HEAD)"
+    fi
+else
+    echo "  ⚠ Native binary not present or not executable — skipping check"
+fi
 
 if [ "$BUILD_ONLY" = true ]; then
     echo
@@ -276,11 +372,76 @@ ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
     && echo "  ✓ AnvilHub config.ts updated" \
     || echo "  ⚠ AnvilHub config.ts update skipped (SSH not available)"
 
-# WordPress shortcodes — update ANVIL_VERSION constant
-ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
-    "ssh 10.0.70.6 'sudo docker exec wordpress-wordpress-1 sed -i \"s/ANVIL_VERSION.*,.*/ANVIL_VERSION\\\", \\\"$VERSION\\\");/\" /var/www/html/wp-content/mu-plugins/culpur-hardening.php && sudo docker exec wordpress-wordpress-1 rm -rf /var/www/html/wp-content/wphb-cache/'" 2>/dev/null \
-    && echo "  ✓ WordPress shortcodes updated + cache cleared" \
-    || echo "  ⚠ WordPress update skipped (SSH not available)"
+# WordPress shortcodes — update ANVIL_VERSION constant.
+#
+# T1-C: previously this used a raw remote sed ("s/ANVIL_VERSION.*,.*/...")
+# that produced exactly the mismatched-quote corruption that took culpur.net
+# down in incident #281 (and recurred in #396). Now it:
+#   1. Fetches the existing file content
+#   2. Applies a quote-preserving in-place replacement (Python — always
+#      installed; no cross-repo dep on safe-edit)
+#   3. Pre-flight checks: refuse if existing line has unbalanced quotes
+#   4. Writes back via base64 (no shell escaping concerns)
+#   5. Runs `php -l` on the result; rolls back to original if lint fails
+WP_PHP_PATH="/var/www/html/wp-content/mu-plugins/culpur-hardening.php"
+WP_SSH="ssh -p 30022 -i $HOME/.ssh/id_ed25519_guard soulofall@guard.armored.ninja"
+WP_INNER="ssh 10.0.70.6"
+WP_DOCKER="sudo docker exec wordpress-wordpress-1"
+
+WP_UPDATE_OK=false
+WP_OLD=$($WP_SSH "$WP_INNER '$WP_DOCKER cat $WP_PHP_PATH'" 2>/dev/null || true)
+if [ -n "$WP_OLD" ]; then
+    # Use Python (always available) to apply the quote-preserving replacement.
+    # Backreference (\\3) forces closing quote to match opening — defeats the
+    # mismatched-quote propagation that caused incidents #281 / #396.
+    WP_NEW=$(python3 -c "
+import re, sys
+old = sys.stdin.read()
+key = 'ANVIL_VERSION'
+ver = '$VERSION'
+# Pre-flight: refuse if existing line has unbalanced quotes
+import re as _re
+lm = _re.search(r'[^\n]*\b' + key + r'\b[^\n]*', old, _re.IGNORECASE)
+if lm:
+    ln = lm.group(0)
+    if ln.count(chr(39)) % 2 != 0 or ln.count(chr(34)) % 2 != 0:
+        sys.stderr.write('refusing to update: existing line has unbalanced quotes: ' + ln.strip() + '\n')
+        sys.exit(2)
+pat = re.compile(r'(define\s*\(\s*([\x27\x22])' + key + r'\2\s*,\s*([\x27\x22]))([^\x27\x22]*?)(\3\s*\))', re.IGNORECASE)
+new = pat.sub(r'\1' + ver + r'\5', old, count=1)
+if new == old:
+    # No change needed — write old back verbatim, exit 0
+    sys.stdout.write(old)
+    sys.exit(0)
+sys.stdout.write(new)
+" <<< "$WP_OLD" 2>/tmp/anvil-wp-update.err)
+    WP_RC=$?
+    if [ $WP_RC -ne 0 ]; then
+        echo "  ✘ WordPress update REFUSED by safe-edit: $(cat /tmp/anvil-wp-update.err)"
+    elif [ "$WP_NEW" = "$WP_OLD" ]; then
+        echo "  ✓ WordPress shortcode already at v$VERSION (no change)"
+        WP_UPDATE_OK=true
+    else
+        # Write through base64 — no shell escaping concerns
+        WP_NEW_B64=$(printf '%s' "$WP_NEW" | base64 | tr -d '\n')
+        $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_NEW_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null
+        # php -l verification — roll back on failure
+        if $WP_SSH "$WP_INNER '$WP_DOCKER php -l $WP_PHP_PATH'" 2>&1 | grep -q "No syntax errors detected"; then
+            $WP_SSH "$WP_INNER '$WP_DOCKER rm -rf /var/www/html/wp-content/wphb-cache/'" 2>/dev/null
+            echo "  ✓ WordPress shortcode updated to v$VERSION + lint passed + cache cleared"
+            WP_UPDATE_OK=true
+        else
+            # Roll back to the original content
+            WP_OLD_B64=$(printf '%s' "$WP_OLD" | base64 | tr -d '\n')
+            $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_OLD_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null
+            echo "  ✘ WordPress php -l REJECTED the new content — rolled back to original" >&2
+            echo "    (release continues; manual investigation needed)" >&2
+        fi
+    fi
+fi
+if [ "$WP_UPDATE_OK" != "true" ]; then
+    echo "  ⚠ WordPress update skipped or failed (SSH unavailable / lint rejected)"
+fi
 
 # GitHub README — update ONLY the version badge.
 #
