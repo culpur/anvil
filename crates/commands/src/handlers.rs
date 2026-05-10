@@ -372,6 +372,10 @@ pub fn handle_slash_command(
             message: "/webhook is not yet implemented. Configure webhooks through your platform's settings (GitHub, GitLab, etc.) or ask the assistant to help write a webhook handler.".to_string(),
             session: session.clone(),
         }),
+        SlashCommand::Ssh { .. } => Some(SlashCommandResult {
+            message: "/ssh: embedded SSH client. Run `anvil` interactively to use the SSH form, or `/ssh <alias>` to retrieve from the vault.".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::PluginSdk { .. } => Some(SlashCommandResult {
             message: "/plugin-sdk is not yet implemented. Plugin development tooling is not yet available. Refer to the Anvil plugin documentation for the plugin manifest format and API.".to_string(),
             session: session.clone(),

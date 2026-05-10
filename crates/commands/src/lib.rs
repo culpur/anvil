@@ -331,9 +331,18 @@ pub enum SlashCommand {
     Regex {
         action: Option<String>,
     },
-    /// `/ssh [list|connect <host>|tunnel <host> <local:remote>|keys]`
+    /// `/ssh` — open an embedded SSH client tab inside Anvil so the user can
+    /// switch between agent chat and live host shells without leaving the TUI.
+    /// Three forms:
+    ///
+    ///   * `/ssh`               → modal form to enter host/port/user/auth/alias
+    ///   * `/ssh <alias>`       → look up alias in vault and connect
+    ///   * `/ssh save <alias>`  → save the active SSH tab's connection details
+    ///                            to the vault under `<alias>` for next time
+    ///
+    /// `args` carries everything after the command word. (T5-Ssh-A.)
     Ssh {
-        action: Option<String>,
+        args: Option<String>,
     },
     /// `/logs [tail <file>|search <file> <pattern>|analyze <file>|stats <file>]`
     Logs {
@@ -738,9 +747,6 @@ impl SlashCommand {
             "regex" => Self::Regex {
                 action: remainder_after_command(trimmed, command),
             },
-            "ssh" => Self::Ssh {
-                action: remainder_after_command(trimmed, command),
-            },
             "logs" => Self::Logs {
                 action: remainder_after_command(trimmed, command),
             },
@@ -755,6 +761,9 @@ impl SlashCommand {
             },
             "webhook" => Self::Webhook {
                 action: remainder_after_command(trimmed, command),
+            },
+            "ssh" => Self::Ssh {
+                args: remainder_after_command(trimmed, command),
             },
             "plugin-sdk" => Self::PluginSdk {
                 action: remainder_after_command(trimmed, command),
@@ -2081,12 +2090,12 @@ mod tests {
             SlashCommand::Vault { action: None },
             SlashCommand::Migrate { action: None },
             SlashCommand::Regex { action: None },
-            SlashCommand::Ssh { action: None },
             SlashCommand::Logs { action: None },
             SlashCommand::Markdown { action: None },
             SlashCommand::Snippets { action: None },
             SlashCommand::Finetune { action: None },
             SlashCommand::Webhook { action: None },
+            SlashCommand::Ssh { args: None },
             SlashCommand::PluginSdk { action: None },
             SlashCommand::Sleep,
             SlashCommand::Think,
@@ -2406,5 +2415,44 @@ mod tests {
         // (no disk I/O needed for this unit test path).
         let output = super::format_suggestions(&[], "some prompt");
         assert!(!output.is_empty());
+    }
+
+    // T5-Ssh-A: parser variants for the embedded SSH client slash command.
+    #[test]
+    fn ssh_bare_command_parses_with_no_args() {
+        assert_eq!(
+            SlashCommand::parse("/ssh"),
+            Some(SlashCommand::Ssh { args: None }),
+        );
+    }
+
+    #[test]
+    fn ssh_with_alias_parses_alias_into_args() {
+        assert_eq!(
+            SlashCommand::parse("/ssh guard"),
+            Some(SlashCommand::Ssh {
+                args: Some("guard".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn ssh_save_subcommand_parses_into_args() {
+        assert_eq!(
+            SlashCommand::parse("/ssh save myalias"),
+            Some(SlashCommand::Ssh {
+                args: Some("save myalias".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn ssh_handles_extra_whitespace() {
+        assert_eq!(
+            SlashCommand::parse("/ssh   guard"),
+            Some(SlashCommand::Ssh {
+                args: Some("guard".to_string()),
+            }),
+        );
     }
 }

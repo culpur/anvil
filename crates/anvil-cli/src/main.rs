@@ -4253,9 +4253,11 @@ impl LiveCli {
             SlashCommand::Regex { action } => {
                 (self.run_regex_command(action.as_deref()), false)
             }
-            // Feature 13 — SSH session manager
-            SlashCommand::Ssh { action } => {
-                (Self::run_ssh_command(action.as_deref()), false)
+            // T5-Ssh: embedded SSH client (Phase A — parser only; full wiring in Phase F)
+            // Supersedes the prior `/ssh` session-manager stub; the new contract
+            // delivers a real interactive SSH tab inside Anvil.
+            SlashCommand::Ssh { args: _ } => {
+                ("/ssh: embedded SSH client not yet wired (Phase F).".to_string(), false)
             }
             // Feature 14 — log analysis
             SlashCommand::Logs { action } => {
@@ -6134,8 +6136,9 @@ impl LiveCli {
                 false
             }
             // Feature 13 — SSH session manager
-            SlashCommand::Ssh { action } => {
-                println!("{}", Self::run_ssh_command(action.as_deref()));
+            // T5-Ssh: embedded SSH client (REPL fallback — full UI requires TUI)
+            SlashCommand::Ssh { args: _ } => {
+                println!("/ssh: embedded SSH client requires TUI mode (run `anvil` interactively).");
                 false
             }
             // Feature 14 — log analysis
