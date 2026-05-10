@@ -282,16 +282,32 @@ ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
     && echo "  ✓ WordPress shortcodes updated + cache cleared" \
     || echo "  ⚠ WordPress update skipped (SSH not available)"
 
-# GitHub README — update version badge
+# GitHub README — update ONLY the version badge.
+#
+# Past bug: the previous version of this step ran a second sed that
+# globally replaced every vX.Y.Z token in the README with the new version,
+# silently rewriting every changelog entry to the latest version on every
+# release. The changelog must be edited by humans (or an explicit
+# changelog-prepend tool) — never by find/replace.
 README_SHA=$(gh api repos/culpur/anvil/contents/README.md --jq '.sha' 2>/dev/null)
 if [ -n "$README_SHA" ]; then
     README_CONTENT=$(gh api repos/culpur/anvil/contents/README.md --jq '.content' | base64 -d)
-    UPDATED_README=$(echo "$README_CONTENT" | sed "s/version-[0-9.]*-/version-$VERSION-/g" | sed "s/v[0-9]*\.[0-9]*\.[0-9]*/v$VERSION/g")
-    ENCODED=$(echo "$UPDATED_README" | base64 | tr -d '\n')
-    gh api repos/culpur/anvil/contents/README.md \
-        -X PUT -f message="docs: auto-bump to $TAG" \
-        -f content="$ENCODED" -f sha="$README_SHA" --jq '.commit.sha' 2>/dev/null
-    echo "  ✓ GitHub README updated to $TAG"
+    # Badge looks like: version-2.2.10-0FBCFF — only that token gets rewritten.
+    UPDATED_README=$(echo "$README_CONTENT" | sed "s/version-[0-9.]*-/version-$VERSION-/g")
+
+    # Sanity: refuse to push if more than the badge changed.
+    DIFF_LINES=$(diff <(echo "$README_CONTENT") <(echo "$UPDATED_README") | grep -c '^[<>]' || true)
+    if [ "$DIFF_LINES" -gt 2 ]; then
+        echo "  ⚠ README badge update would change $DIFF_LINES lines — refusing to push (would mangle changelog)" >&2
+    elif [ "$UPDATED_README" = "$README_CONTENT" ]; then
+        echo "  ✓ GitHub README badge already at $TAG (no change)"
+    else
+        ENCODED=$(echo "$UPDATED_README" | base64 | tr -d '\n')
+        gh api repos/culpur/anvil/contents/README.md \
+            -X PUT -f message="docs: bump version badge to $TAG" \
+            -f content="$ENCODED" -f sha="$README_SHA" --jq '.commit.sha' 2>/dev/null
+        echo "  ✓ GitHub README badge updated to $TAG"
+    fi
 fi
 
 echo
