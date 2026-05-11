@@ -186,12 +186,12 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 **Windows is back, BSD joins, routines on disk** &mdash; seven platforms now.
 
-- &#10003; **FreeBSD x86_64 + NetBSD x86_64 binaries** &mdash; first-ever BSD support, built from Culpur-owned builder images. Each binary SHA256-verified and signed by the release pipeline.
+- &#10003; **FreeBSD x86_64 + NetBSD x86_64 binaries** &mdash; first-ever BSD support. Every binary SHA256-verified and signed by the release pipeline, with paired `.sha256` manifests at [anvilhub.culpur.net/sha256/](https://anvilhub.culpur.net/sha256/).
 - &#10003; **Windows x86_64 is back** &mdash; the v2.2.12 hold is fixed. ssh-agent auth is now `#[cfg(unix)]`-gated with a clean Windows stub. The rest of the SSH driver (key-file, password, kbd-interactive) works on Windows exactly as on Unix.
 - &#10003; **Seven platforms total** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64.
-- &#10003; **Release pipeline hardening** &mdash; removed the `| tail -1` mask that hid the v2.2.12 Windows build failure. Build errors now hard-fail instead of silently producing partial releases.
-- &#10003; **Routines foundation on disk** &mdash; new `crates/runtime/src/routines/` module with schedule grammar (duration, interval, cron, ISO timestamp), output archive with `[SILENT]` early-stop, and SHA-256 input-hash packet schema. 63 new tests. v2.2.14 daemon ships on top.
-- &#10003; FreeBSD ARM64 and OpenBSD x86_64 are source-only this release &mdash; Rust ships no precompiled `rust-std` for either target. Build via `cargo install --git`.
+- &#10003; **Release pipeline hardening** &mdash; build errors now hard-fail instead of silently producing partial releases (the v2.2.12 incident where the Windows build failed silently and a stale artifact was published).
+- &#10003; **Routines foundation on disk** &mdash; schedule grammar (duration, interval, cron, ISO timestamp), output archive with `[SILENT]` early-stop, and SHA-256 input-hash packet schema. 63 new tests. The v2.2.14 daemon ships on top.
+- &#10003; FreeBSD ARM64 and OpenBSD x86_64 are not in this release &mdash; the Rust toolchain does not publish a precompiled standard library for either target. Both are queued for v2.2.14.
 - &#10003; 1,146 workspace tests passing across every crate. Zero failures. Zero warnings.
 
 ### v2.2.12 &mdash; May 11, 2026
@@ -238,7 +238,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; TUI: native terminal selection restored (Shift-drag works again)
 - &#10003; TUI: tool-result summaries now actually summarize
 - &#10003; Release pipeline: regenerate sha256 manifests every build + verify-before-release
-- &#10003; Release pipeline: publish binaries to public `culpur/anvil`, not the private `anvil-source` repo
+- &#10003; Release pipeline: fix repo target on `gh release` calls
 
 ### v2.2.9 &mdash; May 6, 2026
 
