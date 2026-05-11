@@ -41,7 +41,7 @@ This release is the product of a punishing architectural cycle: per-tab parallel
 ## Quality
 
 - **318 tests pass** — 304 lib tests + 5 per-tab inference integration tests + 5 SSH integration tests + 4 tool-card integration tests. Zero failures. Zero warnings.
-- **5 platforms** — macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64.
+- **4 platforms this release** — macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64. Windows x86_64 build is deferred to v2.2.13 while we land the cross-platform fix for the new SSH agent integration (Windows has no Unix-domain sockets). Windows users on v2.2.11 are unaffected — stay there until v2.2.13.
 - **~22 MB single binary** — no runtime dependencies, no install prerequisites beyond the binary itself.
 
 ---

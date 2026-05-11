@@ -1,7 +1,10 @@
-# Anvil v2.4 Routines — What to Build, What to Adopt
+# Anvil Routines — What to Build, What to Adopt
 
 **Date:** 2026-05-11
-**Status:** Pre-spec notes. Distilled from inspection of four existing automation/agent systems plus the current Anvil tree. Naming and positioning are out of scope; this is an engineering-only read.
+**Reframed:** 2026-05-11 — this doc was originally titled "v2.4 Routines." The v2.4 framing was retired alongside the eleven-release roadmap. Routines work now ships as Tier 2 of `ROADMAP.md`, slice-by-slice into whichever `v2.2.x` patch is next.
+**Status:** Working notes. Distilled from inspection of four existing automation/agent systems plus the current Anvil tree. Naming and positioning are out of scope; this is an engineering-only read.
+
+**A note on version references in this doc.** The body still refers to "v2.4" in many places because the doc was written when that framing was active. Treat those references as **build-order anchors**, not release labels — they tell you which work depends on which. The cost estimate in §13 and the ordering everywhere else are still correct; only the version label is wrong, and rewriting every mention would be churn. New decisions made after the reframing use the corrected backlog-tier framing.
 
 ---
 
@@ -298,7 +301,7 @@ Roughly ordered by build cost, smallest first:
 20. **launchd + systemd-user unit installers** (per §16/Q5) — `anvil routine install-daemon` / `uninstall-daemon` subcommands generating platform-appropriate units. One day for macOS launchd + Linux systemd-user. Windows Task Scheduler in 2.4.x.
 21. **Per-adapter truncation policy + `archive_url`** (per §16/Q6) — `default_max_chars` and `supports_attachments` on the adapter trait, `deliver_max_chars` TOML override, `archive_url` field in webhook payloads. Half a day on top of item 6.
 
-Critical path for v2.4 release: items 1–11 + 15 + 17 + 19 + 20 + 21. Roughly **three weeks of solo work**, no longer blocked on the v2.3 journal (item 8 is now a temporary JSONL writer per §16/Q3). Items 16 and 18 are strong-recommend ship-with-v2.4 if time allows; items 12–14 (watch/webhook/event triggers) remain 2.4.x.
+Build order is roughly smallest first; ship items into whichever `v2.2.x` patch is next when each is ready. **There is no "v2.4 release."** The capability backlog in `ROADMAP.md` retired that framing — items here are Tier 2 in the backlog, and version bumps happen for user-visible reasons (on-disk break, CLI break, architectural seam), not feature accumulation. The full Tier 2 build is roughly **three weeks of solo work** end-to-end, but it ships in slices, not a milestone.
 
 ---
 
@@ -453,6 +456,8 @@ $ anvil routine install-daemon
 
   Where it installs:
     macOS:   ~/Library/LaunchAgents/com.anvil.routined.plist
+    Linux:   ~/.config/systemd/user/anvil-routined.service
+    FreeBSD: ~/.config/anvil/rc.d/anvil-routined (loaded via user crontab @reboot)
     Logs:    ~/.anvil/routines/daemon.log
     Pidfile: ~/.anvil/routines/daemon.pid
 
@@ -527,4 +532,30 @@ The consent UX adds work on top of the §13/Q5 items (19, 20):
 
 Total: ~2 additional days. The cost is real and worth paying — without this work, the daemon-install story is a footgun. With it, persistent execution is a deliberate, visible, reversible choice.
 
-This pushes the revised critical-path estimate from §13 from "three weeks" to **"three and a half weeks of solo work."** That is the right scope for a release that fundamentally changes when Anvil can act on the user's behalf.
+**Cross-OS variance addendum (per §17.8):** the daemon generator must produce three different unit formats (launchd plist, systemd-user service, FreeBSD crontab-launcher) instead of two. Adds ~half a day on top of items 19, 20 — most of the structure is the same generator with three Tera templates. The systemd-user lingering detection adds ~quarter day. The FreeBSD path is genuinely new code (programmatic crontab editing) and adds ~half a day.
+
+Total cross-OS variance: ~1.25 additional days, contingent on FreeBSD landing per ROADMAP Tier 8.5 Stream B. If BSD ships after the routines daemon, the daemon generator can ship Mac+Linux only first and FreeBSD support folds in via a separate cfg-gated module — no rewrite, no migration.
+
+This pushes the revised critical-path estimate from §13 from "three weeks" to **"three and a half to four weeks of solo work,"** depending on whether BSD daemon support is in-scope or deferred. That is the right scope for a release that fundamentally changes when Anvil can act on the user's behalf.
+
+### 17.8 Cross-OS daemon variance (added 2026-05-11)
+
+The §17.2 prompt example shows three OS-specific install paths (macOS launchd, Linux systemd-user, FreeBSD rc.d-via-crontab). Each is a different init story and the daemon generator must produce the right one. This subsection captures what's known per-OS so the implementer doesn't have to rediscover it.
+
+**macOS (launchd):** `~/Library/LaunchAgents/com.anvil.routined.plist`. KeepAlive=true, RunAtLoad=true, standard pattern. `launchctl load` to install, `launchctl unload` to remove. The plist generator is the path of least resistance — Apple's tooling is well-documented.
+
+**Linux (systemd-user):** `~/.config/systemd/user/anvil-routined.service`. `Type=simple`, `Restart=on-failure`, `WantedBy=default.target`. `systemctl --user enable --now anvil-routined` to install. **Watch-out:** systemd-user on headless servers requires `loginctl enable-linger <user>` or the service dies at logout. The install-daemon flow must detect and offer to enable lingering with a separate consent line if the user is on a headless machine.
+
+**FreeBSD (rc.d-via-crontab):** FreeBSD has no per-user init parallel to launchd/systemd-user. Two options:
+  1. **User crontab `@reboot` entry** — simplest, portable, no root needed. The install path writes `~/.config/anvil/rc.d/anvil-routined` as a bare shell launcher script, then adds `@reboot ~/.config/anvil/rc.d/anvil-routined` to the user's crontab via `crontab -e`-equivalent (programmatic crontab modification). Logs go to `~/.anvil/routines/daemon.log` as documented. Restart-on-failure must be implemented inside the launcher script as a `while; do anvil routined; sleep 5; done` loop. Less clean than launchd/systemd but no root required.
+  2. **System-wide `/usr/local/etc/rc.d/anvil-routined` (sysadmin install)** — needs root, only appropriate for fleet provisioning where the user IS root or has sudoers. Out of scope for the v2.2.x first cut; document the path and defer the implementation.
+
+  Choose option 1 for the consent-gated install. The user can always promote to option 2 by hand.
+
+**OpenBSD / NetBSD:** Similar to FreeBSD — no per-user init system. Option 1 (user crontab `@reboot`) works identically. Defer to the FreeBSD path until somebody asks for OpenBSD-native daemon support.
+
+**Windows:** Out of scope for the routines daemon in v2.2.x. Windows users can still write routine TOMLs and dispatch them manually with `anvil routine run --inline <name>`. A native Windows service install (`sc create`) is a v2.3+ candidate when the audience justifies it. Per the ROADMAP Tier 8.5 Stream A item 3, native Windows ssh-agent support is also a follow-up — both are aspects of the same "Windows is a second-class citizen until somebody puts effort in" reality.
+
+**The daemon generator must be `cfg(target_os)`-gated.** No runtime detection ifs in the consent prompt — the prompt shows the path appropriate to the user's OS and only that path. The list of "Where it installs" lines in §17.2 is shown filtered, not all four every time.
+
+This is closely related to ROADMAP.md Tier 8.5 (platform reach). The cross-compile gap (v2.2.13 Windows fix, FreeBSD never on matrix) and the cross-OS daemon gap (this subsection) are the same kind of problem at two layers — both reflect the cost of "every platform" being non-trivial to keep honest. Build the daemon-generator with the cfg-gated multi-OS structure from day one, even if FreeBSD support lands later, so retrofitting BSD doesn't require restructuring the consent prompt.
