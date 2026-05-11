@@ -138,6 +138,7 @@ async fn do_auth(
     }
 }
 
+#[cfg(unix)]
 async fn auth_agent(
     session: &mut client::Handle<ClientHandler>,
     user: &str,
@@ -189,6 +190,25 @@ async fn auth_agent(
     let _ = event_tx
         .send(SshEvent::AuthFailure(
             "agent: all keys rejected by server".into(),
+        ))
+        .await;
+    Ok(false)
+}
+
+/// Windows stub: ssh-agent auth uses Unix-domain sockets, which Windows lacks.
+/// Surfaces a clear failure and lets the auth chain fall through to KeyFile /
+/// Password / KeyboardInteractive. Native Windows ssh-agent transport (named
+/// pipes for Win32-OpenSSH, window messages for Pageant) is a separate piece
+/// of work.
+#[cfg(not(unix))]
+async fn auth_agent(
+    _session: &mut client::Handle<ClientHandler>,
+    _user: &str,
+    event_tx: &mpsc::Sender<SshEvent>,
+) -> Result<bool, SshError> {
+    let _ = event_tx
+        .send(SshEvent::AuthFailure(
+            "ssh-agent auth is not supported on this platform; use a key file or password".into(),
         ))
         .await;
     Ok(false)
