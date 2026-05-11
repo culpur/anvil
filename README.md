@@ -201,12 +201,19 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ### v2.2.11 &mdash; May 9, 2026
 
-**Self-Awareness Release** &mdash; the agent now knows itself.
+**Outweigh-them-all release** &mdash; self-awareness plus ten core surfaces in one cut.
 
-- &#10003; System prompt now leads with "You are Anvil v2.2.11" and references the currently loaded model + provider in every turn &mdash; no more hallucinating Spring Boot or claiming to be a different model
-- &#10003; Token economy &mdash; W11 file-fingerprint cache + W12 command-output cache + W13 skill-chaining engine
-- &#10003; Default token-economy skills (W14) &mdash; 7 bundled skills for cache-aware development
-- &#10003; `/memory` slash command tree (W15) with AutoPromoter session-scoped pattern detection
+- &#10003; System prompt now leads with "You are Anvil v2.2.11" and references the currently loaded model + provider in every turn &mdash; no more hallucinating a different identity
+- &#10003; **W1 hook events:** PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd, PreCompact, Notification &mdash; full CC parity
+- &#10003; **W2 effort slider:** `/effort low|medium|high` &mdash; tune reasoning depth per turn, persisted per session
+- &#10003; **W3 goal persistence:** per-session goals survive `/clear` and reconnect, surfaced in status line
+- &#10003; **W4 named profiles:** save and switch (provider, model, effort, output style) tuples by name
+- &#10003; **W5 published JSON schema:** `settings.json` fully typed, IDE-completable, served at `anvilhub.culpur.net/schema/settings.json`
+- &#10003; **W6 OpenTelemetry events:** `OTEL_EXPORTER_OTLP_ENDPOINT` support, permission_decision + tool_call + token_usage spans
+- &#10003; **W7 custom output styles:** define your own `/output-style` names in settings, ship them as plugins
+- &#10003; **W8 reviewer-agent approval gate:** optional second-agent review before file writes, configurable threshold
+- &#10003; **W9 anvil mcp-server mode:** run Anvil itself as an MCP server &mdash; expose agents and tools to any MCP client
+- &#10003; **W10 requirements.toml admin policy floor:** enforce minimum versions, required plugins, denied domains org-wide
 - &#10003; Rename `CLAUDE.md` &rarr; `ANVIL.md` across user-facing strings + the anvil-md-curator skill
 - &#10003; Build-time fix: `cargo:rerun-if-changed` now watches the actual ref file, not just `.git/HEAD` &mdash; GIT_SHA stays current across rebuilds
 
