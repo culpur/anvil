@@ -79,7 +79,8 @@ impl LiveCli {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map_or(0, |s| s.lines().filter(|l| !l.is_empty()).count());
 
-        let session = self.runtime.session();
+        let runtime_guard = self.active_runtime();
+        let session = runtime_guard.session();
         let total_tokens = session.messages.iter()
             .filter_map(|m| m.usage.as_ref())
             .map(|u| u.input_tokens + u.output_tokens)
@@ -280,7 +281,8 @@ impl LiveCli {
                 let summary = store.today();
                 if summary.sessions.is_empty() {
                     // No sessions recorded yet today — show live session stats.
-                    let session = self.runtime.session();
+                    let runtime_guard = self.active_runtime();
+                    let session = runtime_guard.session();
                     let total_tokens: u32 = session.messages.iter()
                         .filter_map(|m| m.usage.as_ref())
                         .map(|u| u.input_tokens + u.output_tokens)

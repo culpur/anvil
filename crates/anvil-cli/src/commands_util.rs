@@ -17,7 +17,8 @@ use crate::{cmd_static, LiveCli};
 impl LiveCli {
     /// `/history [all]` — display conversation messages.
     pub(crate) fn format_history(&self, show_all: bool) -> String {
-        let messages = &self.runtime.session().messages;
+        let runtime_guard = self.active_runtime();
+        let messages = &runtime_guard.session().messages;
         let limit = if show_all { messages.len() } else { 20 };
         let start = messages.len().saturating_sub(limit);
         let visible = &messages[start..];
@@ -77,7 +78,7 @@ impl LiveCli {
             content
         );
         // Inject as a user message so the model sees it on the next turn.
-        self.runtime.inject_user_message(&injection);
+        self.active_runtime_mut().inject_user_message(&injection);
         self.context_files.push(path_buf.clone());
         Ok(format!("Added to context: {}", path_buf.display()))
     }

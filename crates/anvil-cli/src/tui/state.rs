@@ -45,14 +45,49 @@ pub enum TuiEvent {
     WorkspaceClear { all_tabs: bool },
 }
 
-/// A cloneable sender that model/tool code uses to push `TuiEvent`s.
+/// A TUI event tagged with the tab it belongs to.  The streaming/tool path
+/// constructs these via `TuiSender::send` (which stamps the sender's
+/// `tab_id`); the TUI's `apply_tagged_event` reads `tab_id` to route to the
+/// correct tab.
 #[derive(Debug, Clone)]
-pub struct TuiSender(pub SyncSender<TuiEvent>);
+pub struct TaggedTuiEvent {
+    pub tab_id: usize,
+    pub event: TuiEvent,
+}
+
+/// A cloneable sender that model/tool code uses to push `TuiEvent`s.
+///
+/// Each clone carries the `tab_id` of the runtime that owns it; sends stamp
+/// that `tab_id` onto every event automatically.  The underlying
+/// `SyncSender<TaggedTuiEvent>` is shared across all senders for the same
+/// TUI instance; only the stamp differs.
+#[derive(Debug, Clone)]
+pub struct TuiSender {
+    inner: SyncSender<TaggedTuiEvent>,
+    tab_id: usize,
+}
 
 impl TuiSender {
-    /// Send an event, discarding errors silently (TUI may have been closed).
+    /// Construct a sender bound to a specific `tab_id`.
+    pub fn new(inner: SyncSender<TaggedTuiEvent>, tab_id: usize) -> Self {
+        Self { inner, tab_id }
+    }
+
+    /// The `tab_id` this sender stamps onto every event.
+    pub fn tab_id(&self) -> usize {
+        self.tab_id
+    }
+
+    /// Send an event tagged with this sender's `tab_id`.  Errors are dropped
+    /// silently (the TUI may have closed).
     pub fn send(&self, event: TuiEvent) {
-        let _ = self.0.send(event);
+        let _ = self.inner.send(TaggedTuiEvent { tab_id: self.tab_id, event });
+    }
+
+    /// Rebind this sender to a different `tab_id`.  The underlying channel is
+    /// unchanged.  Used when re-routing a runtime (e.g. on `/fork`).
+    pub fn with_tab_id(&self, tab_id: usize) -> Self {
+        Self { inner: self.inner.clone(), tab_id }
     }
 }
 
@@ -262,6 +297,15 @@ pub(crate) struct Tab {
     /// vt100 virtual screen instead of the chat log. All chat-related
     /// fields above are unused when `ssh.is_some()`.
     pub ssh: Option<crate::tui::ssh_tab::SshTabState>,
+    /// Per-tab inference runtime ownership marker (bug 3).
+    ///
+    /// Each tab owns its own runtime so multiple tabs can run independent
+    /// turns concurrently (bug 3). The runtime itself lives in
+    /// `LiveCli.tab_runtimes[i]` (parallel to `AnvilTui.tabs[i]`); this
+    /// flag tracks whether that slot is populated. For the bootstrap tab
+    /// this is set to `true` by `LiveCli::new`; for subsequent tabs it is
+    /// set by the `/tab new` handler when the runtime is installed.
+    pub has_runtime: bool,
 }
 
 impl Tab {
@@ -294,6 +338,7 @@ impl Tab {
             scrollback: ScrollbackBuffer::new(),
             scrollback_state: ScrollbackState::live(),
             ssh: None,
+            has_runtime: false,
         }
     }
 
@@ -362,6 +407,69 @@ impl Tab {
             .enumerate()
             .map(|(i, (name, _))| (i + 1, name.as_str(), i + 1 == self.active_branch))
             .collect()
+    }
+}
+
+// ─── Per-tab runtime flag tests ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod tab_runtime_tests {
+    use super::*;
+
+    /// A freshly constructed `Tab` must have `has_runtime = false`; the flag is
+    /// set externally by `run_repl_tui` after `push_tab_runtime` succeeds.
+    #[test]
+    fn tab_holds_optional_runtime() {
+        let tab = Tab::new(1, "test".to_string(), "model".to_string(), "sess".to_string());
+        assert!(!tab.has_runtime, "new Tab should start with has_runtime = false");
+    }
+
+    /// `TuiSender::with_tab_id` rebinds the tab stamp and delivers events to
+    /// the original channel — verifying the sender stamping used in
+    /// `push_tab_runtime`.
+    #[test]
+    fn tab_install_runtime_stamps_correct_sender() {
+        use std::sync::mpsc;
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(4);
+        let prototype = TuiSender::new(tx, 1);
+        // Simulate what push_tab_runtime does: stamp the sender with the new tab's id.
+        let tab_id = 42usize;
+        let stamped = prototype.with_tab_id(tab_id);
+        stamped.send(TuiEvent::TurnDone);
+        let tagged = rx.try_recv().expect("expected event on channel");
+        assert_eq!(tagged.tab_id, tab_id, "sender must be stamped with the new tab's id");
+    }
+}
+
+// ─── Sender tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod sender_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// `TuiSender::send` must stamp the sender's `tab_id` onto every event.
+    #[test]
+    fn tui_sender_stamps_tab_id() {
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(4);
+        let sender = TuiSender::new(tx, 7);
+        sender.send(TuiEvent::TurnDone);
+        let tagged = rx.try_recv().expect("expected a message");
+        assert_eq!(tagged.tab_id, 7);
+        assert!(matches!(tagged.event, TuiEvent::TurnDone));
+    }
+
+    /// `TuiSender::with_tab_id` must rebind the stamp without changing the
+    /// underlying channel.
+    #[test]
+    fn tui_sender_with_tab_id_rebinds() {
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(4);
+        let sender = TuiSender::new(tx, 1);
+        let rebound = sender.with_tab_id(99);
+        rebound.send(TuiEvent::System("hello".to_string()));
+        let tagged = rx.try_recv().expect("expected a message");
+        assert_eq!(tagged.tab_id, 99);
+        assert!(matches!(tagged.event, TuiEvent::System(_)));
     }
 }
 
@@ -461,3 +569,112 @@ pub(crate) struct CompletionItem {
 // ─── Spinner frames ───────────────────────────────────────────────────────────
 
 pub(super) const THINK_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    /// Spin up two concurrent workers, each sending TextDelta events and a
+    /// TurnDone via the shared channel.  Verify:
+    ///   - No cross-contamination: every event carries the tab_id of the
+    ///     worker that produced it.
+    ///   - TurnDone arrives for both tab_ids.
+    ///   - Within each tab's event sequence, TextDeltas precede TurnDone.
+    #[test]
+    fn concurrent_workers_emit_correct_tab_ids() {
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(64);
+
+        let sender1 = TuiSender::new(tx.clone(), 1);
+        let sender2 = TuiSender::new(tx.clone(), 2);
+        drop(tx);
+
+        let h1 = thread::spawn(move || {
+            for chunk in &["hello", " world"] {
+                sender1.send(TuiEvent::TextDelta(chunk.to_string()));
+            }
+            sender1.send(TuiEvent::TurnDone);
+        });
+        let h2 = thread::spawn(move || {
+            for chunk in &["foo", " bar", " baz"] {
+                sender2.send(TuiEvent::TextDelta(chunk.to_string()));
+            }
+            sender2.send(TuiEvent::TurnDone);
+        });
+
+        h1.join().expect("worker 1 panicked");
+        h2.join().expect("worker 2 panicked");
+
+        let events: Vec<TaggedTuiEvent> =
+            std::iter::from_fn(|| rx.try_recv().ok()).collect();
+
+        // No text from tab 2 should appear under tab 1, and vice versa.
+        let tab1_texts: Vec<String> = events.iter()
+            .filter(|e| e.tab_id == 1)
+            .filter_map(|e| if let TuiEvent::TextDelta(ref s) = e.event { Some(s.clone()) } else { None })
+            .collect();
+        let tab2_texts: Vec<String> = events.iter()
+            .filter(|e| e.tab_id == 2)
+            .filter_map(|e| if let TuiEvent::TextDelta(ref s) = e.event { Some(s.clone()) } else { None })
+            .collect();
+
+        for t in &tab1_texts {
+            assert!(["hello", " world"].contains(&t.as_str()),
+                "unexpected text in tab 1: {t:?}");
+        }
+        for t in &tab2_texts {
+            assert!(["foo", " bar", " baz"].contains(&t.as_str()),
+                "unexpected text in tab 2: {t:?}");
+        }
+        assert_eq!(tab1_texts.len(), 2);
+        assert_eq!(tab2_texts.len(), 3);
+
+        // TurnDone must arrive for both tabs.
+        let done_tabs: Vec<usize> = events.iter()
+            .filter(|e| matches!(e.event, TuiEvent::TurnDone))
+            .map(|e| e.tab_id)
+            .collect();
+        assert!(done_tabs.contains(&1), "no TurnDone for tab 1: {done_tabs:?}");
+        assert!(done_tabs.contains(&2), "no TurnDone for tab 2: {done_tabs:?}");
+
+        // Per-tab ordering: last TextDelta must precede TurnDone.
+        let tab1_ev: Vec<_> = events.iter().filter(|e| e.tab_id == 1).collect();
+        let t1_done_pos = tab1_ev.iter().rposition(|e| matches!(e.event, TuiEvent::TurnDone)).unwrap();
+        let t1_text_pos = tab1_ev.iter().rposition(|e| matches!(e.event, TuiEvent::TextDelta(_))).unwrap();
+        assert!(t1_text_pos < t1_done_pos, "TurnDone before last TextDelta in tab 1");
+
+        let tab2_ev: Vec<_> = events.iter().filter(|e| e.tab_id == 2).collect();
+        let t2_done_pos = tab2_ev.iter().rposition(|e| matches!(e.event, TuiEvent::TurnDone)).unwrap();
+        let t2_text_pos = tab2_ev.iter().rposition(|e| matches!(e.event, TuiEvent::TextDelta(_))).unwrap();
+        assert!(t2_text_pos < t2_done_pos, "TurnDone before last TextDelta in tab 2");
+    }
+
+    /// Verify that a try_recv drain loop (as used by pump_events_nonblocking)
+    /// collects every event from two concurrent workers without blocking.
+    #[test]
+    fn drain_loop_collects_all_events() {
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(128);
+        let s1 = TuiSender::new(tx.clone(), 10);
+        let s2 = TuiSender::new(tx.clone(), 20);
+        drop(tx);
+
+        let h1 = thread::spawn(move || {
+            for c in &["a", "b", "c", "d", "e"] { s1.send(TuiEvent::TextDelta(c.to_string())); }
+            s1.send(TuiEvent::TurnDone);
+        });
+        let h2 = thread::spawn(move || {
+            for c in &["x", "y", "z"] { s2.send(TuiEvent::TextDelta(c.to_string())); }
+            s2.send(TuiEvent::TurnDone);
+        });
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        let count = std::iter::from_fn(|| rx.try_recv().ok()).count();
+        // 5 TextDeltas + 1 TurnDone from worker 1 = 6
+        // 3 TextDeltas + 1 TurnDone from worker 2 = 4
+        assert_eq!(count, 10, "expected 10 events, got {count}");
+    }
+}

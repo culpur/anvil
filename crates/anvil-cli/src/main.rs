@@ -1762,9 +1762,16 @@ fn run_continue() -> Result<(), Box<dyn std::error::Error>> {
     let loaded = Session::load_from_path(&most_recent.path)?;
     let message_count = loaded.messages.len();
 
+    // Restore the model the session was last using. Falls back to
+    // DEFAULT_MODEL only if the sidecar is missing (older sessions, or one
+    // that never persisted). This prevents Ollama sessions from being
+    // re-built on Anthropic and then erroring on missing credentials.
+    let saved_model = session_meta::get_session_model(&most_recent.id)
+        .unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
     // Build a fresh LiveCli then immediately swap in the loaded session.
     let mut cli = LiveCli::new(
-        DEFAULT_MODEL.to_string(),
+        saved_model,
         true,
         None,
         default_permission_mode(),
@@ -2062,8 +2069,14 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     let (mut tui, sender) =
         AnvilTui::new(cli.model.clone(), cli.session_id(), cli.permission_mode.as_str())?;
 
+    // Keep a prototype sender so push_tab_runtime can stamp new per-tab senders.
+    let sender_prototype = sender.clone();
+
     // Install the TUI sender so all model/tool output is routed to it.
     cli.enable_tui(sender);
+
+    // Bootstrap tab (index 0) already has a runtime installed by LiveCli::new.
+    tui.mark_tab_has_runtime(0);
 
     // Sync thinking mode and effort level to TUI status bar.
     tui.set_thinking_enabled(cli.thinking_enabled);
@@ -2123,7 +2136,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
     // v2.2.11: fire SessionStart hooks after config + MCP loaded, before first prompt.
     {
-        let msgs = cli.runtime.run_session_start_hooks();
+        let msgs = cli.active_runtime_mut().run_session_start_hooks();
         for msg in msgs {
             tui.push_system(format!("[hook] {msg}"));
         }
@@ -2642,6 +2655,22 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     let new_session = create_managed_session_handle()?;
                     let tab_idx = tui.new_tab(tab_name, cli.model.clone(), new_session.id.clone());
                     tui.switch_tab(tab_idx);
+                    cli.active_tab_idx = tab_idx;
+                    let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                    if let Err(e) = cli.push_tab_runtime(
+                        tab_id,
+                        &sender_prototype,
+                        Session::new(),
+                        cli.model.clone(),
+                        cli.system_prompt.clone(),
+                        true,
+                        cli.allowed_tools.clone(),
+                        cli.permission_mode,
+                    ) {
+                        tui.push_system(format!("[Remote] Warning: per-tab runtime failed: {e}"));
+                    } else {
+                        tui.mark_tab_has_runtime(tab_idx);
+                    }
                     tui.push_system(format!("[Remote] Opened tab: {tab_name}"));
                     // Broadcast tab_opened to relay so web viewer adds the tab
                     if let Some(tx) = &cli.relay_event_tx {
@@ -2723,22 +2752,36 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 tui.push_system(format!("[Remote] {message}"));
                 tui.scroll_to_bottom();
                 tui.draw()?;
-                let cli_ref = &mut cli;
-                let input_owned = message;
-                let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
-                    std::sync::Arc::new(std::sync::Mutex::new(None));
-                let turn_err_clone = turn_err.clone();
-                std::thread::scope(|s| {
-                    s.spawn(move || {
-                        if let Err(e) = cli_ref.run_turn(&input_owned)
-                            && let Ok(mut guard) = turn_err_clone.lock() {
-                                *guard = Some(e.to_string());
+                // Preprocessing (instruction hot-reload, pinned files, QMD context)
+                // runs on the main thread; only the blocking API call is offloaded.
+                if cli.maybe_reload_instructions() {
+                    let sp = cli.system_prompt.clone();
+                    cli.active_runtime_mut().replace_system_prompt(sp);
+                }
+                cli.inject_pinned_files_for_active_tab();
+                cli.effort_level.apply_to_env();
+                let effective_input = cli.build_input_with_qmd_context(&message);
+                let active = cli.active_tab_idx;
+                let active_tab_id = tui.tab_id_at(active).unwrap_or(active + 1);
+                if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
+                    tui.push_system(format!("Cannot start turn: {reason}"));
+                } else {
+                    let _ = tui.wait_for_turn_end_for_tab(active_tab_id)?;
+                    let reaped = cli.try_reap_finished_turns();
+                    for (idx, result) in reaped {
+                        if let Err(e) = result {
+                            if idx == active {
+                                tui.push_system(format!("Turn error: {e}"));
+                            } else {
+                                tui.push_system_to_tab(idx, format!("Turn error: {e}"));
                             }
-                    });
-                    let _ = tui.wait_for_turn_end();
-                });
-                if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
-                    tui.push_system(format!("Turn error: {err}"));
+                        }
+                    }
+                    // Post-turn work for the active tab.
+                    cli.persist_session()?;
+                    if let Some(msg) = cli.maybe_auto_compact() {
+                        tui.push_system(msg);
+                    }
                 }
             }
         }
@@ -2747,6 +2790,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         match tui.read_input()? {
             ReadResult::Continue => {
                 // Nothing submitted yet; loop and redraw.
+                // Sync active_tab_idx in case a keyboard shortcut (F2/F3,
+                // Ctrl+Left/Right, Alt+1-9) switched tabs inside read_input
+                // without surfacing a distinct ReadResult variant.
+                cli.active_tab_idx = tui.active_tab_index();
+                // Drain any pending TUI events from background tabs so their
+                // streaming output renders while the user is typing in another tab.
+                tui.pump_events_nonblocking();
             }
             ReadResult::Exit => {
                 cli.persist_session()?;
@@ -2771,12 +2821,25 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             ReadResult::NewTab => {
-                // Ctrl+T: open a new in-memory tab.  All tabs share the same
-                // model and runtime for now; the new tab just gets a fresh
-                // session so the conversation starts empty.
                 let new_session = create_managed_session_handle()?;
                 let tab_idx = tui.new_tab("new", cli.model.clone(), new_session.id.clone());
                 tui.switch_tab(tab_idx);
+                cli.active_tab_idx = tab_idx;
+                let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                if let Err(e) = cli.push_tab_runtime(
+                    tab_id,
+                    &sender_prototype,
+                    Session::new(),
+                    cli.model.clone(),
+                    cli.system_prompt.clone(),
+                    true,
+                    cli.allowed_tools.clone(),
+                    cli.permission_mode,
+                ) {
+                    tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
+                } else {
+                    tui.mark_tab_has_runtime(tab_idx);
+                }
                 tui.push_system(format!(
                     "Opened tab {}  |  session {}  |  use /tab rename <name> to rename",
                     tab_idx + 1,
@@ -2814,6 +2877,22 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             let new_session = create_managed_session_handle()?;
                             let tab_idx = tui.new_tab(name, cli.model.clone(), new_session.id.clone());
                             tui.switch_tab(tab_idx);
+                            cli.active_tab_idx = tab_idx;
+                            let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                            if let Err(e) = cli.push_tab_runtime(
+                                tab_id,
+                                &sender_prototype,
+                                Session::new(),
+                                cli.model.clone(),
+                                cli.system_prompt.clone(),
+                                true,
+                                cli.allowed_tools.clone(),
+                                cli.permission_mode,
+                            ) {
+                                tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
+                            } else {
+                                tui.mark_tab_has_runtime(tab_idx);
+                            }
                             tui.push_system(format!(
                                 "Opened tab {}  |  session {}",
                                 tab_idx + 1,
@@ -2857,7 +2936,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         n => {
                             if let Ok(num) = n.parse::<usize>() {
-                                tui.switch_tab(num.saturating_sub(1));
+                                let tab_idx = num.saturating_sub(1);
+                                tui.switch_tab(tab_idx);
+                                cli.active_tab_idx = tui.active_tab_index();
                             } else {
                                 tui.push_system(format!("Unknown /tab action: {n}. Try /tab for help."));
                             }
@@ -2940,7 +3021,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         let result = file_drop::process_file(path);
                         tui.push_system(result.notice);
                         if !result.blocks.is_empty() {
-                            cli.runtime.inject_user_blocks(result.blocks);
+                            cli.active_runtime_mut().inject_user_blocks(result.blocks);
                             any_blocks = true;
                         }
                     }
@@ -2949,22 +3030,28 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         tui.push_system(format!("Thinking... ({})", cli.model));
                         tui.scroll_to_bottom();
                         tui.draw()?;
-                        let cli_ref = &mut cli;
-                        let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
-                            std::sync::Arc::new(std::sync::Mutex::new(None));
-                        let turn_err_clone = turn_err.clone();
-                        std::thread::scope(|s| {
-                            s.spawn(move || {
-                                if let Err(e) = cli_ref.run_turn_file_drop()
-                                    && let Ok(mut guard) = turn_err_clone.lock() {
-                                        *guard = Some(e.to_string());
+                        // Blocks are already injected above; spawn the worker to call
+                        // run_turn_preloaded without any additional user message.
+                        cli.effort_level.apply_to_env();
+                        let active = cli.active_tab_idx;
+                        let active_tab_id = tui.tab_id_at(active).unwrap_or(active + 1);
+                        if let Err(reason) = cli.spawn_file_drop_turn_for_tab(active, cli.permission_mode) {
+                            tui.push_system(format!("Cannot start turn: {reason}"));
+                        } else {
+                            let _ = tui.wait_for_turn_end_for_tab(active_tab_id)?;
+                            let reaped = cli.try_reap_finished_turns();
+                            for (idx, result) in reaped {
+                                if let Err(e) = result {
+                                    if idx == active {
+                                        tui.push_system(format!("Turn error: {e}"));
+                                    } else {
+                                        tui.push_system_to_tab(idx, format!("Turn error: {e}"));
                                     }
-                            });
-                            let _ = tui.wait_for_turn_end();
-                        });
-                        if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
-                            tui.push_system(format!("Turn error: {err}"));
+                                }
+                            }
+                            cli.persist_session()?;
                         }
+                        // (held_submit not applicable to file-drop path)
                     }
                     continue;
                 }
@@ -2975,51 +3062,116 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 tui.scroll_to_bottom();
                 tui.draw()?; // Immediate visual feedback before blocking API call
 
-                // Run the turn on a scoped background thread so the main
-                // thread can enter the event-drain / animation loop immediately.
-                // This enables live streaming display instead of buffering
-                // the full response before showing anything.
+                // Run the turn on a background thread so the main thread can
+                // enter the event-drain / animation loop immediately.  This
+                // enables live streaming display instead of buffering the full
+                // response before showing anything.
                 //
-                // T1-#400: wait_for_turn_end now ALSO polls keyboard input
+                // Preprocessing (instruction hot-reload, pinned files, QMD
+                // context) must happen on the main thread because it needs
+                // &mut LiveCli.  The blocking API call is offloaded.
+                //
+                // T1-#400: wait_for_turn_end_for_tab also polls keyboard input
                 // during the wait, so the user can compose the next prompt
                 // while the current turn streams. If they pressed Enter
                 // mid-turn, the captured draft is returned here as
                 // `held_submit` and we feed it back into the input loop so
                 // it auto-submits as the next turn (no user action needed).
                 let mut held_submit: Option<String> = None;
-                {
-                    let cli_ref = &mut cli;
-                    let input_owned = trimmed.to_string();
-                    let turn_err: std::sync::Arc<std::sync::Mutex<Option<String>>> =
-                        std::sync::Arc::new(std::sync::Mutex::new(None));
-                    let turn_err_clone = turn_err.clone();
-                    std::thread::scope(|s| {
-                        s.spawn(move || {
-                            if let Err(e) = cli_ref.run_turn(&input_owned)
-                                && let Ok(mut guard) = turn_err_clone.lock() {
-                                    *guard = Some(e.to_string());
-                                }
-                        });
-                        // Main thread: animate the TUI + accept in-flight typing.
-                        if let Ok(captured) = tui.wait_for_turn_end() {
-                            held_submit = captured;
+                // Preprocessing on the main thread.
+                if cli.maybe_reload_instructions() {
+                    let sp = cli.system_prompt.clone();
+                    cli.active_runtime_mut().replace_system_prompt(sp);
+                }
+                cli.inject_pinned_files_for_active_tab();
+                cli.effort_level.apply_to_env();
+                let effective_input = cli.build_input_with_qmd_context(trimmed);
+                let active = cli.active_tab_idx;
+                let active_tab_id = tui.tab_id_at(active).unwrap_or(active + 1);
+                if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
+                    tui.push_system(format!("Cannot start turn: {reason}"));
+                } else {
+                    // Wait for active tab's TurnDone; background tabs keep
+                    // streaming via the shared channel.
+                    if let Ok(captured) = tui.wait_for_turn_end_for_tab(active_tab_id) {
+                        held_submit = captured;
+                    }
+                    // Reap finished handles (active tab finished; background tabs
+                    // may still be running and will be reaped on future iterations).
+                    let reaped = cli.try_reap_finished_turns();
+                    for (idx, result) in reaped {
+                        if let Err(e) = result {
+                            if idx == active {
+                                tui.push_system(format!("Turn error: {e}"));
+                            } else {
+                                tui.push_system_to_tab(idx, format!("Turn error: {e}"));
+                            }
                         }
+                    }
+                    // Post-turn work for the active tab: persist session,
+                    // auto-compact, notification hooks, skill hints.
+                    cli.persist_session()?;
+                    if let Some(msg) = cli.maybe_auto_compact() {
+                        tui.push_system(msg);
+                    }
+                    // Notification hooks.
+                    cli.active_runtime_mut().run_notification_hooks(&NotificationPayload {
+                        kind: NotificationKind::Completion,
+                        message: "Turn complete".to_string(),
                     });
-                    if let Some(err) = turn_err.lock().ok().and_then(|g| g.clone()) {
-                        tui.push_system(format!("Turn error: {err}"));
+                    // Skill suggestion hints.
+                    {
+                        use commands::agents::{discover_skill_roots, load_skills_from_roots};
+                        use commands::{ChainEvaluator, format_chain_hint};
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let roots = discover_skill_roots(&cwd);
+                        if let Ok(skills) = load_skills_from_roots(&roots) {
+                            let skills_with_triggers: Vec<&commands::agents::SkillSummary> =
+                                skills.iter().filter(|s| !s.triggers.is_empty()).collect();
+                            let matches = match_triggers(trimmed, &skills_with_triggers);
+                            if let Some(hint) = format_suggestions_hint(&matches) {
+                                tui.push_system(hint);
+                            }
+                            let loaded: Vec<commands::agents::SkillSummary> = cli.loaded_skills_snapshot();
+                            if !loaded.is_empty() {
+                                let all_skills: std::collections::HashMap<String, commands::agents::SkillSummary> =
+                                    skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
+                                let evaluator = ChainEvaluator::new();
+                                let candidates = evaluator.evaluate(&loaded, &all_skills, trimmed);
+                                for loaded_skill in &loaded {
+                                    let skill_candidates: Vec<_> = candidates.iter()
+                                        .filter(|c| c.triggered_by.eq_ignore_ascii_case(&loaded_skill.name))
+                                        .cloned()
+                                        .collect();
+                                    if let Some(hint) = format_chain_hint(&loaded_skill.name, &skill_candidates) {
+                                        tui.push_system(hint);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // T1-#400: if user pressed Enter during the in-flight turn,
-                // surface the held draft as a system note and stash it in
-                // the input box so the NEXT iteration of the read_input loop
-                // sees it.  We don't auto-fire to keep cancel-on-misfire
-                // possible — the user can press Enter to ship it or edit
-                // first.  The held draft is already trimmed.
+                // we held the draft. Behavior depends on shape:
+                //   - Slash command (starts with '/'): auto-fire as the next
+                //     submission. Anyone typing `/ssh` mid-turn meant to
+                //     EXECUTE that command, not enqueue it as a chat message.
+                //     We stash it as a synthetic "next submit" — the main
+                //     read_input loop's first iteration picks it up and
+                //     dispatches through the normal slash path.
+                //   - Free text: drop back into the input box as a draft so
+                //     the user can cancel-on-misfire or edit before sending.
+                //     This is the original v2.2.12 behavior, preserved.
                 if let Some(draft) = held_submit
                     && !draft.is_empty()
                 {
-                    tui.push_system(format!("↳ resuming with held draft: {draft}"));
-                    tui.set_input(draft);
+                    if draft.starts_with('/') {
+                        tui.push_system(format!("↳ executing held command: {draft}"));
+                        tui.set_pending_submission(draft);
+                    } else {
+                        tui.push_system(format!("↳ resuming with held draft: {draft}"));
+                        tui.set_input(draft);
+                    }
                 }
                 // Update footer QMD/archive status after each turn
                 if cli.qmd.is_enabled()
@@ -3051,7 +3203,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // v2.2.11: fire SessionEnd hooks on clean exit.
-    let _ = cli.runtime.run_session_end_hooks();
+    let _ = cli.active_runtime_mut().run_session_end_hooks();
 
     // Capture the session id BEFORE we drop `tui` (and thus `cli`).
     let exit_session_id = cli.session_id().to_string();
@@ -3142,7 +3294,7 @@ fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         let result = file_drop::process_file(path);
                         println!("{}", result.notice);
                         if !result.blocks.is_empty() {
-                            cli.runtime.inject_user_blocks(result.blocks);
+                            cli.active_runtime_mut().inject_user_blocks(result.blocks);
                             any_blocks = true;
                         }
                     }
@@ -3190,7 +3342,7 @@ fn inject_task_notifications_tui(
             info.status.as_str(),
             info.id,
         ));
-        cli.runtime.inject_user_message(&notification);
+        cli.active_runtime_mut().inject_user_message(&notification);
     }
     if let Err(err) = cli.persist_session() {
         tui.push_system(format!("[task] failed to persist session: {err}"));
@@ -3222,7 +3374,7 @@ fn inject_task_notifications(cli: &mut LiveCli, last_check: Instant) -> Instant 
             info.status.as_str(),
             info.id,
         );
-        cli.runtime.inject_user_message(&notification);
+        cli.active_runtime_mut().inject_user_message(&notification);
     }
 
     // Persist the updated session so the notifications survive a resume.
@@ -3253,15 +3405,43 @@ fn format_task_notification(info: &CompletedTaskInfo) -> String {
     )
 }
 
+/// Per-tab runtime state (bug 3 — per-tab parallel inference).
+///
+/// Each `Tab` in `AnvilTui.tabs[i]` has a corresponding `TabRuntimeState` at
+/// `LiveCli.tab_runtimes[i]`. The runtime and its per-tab TuiSenderSlot are
+/// kept here (not in `tui::state::Tab`) to avoid a circular-dependency between
+/// the `tui` submodule and `providers.rs`.
+///
+/// The runtime is wrapped in `Arc<Mutex<...>>` so that a background worker
+/// thread can hold a clone of the Arc and lock only the index it owns while
+/// the main thread continues to service other tabs. This is Strategy A from
+/// the Commit 3 spec.
+struct TabRuntimeState {
+    /// The per-tab conversation runtime, behind a mutex so a background
+    /// worker thread can run a turn without holding `&mut LiveCli`.
+    runtime: Arc<Mutex<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>>>,
+    /// Per-tab sender slot. Each tab's runtime holds a `TuiSenderSlot` whose
+    /// inner `TuiSender` is stamped with that tab's `id`, so events always
+    /// route to the correct tab regardless of which tab is active.
+    tui_slot: TuiSenderSlot,
+    /// Handle to the background worker running the current turn on this tab,
+    /// if any. `None` means the tab is idle. The handle is set by
+    /// `spawn_turn_for_tab` and reaped by `try_reap_finished_turns`.
+    in_flight: Option<std::thread::JoinHandle<Result<(), String>>>,
+}
+
 struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     system_prompt: Vec<String>,
-    runtime: ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>,
+    /// Per-tab runtimes (bug 3). Index i corresponds to AnvilTui.tabs[i].
+    /// Always non-empty; index 0 is the bootstrap tab's runtime.
+    tab_runtimes: Vec<TabRuntimeState>,
+    /// Which tab index is currently active. Kept in sync with
+    /// `AnvilTui.active_tab` by the run loop after every tab switch.
+    active_tab_idx: usize,
     session: SessionHandle,
-    /// Shared slot — install a `TuiSender` here to redirect output to the TUI.
-    tui_slot: TuiSenderSlot,
     /// QMD search client — present when the `qmd` binary is available,
     /// disabled (but non-None) otherwise so callers never need to branch.
     qmd: QmdClient,
@@ -3313,12 +3493,12 @@ impl LiveCli {
             None,
         )?;
         let session = create_managed_session_handle()?;
-        let tui_slot: TuiSenderSlot = Arc::new(Mutex::new(None));
+        let bootstrap_tui_slot: TuiSenderSlot = Arc::new(Mutex::new(None));
         // Shared agent manager — owned here for TUI polling, shared with
         // CliToolExecutor so tool calls can register real agent threads.
         let agent_manager: Arc<Mutex<agents::AgentManager>> =
             Arc::new(Mutex::new(agents::AgentManager::new()));
-        let runtime = build_runtime_with_tui_slot(
+        let bootstrap_runtime = build_runtime_with_tui_slot(
             Session::new(),
             model.clone(),
             system_prompt.clone(),
@@ -3327,7 +3507,7 @@ impl LiveCli {
             allowed_tools.clone(),
             permission_mode,
             None,
-            tui_slot.clone(),
+            bootstrap_tui_slot.clone(),
             agent_manager.clone(),
         )?;
         let qmd = QmdClient::new();
@@ -3339,9 +3519,13 @@ impl LiveCli {
             allowed_tools,
             permission_mode,
             system_prompt,
-            runtime,
+            tab_runtimes: vec![TabRuntimeState {
+                runtime: Arc::new(Mutex::new(bootstrap_runtime)),
+                tui_slot: bootstrap_tui_slot,
+                in_flight: None,
+            }],
+            active_tab_idx: 0,
             session,
-            tui_slot,
             qmd,
             history_archiver,
             context_files: Vec::new(),
@@ -3386,19 +3570,266 @@ impl LiveCli {
         Ok(cli)
     }
 
-    /// Install a TUI sender so all model/tool output goes to the TUI.
+    // ── Per-tab runtime accessors (bug 3) ────────────────────────────────────
+
+    /// Get an immutable reference to the active tab's runtime.
+    ///
+    /// Lock and return the active tab's runtime.
+    ///
+    /// Returns a `MutexGuard` that derefs to `&ConversationRuntime`.  The lock
+    /// is released when the guard is dropped.  Callers that hold the guard
+    /// across a `spawn_turn_for_tab` call would deadlock — don't do that.
+    ///
+    /// Panics if the active tab has no runtime installed, which should never
+    /// happen after `LiveCli::new` completes.
+    fn active_runtime(
+        &self,
+    ) -> std::sync::MutexGuard<'_, ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>> {
+        self.tab_runtimes[self.active_tab_idx]
+            .runtime
+            .lock()
+            .expect("runtime mutex poisoned")
+    }
+
+    /// Lock and return the active tab's runtime mutably.
+    ///
+    /// Same lifetime / deadlock caveat as `active_runtime`.
+    fn active_runtime_mut(
+        &self,
+    ) -> std::sync::MutexGuard<'_, ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>> {
+        self.tab_runtimes[self.active_tab_idx]
+            .runtime
+            .lock()
+            .expect("runtime mutex poisoned")
+    }
+
+    /// Install a new runtime for the active tab, replacing any existing one.
+    fn install_active_runtime(
+        &mut self,
+        rt: ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>,
+    ) {
+        *self.tab_runtimes[self.active_tab_idx]
+            .runtime
+            .lock()
+            .expect("runtime mutex poisoned") = rt;
+    }
+
+    /// Spawn a model turn for the given tab index.  Returns immediately; the
+    /// turn runs in a background thread and emits `TaggedTuiEvent`s through
+    /// the tab's pre-installed `TuiSender`.
+    ///
+    /// `effective_input` is the already-preprocessed prompt (QMD context
+    /// injected, etc.).  The caller must do preprocessing on the main thread
+    /// before calling this.
+    ///
+    /// The worker thread calls `ConversationRuntime::run_turn` (which streams
+    /// `TextDelta` events), then sends `Tokens` and `TurnDone` via the tab's
+    /// `TuiSender`.  The caller must call `wait_for_turn_end_for_tab` to wait
+    /// for the `TurnDone` before reading results.
+    ///
+    /// Stores the `JoinHandle` in `tab_runtimes[tab_idx].in_flight` so the
+    /// main loop can reap it via `try_reap_finished_turns`.
+    ///
+    /// Returns `Err` if a turn is already in flight on this tab.
+    fn spawn_turn_for_tab(
+        &mut self,
+        tab_idx: usize,
+        effective_input: String,
+        permission_mode: PermissionMode,
+    ) -> Result<(), String> {
+        if self.tab_runtimes[tab_idx].in_flight.is_some() {
+            return Err(format!("tab {} already has a turn in flight", tab_idx + 1));
+        }
+        let runtime_arc = Arc::clone(&self.tab_runtimes[tab_idx].runtime);
+        // Grab a TuiSender clone so the worker can emit TurnDone.
+        let tui_sender: Option<TuiSender> = self.tab_runtimes[tab_idx]
+            .tui_slot
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+
+        let handle = std::thread::spawn(move || -> Result<(), String> {
+            let mut rt = runtime_arc
+                .lock()
+                .map_err(|_| "runtime mutex poisoned".to_string())?;
+            let mut prompter = CliPermissionPrompter::new(permission_mode);
+            match rt.run_turn(&effective_input, Some(&mut prompter)) {
+                Ok(ref summary) => {
+                    if let Some(ref tx) = tui_sender {
+                        let usage = summary.usage;
+                        tx.send(TuiEvent::Tokens {
+                            input: usage.input_tokens,
+                            output: usage.output_tokens,
+                        });
+                        tx.send(TuiEvent::TurnDone);
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    if let Some(ref tx) = tui_sender {
+                        tx.send(TuiEvent::System(format!("Error: {e}")));
+                        tx.send(TuiEvent::TurnDone);
+                    }
+                    Err(e.to_string())
+                }
+            }
+        });
+        self.tab_runtimes[tab_idx].in_flight = Some(handle);
+        Ok(())
+    }
+
+    /// Spawn a file-drop turn for the given tab index.
+    ///
+    /// Blocks have already been injected via `inject_user_blocks`.  The worker
+    /// calls `run_turn_preloaded` and emits `TurnDone` via the tab's sender.
+    fn spawn_file_drop_turn_for_tab(
+        &mut self,
+        tab_idx: usize,
+        permission_mode: PermissionMode,
+    ) -> Result<(), String> {
+        if self.tab_runtimes[tab_idx].in_flight.is_some() {
+            return Err(format!("tab {} already has a turn in flight", tab_idx + 1));
+        }
+        let runtime_arc = Arc::clone(&self.tab_runtimes[tab_idx].runtime);
+        let tui_sender: Option<TuiSender> = self.tab_runtimes[tab_idx]
+            .tui_slot
+            .lock()
+            .ok()
+            .and_then(|g| g.clone());
+
+        let handle = std::thread::spawn(move || -> Result<(), String> {
+            let mut rt = runtime_arc
+                .lock()
+                .map_err(|_| "runtime mutex poisoned".to_string())?;
+            let mut prompter = CliPermissionPrompter::new(permission_mode);
+            match rt.run_turn_preloaded(Some(&mut prompter)) {
+                Ok(ref summary) => {
+                    if let Some(ref tx) = tui_sender {
+                        let usage = summary.usage;
+                        tx.send(TuiEvent::Tokens {
+                            input: usage.input_tokens,
+                            output: usage.output_tokens,
+                        });
+                        tx.send(TuiEvent::TurnDone);
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    if let Some(ref tx) = tui_sender {
+                        tx.send(TuiEvent::System(format!("Error: {e}")));
+                        tx.send(TuiEvent::TurnDone);
+                    }
+                    Err(e.to_string())
+                }
+            }
+        });
+        self.tab_runtimes[tab_idx].in_flight = Some(handle);
+        Ok(())
+    }
+
+    /// Poll all tabs for finished turns; join and return results.
+    ///
+    /// Non-blocking: returns only the handles that report `is_finished()`.
+    /// Each entry is `(tab_idx, Ok(()) | Err(msg))`.
+    fn try_reap_finished_turns(&mut self) -> Vec<(usize, Result<(), String>)> {
+        let mut results = Vec::new();
+        for (idx, tab_rt) in self.tab_runtimes.iter_mut().enumerate() {
+            if tab_rt
+                .in_flight
+                .as_ref()
+                .is_some_and(|h| h.is_finished())
+            {
+                let handle = tab_rt.in_flight.take().expect("just confirmed Some");
+                let result = handle
+                    .join()
+                    .unwrap_or_else(|_| Err("worker thread panicked".to_string()));
+                results.push((idx, result));
+            }
+        }
+        results
+    }
+
+    /// Inject any pinned files as user messages into the active tab's runtime.
+    ///
+    /// Must be called on the main thread before spawning a turn, because it
+    /// mutates the runtime (adds messages to the conversation history).
+    fn inject_pinned_files_for_active_tab(&mut self) {
+        if let Ok(pinned_path) = anvil_pinned_path()
+            && let Ok(pinned) = load_pinned_paths(&pinned_path)
+        {
+            for path in &pinned {
+                if let Ok(content) = fs::read_to_string(path) {
+                    let reminder = format!(
+                        "<system-reminder>Pinned file context: {}\n{}</system-reminder>",
+                        path.display(),
+                        content
+                    );
+                    self.active_runtime_mut().inject_user_message(&reminder);
+                }
+            }
+        }
+    }
+
+    /// Get a clone of the active tab's `TuiSenderSlot`.
+    fn active_tui_slot(&self) -> TuiSenderSlot {
+        self.tab_runtimes[self.active_tab_idx].tui_slot.clone()
+    }
+
+    /// Install a TUI sender into the active tab's slot so model/tool output
+    /// goes to the TUI for that tab.
     fn enable_tui(&self, sender: TuiSender) {
-        if let Ok(mut guard) = self.tui_slot.lock() {
+        if let Ok(mut guard) = self.tab_runtimes[self.active_tab_idx].tui_slot.lock() {
             *guard = Some(sender);
         }
     }
 
-    /// Remove the TUI sender (fallback to stdout).
+    /// Remove the active tab's TUI sender (fallback to stdout).
     #[allow(dead_code)]
     fn disable_tui(&self) {
-        if let Ok(mut guard) = self.tui_slot.lock() {
+        if let Ok(mut guard) = self.tab_runtimes[self.active_tab_idx].tui_slot.lock() {
             *guard = None;
         }
+    }
+
+    /// Push a new `TabRuntimeState` for a freshly opened tab and return its
+    /// index.  The new slot is immediately enabled with `sender` stamped for
+    /// `tab_id`.  Called from the `/tab new` handler and the remote-control
+    /// `__new_tab:` message path.
+    fn push_tab_runtime(
+        &mut self,
+        tab_id: usize,
+        sender_prototype: &TuiSender,
+        session: Session,
+        model: String,
+        system_prompt: Vec<String>,
+        enable_tools: bool,
+        allowed_tools: Option<AllowedToolSet>,
+        permission_mode: PermissionMode,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let new_slot: TuiSenderSlot = Arc::new(Mutex::new(None));
+        // Pre-install a sender stamped with the new tab's id.
+        if let Ok(mut guard) = new_slot.lock() {
+            *guard = Some(sender_prototype.with_tab_id(tab_id));
+        }
+        let rt = build_runtime_with_tui_slot(
+            session,
+            model,
+            system_prompt,
+            enable_tools,
+            true,
+            allowed_tools,
+            permission_mode,
+            None,
+            new_slot.clone(),
+            self.agent_manager.clone(),
+        )?;
+        let idx = self.tab_runtimes.len();
+        self.tab_runtimes.push(TabRuntimeState {
+            runtime: Arc::new(Mutex::new(rt)),
+            tui_slot: new_slot,
+            in_flight: None,
+        });
+        Ok(idx)
     }
 
     /// Return the current session ID.
@@ -3448,7 +3879,7 @@ impl LiveCli {
     /// `runtime.inject_user_blocks`.  No additional user message is prepended.
     fn run_turn_file_drop(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let tui_tx: Option<TuiSender> = self
-            .tui_slot
+            .active_tui_slot()
             .lock()
             .ok()
             .and_then(|guard| guard.clone());
@@ -3457,7 +3888,7 @@ impl LiveCli {
             tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
             let result = self
-                .runtime
+                .active_runtime_mut()
                 .run_turn_preloaded(Some(&mut permission_prompter));
             match result {
                 Ok(ref summary) => {
@@ -3482,7 +3913,7 @@ impl LiveCli {
             indicator.tick("Thinking...", &mut stdout)?;
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
             let result = self
-                .runtime
+                .active_runtime_mut()
                 .run_turn_preloaded(Some(&mut permission_prompter));
             match result {
                 Ok(ref summary) => {
@@ -3517,7 +3948,10 @@ impl LiveCli {
         // the existing run_turn flow on the *next* turn, but the worst case
         // is that the prefix gets dropped for one turn.
         if self.maybe_reload_instructions() {
-            self.runtime.replace_system_prompt(self.system_prompt.clone());
+            // Clone before calling active_runtime_mut() to avoid an immutable
+            // borrow of self.system_prompt conflicting with the mutable borrow.
+            let sp = self.system_prompt.clone();
+            self.active_runtime_mut().replace_system_prompt(sp);
         }
 
         // Inject any pinned files at the start of each turn.
@@ -3530,7 +3964,7 @@ impl LiveCli {
                             path.display(),
                             content
                         );
-                        self.runtime.inject_user_message(&reminder);
+                        self.active_runtime_mut().inject_user_message(&reminder);
                     }
                 }
             }
@@ -3547,7 +3981,7 @@ impl LiveCli {
 
         // Check if TUI mode is active
         let tui_tx: Option<TuiSender> = self
-            .tui_slot
+            .active_tui_slot()
             .lock()
             .ok()
             .and_then(|guard| guard.clone());
@@ -3557,7 +3991,7 @@ impl LiveCli {
             tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
             let result = self
-                .runtime
+                .active_runtime_mut()
                 .run_turn(&effective_input, Some(&mut permission_prompter));
             match result {
                 Ok(ref summary) => {
@@ -3568,7 +4002,7 @@ impl LiveCli {
                     });
                     tx.send(TuiEvent::TurnDone);
                     // Fire Notification(completion) hook after turn completes.
-                    self.runtime.run_notification_hooks(&NotificationPayload {
+                    self.active_runtime_mut().run_notification_hooks(&NotificationPayload {
                         kind: NotificationKind::Completion,
                         message: format!(
                             "Turn complete ({} input / {} output tokens)",
@@ -3618,7 +4052,7 @@ impl LiveCli {
                 Err(error) => {
                     let err_msg = format!("Error: {error}");
                     // Fire Notification(error) hook before displaying the error.
-                    self.runtime.run_notification_hooks(&NotificationPayload {
+                    self.active_runtime_mut().run_notification_hooks(&NotificationPayload {
                         kind: NotificationKind::Error,
                         message: err_msg.clone(),
                     });
@@ -3634,7 +4068,7 @@ impl LiveCli {
             indicator.tick("Thinking...", &mut stdout)?;
             let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
             let result = self
-                .runtime
+                .active_runtime_mut()
                 .run_turn(&effective_input, Some(&mut permission_prompter));
             match result {
                 Ok(ref summary) => {
@@ -3768,7 +4202,7 @@ impl LiveCli {
                 let new_model = model.as_deref().unwrap();
                 let previous = self.model.clone();
                 self.model = new_model.to_string();
-                let msg_count = self.runtime.session().messages.len();
+                let msg_count = self.active_runtime().session().messages.len();
                 tui.set_model(self.model.clone());
                 tui.push_system(format_model_switch_report(&previous, &self.model, msg_count));
                 return Ok(false);
@@ -3952,8 +4386,8 @@ impl LiveCli {
                 (text, false)
             }
             SlashCommand::Status => {
-                let cumulative = self.runtime.usage().cumulative_usage();
-                let latest = self.runtime.usage().current_turn_usage();
+                let cumulative = self.active_runtime().usage().cumulative_usage();
+                let latest = self.active_runtime().usage().current_turn_usage();
                 let ctx = status_context(Some(&self.session.path)).unwrap_or_else(|_| StatusContext {
                     cwd: env::current_dir().unwrap_or_default(),
                     session_path: Some(self.session.path.clone()),
@@ -3966,18 +4400,18 @@ impl LiveCli {
                 (format_status_report(
                     &self.model,
                     StatusUsage {
-                        message_count: self.runtime.session().messages.len(),
-                        turns: self.runtime.usage().turns(),
+                        message_count: self.active_runtime().session().messages.len(),
+                        turns: self.active_runtime().usage().turns(),
                         latest,
                         cumulative,
-                        estimated_tokens: self.runtime.estimated_tokens(),
+                        estimated_tokens: self.active_runtime().estimated_tokens(),
                     },
                     self.permission_mode.as_str(),
                     &ctx,
                 ), false)
             }
             SlashCommand::Cost => {
-                let c = self.runtime.usage().cumulative_usage();
+                let c = self.active_runtime().usage().cumulative_usage();
                 (format!("Tokens: ↑{} ↓{} (total: {})", c.input_tokens, c.output_tokens, c.input_tokens + c.output_tokens), false)
             }
             SlashCommand::Version => {
@@ -4037,8 +4471,8 @@ impl LiveCli {
                 } else {
                     (format_model_report(
                         &self.model,
-                        self.runtime.session().messages.len(),
-                        self.runtime.usage().turns(),
+                        self.active_runtime().session().messages.len(),
+                        self.active_runtime().usage().turns(),
                     ), false)
                 }
             }
@@ -4059,7 +4493,7 @@ impl LiveCli {
                 if changed {
                     // T4-N: tell the TUI to wipe its visible display state so
                     // the user no longer sees the just-cleared session.
-                    if let Some(tx) = self.tui_slot.lock().ok().and_then(|g| g.clone()) {
+                    if let Some(tx) = self.active_tui_slot().lock().ok().and_then(|g| g.clone()) {
                         tx.send(TuiEvent::WorkspaceClear { all_tabs });
                     }
                     let msg = if all_tabs {
@@ -4466,7 +4900,7 @@ impl LiveCli {
                                 composed_system_prompt.extend(original_system_prompt.iter().cloned());
 
                                 let rebuild = build_runtime_with_tui_slot(
-                                    self.runtime.session().clone(),
+                                    self.active_runtime().session().clone(),
                                     self.model.clone(),
                                     composed_system_prompt,
                                     true,
@@ -4474,16 +4908,16 @@ impl LiveCli {
                                     self.allowed_tools.clone(),
                                     self.permission_mode,
                                     None,
-                                    self.tui_slot.clone(),
+                                    self.active_tui_slot(),
                                     self.agent_manager.clone(),
                                 );
                                 match rebuild {
                                     Err(e) => (format!("agent compose: failed to build runtime: {e}"), false),
                                     Ok(new_runtime) => {
-                                        self.runtime = new_runtime;
+                                        self.install_active_runtime(new_runtime);
                                         let turn_result = self.run_turn(&task);
                                         let restore = build_runtime_with_tui_slot(
-                                            self.runtime.session().clone(),
+                                            self.active_runtime().session().clone(),
                                             self.model.clone(),
                                             original_system_prompt.clone(),
                                             true,
@@ -4491,12 +4925,12 @@ impl LiveCli {
                                             self.allowed_tools.clone(),
                                             self.permission_mode,
                                             None,
-                                            self.tui_slot.clone(),
+                                            self.active_tui_slot(),
                                             self.agent_manager.clone(),
                                         );
                                         self.system_prompt = original_system_prompt;
                                         if let Ok(restored) = restore {
-                                            self.runtime = restored;
+                                            self.install_active_runtime(restored);
                                         }
                                         if let Err(e) = turn_result {
                                             (format!("{header}\nagent compose turn failed: {e}"), false)
@@ -4521,7 +4955,7 @@ impl LiveCli {
                                 let marker = format!("# skill:{name} —");
                                 self.system_prompt.retain(|s| !s.contains(&marker));
                                 self.system_prompt.insert(0, body);
-                                let session = self.runtime.session().clone();
+                                let session = self.active_runtime().session().clone();
                                 match build_runtime_with_tui_slot(
                                     session,
                                     self.model.clone(),
@@ -4531,11 +4965,11 @@ impl LiveCli {
                                     self.allowed_tools.clone(),
                                     self.permission_mode,
                                     None,
-                                    self.tui_slot.clone(),
+                                    self.active_tui_slot(),
                                     self.agent_manager.clone(),
                                 ) {
                                     Ok(rt) => {
-                                        self.runtime = rt;
+                                        self.install_active_runtime(rt);
                                         runtime::otel::skill_activated(&name, "user");
                                         (format!("Skill '{name}' loaded — active for the next turn."), false)
                                     }
@@ -4558,7 +4992,7 @@ impl LiveCli {
                         let prompt_text = prompt.unwrap_or_default();
                         if prompt_text.is_empty() {
                             // Fall back to the last user message in session history.
-                            let last_user = self.runtime.session().messages.iter().rev()
+                            let last_user = self.active_runtime().session().messages.iter().rev()
                                 .filter(|m| m.role == MessageRole::User)
                                 .find_map(|m| m.blocks.iter().find_map(|b| {
                                     if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
@@ -4625,7 +5059,7 @@ impl LiveCli {
     }
 
     fn run_prompt_json(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let session = self.runtime.session().clone();
+        let session = self.active_runtime().session().clone();
         let mut runtime = build_runtime(
             session,
             self.model.clone(),
@@ -4638,7 +5072,7 @@ impl LiveCli {
         )?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let summary = runtime.run_turn(input, Some(&mut permission_prompter))?;
-        self.runtime = runtime;
+        self.install_active_runtime(runtime);
         self.persist_session()?;
         println!(
             "{}",
@@ -4727,8 +5161,8 @@ impl LiveCli {
         }
 
         // Rebuild the runtime so the new system prompt takes effect.
-        let session = self.runtime.session().clone();
-        self.runtime = build_runtime_with_tui_slot(
+        let session = self.active_runtime().session().clone();
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -4737,9 +5171,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
 
         let style_name = new_style.as_str().to_string();
         save_output_style(new_style.clone());
@@ -4797,8 +5231,9 @@ impl LiveCli {
         } else {
             self.allowed_tools.clone() // restore original
         };
-        self.runtime = build_runtime_with_tui_slot(
-            self.runtime.session().clone(),
+        let current_session = self.active_runtime().session().clone();
+        self.install_active_runtime(build_runtime_with_tui_slot(
+            current_session,
             self.model.clone(),
             self.system_prompt.clone(),
             !self.chat_mode,
@@ -4806,9 +5241,9 @@ impl LiveCli {
             new_allowed,
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         let status = if self.chat_mode {
             "Chat mode ON — tools disabled"
         } else {
@@ -4847,8 +5282,8 @@ impl LiveCli {
         }
 
         // Rebuild the runtime so the new system prompt takes effect.
-        let session = self.runtime.session().clone();
-        self.runtime = build_runtime_with_tui_slot(
+        let session = self.active_runtime().session().clone();
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -4857,9 +5292,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
 
         let msg = if self.fast_mode {
             "Fast mode ON — responses will be concise and max_tokens is reduced.".to_string()
@@ -5324,7 +5759,7 @@ impl LiveCli {
         }
 
         // 7. Context window estimate
-        let est = self.runtime.estimated_tokens();
+        let est = self.active_runtime().estimated_tokens();
         lines.push(format!("  - Estimated context: {est} tokens"));
 
         lines.join("\n")
@@ -5332,10 +5767,10 @@ impl LiveCli {
 
     /// `/tokens` — detailed token breakdown.
     fn format_tokens(&self) -> String {
-        let cumulative = self.runtime.usage().cumulative_usage();
-        let latest = self.runtime.usage().current_turn_usage();
-        let turns = self.runtime.usage().turns();
-        let est = self.runtime.estimated_tokens();
+        let cumulative = self.active_runtime().usage().cumulative_usage();
+        let latest = self.active_runtime().usage().current_turn_usage();
+        let turns = self.active_runtime().usage().turns();
+        let est = self.active_runtime().estimated_tokens();
 
         // Context window for the current model.
         let ctx_window: usize = 200_000;
@@ -5796,7 +6231,7 @@ impl LiveCli {
                                 let marker = format!("# skill:{name} —");
                                 self.system_prompt.retain(|s| !s.contains(&marker));
                                 self.system_prompt.insert(0, body);
-                                let session = self.runtime.session().clone();
+                                let session = self.active_runtime().session().clone();
                                 match build_runtime_with_tui_slot(
                                     session,
                                     self.model.clone(),
@@ -5806,11 +6241,11 @@ impl LiveCli {
                                     self.allowed_tools.clone(),
                                     self.permission_mode,
                                     None,
-                                    self.tui_slot.clone(),
+                                    self.active_tui_slot(),
                                     self.agent_manager.clone(),
                                 ) {
                                     Ok(rt) => {
-                                        self.runtime = rt;
+                                        self.install_active_runtime(rt);
                                         println!("Skill '{name}' loaded — active for the next turn.");
                                     }
                                     Err(e) => eprintln!("skill load: runtime rebuild failed: {e}"),
@@ -5831,7 +6266,7 @@ impl LiveCli {
                         use runtime::{ContentBlock, MessageRole};
                         let prompt_text = prompt.unwrap_or_default();
                         let effective = if prompt_text.is_empty() {
-                            self.runtime.session().messages.iter().rev()
+                            self.active_runtime().session().messages.iter().rev()
                                 .filter(|m| m.role == MessageRole::User)
                                 .find_map(|m| m.blocks.iter().find_map(|b| {
                                     if let ContentBlock::Text { text } = b { Some(text.clone()) } else { None }
@@ -6486,8 +6921,9 @@ impl LiveCli {
                         let mut composed_system_prompt = vec![composed.prompt.clone()];
                         composed_system_prompt.extend(original_system_prompt.iter().cloned());
 
-                        self.runtime = build_runtime_with_tui_slot(
-                            self.runtime.session().clone(),
+                        let current_session = self.active_runtime().session().clone();
+                        self.install_active_runtime(build_runtime_with_tui_slot(
+                            current_session,
                             self.model.clone(),
                             composed_system_prompt,
                             true,
@@ -6495,15 +6931,15 @@ impl LiveCli {
                             self.allowed_tools.clone(),
                             self.permission_mode,
                             None,
-                            self.tui_slot.clone(),
+                            self.active_tui_slot(),
                             self.agent_manager.clone(),
-                        )?;
+                        )?);
 
                         let turn_result = self.run_turn(&task);
 
                         // Restore original system prompt regardless of outcome.
                         let restore_result = build_runtime_with_tui_slot(
-                            self.runtime.session().clone(),
+                            self.active_runtime().session().clone(),
                             self.model.clone(),
                             original_system_prompt.clone(),
                             true,
@@ -6511,12 +6947,12 @@ impl LiveCli {
                             self.allowed_tools.clone(),
                             self.permission_mode,
                             None,
-                            self.tui_slot.clone(),
+                            self.active_tui_slot(),
                             self.agent_manager.clone(),
                         );
                         self.system_prompt = original_system_prompt;
                         if let Ok(restored) = restore_result {
-                            self.runtime = restored;
+                            self.install_active_runtime(restored);
                         }
 
                         turn_result
@@ -6527,7 +6963,13 @@ impl LiveCli {
     }
 
     fn persist_session(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.runtime.session().save_to_path(&self.session.path)?;
+        self.active_runtime().session().save_to_path(&self.session.path)?;
+        // Best-effort: stamp the sidecar with the active model so
+        // `anvil --continue` can rebuild the CLI on the right provider.
+        // The Session JSON itself has no model field; this lives next to it
+        // as `<id>.meta.json`. Failures here are non-fatal — exiting with a
+        // saved conversation is more important than the model hint.
+        let _ = session_meta::set_session_model(&self.session.id, &self.model);
         Ok(())
     }
 
@@ -6538,7 +6980,8 @@ impl LiveCli {
     fn record_daily(&self) {
         use runtime::{DailyStore, SessionSummary, extract_tasks};
 
-        let session_data = self.runtime.session();
+        let runtime_guard = self.active_runtime();
+        let session_data = runtime_guard.session();
         let messages = &session_data.messages;
 
         // Extract tasks from the conversation history.
@@ -6553,7 +6996,7 @@ impl LiveCli {
             store.list(Some(runtime::nominations::NominationStatus::Pending)).len()
         };
 
-        let tokens_used = self.runtime.usage().cumulative_usage().total_tokens();
+        let tokens_used = self.active_runtime().usage().cumulative_usage().total_tokens();
         let duration_ms = self.session_start.elapsed().as_millis() as u64;
         let duration_secs = duration_ms / 1000;
         let messages_count = messages.len();
@@ -6565,7 +7008,7 @@ impl LiveCli {
 
         // Emit session_end OTel event (no-op when disabled).
         {
-            let cost = self.runtime.usage().cumulative_usage();
+            let cost = self.active_runtime().usage().cumulative_usage();
             let cost_str = format!("{:.6}", cost.total_tokens() as f64 * 0.000_003);
             runtime::otel::session_end(
                 &self.session.id,
@@ -6609,18 +7052,18 @@ impl LiveCli {
     }
 
     fn print_status(&self) {
-        let cumulative = self.runtime.usage().cumulative_usage();
-        let latest = self.runtime.usage().current_turn_usage();
+        let cumulative = self.active_runtime().usage().cumulative_usage();
+        let latest = self.active_runtime().usage().current_turn_usage();
         println!(
             "{}",
             format_status_report(
                 &self.model,
                 StatusUsage {
-                    message_count: self.runtime.session().messages.len(),
-                    turns: self.runtime.usage().turns(),
+                    message_count: self.active_runtime().session().messages.len(),
+                    turns: self.active_runtime().usage().turns(),
                     latest,
                     cumulative,
-                    estimated_tokens: self.runtime.estimated_tokens(),
+                    estimated_tokens: self.active_runtime().estimated_tokens(),
                 },
                 self.permission_mode.as_str(),
                 &match status_context(Some(&self.session.path)) {
@@ -6640,8 +7083,8 @@ impl LiveCli {
                 "{}",
                 format_model_report(
                     &self.model,
-                    self.runtime.session().messages.len(),
-                    self.runtime.usage().turns(),
+                    self.active_runtime().session().messages.len(),
+                    self.active_runtime().usage().turns(),
                 )
             );
             return Ok(false);
@@ -6654,17 +7097,17 @@ impl LiveCli {
                 "{}",
                 format_model_report(
                     &self.model,
-                    self.runtime.session().messages.len(),
-                    self.runtime.usage().turns(),
+                    self.active_runtime().session().messages.len(),
+                    self.active_runtime().usage().turns(),
                 )
             );
             return Ok(false);
         }
 
         let previous = self.model.clone();
-        let session = self.runtime.session().clone();
+        let session = self.active_runtime().session().clone();
         let message_count = session.messages.len();
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             model.clone(),
             self.system_prompt.clone(),
@@ -6673,9 +7116,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.model.clone_from(&model);
         println!(
             "{}",
@@ -6708,9 +7151,9 @@ impl LiveCli {
         }
 
         let previous = self.permission_mode.as_str().to_string();
-        let session = self.runtime.session().clone();
+        let session = self.active_runtime().session().clone();
         self.permission_mode = permission_mode_from_label(normalized);
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -6719,9 +7162,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         println!(
             "{}",
             format_permissions_switch_report(&previous, normalized)
@@ -6738,7 +7181,7 @@ impl LiveCli {
         }
 
         self.session = create_managed_session_handle()?;
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             Session::new(),
             self.model.clone(),
             self.system_prompt.clone(),
@@ -6747,9 +7190,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         println!(
             "Session cleared\n  Mode             fresh session\n  Preserved model  {}\n  Permission mode  {}\n  Session          {}",
             self.model,
@@ -6760,7 +7203,7 @@ impl LiveCli {
     }
 
     fn print_cost(&self) {
-        let cumulative = self.runtime.usage().cumulative_usage();
+        let cumulative = self.active_runtime().usage().cumulative_usage();
         println!("{}", format_cost_report(cumulative));
     }
 
@@ -6776,7 +7219,7 @@ impl LiveCli {
         let handle = resolve_session_reference(&session_ref)?;
         let session = Session::load_from_path(&handle.path)?;
         let message_count = session.messages.len();
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -6785,16 +7228,16 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.session = handle;
         println!(
             "{}",
             format_resume_report(
                 &self.session.path.display().to_string(),
                 message_count,
-                self.runtime.usage().turns(),
+                self.active_runtime().usage().turns(),
             )
         );
         Ok(true)
@@ -6808,7 +7251,7 @@ impl LiveCli {
         id: String,
         path: PathBuf,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -6817,9 +7260,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.session = SessionHandle { id, path };
         Ok(())
     }
@@ -6901,18 +7344,18 @@ impl LiveCli {
         format: Option<&str>,
         requested_path: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let export_path = resolve_export_path(requested_path, self.runtime.session())?;
+        let export_path = resolve_export_path(requested_path, self.active_runtime().session())?;
         let content = if format == Some("md") {
-            render_export_markdown(self.runtime.session())
+            render_export_markdown(self.active_runtime().session())
         } else {
-            render_export_text(self.runtime.session())
+            render_export_text(self.active_runtime().session())
         };
         fs::write(&export_path, content)?;
         let fmt_label = if format == Some("md") { "markdown" } else { "text" };
         println!(
             "Export\n  Result           wrote {fmt_label} transcript\n  File             {}\n  Messages         {}",
             export_path.display(),
-            self.runtime.session().messages.len(),
+            self.active_runtime().session().messages.len(),
         );
         Ok(())
     }
@@ -6935,7 +7378,7 @@ impl LiveCli {
                 let handle = resolve_session_reference(target)?;
                 let session = Session::load_from_path(&handle.path)?;
                 let message_count = session.messages.len();
-                self.runtime = build_runtime_with_tui_slot(
+                self.install_active_runtime(build_runtime_with_tui_slot(
                     session,
                     self.model.clone(),
                     self.system_prompt.clone(),
@@ -6944,9 +7387,9 @@ impl LiveCli {
                     self.allowed_tools.clone(),
                     self.permission_mode,
                     None,
-                    self.tui_slot.clone(),
+                    self.active_tui_slot(),
                     self.agent_manager.clone(),
-                )?;
+                )?);
                 self.session = handle;
                 println!(
                     "Session switched\n  Active session   {}\n  File             {}\n  Messages         {}",
@@ -7041,7 +7484,7 @@ impl LiveCli {
                 let handle = resolve_session_reference(target)?;
                 let session = Session::load_from_path(&handle.path)?;
                 let message_count = session.messages.len();
-                self.runtime = build_runtime_with_tui_slot(
+                self.install_active_runtime(build_runtime_with_tui_slot(
                     session,
                     self.model.clone(),
                     self.system_prompt.clone(),
@@ -7050,9 +7493,9 @@ impl LiveCli {
                     self.allowed_tools.clone(),
                     self.permission_mode,
                     None,
-                    self.tui_slot.clone(),
+                    self.active_tui_slot(),
                     self.agent_manager.clone(),
-                )?;
+                )?);
                 self.session = handle;
                 Ok((format!(
                     "Session switched\n  Active session   {}\n  File             {}\n  Messages         {}",
@@ -7098,7 +7541,7 @@ impl LiveCli {
         let handle = resolve_session_reference(&session_ref)?;
         let session = Session::load_from_path(&handle.path)?;
         let message_count = session.messages.len();
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -7107,20 +7550,21 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.session = handle;
         Ok((format_resume_report(
             &self.session.path.display().to_string(),
             message_count,
-            self.runtime.usage().turns(),
+            self.active_runtime().usage().turns(),
         ), true))
     }
 
     fn reload_runtime_features(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.runtime = build_runtime_with_tui_slot(
-            self.runtime.session().clone(),
+        let current_session = self.active_runtime().session().clone();
+        self.install_active_runtime(build_runtime_with_tui_slot(
+            current_session,
             self.model.clone(),
             self.system_prompt.clone(),
             true,
@@ -7128,9 +7572,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.persist_session()
     }
 
@@ -7138,16 +7582,16 @@ impl LiveCli {
         // Archive the full conversation before discarding messages.
         let _ = self.history_archiver.archive_session(
             &self.session.id,
-            self.runtime.session(),
+            self.active_runtime().session(),
             &self.model,
             "Manual /compact",
         );
 
-        let result = self.runtime.compact(CompactionConfig::default());
+        let result = self.active_runtime_mut().compact(CompactionConfig::default());
         let removed = result.removed_message_count;
         let kept = result.compacted_session.messages.len();
         let skipped = removed == 0;
-        self.runtime = build_runtime_with_tui_slot(
+        self.install_active_runtime(build_runtime_with_tui_slot(
             result.compacted_session,
             self.model.clone(),
             self.system_prompt.clone(),
@@ -7156,9 +7600,9 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
-        )?;
+        )?);
         self.persist_session()?;
 
         // Re-index history so the new archive file is immediately searchable.
@@ -7174,7 +7618,7 @@ impl LiveCli {
     /// Returns `Some(notification_text)` when compaction was triggered so the
     /// caller can surface a message to the user; `None` when not needed.
     fn maybe_auto_compact(&mut self) -> Option<String> {
-        let estimated = self.runtime.estimated_tokens();
+        let estimated = self.active_runtime().estimated_tokens();
         let context_max = max_tokens_for_model(&self.model) as usize;
         let threshold_pct = HistoryArchiver::compact_threshold_pct() as usize;
         let threshold = context_max * threshold_pct / 100;
@@ -7186,12 +7630,12 @@ impl LiveCli {
         // Archive before discarding messages.
         let archive_result = self.history_archiver.archive_session(
             &self.session.id,
-            self.runtime.session(),
+            self.active_runtime().session(),
             &self.model,
             &format!("Auto-compacted: estimated {estimated} tokens exceeded {threshold_pct}% of {context_max} context limit"),
         );
 
-        let result = self.runtime.compact(CompactionConfig::default());
+        let result = self.active_runtime_mut().compact(CompactionConfig::default());
         if result.removed_message_count == 0 {
             return None;
         }
@@ -7205,11 +7649,11 @@ impl LiveCli {
             self.allowed_tools.clone(),
             self.permission_mode,
             None,
-            self.tui_slot.clone(),
+            self.active_tui_slot(),
             self.agent_manager.clone(),
         )
         .map(|new_runtime| {
-            self.runtime = new_runtime;
+            self.install_active_runtime(new_runtime);
         });
 
         let _ = self.persist_session();
@@ -7240,7 +7684,7 @@ impl LiveCli {
         enable_tools: bool,
         progress: Option<InternalPromptProgressReporter>,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let session = self.runtime.session().clone();
+        let session = self.active_runtime().session().clone();
         let mut runtime = build_runtime(
             session,
             self.model.clone(),
@@ -7500,6 +7944,7 @@ impl LiveCli {
                     scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
                     scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
                     ssh: None,
+                    has_runtime: true,
                 };
                 self.share_manager.stop_share(&synthetic)
             }
@@ -7508,7 +7953,7 @@ impl LiveCli {
             _ => {
                 // Build share messages from the session (user + assistant only).
                 let messages: Vec<runtime::ShareMessage> = self
-                    .runtime
+                    .active_runtime()
                     .session()
                     .messages
                     .iter()
@@ -7948,7 +8393,7 @@ impl LiveCli {
     }
 
     fn run_debug_tool_call(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("{}", render_last_tool_debug_report(self.runtime.session())?);
+        println!("{}", render_last_tool_debug_report(self.active_runtime().session())?);
         Ok(())
     }
 }
