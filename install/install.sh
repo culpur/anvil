@@ -71,9 +71,20 @@ case "$PLATFORM" in
     netbsd)  TARGET="${ARCH_STD}-unknown-netbsd"      ;;
 esac
 
-# OpenBSD/NetBSD only ship x86_64 binaries today; ARM64 users build from source.
-if [[ "$PLATFORM" == "openbsd" || "$PLATFORM" == "netbsd" ]] && [[ "$ARCH_STD" != "x86_64" ]]; then
-    die "Binary not available for $PLATFORM/$ARCH_STD — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+# BSD support matrix:
+#   - FreeBSD x86_64: shipped as a binary (Tier-2)
+#   - FreeBSD ARM64:  source-only (Rust has no aarch64-unknown-freebsd rust-std)
+#   - NetBSD x86_64:  shipped as a binary (Tier-3; may be source-only on some releases)
+#   - OpenBSD x86_64: source-only (Rust has no usable cross sysroot today)
+#   - All other BSD arch combos: source-only.
+if [[ "$PLATFORM" == "openbsd" ]]; then
+    die "OpenBSD binary not available — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+fi
+if [[ "$PLATFORM" == "freebsd" && "$ARCH_STD" == "aarch64" ]]; then
+    die "FreeBSD ARM64 binary not available — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+fi
+if [[ "$PLATFORM" == "netbsd" && "$ARCH_STD" != "x86_64" ]]; then
+    die "Binary not available for netbsd/$ARCH_STD — build from source with: cargo install --git https://github.com/culpur/anvil-source"
 fi
 
 info "Platform: ${PLATFORM} / ${ARCH_STD}  (target: ${TARGET})"

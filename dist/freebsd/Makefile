@@ -24,8 +24,8 @@ NO_BUILD=       yes
 NO_ARCH=        yes
 USES=           shebangfix
 
-ONLY_FOR_ARCHS= amd64 arm64
-ONLY_FOR_ARCHS_REASON=  upstream binaries only for x86_64 and aarch64
+ONLY_FOR_ARCHS= amd64
+ONLY_FOR_ARCHS_REASON=  upstream binary is x86_64 only (FreeBSD aarch64 source-build via `cargo install --git`)
 
 do-install:
         ${INSTALL_PROGRAM} ${DISTDIR}/${DISTFILES} ${STAGEDIR}${PREFIX}/bin/anvil

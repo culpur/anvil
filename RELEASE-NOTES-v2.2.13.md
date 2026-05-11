@@ -4,19 +4,20 @@ Released: 2026-05-11
 
 v2.2.12 deferred Windows by one release while the new SSH agent code
 got a cross-platform fix. v2.2.13 closes that gap — Windows x86_64 is
-back in the build matrix, the release pipeline gained four BSD targets
-on top, and a quiet on-disk routines foundation has landed in the
-runtime ready for the v2.2.14 daemon work. Single-binary upgrade — no
-config migration, no new dependencies, no behavior change for existing
-sessions. Update via `anvil upgrade` or `brew reinstall anvil`.
+back in the build matrix, the release pipeline gains FreeBSD x86_64
+and NetBSD x86_64 binaries on top, and a quiet on-disk routines
+foundation has landed in the runtime ready for the v2.2.14 daemon
+work. Single-binary upgrade — no config migration, no new
+dependencies, no behavior change for existing sessions. Update via
+`anvil upgrade` or `brew reinstall anvil`.
 
-This release ships on **nine platforms**, up from four in v2.2.12 and
-five in v2.2.11: macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64,
-Windows x86_64, FreeBSD x86_64, FreeBSD ARM64, OpenBSD x86_64, and
-NetBSD x86_64. All binaries are SHA256-verified and signed by the
-release pipeline. Tier-2 targets (FreeBSD, both arches) are hard-fail
-in the build; Tier-3 targets (OpenBSD, NetBSD) are soft-fail with a
-build-from-source fallback when the cross-rs sysroot is unavailable.
+This release ships on **seven platforms**: macOS ARM64, macOS Intel,
+Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, and NetBSD
+x86_64. All binaries are SHA256-verified and signed by the release
+pipeline. FreeBSD ARM64 and OpenBSD x86_64 are source-only this
+release — the Rust toolchain does not ship a precompiled standard
+library for either target, and a clean cross-compile path that builds
+the stdlib from source is queued for v2.2.14.
 
 ---
 
@@ -48,26 +49,37 @@ upgrade.
 
 ## Headline: BSD cross-compile in the release pipeline
 
-The build matrix now includes four BSD targets:
+The build matrix gains two BSD targets:
 
-- **FreeBSD x86_64** (`x86_64-unknown-freebsd`) — Rust Tier 2, hard-fail
-- **FreeBSD ARM64** (`aarch64-unknown-freebsd`) — Rust Tier 2, hard-fail
-- **OpenBSD x86_64** (`x86_64-unknown-openbsd`) — Rust Tier 3, soft-fail
-- **NetBSD x86_64** (`x86_64-unknown-netbsd`) — Rust Tier 3, soft-fail
+- **FreeBSD x86_64** (`x86_64-unknown-freebsd`) — Rust Tier 2, hard-fail in the pipeline
+- **NetBSD x86_64** (`x86_64-unknown-netbsd`) — Rust Tier 3, soft-fail with source-build fallback
 
-Cross-compile runs through cross-rs Docker images
-(`ghcr.io/cross-rs/<target>:0.2.5`) alongside the existing Linux and
-Windows mingw containers. The install script (`install/install.sh`)
-detects FreeBSD, OpenBSD, and NetBSD from `uname` output and resolves
-the correct binary name. A `dist/freebsd/Makefile` skeleton ships in
-the repo so a FreeBSD user can drop the binary into their local ports
-tree.
+Cross-compile runs through Culpur-owned builder images at
+`registry.culpur.net/culpur/anvil-builder-<target>:rust-<version>`.
+The images are built from `rust:1.94-bookworm` plus an extracted
+FreeBSD 14.3 or NetBSD 9.3 sysroot, with the C cross-toolchain
+(clang + lld + llvm-ar) and target-specific CFLAGS / linker flags
+preconfigured. Dockerfiles live at `dist/builders/` and are rebuilt +
+pushed to the registry whenever the Rust toolchain version bumps.
 
-Tier-3 BSD users (OpenBSD, NetBSD) whose cross-rs image is missing or
-broken on the day of a release get a clear message in install.sh
-pointing them at a source build with `cargo install --git`. The Tier-2
-FreeBSD targets are treated as first-class platforms — a missing
-FreeBSD binary fails the release.
+The pre-flight that produced this design caught real problems early:
+the upstream cross-rs images turned out to have no `cargo` or `rustc`
+on PATH (they ship only the C toolchain), their `:0.2.5` tag is
+missing for FreeBSD ARM64, and OpenBSD has no published image at all.
+Building our own images removes all three failure modes.
+
+The install script (`install/install.sh`) detects FreeBSD, OpenBSD,
+and NetBSD from `uname` output. FreeBSD x86_64 and NetBSD x86_64 fall
+through to the prebuilt binary download path. FreeBSD ARM64, OpenBSD
+x86_64, and any non-x86_64 NetBSD variant exit with a clear message
+pointing at the source build:
+
+```bash
+cargo install --git https://github.com/culpur/anvil-source
+```
+
+A `dist/freebsd/Makefile` skeleton ships in the repo for users who
+want to drop Anvil into their local FreeBSD ports tree.
 
 ---
 
@@ -163,17 +175,22 @@ work, daemon, and `/routine` slash command land in v2.2.14.
   the SSH driver — `auth_password`, `auth_publickey`, the russh
   client handler, the keystroke encoder, the event channel — compiles
   identically on both platforms.
-- **Build matrix expanded from 5 to 9.** `scripts/release.sh`
+- **Build matrix expanded from 5 to 7.** `scripts/release.sh`
   `TARGETS` array grows; per-target build steps use either the host
   toolchain (macOS), an Ubuntu-based Docker container (Linux + Windows
-  mingw), or a cross-rs container (BSD).
-- **Tier-3 soft-fail.** OpenBSD and NetBSD build steps continue past a
-  missing-sysroot error with a clear warning rather than aborting the
-  release. Their absence from a release is logged in the release notes
-  but does not block macOS/Linux/Windows/FreeBSD shipment.
+  mingw), or a Culpur-owned builder image at registry.culpur.net (BSD).
+- **Builder images are first-class artifacts.** `dist/builders/`
+  contains the Dockerfiles + the `build-and-push.sh` script that
+  bakes the images and pushes them to `registry.culpur.net/culpur/`.
+  They are rebuilt on Rust toolchain bumps, not on every release.
+- **Tier-3 soft-fail.** The NetBSD build step continues past a
+  toolchain-bump error with a clear warning rather than aborting the
+  release. Its absence from a release is logged but does not block
+  macOS / Linux / Windows / FreeBSD shipment.
 - **install.sh BSD detection.** Resolves `freebsd`, `openbsd`,
   `netbsd` from `uname -s`. Falls back to a source-build hint for
-  unsupported architecture combinations (OpenBSD ARM64, NetBSD ARM64).
+  unsupported combinations (FreeBSD ARM64, OpenBSD any arch, NetBSD
+  ARM64).
 - **`dist/freebsd/Makefile`.** Skeleton FreeBSD port file with the
   release URL, distfile pattern, install rule, and license metadata.
   Not submitted to the FreeBSD ports tree as part of this release.
@@ -189,10 +206,11 @@ work, daemon, and `/routine` slash command land in v2.2.14.
   18 packet, plus the smoke test on `is_silent_output`. None of these
   tests gate the v2.2.13 release; they validate the foundation that
   v2.2.14 will build on.
-- **Nine binaries this release.** macOS ARM64, macOS Intel, Linux
-  x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, FreeBSD ARM64,
-  OpenBSD x86_64 (Tier-3, may be source-only), NetBSD x86_64 (Tier-3,
-  may be source-only).
+- **Seven binaries this release.** macOS ARM64, macOS Intel, Linux
+  x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64
+  (Tier-3, may be source-only on some toolchain bumps). FreeBSD ARM64
+  and OpenBSD x86_64 are source-only and queued for v2.2.14 once a
+  build-std path is in place.
 - **~22 MB single binary** — no runtime dependencies, no install
   prerequisites beyond the binary itself.
 
@@ -216,11 +234,11 @@ irm https://anvilhub.culpur.net/install.ps1 | iex
 anvil upgrade
 ```
 
-FreeBSD users with a local ports tree can drop the binary in via the
-skeleton `dist/freebsd/Makefile` in the repo. OpenBSD and NetBSD
-users may need to build from source if the cross-compile sysroot was
-unavailable on the day of release; the install script will detect
-this and point them at the source build.
+FreeBSD x86_64 users with a local ports tree can drop the binary in
+via the skeleton `dist/freebsd/Makefile` in the repo. FreeBSD ARM64,
+OpenBSD x86_64, and any non-x86_64 NetBSD users build from source
+with `cargo install --git`; the install script detects this case and
+prints the exact command to run.
 
 ---
 
