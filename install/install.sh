@@ -48,9 +48,12 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
 
 case "$OS" in
-    linux)  PLATFORM="linux"  ;;
-    darwin) PLATFORM="macos"  ;;
-    *)      die "Unsupported OS: $OS" ;;
+    linux)   PLATFORM="linux"   ;;
+    darwin)  PLATFORM="macos"   ;;
+    freebsd) PLATFORM="freebsd" ;;
+    openbsd) PLATFORM="openbsd" ;;
+    netbsd)  PLATFORM="netbsd"  ;;
+    *)       die "Unsupported OS: $OS" ;;
 esac
 
 case "$ARCH" in
@@ -60,10 +63,17 @@ case "$ARCH" in
 esac
 
 # Rust target triple
-if [[ "$PLATFORM" == "macos" ]]; then
-    TARGET="${ARCH_STD}-apple-darwin"
-elif [[ "$PLATFORM" == "linux" ]]; then
-    TARGET="${ARCH_STD}-unknown-linux-gnu"
+case "$PLATFORM" in
+    macos)   TARGET="${ARCH_STD}-apple-darwin"        ;;
+    linux)   TARGET="${ARCH_STD}-unknown-linux-gnu"   ;;
+    freebsd) TARGET="${ARCH_STD}-unknown-freebsd"     ;;
+    openbsd) TARGET="${ARCH_STD}-unknown-openbsd"     ;;
+    netbsd)  TARGET="${ARCH_STD}-unknown-netbsd"      ;;
+esac
+
+# OpenBSD/NetBSD only ship x86_64 binaries today; ARM64 users build from source.
+if [[ "$PLATFORM" == "openbsd" || "$PLATFORM" == "netbsd" ]] && [[ "$ARCH_STD" != "x86_64" ]]; then
+    die "Binary not available for $PLATFORM/$ARCH_STD — build from source with: cargo install --git https://github.com/culpur/anvil-source"
 fi
 
 info "Platform: ${PLATFORM} / ${ARCH_STD}  (target: ${TARGET})"

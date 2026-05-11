@@ -100,6 +100,10 @@ TARGETS=(
     "x86_64-unknown-linux-gnu"
     "aarch64-unknown-linux-gnu"
     "x86_64-pc-windows-gnu"
+    "x86_64-unknown-freebsd"
+    "aarch64-unknown-freebsd"
+    "x86_64-unknown-openbsd"
+    "x86_64-unknown-netbsd"
 )
 OUTPUT_DIR="$PROJECT_DIR/target/release-artifacts"
 mkdir -p "$OUTPUT_DIR"
@@ -111,20 +115,20 @@ if [ "$SKIP_BUILD" = false ]; then
     echo
 
     # 1a. macOS ARM (native)
-    echo "  [1/5] macOS ARM (aarch64-apple-darwin)..."
-    cargo build --release --target aarch64-apple-darwin 2>&1 | tail -1
+    echo "  [1/9] macOS ARM (aarch64-apple-darwin)..."
+    cargo build --release --target aarch64-apple-darwin
     cp target/aarch64-apple-darwin/release/anvil "$OUTPUT_DIR/anvil-aarch64-apple-darwin"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $5}')"
 
     # 1b. macOS Intel (native cross)
-    echo "  [2/5] macOS Intel (x86_64-apple-darwin)..."
+    echo "  [2/9] macOS Intel (x86_64-apple-darwin)..."
     rustup target add x86_64-apple-darwin 2>/dev/null || true
-    cargo build --release --target x86_64-apple-darwin 2>&1 | tail -1
+    cargo build --release --target x86_64-apple-darwin
     cp target/x86_64-apple-darwin/release/anvil "$OUTPUT_DIR/anvil-x86_64-apple-darwin"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-apple-darwin" | awk '{print $5}')"
 
     # 1c. Linux x86_64 (Docker)
-    echo "  [3/5] Linux x86_64 (x86_64-unknown-linux-gnu)..."
+    echo "  [3/9] Linux x86_64 (x86_64-unknown-linux-gnu)..."
     docker build --platform linux/amd64 -t anvil-builder-linux -f - . 2>/dev/null << 'DOCKERFILE'
 FROM --platform=linux/amd64 rust:1.94-slim-bookworm
 RUN apt-get update && apt-get install -y pkg-config libssl-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu && rm -rf /var/lib/apt/lists/*
@@ -132,23 +136,23 @@ RUN rustup target add aarch64-unknown-linux-gnu
 WORKDIR /build
 DOCKERFILE
     docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" anvil-builder-linux \
-        cargo build --release --target x86_64-unknown-linux-gnu 2>&1 | tail -1
+        cargo build --release --target x86_64-unknown-linux-gnu
     cp target/x86_64-unknown-linux-gnu/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu" | awk '{print $5}')"
 
     # 1d. Linux ARM64 (Docker cross)
-    echo "  [4/5] Linux ARM64 (aarch64-unknown-linux-gnu)..."
+    echo "  [4/9] Linux ARM64 (aarch64-unknown-linux-gnu)..."
     docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" \
         -e CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
         -e CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
         -e CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
         anvil-builder-linux \
-        cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tail -1
+        cargo build --release --target aarch64-unknown-linux-gnu
     cp target/aarch64-unknown-linux-gnu/release/anvil "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu" | awk '{print $5}')"
 
     # 1e. Windows x86_64 (Docker cross with mingw)
-    echo "  [5/5] Windows x86_64 (x86_64-pc-windows-gnu)..."
+    echo "  [5/9] Windows x86_64 (x86_64-pc-windows-gnu)..."
     docker build --platform linux/amd64 -t anvil-builder-win -f - . 2>/dev/null << 'DOCKERFILE'
 FROM --platform=linux/amd64 rust:1.94-slim-bookworm
 RUN apt-get update && apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
@@ -158,9 +162,49 @@ DOCKERFILE
     docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" \
         -e CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
         anvil-builder-win \
-        cargo build --release --target x86_64-pc-windows-gnu 2>&1 | tail -1
+        cargo build --release --target x86_64-pc-windows-gnu
     cp target/x86_64-pc-windows-gnu/release/anvil.exe "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe" | awk '{print $5}')"
+
+    # 1f. FreeBSD x86_64 (cross-rs — Tier-2, hard fail on error)
+    echo "  [6/9] FreeBSD x86_64 (x86_64-unknown-freebsd)..."
+    docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
+        ghcr.io/cross-rs/x86_64-unknown-freebsd:0.2.5 \
+        cargo build --release --target x86_64-unknown-freebsd
+    cp target/x86_64-unknown-freebsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd"
+    echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd" | awk '{print $5}')"
+
+    # 1g. FreeBSD ARM64 (cross-rs — Tier-2, hard fail on error)
+    echo "  [7/9] FreeBSD ARM64 (aarch64-unknown-freebsd)..."
+    docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
+        ghcr.io/cross-rs/aarch64-unknown-freebsd:0.2.5 \
+        cargo build --release --target aarch64-unknown-freebsd
+    cp target/aarch64-unknown-freebsd/release/anvil "$OUTPUT_DIR/anvil-aarch64-unknown-freebsd"
+    echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-unknown-freebsd" | awk '{print $5}')"
+
+    # 1h. OpenBSD x86_64 (cross-rs — Tier-3, skip gracefully if image unavailable)
+    echo "  [8/9] OpenBSD x86_64 (x86_64-unknown-openbsd)..."
+    if docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
+        ghcr.io/cross-rs/x86_64-unknown-openbsd:0.2.5 \
+        cargo build --release --target x86_64-unknown-openbsd 2>&1; then
+        cp target/x86_64-unknown-openbsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-openbsd"
+        echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-openbsd" | awk '{print $5}')"
+    else
+        echo "        ⚠ OpenBSD build skipped (cross-rs image unavailable for Tier-3 target)"
+        echo "        Users on OpenBSD can build from source: cargo install --git https://github.com/culpur/anvil-source"
+    fi
+
+    # 1i. NetBSD x86_64 (cross-rs — Tier-3, skip gracefully if image unavailable)
+    echo "  [9/9] NetBSD x86_64 (x86_64-unknown-netbsd)..."
+    if docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
+        ghcr.io/cross-rs/x86_64-unknown-netbsd:0.2.5 \
+        cargo build --release --target x86_64-unknown-netbsd 2>&1; then
+        cp target/x86_64-unknown-netbsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd"
+        echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd" | awk '{print $5}')"
+    else
+        echo "        ⚠ NetBSD build skipped (cross-rs image unavailable for Tier-3 target)"
+        echo "        Users on NetBSD can build from source: cargo install --git https://github.com/culpur/anvil-source"
+    fi
 
     echo
     echo "▸ Build complete:"
@@ -178,7 +222,9 @@ echo
 echo "▸ Phase 1.5: Regenerate sha256 manifests..."
 for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
          "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe; do
+         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd "$OUTPUT_DIR"/anvil-aarch64-unknown-freebsd \
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-openbsd "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd; do
     if [ ! -f "$f" ]; then continue; fi
     name=$(basename "$f")
     shasum -a 256 "$f" | awk -v n="$name" '{print $1"  "n}' > "$f.sha256"
@@ -205,7 +251,9 @@ echo
 echo "▸ Phase 2.5: Verify each binary's hash matches its manifest..."
 for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
          "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe; do
+         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd "$OUTPUT_DIR"/anvil-aarch64-unknown-freebsd \
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-openbsd "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd; do
     if [ ! -f "$f" ]; then continue; fi
     actual=$(shasum -a 256 "$f" | awk '{print $1}')
     expected=$(awk '{print $1}' "$f.sha256")
@@ -303,6 +351,10 @@ NOTES="$(cat "$RELEASE_NOTES_FILE")
 | Linux x86_64 | \`anvil-x86_64-unknown-linux-gnu\` |
 | Linux ARM64 | \`anvil-aarch64-unknown-linux-gnu\` |
 | Windows x86_64 | \`anvil-x86_64-pc-windows-gnu.exe\` |
+| FreeBSD x86_64 | \`anvil-x86_64-unknown-freebsd\` |
+| FreeBSD ARM64 | \`anvil-aarch64-unknown-freebsd\` |
+| OpenBSD x86_64 | \`anvil-x86_64-unknown-openbsd\` |
+| NetBSD x86_64 | \`anvil-x86_64-unknown-netbsd\` |
 
 ### Installation
 \`\`\`bash
