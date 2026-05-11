@@ -227,8 +227,10 @@ mod tests {
             last_snapshot: None,
             log_len_at_snapshot: None,
             scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
+            scrollback_pending_lines: 0,
             scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
             ssh: None,
+            has_runtime: false,
         }
     }
 
@@ -323,6 +325,9 @@ mod tests {
                 detail: "ls -la".to_string(),
                 done: true,
                 is_error: false,
+                expanded: false,
+                full_input: None,
+                full_result: None,
             },
             LogEntry::System("session started".to_string()),
             LogEntry::Assistant("Hi there".to_string()),

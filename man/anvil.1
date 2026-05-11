@@ -1,0 +1,579 @@
+.\" anvil(1) — manual page for Anvil, the AI coding assistant from Culpur Defense.
+.\" Hand-authored. Update when adding new top-level features.
+.TH ANVIL 1 "2026-05-11" "Anvil 2.2.12" "User Commands"
+.SH NAME
+anvil \- AI coding assistant (interactive REPL, one-shot prompts, MCP server)
+.SH SYNOPSIS
+.B anvil
+.RI [ options ]
+.RI [ "subcommand" " | " "PROMPT" ]
+.SH DESCRIPTION
+.B anvil
+is an interactive AI coding assistant.
+Run it inside a workspace to chat with an LLM that can read, edit, and run code
+in that workspace; route prompts through providers like Anthropic, OpenAI, xAI,
+or a local Ollama daemon; switch models mid-session; persist sessions across
+restarts; SSH to remote hosts from inside the same TUI; manage credentials in
+an encrypted vault; install plugins (agents, skills, MCP servers); and stream
+results to a remote web viewer.
+.PP
+Anvil is shipped by Culpur Defense.
+The source is open at
+.B https://github.com/culpur/anvil
+and release artifacts live at
+.B https://anvilhub.culpur.net/anvil/releases.
+.SH MODES
+.TP
+.B Interactive REPL
+.RB "Default mode when " anvil
+is invoked without a prompt argument.
+Renders a TUI with tabs, scrollback, an input box, slash commands, and live
+streaming of model output.
+.TP
+.B One\-shot
+.RB "Pass " "PROMPT" " as a positional argument or with " "anvil prompt \(dq...\(dq"
+to run a single turn and exit.
+Combine with
+.B \-\-output\-format=json
+for programmatic consumption.
+.TP
+.B MCP server
+.B "anvil mcp\-server"
+runs Anvil as a Model Context Protocol server, exposing its tools to other
+MCP\-capable clients.
+.TP
+.B Doctor / Init / Login
+.B "anvil doctor"
+runs preflight self\-checks.
+.B "anvil init"
+scaffolds ANVIL.md and per\-workspace state.
+.B "anvil login"
+walks you through OAuth or API\-key login per provider.
+.SH OPTIONS
+.TP
+.B \-\-model MODEL
+Override the active model.
+Accepts provider\-prefixed forms like
+.IR "anthropic:claude\-sonnet\-4\-6" ,
+.IR "openai:gpt\-5" ,
+or
+.IR "ollama:qwen3\-coder" .
+.TP
+.B \-\-output\-format FORMAT
+For non\-interactive use.
+.B text
+(default) prints plain output;
+.B json
+emits a stream of JSON events suitable for scripts.
+.TP
+.B \-\-permission\-mode MODE
+Set the default permission posture.
+One of:
+.B ask
+(confirm each tool call, safest);
+.B workspace\-write
+(auto\-allow edits within the workspace);
+.B danger\-full\-access
+(no prompts at all).
+The active mode can also be toggled at runtime with the
+.B /permissions
+slash command.
+.TP
+.B \-\-dangerously\-skip\-permissions
+Skip every permission check for this run.
+Equivalent to
+.B "\-\-permission\-mode=danger\-full\-access"
+but more explicit at the call site.
+Only use when you fully trust both the model and the prompt.
+.TP
+.B \-\-allowedTools TOOLS
+Restrict which built\-in tools the assistant may invoke.
+Repeatable or comma\-separated.
+Aliases like
+.B Read
+,
+.B Edit
+,
+.B Bash
+work alongside fully\-qualified names.
+.TP
+.B \-\-resume PATH | SESSION
+Load and continue an existing session.
+A path opens that JSON file; a bare token resolves against
+.B ~/.anvil/sessions/.
+.TP
+.B \-\-continue
+Resume the most\-recently\-saved session.
+.TP
+.B \-\-first\-run | \-\-setup
+Force the first\-run setup wizard to run, even if
+.B ~/.anvil/config.json
+already exists.
+Same effect as the
+.B anvil setup
+subcommand.
+.TP
+.B \-\-update
+Self\-update to the latest GitHub release.
+Verifies SHA256 before replacing the binary.
+.TP
+.B \-V, \-\-version
+Print version and build information (semver, git SHA, target triple, build
+date) and exit.
+.TP
+.B \-h, \-\-help
+Print help and exit.
+.SH NAVIGATION
+The interactive TUI is keyboard\-driven; mouse capture is on by default.
+.SS Tabs
+.TP
+.B F2 / F3
+Previous / next tab (works in every terminal, including Apple Terminal).
+.TP
+.B Ctrl+T / Ctrl+W
+New tab / close active tab.
+.TP
+.B Ctrl+Left / Ctrl+Right
+Previous / next tab (most terminals; some emulators swallow Ctrl+arrow).
+.TP
+.B Ctrl+1 ... Ctrl+9
+Jump to tab N (iTerm2, Ghostty; not Apple Terminal).
+.TP
+.B Alt+1 ... Alt+9
+Jump to tab N (works in Apple Terminal too).
+.TP
+.B Click a tab label
+Switch to that tab.
+.TP
+.B "Click \(mu next to a tab"
+Close that tab (only visible when more than one tab is open).
+.SS Parallel inference
+Each tab runs its own conversation thread independently.
+Sending a prompt in Tab\~1 and then switching to Tab\~2 to send another results in
+both turns streaming concurrently \(em there is no global lock on inference.
+Tab labels show a
+.B *
+suffix when the tab has unread output, and a
+.B \(aw
+suffix when the tab's worker is waiting for a permission decision.
+.SS Permission modal
+When a tool call requires elevated permissions the TUI renders a modal overlay
+for the active tab.
+Background tabs that have a pending permission request display the
+.B \(aw
+marker in the tab bar.
+Switch to the tab to reveal the modal and answer:
+.TP
+.B y / Enter
+Allow the action once.
+.TP
+.B a
+Allow always for this session.
+.TP
+.B n / Esc
+Deny the action.
+.SS Input
+.TP
+.B Enter
+Submit the current input as a prompt.
+.TP
+.B Shift+Enter / Ctrl+J
+Insert a newline.
+.TP
+.B Tab
+Trigger slash\-command completion.
+.TP
+.B Ctrl+C
+On empty input: press twice within 1 second to exit. With input: clear the line.
+.TP
+.B Ctrl+U / Ctrl+K
+Kill text before / after the cursor.
+.TP
+.B Ctrl+A / Ctrl+E
+Jump to start / end of input.
+.TP
+.B Up / Down
+Walk command history (or scroll chat when input is empty).
+.TP
+.B Esc
+Cancel an in\-flight assistant response.
+.SS Scrolling
+.TP
+.B PageUp / PageDown
+Page through scrollback.
+.TP
+.B "Mouse wheel"
+Scroll chat or scrollable dialogs (configure overlays, /skill picker, etc.).
+.TP
+.B End
+Snap back to live bottom.
+.SS Inside an /ssh tab
+.TP
+.B Ctrl+B then key
+SSH\-mode escape prefix (like tmux). A digit jumps tabs; q closes the SSH tab.
+.TP
+All other keys are forwarded to the remote shell.
+.SH SLASH COMMANDS
+Type a slash at the start of the input line to invoke a command.
+.B /help
+shows the full list and per\-command help. The most frequently used:
+.TP
+.B /help "[COMMAND]"
+Browse all slash commands or get help for a specific one.
+.TP
+.B /status
+Inspect session, workspace, model, permission mode, and recent activity.
+.TP
+.B /model "[NAME]"
+List or switch models. Includes tab completion of installed models.
+.TP
+.B /permissions "[MODE]"
+Inspect or change permission mode.
+.TP
+.B /compact
+Compact the current conversation by summarising older turns to free up context.
+.TP
+.B /clear
+Clear the active tab's scrollback and conversation state.
+.TP
+.B /tab "NAME"
+Rename the active tab; with no name, opens a tab\-management picker.
+.TP
+.B /diff
+Show the diff of file edits made during the active session.
+.TP
+.B /fork
+Branch the current session into a new tab from the current turn.
+.TP
+.B /rename
+Rename the persisted session.
+.TP
+.B /vim
+Toggle vim\-style modal editing in the input line.
+.TP
+.B /ssh "[ALIAS | user@host[:port] | save NAME]"
+Open a new SSH tab. With no arguments, prompts for connection details in a
+modal form. With an alias, loads from the vault. With
+.BR "save " "NAME ,"
+persists the active SSH tab's destination + auth under that alias.
+See
+.B SSH CLIENT
+below.
+.TP
+.B /ollama "[list | show | ps | tune | option | policy | pull | rm | cp | create | bench | requantize]"
+Manage the local Ollama daemon: list models, tune options, run benchmarks,
+pull / remove / copy / create models, requantize.
+.TP
+.B /knowledge "[review | list]"
+Manage the auto\-detected learning nominations queue (project patterns,
+conventions, infrastructure facts) and promote them to CLAUDE.md or QMD.
+.TP
+.B /daily "[YYYY\-MM\-DD]"
+Show today's auto\-generated session summary, or a specific day's.
+.TP
+.B /usage
+View cost and token usage (consolidates the older /cost and /stats).
+.TP
+.B /vault "[setup | list | get | put | rm | rotate]"
+Manage the encrypted credential vault.
+.TP
+.B /agent "[list | compose | rm]"
+Manage agent compositions (trait\-based subagents).
+.TP
+.B /skill "[list | suggest | install | rm | disable]"
+Manage skills (auto\-suggested context bundles).
+.TP
+.B /think
+Toggle extended\-thinking mode for models that support it.
+.TP
+.B /remote\-control
+Open a remote control session: stream the active turn to a web viewer URL.
+.TP
+.B /init
+Scaffold ANVIL.md in the current workspace (mirrors the
+.B anvil init
+subcommand).
+.TP
+.B /doctor
+Run preflight self\-checks from inside the TUI.
+.TP
+.B /reset
+Reset the active tab's session (preserves the tab itself).
+.SH ENVIRONMENT
+.TP
+.B ANVIL_HOME
+Override the location of Anvil's state directory. Defaults to
+.B ~/.anvil.
+.TP
+.B ANVIL_TUI_MOUSE
+.B 0|false|no|off
+disables mouse capture (use this if your terminal swallows drag\-to\-select).
+Any other value, or unset, leaves mouse capture on. The first\-run wizard
+stores a default at
+.BR ~/.anvil/config.json:tui_mouse_capture ;
+this env var, if set, wins over that.
+.TP
+.B ANVIL_OUTPUT_STYLE
+Override the active output style. Built\-in values include
+.B precise
+(default) and
+.B condensed.
+Per\-session change with the
+.B /output\-style
+command.
+.TP
+.B ANVIL_EFFORT
+Override the effort / reasoning slider for models that support it. Values
+.B minimal, low, medium, high.
+.TP
+.B ANVIL_AI_AGENT
+Set the user\-agent identifier reported to upstream providers.
+.TP
+.B ANVIL_HIDE_CWD
+Hide the working directory from the status line.
+.TP
+.B ANVIL_DISABLE_UPDATES
+Disable the daily update check.
+.TP
+.B ANVIL_FORCE_SYNC
+Force the next stream to use non\-streaming mode (debugging aid).
+.TP
+.B ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY
+Direct API keys, used when the vault is locked or unset.
+.TP
+.B OLLAMA_HOST
+Override the URL for the local Ollama daemon. Defaults to
+.B http://localhost:11434.
+.TP
+.B HTTPS_PROXY, HTTP_PROXY, NO_PROXY
+Standard proxy variables, honored for all outbound HTTP.
+.SH FILES
+.TP
+.B ~/.anvil/
+Anvil's per\-user state directory (override with
+.BR ANVIL_HOME ).
+.TP
+.B ~/.anvil/config.json
+First\-run setup output. Stores
+.B default_model, default_provider, provider_priority, providers,
+.BR thinking_enabled , " tui_mouse_capture" , " theme" , " permission_mode" .
+.TP
+.B ~/.anvil/credentials.json
+Plaintext API keys. Only written when the vault setup step is skipped.
+.TP
+.B ~/.anvil/vault/
+AES\-256\-GCM encrypted credential store.
+Argon2id KDF; master password is never persisted.
+.TP
+.B ~/.anvil/sessions/
+Per\-session JSON files. Loaded by
+.B \-\-resume
+and
+.B \-\-continue.
+.TP
+.B ~/.anvil/nominations/
+Learning nominations awaiting review.
+Promoted entries land in
+.B CLAUDE.md
+or the QMD index.
+.TP
+.B ~/.anvil/private/
+Encrypted private project memory (infrastructure details that are sensitive
+but not credentials, like internal hostnames or deploy paths).
+.TP
+.B ~/.anvil/daily/
+Auto\-generated daily session summaries.
+.TP
+.B ~/.anvil/skills/, ~/.anvil/agents/, ~/.anvil/plugins/
+Per\-user skill / agent / plugin installs.
+.TP
+.B ANVIL.md, CLAUDE.md
+Per\-workspace knowledge files Anvil reads on session start.
+.B ANVIL.md
+is the preferred name;
+.B CLAUDE.md
+is read for compatibility.
+.TP
+.B settings.json
+Per\-workspace overrides (placed in the workspace root).
+.SH VAULT
+The vault is the canonical store for sensitive data.
+.B "anvil setup"
+walks you through creating one;
+.B /vault
+manages it from inside the TUI.
+Encryption is AES\-256\-GCM with an Argon2id\-derived key.
+The master password is requested once per session and held in memory.
+API keys, SSH key passphrases, and saved SSH aliases live here.
+.SH SSH CLIENT
+.B /ssh
+opens an in\-tab SSH connection backed by russh (no shell\-out).
+With no arguments, a modal form prompts for host, port, user, auth method,
+and optional alias. Auth methods:
+.B Agent
+(uses your running SSH agent),
+.B Key file
+(a path or bare filename resolved against
+.BR ~/.ssh/ ),
+.B Password,
+and
+.B Keyboard\-interactive.
+The form's
+.B [Browse \(ti/.ssh]
+button (or Ctrl+F shortcut) opens a filterable picker over your
+.B ~/.ssh
+directory. Successful connections can be persisted to the vault as named
+aliases for one\-command reconnect.
+While in an SSH tab,
+.B Ctrl+B
+is the escape prefix (like tmux): a digit jumps tabs,
+.B q
+closes the SSH tab. Window resize events are forwarded to the remote shell.
+.SH SKILLS, AGENTS, AND HOOKS
+.SS Skills
+Skills are reusable context bundles with front\-matter triggers.
+Anvil auto\-suggests skills when their triggers match the conversation;
+the user accepts via
+.B /skill suggest
+or auto\-promotes via the
+.B "suggest\-not\-auto"
+policy. Install user skills under
+.B ~/.anvil/skills/,
+plugin skills are embedded at build time, and workspace skills can live in
+.B .anvil/skills/.
+.SS Agents
+Agents are trait\-composed subagents with their own system prompt, tools,
+permission mode, and shared context. Compose with
+.B /agent compose
+or via plugin manifests.
+.SS Hooks
+Hooks fire on lifecycle events (PreTurn, PostTurn, PreCompact, PostCompact,
+PreToolCall, PostToolCall, SessionStart, SessionEnd, ...). They can run
+shell commands or invoke MCP tools directly (type=mcp_tool). Configured in
+.B settings.json
+or
+.B ~/.anvil/hooks/.
+.SS Plugins
+Plugins bundle skills, agents, hooks, and MCP servers under one manifest.
+Install from a directory with
+.B "anvil plugin install DIR,"
+from a zip with
+.B "\-\-plugin\-dir FILE.zip,"
+or for one session with
+.BR "\-\-plugin\-url URL."
+Bundled plugins ship with the binary (embedded at compile time, no path
+lookup required).
+.SH MCP SERVERS
+Anvil is both an MCP client (loading external MCP tools via
+.B claude mcp add
+or
+.BR settings.json )
+and an MCP server (run
+.BR "anvil mcp\-server" ).
+.B alwaysLoad=true
+in MCP server config skips the deferred tool\-search round trip.
+.SH OUTPUT STYLES
+.B /output\-style
+selects the response shape.
+.B precise
+is the default;
+.B condensed
+emits terser, caveman\-style replies. Custom styles live in
+.B ~/.anvil/output\-styles/.
+.SH PERMISSION MODES
+Anvil's three permission postures, from safest to most permissive:
+.B ask
+(confirm every tool call),
+.B workspace\-write
+(auto\-allow edits inside the current workspace),
+.B danger\-full\-access
+(no prompts).
+Mode is set by
+.B \-\-permission\-mode,
+the wizard, or
+.B /permissions
+mid\-session. Subagents inherit the parent's mode.
+.B Bash(mkdir *)
+,
+.B Bash(touch *)
+,
+and similar allow rules in
+.B settings.json
+narrow ask\-mode prompts.
+.SH SESSION PERSISTENCE
+Every session is auto\-saved to
+.B ~/.anvil/sessions/<id>.json
+as turns complete. On clean exit, Anvil prints the session ID and the
+.B "anvil \-\-continue"
+/
+.B "anvil \-\-resume <id>"
+commands needed to pick it back up.
+.B /fork
+clones a session pointer (O(1));
+.B /rename
+renames the persisted name.
+.SH EXIT STATUS
+.TP
+.B 0
+Normal exit (Ctrl+C twice, /exit, /quit, or EOF).
+.TP
+.B 1
+Generic runtime error.
+.TP
+.B 2
+Invalid arguments or configuration.
+.TP
+.B 3
+Authentication / vault failure.
+.SH EXAMPLES
+Start a REPL in the current workspace:
+.IP
+.B anvil
+.PP
+One\-shot prompt, JSON output for scripts:
+.IP
+.B anvil \-\-output\-format json "summarize src/main.rs"
+.PP
+Resume the most recent session:
+.IP
+.B anvil \-\-continue
+.PP
+Pick a model up front:
+.IP
+.B anvil \-\-model anthropic:claude\-sonnet\-4\-6
+.PP
+Run with no permission prompts (CI, trusted workspace):
+.IP
+.B anvil \-\-permission\-mode danger\-full\-access "run the test suite"
+.PP
+Re\-run first\-run setup (e.g. to change the default model):
+.IP
+.B anvil \-\-setup
+.PP
+SSH into a saved host from inside the TUI:
+.IP
+.B "(in REPL) /ssh prod\-bastion"
+.SH SEE ALSO
+.BR ssh (1),
+.BR tmux (1),
+.BR ollama (1)
+.PP
+Project page:
+.B https://anvilhub.culpur.net/anvil
+.br
+Source:
+.B https://github.com/culpur/anvil
+.br
+Issues / discussions:
+.B https://github.com/culpur/anvil/issues
+.SH AUTHORS
+Anvil is developed by Culpur Defense
+.RB ( https://culpur.net ).
+.SH BUGS
+Report bugs at
+.B https://github.com/culpur/anvil/issues.
+Run
+.B /usage
+inside the REPL to attach a session summary; include the output of
+.B "anvil \-\-version"
+in any report.

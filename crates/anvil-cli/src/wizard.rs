@@ -193,7 +193,7 @@ pub(crate) fn run_first_run_wizard() {
     let mut model_candidates: Vec<(String, String)> = Vec::new(); // (model_id, provider_label)
 
     // ── Step 1: Vault setup ───────────────────────────────────────────────────
-    wizard_step_header(1, 6, "Vault Setup (Credential Encryption)");
+    wizard_step_header(1, 7, "Vault Setup (Credential Encryption)");
     println!();
     println!("  Anvil stores your API keys in an AES-256-GCM encrypted vault.");
     println!("  You set a master password now — it is never stored anywhere.");
@@ -288,7 +288,7 @@ pub(crate) fn run_first_run_wizard() {
     let _ = vault_setup_done; // informational; wizard_save_credential checks session state
 
     // ── Step 2: Ollama ────────────────────────────────────────────────────────
-    wizard_step_header(2, 6, "Ollama (Local AI)");
+    wizard_step_header(2, 7, "Ollama (Local AI)");
     println!();
     println!("  Ollama runs AI models locally on your machine.");
     println!("  No API key required for basic use.");
@@ -409,7 +409,7 @@ pub(crate) fn run_first_run_wizard() {
     }
 
     // ── Step 3: Anthropic ─────────────────────────────────────────────────────
-    wizard_step_header(3, 6, "Anthropic (Claude)");
+    wizard_step_header(3, 7, "Anthropic (Claude)");
     println!();
     println!("  Anthropic provides Claude — the most capable AI assistant.");
     println!();
@@ -496,7 +496,7 @@ pub(crate) fn run_first_run_wizard() {
     }
 
     // ── Step 4: OpenAI ────────────────────────────────────────────────────────
-    wizard_step_header(4, 6, "OpenAI (ChatGPT)");
+    wizard_step_header(4, 7, "OpenAI (ChatGPT)");
     println!();
     println!("  OpenAI provides GPT models for coding and reasoning.");
     println!();
@@ -551,7 +551,7 @@ pub(crate) fn run_first_run_wizard() {
     }
 
     // ── Step 5: xAI (Grok) ───────────────────────────────────────────────────
-    wizard_step_header(5, 6, "xAI (Grok)");
+    wizard_step_header(5, 7, "xAI (Grok)");
     println!();
     println!("  xAI provides Grok models.");
     println!();
@@ -587,7 +587,7 @@ pub(crate) fn run_first_run_wizard() {
     }
 
     // ── Step 6: Provider priority & default model ─────────────────────────────
-    wizard_step_header(6, 6, "Provider Priority & Default Model");
+    wizard_step_header(6, 7, "Provider Priority & Default Model");
     println!();
 
     let mut seen = std::collections::HashSet::new();
@@ -711,6 +711,66 @@ pub(crate) fn run_first_run_wizard() {
         .cloned()
         .unwrap_or_else(|| "anthropic".to_string());
 
+    // ── Step 7: TUI Preferences ───────────────────────────────────────────────
+    wizard_step_header(7, 7, "TUI Preferences");
+    println!();
+    println!("  These shape the look and feel of the interactive REPL. You can");
+    println!("  change any of them later with /config or by editing settings.json.");
+    println!();
+
+    // Mouse capture
+    println!("  \x1b[1;33mEnable mouse capture?\x1b[0m");
+    println!("  Mouse capture lets you CLICK tab labels to switch tabs, click");
+    println!("  the × glyph to close them, and use the wheel to scroll chat.");
+    println!("  Native drag-to-select still works (Shift+Drag passes through).");
+    println!();
+    println!("    [1] Yes — enable mouse capture (recommended)");
+    println!("    [2] No  — keyboard only");
+    println!();
+    let mouse_choice = wizard_read_line("  Choice [1]: ");
+    let mouse_capture_enabled = !matches!(mouse_choice.trim(), "2" | "n" | "N" | "no" | "No");
+    if mouse_capture_enabled {
+        println!("  \x1b[32m✓\x1b[0m Mouse capture on. Override per-session with ANVIL_TUI_MOUSE=0.");
+    } else {
+        println!("  Mouse capture off. F2/F3 still switch tabs; /help shows all keys.");
+    }
+    println!();
+
+    // Theme
+    println!("  \x1b[1;33mTheme?\x1b[0m");
+    println!("    [1] Dark   (default)");
+    println!("    [2] Light");
+    println!("    [3] Auto   (follow terminal background detection)");
+    println!();
+    let theme_choice = wizard_read_line("  Choice [1]: ");
+    let theme_value = match theme_choice.trim() {
+        "2" => "light",
+        "3" => "auto",
+        _ => "dark",
+    };
+    println!("  \x1b[32m✓\x1b[0m Theme = {theme_value}. Change later with /theme.");
+    println!();
+
+    // Permission mode
+    println!("  \x1b[1;33mDefault permission mode?\x1b[0m");
+    println!("  Anvil asks before running tools that touch your system.");
+    println!("  Permission mode controls how much it asks vs. just acts.");
+    println!();
+    println!("    [1] ask                  — confirm each tool call (safest, default)");
+    println!("    [2] workspace-write      — auto-allow edits inside the workspace");
+    println!("    [3] danger-full-access   — no prompts (only use if you trust the model + prompt)");
+    println!();
+    let perm_choice = wizard_read_line("  Choice [1]: ");
+    let permission_mode_value = match perm_choice.trim() {
+        "2" => "workspace-write",
+        "3" => "danger-full-access",
+        _ => "ask",
+    };
+    println!(
+        "  \x1b[32m✓\x1b[0m Permission mode = {permission_mode_value}. Change anytime with /permissions."
+    );
+    println!();
+
     // ── Build and save config.json ─────────────────────────────────────────────
     let mut providers_obj = serde_json::Map::new();
 
@@ -776,6 +836,18 @@ pub(crate) fn run_first_run_wizard() {
     config.insert(
         "thinking_enabled".to_string(),
         serde_json::Value::Bool(thinking_enabled),
+    );
+    config.insert(
+        "tui_mouse_capture".to_string(),
+        serde_json::Value::Bool(mouse_capture_enabled),
+    );
+    config.insert(
+        "theme".to_string(),
+        serde_json::Value::String(theme_value.to_string()),
+    );
+    config.insert(
+        "permission_mode".to_string(),
+        serde_json::Value::String(permission_mode_value.to_string()),
     );
 
     let config_path = match wizard_save_config(&config) {

@@ -319,16 +319,31 @@ sudo mv anvil-* /usr/local/bin/anvil
 # code; binaries don't go there. Always pass --repo explicitly so this never
 # silently follows whichever remote the cwd happens to track.
 PUBLIC_REPO="culpur/anvil"
+# Stage the manpage alongside the binaries so it ships as a release asset.
+# The Homebrew formula's `resource "manpage"` block downloads this URL.
+if [ -f "$PROJECT_DIR/man/anvil.1" ]; then
+    cp "$PROJECT_DIR/man/anvil.1" "$OUTPUT_DIR/anvil.1"
+fi
 if gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
     echo "  Release $TAG exists on $PUBLIC_REPO — uploading assets..."
     gh release upload "$TAG" --repo "$PUBLIC_REPO" "$OUTPUT_DIR"/anvil-* --clobber
+    [ -f "$OUTPUT_DIR/anvil.1" ] && \
+        gh release upload "$TAG" --repo "$PUBLIC_REPO" "$OUTPUT_DIR/anvil.1" --clobber
 else
     echo "  Creating release $TAG on $PUBLIC_REPO..."
-    gh release create "$TAG" \
-        --repo "$PUBLIC_REPO" \
-        --title "Anvil $TAG" \
-        --notes "$NOTES" \
-        "$OUTPUT_DIR"/anvil-*
+    if [ -f "$OUTPUT_DIR/anvil.1" ]; then
+        gh release create "$TAG" \
+            --repo "$PUBLIC_REPO" \
+            --title "Anvil $TAG" \
+            --notes "$NOTES" \
+            "$OUTPUT_DIR"/anvil-* "$OUTPUT_DIR/anvil.1"
+    else
+        gh release create "$TAG" \
+            --repo "$PUBLIC_REPO" \
+            --title "Anvil $TAG" \
+            --notes "$NOTES" \
+            "$OUTPUT_DIR"/anvil-*
+    fi
 fi
 
 echo
@@ -337,6 +352,11 @@ ARM_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $
 INTEL_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-x86_64-apple-darwin" | awk '{print $1}')
 ARM_LINUX=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu" | awk '{print $1}')
 X86_LINUX=$(shasum -a 256 "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu" | awk '{print $1}')
+if [ -f "$OUTPUT_DIR/anvil.1" ]; then
+    MANPAGE_SHA=$(shasum -a 256 "$OUTPUT_DIR/anvil.1" | awk '{print $1}')
+else
+    MANPAGE_SHA=""
+fi
 
 BREW_SHA=$(gh api repos/culpur/homebrew-anvil/contents/Formula/anvil.rb --jq '.sha' 2>/dev/null)
 if [ -n "$BREW_SHA" ]; then
@@ -364,9 +384,17 @@ class Anvil < Formula
       sha256 "$X86_LINUX"
     end
   end
+$( [ -n "$MANPAGE_SHA" ] && cat <<MANPAGE
+  resource "manpage" do
+    url "https://github.com/culpur/anvil/releases/download/$TAG/anvil.1"
+    sha256 "$MANPAGE_SHA"
+  end
+MANPAGE
+)
   def install
     downloaded = Dir["anvil-*"].first || "anvil"
     bin.install downloaded => "anvil"
+$( [ -n "$MANPAGE_SHA" ] && echo '    resource("manpage").stage { man1.install "anvil.1" }' )
   end
   test do
     assert_match "Anvil CLI", shell_output("#{bin}/anvil --version")

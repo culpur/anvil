@@ -91,16 +91,76 @@ pub(crate) fn get_session_name(id: &str) -> Option<String> {
         return None;
     }
     let raw = fs::read_to_string(&path).ok()?;
-    parse_name_from_meta_json(&raw)
+    parse_string_field(&raw, "name")
 }
 
-/// Tiny no-deps JSON sniffer for the single field we need. Avoids dragging in
-/// runtime's JsonValue here (which would create a cyclic crate dep).
-fn parse_name_from_meta_json(raw: &str) -> Option<String> {
-    // Find `"name"` then the next `"..."` literal. Honors a backslash escape
-    // for `\"`. Robust enough for the values we ourselves write.
-    let key_idx = raw.find("\"name\"")?;
-    let after_key = &raw[key_idx + 6..];
+/// Read the saved model identifier (e.g. "ollama:qwen3.5:latest" or
+/// "anthropic:claude-sonnet-4-6") that this session was using when last
+/// persisted. `--continue` uses this so we don't fall back to DEFAULT_MODEL
+/// and accidentally try to talk to Anthropic when the user was on Ollama.
+pub(crate) fn get_session_model(id: &str) -> Option<String> {
+    let path = meta_path_for_id(id).ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let raw = fs::read_to_string(&path).ok()?;
+    parse_string_field(&raw, "model")
+}
+
+/// Update or set the saved model on the sidecar. Preserves any existing
+/// `name` field. No-ops on empty input. Failures are non-fatal — the caller
+/// uses this best-effort.
+pub(crate) fn set_session_model(
+    id: &str,
+    model: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if model.is_empty() {
+        return Ok(());
+    }
+    // Hand-write the JSON so the sidecar stays no-deps. Preserve any existing
+    // name + renamed_at so renames aren't blown away when we write the model.
+    let path = meta_path_for_id(id)?;
+    let existing_name = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| parse_string_field(&s, "name"))
+    } else {
+        None
+    };
+    let existing_renamed_at = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| parse_number_field(&s, "renamed_at"))
+    } else {
+        None
+    };
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(n) = existing_name {
+        parts.push(format!("\"name\":\"{}\"", n.replace('"', "\\\"")));
+    }
+    if let Some(r) = existing_renamed_at {
+        parts.push(format!("\"renamed_at\":{r}"));
+    }
+    parts.push(format!("\"model\":\"{}\"", model.replace('"', "\\\"")));
+    parts.push(format!("\"model_updated_at\":{updated_at}"));
+
+    let json = format!("{{{}}}\n", parts.join(","));
+    fs::write(&path, json)?;
+    Ok(())
+}
+
+/// Tiny no-deps JSON sniffer for a single string field. Avoids dragging in
+/// runtime's JsonValue here (which would create a cyclic crate dep). Honors
+/// a backslash escape for `\"`. Robust enough for the values we ourselves write.
+fn parse_string_field(raw: &str, key: &str) -> Option<String> {
+    let key_pattern = format!("\"{key}\"");
+    let key_idx = raw.find(&key_pattern)?;
+    let after_key = &raw[key_idx + key_pattern.len()..];
     let colon_idx = after_key.find(':')?;
     let after_colon = &after_key[colon_idx + 1..];
     let quote_idx = after_colon.find('"')?;
@@ -122,6 +182,30 @@ fn parse_name_from_meta_json(raw: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Same idea, but for a bare numeric field (`"renamed_at":1234`). Returns
+/// None if the key isn't present or its value isn't an unsigned integer.
+fn parse_number_field(raw: &str, key: &str) -> Option<u64> {
+    let key_pattern = format!("\"{key}\"");
+    let key_idx = raw.find(&key_pattern)?;
+    let after_key = &raw[key_idx + key_pattern.len()..];
+    let colon_idx = after_key.find(':')?;
+    let after_colon = &after_key[colon_idx + 1..];
+    // Skip whitespace.
+    let trimmed = after_colon.trim_start();
+    let mut end = 0;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    trimmed[..end].parse().ok()
 }
 
 /// Resolve a name to a session ID by scanning all `*.meta.json` sidecars.
@@ -191,19 +275,63 @@ mod tests {
     #[test]
     fn parse_name_from_simple_json() {
         let raw = r#"{"name":"auth-refactor","renamed_at":1778365293}"#;
-        assert_eq!(parse_name_from_meta_json(raw), Some("auth-refactor".to_string()));
+        assert_eq!(
+            parse_string_field(raw, "name"),
+            Some("auth-refactor".to_string())
+        );
     }
 
     #[test]
     fn parse_name_with_escaped_quote() {
         let raw = r#"{"name":"foo \"bar\"","renamed_at":1}"#;
-        assert_eq!(parse_name_from_meta_json(raw), Some("foo \"bar\"".to_string()));
+        assert_eq!(
+            parse_string_field(raw, "name"),
+            Some("foo \"bar\"".to_string())
+        );
     }
 
     #[test]
     fn parse_name_returns_none_when_missing() {
         let raw = r#"{"renamed_at":1}"#;
-        assert_eq!(parse_name_from_meta_json(raw), None);
+        assert_eq!(parse_string_field(raw, "name"), None);
+    }
+
+    #[test]
+    fn parse_model_from_combined_json() {
+        // Sidecar with both name and model (the post-bug-4 shape).
+        let raw = r#"{"name":"auth-refactor","renamed_at":100,"model":"ollama:qwen3.5:latest","model_updated_at":200}"#;
+        assert_eq!(
+            parse_string_field(raw, "model"),
+            Some("ollama:qwen3.5:latest".to_string())
+        );
+        assert_eq!(
+            parse_string_field(raw, "name"),
+            Some("auth-refactor".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_model_without_name() {
+        // Sidecar that has only model (session was never renamed).
+        let raw = r#"{"model":"anthropic:claude-sonnet-4-6","model_updated_at":300}"#;
+        assert_eq!(
+            parse_string_field(raw, "model"),
+            Some("anthropic:claude-sonnet-4-6".to_string())
+        );
+        assert_eq!(parse_string_field(raw, "name"), None);
+    }
+
+    #[test]
+    fn parse_number_field_works() {
+        let raw = r#"{"renamed_at":1778365293,"other":"x"}"#;
+        assert_eq!(parse_number_field(raw, "renamed_at"), Some(1778365293));
+        assert_eq!(parse_number_field(raw, "missing"), None);
+    }
+
+    #[test]
+    fn parse_number_field_handles_whitespace() {
+        let raw = r#"{"x":   42 }"#;
+        assert_eq!(parse_number_field(raw, "x"), Some(42));
     }
 
     #[test]

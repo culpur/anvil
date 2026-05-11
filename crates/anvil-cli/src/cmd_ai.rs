@@ -1025,7 +1025,7 @@ impl LiveCli {
                 if rest.is_empty() {
                     return "Usage: /debug explain <error message or stack trace>".to_string();
                 }
-                let session_context = recent_user_context(self.runtime.session(), 4);
+                let session_context = recent_user_context(self.active_runtime().session(), 4);
                 let prompt = format!(
                     "You are /debug explain. Analyse and explain the following error.\n\
                      Error:\n```\n{rest}\n```\n\
@@ -1734,7 +1734,7 @@ impl LiveCli {
         let prompt = format!(
             "Generate a git commit message in plain text Lore format only. Base it on this staged diff summary:\n\n{}\n\nRecent conversation context:\n{}",
             truncate_for_prompt(&staged_stat, 8_000),
-            recent_user_context(self.runtime.session(), 6)
+            recent_user_context(self.active_runtime().session(), 6)
         );
         let message = sanitize_generated_message(&self.run_internal_prompt_text(&prompt, false)?);
         if message.trim().is_empty() {
@@ -1796,7 +1796,7 @@ impl LiveCli {
         let prompt = format!(
             "Generate a GitHub issue title and body from this conversation. Output plain text in this format exactly:\nTITLE: <title>\nBODY:\n<body markdown>\n\nContext hint: {}\n\nConversation context:\n{}",
             context.unwrap_or("none"),
-            truncate_for_prompt(&recent_user_context(self.runtime.session(), 10), 10_000)
+            truncate_for_prompt(&recent_user_context(self.active_runtime().session(), 10), 10_000)
         );
         let draft = sanitize_generated_message(&self.run_internal_prompt_text(&prompt, false)?);
         let (title, body) = parse_titled_body(&draft)

@@ -81,7 +81,7 @@ use runtime::{
 use crossterm::terminal;
 use serde_json::json;
 use tools::GlobalToolRegistry;
-use tui::{AnvilTui, ConfigureAction, ReadResult, TuiEvent, TuiSender};
+use tui::{AnvilTui, ConfigureAction, InFlightInterruption, ReadResult, TuiEvent, TuiSender};
 
 use auth::{
     query_anthropic_models, run_anthropic_login, run_login, run_logout, run_ollama_setup,
@@ -2766,7 +2766,107 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
                     tui.push_system(format!("Cannot start turn: {reason}"));
                 } else {
-                    let _ = tui.wait_for_turn_end_for_tab(active_tab_id)?;
+                    // Dispatch loop: handle user actions that arrive while the
+                    // remote-triggered turn is in flight (tab switching, new
+                    // tabs, etc.).  Only TurnDone / ChannelClosed end the wait.
+                    let mut wait_tab_id = active_tab_id;
+                    'remote_wait: loop {
+                        match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
+                            InFlightInterruption::TurnDone
+                            | InFlightInterruption::ChannelClosed => break 'remote_wait,
+                            InFlightInterruption::TabSwitched => {
+                                cli.active_tab_idx = tui.active_tab_index();
+                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !still_running { break 'remote_wait; }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::OpenNewTab => {
+                                let new_session = create_managed_session_handle()?;
+                                let tab_idx = tui.new_tab("new", cli.model.clone(), new_session.id.clone());
+                                tui.switch_tab(tab_idx);
+                                cli.active_tab_idx = tab_idx;
+                                let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                if let Err(e) = cli.push_tab_runtime(
+                                    tab_id,
+                                    &sender_prototype,
+                                    Session::new(),
+                                    cli.model.clone(),
+                                    cli.system_prompt.clone(),
+                                    true,
+                                    cli.allowed_tools.clone(),
+                                    cli.permission_mode,
+                                ) {
+                                    tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
+                                } else {
+                                    tui.mark_tab_has_runtime(tab_idx);
+                                }
+                                tui.push_system(format!(
+                                    "Opened tab {}  |  session {}",
+                                    tab_idx + 1,
+                                    new_session.id,
+                                ));
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::CloseActiveTab => {
+                                let idx = tui.active_tab_index();
+                                if idx != active {
+                                    tui.close_tab_by_index(idx);
+                                    cli.active_tab_idx = tui.active_tab_index();
+                                }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::SlashCommand(line) => {
+                                let trimmed = line.trim();
+                                // /quit and /exit aren't recognised by SlashCommand::parse —
+                                // the literal-match exit path lives in the main loop's
+                                // ReadResult::Submit handler. Stash the command as a pending
+                                // submission so the main loop picks it up after we break.
+                                if matches!(trimmed, "/exit" | "/quit") {
+                                    tui.set_pending_submission(trimmed.to_string());
+                                    break 'remote_wait;
+                                }
+                                tui.push_system(format!("↳ executing held command: {line}"));
+                                if let Some(command) = SlashCommand::parse(trimmed) {
+                                    match cli.handle_repl_command_tui(command, &mut tui) {
+                                        Ok(_) => {}
+                                        Err(err) => tui.push_system(format!("Error: {err}")),
+                                    }
+                                    tui.set_thinking_enabled(cli.thinking_enabled);
+                                    tui.set_effort_level(cli.effort_level.as_str());
+                                }
+                                // If the command opened a modal (e.g. /ssh, /configure),
+                                // break out of the wait so the main read_input loop drives
+                                // the modal. The background turn continues; we'll reap it
+                                // on subsequent main-loop iterations.
+                                if tui.has_active_modal() {
+                                    break 'remote_wait;
+                                }
+                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !still_running { break 'remote_wait; }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::SubmitChatPrompt(prompt) => {
+                                let idle_idx = tui.active_tab_index();
+                                let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
+                                let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !in_flight {
+                                    tui.set_pending_submission(prompt);
+                                    break 'remote_wait;
+                                }
+                                let eff = cli.build_input_with_qmd_context(&prompt);
+                                if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
+                                    // Tab busy — stash for after current turn ends.
+                                    tui.set_pending_submission(prompt);
+                                    break 'remote_wait;
+                                }
+                                wait_tab_id = idle_tab_id;
+                            }
+                        }
+                    }
                     let reaped = cli.try_reap_finished_turns();
                     for (idx, result) in reaped {
                         if let Err(e) = result {
@@ -2799,6 +2899,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 tui.pump_events_nonblocking();
             }
             ReadResult::Exit => {
+                let drained = cli.drain_all_in_flight_workers();
+                if drained > 0 {
+                    tui.push_system(format!(
+                        "Drained {drained} in-flight turn(s) before exit."
+                    ));
+                }
                 cli.persist_session()?;
                 cli.record_daily();
                 break 'outer;
@@ -2853,6 +2959,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 if matches!(trimmed, "/exit" | "/quit") {
+                    let drained = cli.drain_all_in_flight_workers();
+                    if drained > 0 {
+                        tui.push_system(format!(
+                            "Drained {drained} in-flight turn(s) before exit."
+                        ));
+                    }
                     cli.persist_session()?;
                     cli.record_daily();
                     break 'outer;
@@ -3038,7 +3150,95 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         if let Err(reason) = cli.spawn_file_drop_turn_for_tab(active, cli.permission_mode) {
                             tui.push_system(format!("Cannot start turn: {reason}"));
                         } else {
-                            let _ = tui.wait_for_turn_end_for_tab(active_tab_id)?;
+                            let mut wait_tab_id = active_tab_id;
+                            'file_wait: loop {
+                                match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
+                                    InFlightInterruption::TurnDone
+                                    | InFlightInterruption::ChannelClosed => break 'file_wait,
+                                    InFlightInterruption::TabSwitched => {
+                                        cli.active_tab_idx = tui.active_tab_index();
+                                        let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                        if !still_running { break 'file_wait; }
+                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                            .unwrap_or(tui.active_tab_index() + 1);
+                                    }
+                                    InFlightInterruption::OpenNewTab => {
+                                        let new_session = create_managed_session_handle()?;
+                                        let tab_idx = tui.new_tab("new", cli.model.clone(), new_session.id.clone());
+                                        tui.switch_tab(tab_idx);
+                                        cli.active_tab_idx = tab_idx;
+                                        let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                        if let Err(e) = cli.push_tab_runtime(
+                                            tab_id,
+                                            &sender_prototype,
+                                            Session::new(),
+                                            cli.model.clone(),
+                                            cli.system_prompt.clone(),
+                                            true,
+                                            cli.allowed_tools.clone(),
+                                            cli.permission_mode,
+                                        ) {
+                                            tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
+                                        } else {
+                                            tui.mark_tab_has_runtime(tab_idx);
+                                        }
+                                        tui.push_system(format!(
+                                            "Opened tab {}  |  session {}",
+                                            tab_idx + 1,
+                                            new_session.id,
+                                        ));
+                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                            .unwrap_or(tui.active_tab_index() + 1);
+                                    }
+                                    InFlightInterruption::CloseActiveTab => {
+                                        let idx = tui.active_tab_index();
+                                        if idx != active {
+                                            tui.close_tab_by_index(idx);
+                                            cli.active_tab_idx = tui.active_tab_index();
+                                        }
+                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                            .unwrap_or(tui.active_tab_index() + 1);
+                                    }
+                                    InFlightInterruption::SlashCommand(line) => {
+                                        let trimmed = line.trim();
+                                        if matches!(trimmed, "/exit" | "/quit") {
+                                            tui.set_pending_submission(trimmed.to_string());
+                                            break 'file_wait;
+                                        }
+                                        tui.push_system(format!("↳ executing held command: {line}"));
+                                        if let Some(command) = SlashCommand::parse(trimmed) {
+                                            match cli.handle_repl_command_tui(command, &mut tui) {
+                                                Ok(_) => {}
+                                                Err(err) => tui.push_system(format!("Error: {err}")),
+                                            }
+                                            tui.set_thinking_enabled(cli.thinking_enabled);
+                                            tui.set_effort_level(cli.effort_level.as_str());
+                                        }
+                                        if tui.has_active_modal() {
+                                            break 'file_wait;
+                                        }
+                                        let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                        if !still_running { break 'file_wait; }
+                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                            .unwrap_or(tui.active_tab_index() + 1);
+                                    }
+                                    InFlightInterruption::SubmitChatPrompt(prompt) => {
+                                        let idle_idx = tui.active_tab_index();
+                                        let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
+                                        let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                        if !in_flight {
+                                            tui.set_pending_submission(prompt);
+                                            break 'file_wait;
+                                        }
+                                        let eff = cli.build_input_with_qmd_context(&prompt);
+                                        if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
+                                            tui.set_pending_submission(prompt);
+                                            break 'file_wait;
+                                        }
+                                        wait_tab_id = idle_tab_id;
+                                    }
+                                }
+                            }
                             let reaped = cli.try_reap_finished_turns();
                             for (idx, result) in reaped {
                                 if let Err(e) = result {
@@ -3091,10 +3291,109 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
                     tui.push_system(format!("Cannot start turn: {reason}"));
                 } else {
-                    // Wait for active tab's TurnDone; background tabs keep
-                    // streaming via the shared channel.
-                    if let Ok(captured) = tui.wait_for_turn_end_for_tab(active_tab_id) {
-                        held_submit = captured;
+                    // Wait for active tab's TurnDone; handle user actions that
+                    // arrive mid-turn (tab switch, new tab, slash command, etc.)
+                    // without blocking the streaming turn on another tab.
+                    let mut wait_tab_id = active_tab_id;
+                    'chat_wait: loop {
+                        match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
+                            InFlightInterruption::TurnDone
+                            | InFlightInterruption::ChannelClosed => {
+                                // Pick up any type-ahead draft the user committed
+                                // while the turn was in flight.
+                                held_submit = tui.pending_submit.take();
+                                break 'chat_wait;
+                            }
+                            InFlightInterruption::TabSwitched => {
+                                cli.active_tab_idx = tui.active_tab_index();
+                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !still_running {
+                                    held_submit = tui.pending_submit.take();
+                                    break 'chat_wait;
+                                }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::OpenNewTab => {
+                                let new_session = create_managed_session_handle()?;
+                                let tab_idx = tui.new_tab("new", cli.model.clone(), new_session.id.clone());
+                                tui.switch_tab(tab_idx);
+                                cli.active_tab_idx = tab_idx;
+                                let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                if let Err(e) = cli.push_tab_runtime(
+                                    tab_id,
+                                    &sender_prototype,
+                                    Session::new(),
+                                    cli.model.clone(),
+                                    cli.system_prompt.clone(),
+                                    true,
+                                    cli.allowed_tools.clone(),
+                                    cli.permission_mode,
+                                ) {
+                                    tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
+                                } else {
+                                    tui.mark_tab_has_runtime(tab_idx);
+                                }
+                                tui.push_system(format!(
+                                    "Opened tab {}  |  session {}",
+                                    tab_idx + 1,
+                                    new_session.id,
+                                ));
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::CloseActiveTab => {
+                                let idx = tui.active_tab_index();
+                                if idx != active {
+                                    tui.close_tab_by_index(idx);
+                                    cli.active_tab_idx = tui.active_tab_index();
+                                }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::SlashCommand(line) => {
+                                let cmd_trimmed = line.trim();
+                                if matches!(cmd_trimmed, "/exit" | "/quit") {
+                                    tui.set_pending_submission(cmd_trimmed.to_string());
+                                    break 'chat_wait;
+                                }
+                                tui.push_system(format!("↳ executing held command: {line}"));
+                                if let Some(command) = SlashCommand::parse(cmd_trimmed) {
+                                    match cli.handle_repl_command_tui(command, &mut tui) {
+                                        Ok(_) => {}
+                                        Err(err) => tui.push_system(format!("Error: {err}")),
+                                    }
+                                    tui.set_thinking_enabled(cli.thinking_enabled);
+                                    tui.set_effort_level(cli.effort_level.as_str());
+                                }
+                                if tui.has_active_modal() {
+                                    break 'chat_wait;
+                                }
+                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !still_running {
+                                    break 'chat_wait;
+                                }
+                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
+                                    .unwrap_or(tui.active_tab_index() + 1);
+                            }
+                            InFlightInterruption::SubmitChatPrompt(prompt) => {
+                                let idle_idx = tui.active_tab_index();
+                                let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
+                                let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
+                                if !in_flight {
+                                    // No turn running — stash as pending and exit.
+                                    tui.set_pending_submission(prompt);
+                                    break 'chat_wait;
+                                }
+                                let eff = cli.build_input_with_qmd_context(&prompt);
+                                if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
+                                    // Tab busy — stash for after current turn ends.
+                                    tui.set_pending_submission(prompt);
+                                    break 'chat_wait;
+                                }
+                                wait_tab_id = idle_tab_id;
+                            }
+                        }
                     }
                     // Reap finished handles (active tab finished; background tabs
                     // may still be running and will be reaped on future iterations).
@@ -3201,6 +3500,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    // Defense-in-depth: every `break 'outer` path above already drains
+    // in-flight workers, but if a new exit path is added that forgets,
+    // this final drain prevents the SessionEnd hooks lock from deadlocking
+    // against a worker that still holds the runtime mutex.
+    let _ = cli.drain_all_in_flight_workers();
 
     // v2.2.11: fire SessionEnd hooks on clean exit.
     let _ = cli.active_runtime_mut().run_session_end_hooks();
@@ -3652,7 +3957,13 @@ impl LiveCli {
             let mut rt = runtime_arc
                 .lock()
                 .map_err(|_| "runtime mutex poisoned".to_string())?;
+            // Bug-3 Commit 4: wire the per-tab TuiSender into the prompter so
+            // permission decisions go through the TUI modal rather than
+            // blocking stdin.
             let mut prompter = CliPermissionPrompter::new(permission_mode);
+            if let Some(sender) = tui_sender.clone() {
+                prompter = prompter.with_tui_sender(sender);
+            }
             match rt.run_turn(&effective_input, Some(&mut prompter)) {
                 Ok(ref summary) => {
                     if let Some(ref tx) = tui_sender {
@@ -3701,7 +4012,11 @@ impl LiveCli {
             let mut rt = runtime_arc
                 .lock()
                 .map_err(|_| "runtime mutex poisoned".to_string())?;
+            // Bug-3 Commit 4: wire per-tab TuiSender for modal prompts.
             let mut prompter = CliPermissionPrompter::new(permission_mode);
+            if let Some(sender) = tui_sender.clone() {
+                prompter = prompter.with_tui_sender(sender);
+            }
             match rt.run_turn_preloaded(Some(&mut prompter)) {
                 Ok(ref summary) => {
                     if let Some(ref tx) = tui_sender {
@@ -3747,6 +4062,26 @@ impl LiveCli {
             }
         }
         results
+    }
+
+    /// Blocking-join every in-flight worker.
+    ///
+    /// Must be called before any code path that locks a tab's runtime mutex
+    /// from the main thread on exit (persist_session, record_daily,
+    /// run_session_end_hooks). A worker holds its tab's runtime mutex for the
+    /// duration of a turn; calling lock() while a worker is mid-turn deadlocks
+    /// the main thread — which is what /quit was doing before this helper.
+    ///
+    /// Returns the number of workers that were drained.
+    fn drain_all_in_flight_workers(&mut self) -> usize {
+        let mut drained = 0;
+        for tab_rt in self.tab_runtimes.iter_mut() {
+            if let Some(handle) = tab_rt.in_flight.take() {
+                let _ = handle.join();
+                drained += 1;
+            }
+        }
+        drained
     }
 
     /// Inject any pinned files as user messages into the active tab's runtime.
@@ -6980,15 +7315,27 @@ impl LiveCli {
     fn record_daily(&self) {
         use runtime::{DailyStore, SessionSummary, extract_tasks};
 
-        let runtime_guard = self.active_runtime();
-        let session_data = runtime_guard.session();
-        let messages = &session_data.messages;
+        // Acquire the runtime mutex ONCE, derive everything we need, then drop
+        // the guard before doing the I/O work. Re-acquiring on the same thread
+        // (std::sync::Mutex is non-reentrant) self-deadlocks — this was a real
+        // /quit hang in v2.2.12 after Commit 3 wrapped the runtime in
+        // Arc<Mutex<...>>.
+        let (messages, tokens_used, tool_count) = {
+            let guard = self.active_runtime();
+            let session_data = guard.session();
+            let messages = session_data.messages.clone();
+            let tokens_used = guard.usage().cumulative_usage().total_tokens();
+            let tool_count = messages.iter().flat_map(|m| &m.blocks).filter(|b| {
+                matches!(b, runtime::ContentBlock::ToolUse { .. })
+            }).count() as u64;
+            (messages, tokens_used, tool_count)
+        };
 
         // Extract tasks from the conversation history.
-        let (tasks_completed, tasks_open) = extract_tasks(messages);
+        let (tasks_completed, tasks_open) = extract_tasks(&messages);
 
         // Collect modified files from ToolResult outputs that mention a path.
-        let files_modified = collect_modified_files(messages);
+        let files_modified = collect_modified_files(&messages);
 
         // Count nominations generated this session.
         let nominations_generated = {
@@ -6996,28 +7343,19 @@ impl LiveCli {
             store.list(Some(runtime::nominations::NominationStatus::Pending)).len()
         };
 
-        let tokens_used = self.active_runtime().usage().cumulative_usage().total_tokens();
         let duration_ms = self.session_start.elapsed().as_millis() as u64;
         let duration_secs = duration_ms / 1000;
         let messages_count = messages.len();
 
-        // Count tool-use blocks across all messages for OTel.
-        let tool_count = messages.iter().flat_map(|m| &m.blocks).filter(|b| {
-            matches!(b, runtime::ContentBlock::ToolUse { .. })
-        }).count() as u64;
-
         // Emit session_end OTel event (no-op when disabled).
-        {
-            let cost = self.active_runtime().usage().cumulative_usage();
-            let cost_str = format!("{:.6}", cost.total_tokens() as f64 * 0.000_003);
-            runtime::otel::session_end(
-                &self.session.id,
-                duration_ms,
-                u64::from(tokens_used),
-                &cost_str,
-                tool_count,
-            );
-        }
+        let cost_str = format!("{:.6}", u64::from(tokens_used) as f64 * 0.000_003);
+        runtime::otel::session_end(
+            &self.session.id,
+            duration_ms,
+            u64::from(tokens_used),
+            &cost_str,
+            tool_count,
+        );
 
         let summary = SessionSummary {
             session_id: self.session.id.clone(),
@@ -7942,6 +8280,7 @@ impl LiveCli {
                     last_snapshot: None,
                     log_len_at_snapshot: None,
                     scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
+                    scrollback_pending_lines: 0,
                     scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
                     ssh: None,
                     has_runtime: true,

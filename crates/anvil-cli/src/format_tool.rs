@@ -44,11 +44,42 @@ pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> S
             }
         }
         "read_file" | "Read" => {
-            // Returns {"content": "...", "lines": N} or similar
-            let lines = parsed.get("lines").and_then(|v| v.as_u64())
-                .or_else(|| parsed.get("content").and_then(|v| v.as_str()).map(|s| s.lines().count() as u64))
+            // Real runtime schema (see runtime::file_ops::ReadFileOutput +
+            // TextFilePayload): { "kind": "text", "file": { "filePath": "...",
+            // "content": "...", "numLines": N, "startLine": S, "totalLines": T } }.
+            // Fall back through several shapes so the summary still works for
+            // older payloads, MCP variants, or tests that emit a flatter object.
+            let file = parsed.get("file").unwrap_or(&parsed);
+            let total_lines = file
+                .get("totalLines")
+                .and_then(|v| v.as_u64())
+                .or_else(|| parsed.get("totalLines").and_then(|v| v.as_u64()));
+            let num_lines = file
+                .get("numLines")
+                .and_then(|v| v.as_u64())
+                .or_else(|| parsed.get("numLines").and_then(|v| v.as_u64()))
+                // Legacy / MCP shape: "lines" at the top level.
+                .or_else(|| parsed.get("lines").and_then(|v| v.as_u64()))
+                // Last resort: count the lines in the content string if present.
+                .or_else(|| {
+                    file.get("content")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| parsed.get("content").and_then(|v| v.as_str()))
+                        .map(|s| s.lines().count() as u64)
+                })
                 .unwrap_or(0);
-            format!("{lines} line{}", if lines == 1 { "" } else { "s" })
+            // Prefer "showing N of M lines" when both are known and differ;
+            // otherwise fall back to the single count we have.
+            match total_lines {
+                Some(total) if total > num_lines && num_lines > 0 => format!(
+                    "{num_lines} of {total} line{}",
+                    if total == 1 { "" } else { "s" },
+                ),
+                _ => format!(
+                    "{num_lines} line{}",
+                    if num_lines == 1 { "" } else { "s" },
+                ),
+            }
         }
         "write_file" | "Write" => {
             let path = extract_tool_path(&parsed);
@@ -669,4 +700,85 @@ pub(crate) fn response_to_events(
     }));
     events.push(AssistantEvent::MessageStop);
     Ok(events)
+}
+
+#[cfg(test)]
+mod read_summary_tests {
+    use super::tool_result_summary;
+
+    /// Real shape emitted by runtime::file_ops::read_file — nested {"file":{...}}
+    /// with numLines + totalLines + content. This is the case that was reporting
+    /// "0 lines" before the fix.
+    #[test]
+    fn real_runtime_payload_reports_line_count() {
+        let payload = r#"{
+            "kind": "text",
+            "file": {
+                "filePath": "/tmp/SKILL.md",
+                "content": "line 1\nline 2\nline 3",
+                "numLines": 3,
+                "startLine": 1,
+                "totalLines": 3
+            }
+        }"#;
+        let summary = tool_result_summary("read_file", payload, false);
+        assert_eq!(summary, "3 lines");
+    }
+
+    /// Partial read (offset/limit applied) — shows "N of M lines".
+    #[test]
+    fn partial_read_shows_n_of_m() {
+        let payload = r#"{
+            "kind": "text",
+            "file": {
+                "filePath": "/tmp/big.txt",
+                "content": "a\nb\nc",
+                "numLines": 3,
+                "startLine": 10,
+                "totalLines": 500
+            }
+        }"#;
+        let summary = tool_result_summary("read_file", payload, false);
+        assert_eq!(summary, "3 of 500 lines");
+    }
+
+    /// Singular form.
+    #[test]
+    fn single_line_uses_singular() {
+        let payload = r#"{
+            "kind": "text",
+            "file": {
+                "filePath": "/tmp/x",
+                "content": "only one",
+                "numLines": 1,
+                "startLine": 1,
+                "totalLines": 1
+            }
+        }"#;
+        let summary = tool_result_summary("read_file", payload, false);
+        assert_eq!(summary, "1 line");
+    }
+
+    /// Flat-shape fallback (no "file" wrapper) — MCP or legacy payloads.
+    #[test]
+    fn flat_legacy_shape_still_works() {
+        let payload = r#"{"content": "one\ntwo", "lines": 2}"#;
+        let summary = tool_result_summary("read_file", payload, false);
+        assert_eq!(summary, "2 lines");
+    }
+
+    /// No numeric field, no content — defaults cleanly to 0 (rare error path).
+    #[test]
+    fn empty_payload_reports_zero() {
+        let summary = tool_result_summary("read_file", "{}", false);
+        assert_eq!(summary, "0 lines");
+    }
+
+    /// Read tool alias should behave the same.
+    #[test]
+    fn read_alias_matches() {
+        let payload = r#"{"file":{"numLines":5,"totalLines":5,"content":"a\nb\nc\nd\ne"}}"#;
+        let summary = tool_result_summary("Read", payload, false);
+        assert_eq!(summary, "5 lines");
+    }
 }

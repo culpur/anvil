@@ -570,11 +570,24 @@ pub(crate) fn build_runtime_with_tui_slot(
 
 pub(crate) struct CliPermissionPrompter {
     current_mode: PermissionMode,
+    /// When `Some`, permission decisions go through the TUI channel rather than
+    /// blocking stdin/stdout.  The sender's `tab_id` identifies which tab's
+    /// worker is asking.  `None` means "fall through to the stdin/stdout path"
+    /// (used by `--print`, batch subcommands, and anything without a TUI).
+    tui_sender: Option<TuiSender>,
 }
 
 impl CliPermissionPrompter {
     pub(crate) const fn new(current_mode: PermissionMode) -> Self {
-        Self { current_mode }
+        Self { current_mode, tui_sender: None }
+    }
+
+    /// Wire in a TUI sender so that permission prompts are routed through the
+    /// TUI modal rather than blocking stdin.  Call this in
+    /// `spawn_turn_for_tab` before passing the prompter to `run_turn`.
+    pub(crate) fn with_tui_sender(mut self, sender: TuiSender) -> Self {
+        self.tui_sender = Some(sender);
+        self
     }
 }
 
@@ -607,33 +620,58 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
             });
         }
 
-        let mut stdout = io::stdout();
-        let mut stdin = io::BufReader::new(io::stdin());
-        let response = render_permission_prompt(
-            &request.tool_name,
-            self.current_mode.as_str(),
-            request.required_mode.as_str(),
-            &input_summary,
-            &mut stdout,
-            &mut stdin,
-        );
-
-        let decision = match response {
-            Ok(line) => {
-                let normalized = line.trim().to_ascii_lowercase();
-                match normalized.as_str() {
-                    "y" | "yes" | "always" => runtime::PermissionPromptDecision::Allow,
-                    _ => runtime::PermissionPromptDecision::Deny {
-                        reason: format!(
-                            "tool '{}' denied by user approval prompt",
-                            request.tool_name
-                        ),
-                    },
-                }
+        let decision = if let Some(ref tui_sender) = self.tui_sender {
+            // TUI path: emit event, block on reply channel.
+            // The TUI will show the modal when the user is on this tab and
+            // dispatch a `PermissionReply` back through `response_tx`.
+            let (reply_tx, reply_rx) = mpsc::sync_channel::<crate::tui::PermissionReply>(1);
+            tui_sender.send(TuiEvent::PermissionRequired {
+                tool_name: request.tool_name.clone(),
+                required_mode: request.required_mode.as_str().to_string(),
+                current_mode: self.current_mode.as_str().to_string(),
+                input_summary: input_summary.clone(),
+                response_tx: reply_tx,
+            });
+            match reply_rx.recv() {
+                Ok(crate::tui::PermissionReply::Allow) => runtime::PermissionPromptDecision::Allow,
+                Ok(crate::tui::PermissionReply::AllowAlways) => runtime::PermissionPromptDecision::AllowAlways,
+                Ok(crate::tui::PermissionReply::Deny) => runtime::PermissionPromptDecision::Deny {
+                    reason: format!("tool '{}' denied by user", request.tool_name),
+                },
+                Err(_) => runtime::PermissionPromptDecision::Deny {
+                    reason: "permission reply channel closed".to_string(),
+                },
             }
-            Err(error) => runtime::PermissionPromptDecision::Deny {
-                reason: format!("permission approval failed: {error}"),
-            },
+        } else {
+            // Fallback path: existing stdin/stdout flow for non-TUI / --print.
+            let mut stdout = io::stdout();
+            let mut stdin = io::BufReader::new(io::stdin());
+            let response = render_permission_prompt(
+                &request.tool_name,
+                self.current_mode.as_str(),
+                request.required_mode.as_str(),
+                &input_summary,
+                &mut stdout,
+                &mut stdin,
+            );
+
+            match response {
+                Ok(line) => {
+                    let normalized = line.trim().to_ascii_lowercase();
+                    match normalized.as_str() {
+                        "y" | "yes" | "always" => runtime::PermissionPromptDecision::Allow,
+                        _ => runtime::PermissionPromptDecision::Deny {
+                            reason: format!(
+                                "tool '{}' denied by user approval prompt",
+                                request.tool_name
+                            ),
+                        },
+                    }
+                }
+                Err(error) => runtime::PermissionPromptDecision::Deny {
+                    reason: format!("permission approval failed: {error}"),
+                },
+            }
         };
 
         // Emit OTel permission_decision event (no-op when disabled).
@@ -838,6 +876,7 @@ impl ApiClient for DefaultRuntimeClient {
                                 tx.send(TuiEvent::ToolCallActive {
                                     name: name.clone(),
                                     detail,
+                                    full_input: input.clone(),
                                 });
                             } else {
                                 // Display tool call block now that input is fully accumulated
@@ -909,6 +948,7 @@ impl ApiClient for DefaultRuntimeClient {
                             tx.send(TuiEvent::ToolCallActive {
                                 name: call.name.clone(),
                                 detail,
+                                full_input: input_str.clone(),
                             });
                         } else if self.emit_output {
                             writeln!(out)

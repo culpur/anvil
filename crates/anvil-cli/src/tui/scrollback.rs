@@ -50,6 +50,20 @@ impl ScrollbackBuffer {
         self.lines.push_back(line);
     }
 
+    /// Pop the last `n` lines from the back of the buffer.
+    ///
+    /// Used by the per-draw refresh path in `tui::mod::draw` to discard
+    /// the trailing "pending text" view before re-pushing the current
+    /// pending lines. Without this, an in-flight stream like
+    /// `# Anvil-Dev` pushed as several deltas (`#`, ` Anvil`, `-Dev`)
+    /// would leave just `#` cached as the first scrollback line forever,
+    /// because the grow-only logic never updated already-pushed entries.
+    pub fn pop_back_n(&mut self, n: usize) {
+        for _ in 0..n.min(self.lines.len()) {
+            self.lines.pop_back();
+        }
+    }
+
     /// Push many lines at once.
     #[allow(dead_code)]
     pub fn push_lines(&mut self, lines: impl IntoIterator<Item = String>) {
@@ -268,6 +282,60 @@ mod tests {
         let mut buf = ScrollbackBuffer::with_capacity(10);
         buf.push_lines(vec!["a".into(), "b".into(), "c".into()]);
         assert_eq!(buf.len(), 3);
+    }
+
+    #[test]
+    fn pop_back_n_removes_trailing_lines() {
+        let mut buf = ScrollbackBuffer::with_capacity(100);
+        buf.push_lines(vec!["a".into(), "b".into(), "c".into(), "d".into()]);
+        buf.pop_back_n(2);
+        let (lines, _) = buf.lines_in_range(0, 10);
+        assert_eq!(lines, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn pop_back_n_saturates_at_buffer_size() {
+        // Asking to pop more than is present must not panic or underflow.
+        let mut buf = ScrollbackBuffer::with_capacity(100);
+        buf.push("only".into());
+        buf.pop_back_n(99);
+        assert_eq!(buf.len(), 0);
+    }
+
+    #[test]
+    fn streaming_deltas_replace_not_append() {
+        // Reproduces the v2.2.12 bug where a streaming assistant message
+        // had its first line truncated in HISTORICAL VIEW. The draw path
+        // used to grow scrollback as text arrived, leaving "#" cached as
+        // line 1 even after the full "# Anvil-Dev Analysis Summary" had
+        // streamed in. The fix tracks how many trailing lines came from
+        // pending_text and rewrites them each frame instead of appending.
+        let mut buf = ScrollbackBuffer::with_capacity(100);
+        let mut pending_count: usize = 0;
+
+        // Frame 1: first delta arrives.
+        buf.pop_back_n(pending_count);
+        pending_count = 0;
+        for line in "#".lines() {
+            buf.push(line.to_string());
+            pending_count += 1;
+        }
+        let (lines, _) = buf.lines_in_range(0, 10);
+        assert_eq!(lines, vec!["#"]);
+
+        // Frame 2: more text arrived on the same line.
+        buf.pop_back_n(pending_count);
+        pending_count = 0;
+        for line in "# Anvil-Dev Analysis Summary".lines() {
+            buf.push(line.to_string());
+            pending_count += 1;
+        }
+        let (lines, _) = buf.lines_in_range(0, 10);
+        assert_eq!(
+            lines,
+            vec!["# Anvil-Dev Analysis Summary"],
+            "scrollback must show the full streamed line, not just '#' (was the bug)"
+        );
     }
 
     // ── PageUp / PageDown navigation ──────────────────────────────────────────

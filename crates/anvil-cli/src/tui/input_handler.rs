@@ -22,6 +22,14 @@ impl AnvilTui {
     /// Returns `Ok(Some(input))` when the user submits a line.
     /// Returns `Ok(None)` when the user exits (`/exit`, Ctrl+C on empty, Ctrl+D).
     pub fn read_input(&mut self) -> io::Result<ReadResult> {
+        // Drain any auto-submission queued by the previous turn's in-flight
+        // handler (e.g. a slash command typed while the model was streaming).
+        // We return immediately so the caller dispatches it the same way as
+        // a normal Enter-on-the-input-line submission.
+        if let Some(line) = self.pending_auto_submit.take() {
+            return Ok(ReadResult::Submit(line));
+        }
+
         self.active_tab_mut().think_frame = self.active_tab().think_frame.wrapping_add(1);
 
         // T5-Ssh-D: drain all SSH tabs each frame, capped at 64 KB per tab to
@@ -116,6 +124,43 @@ impl AnvilTui {
                                     self.scroll_down(3);
                                 }
                             }
+                            // Click-to-switch on the tab bar. We compare against
+                            // the geometry recorded by the most-recent draw.
+                            crossterm::event::MouseEventKind::Down(
+                                crossterm::event::MouseButton::Left,
+                            ) => {
+                                if mouse.row == self.tab_bar_row {
+                                    let col = mouse.column;
+                                    let mut handled = false;
+                                    // Search a copy of the geometry so we can
+                                    // mutate self inside the loop.
+                                    let hits = self.tab_hits.clone();
+                                    for hit in &hits {
+                                        if Some(col) == hit.close_col {
+                                            if self.tabs.len() > 1 {
+                                                self.switch_tab(hit.idx);
+                                                if let Some(name) = self.close_active_tab() {
+                                                    self.push_system(format!(
+                                                        "Closed tab: {name}"
+                                                    ));
+                                                }
+                                            }
+                                            handled = true;
+                                            break;
+                                        }
+                                        if col >= hit.label_start && col < hit.label_end {
+                                            self.switch_tab(hit.idx);
+                                            handled = true;
+                                            break;
+                                        }
+                                    }
+                                    if handled {
+                                        self.redraw.request(
+                                            super::redraw::DirtyRegions::ALL,
+                                        );
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -129,6 +174,35 @@ impl AnvilTui {
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
         use super::configure_types::ConfigureState;
+
+        // Bug-3 Commit 4: when the active tab has a pending permission request,
+        // intercept the key and route it to the approval modal.  All other keys
+        // are consumed (the modal is modal — no editing below it).
+        {
+            let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
+            if self.pending_permissions.contains_key(&active_tab_id) {
+                use crossterm::event::KeyCode as KC;
+                let reply = match key.code {
+                    KC::Char('y') | KC::Char('Y') | KC::Enter => {
+                        Some(super::PermissionReply::Allow)
+                    }
+                    KC::Char('a') | KC::Char('A') => {
+                        Some(super::PermissionReply::AllowAlways)
+                    }
+                    KC::Char('n') | KC::Char('N') | KC::Esc => {
+                        Some(super::PermissionReply::Deny)
+                    }
+                    _ => None,
+                };
+                if let Some(r) = reply {
+                    if let Some(pending) = self.pending_permissions.remove(&active_tab_id) {
+                        let _ = pending.response_tx.send(r);
+                    }
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                }
+                return Ok(ReadResult::Continue);
+            }
+        }
 
         // T5-Ssh-E: when the SSH form modal is open, all keys go to the form.
         // Submit closes the modal and (in Commit F) kicks off the connection.
@@ -271,6 +345,16 @@ impl AnvilTui {
                     }
 
         match key.code {
+            // F2 / F3: terminal-agnostic tab navigation. Apple Terminal and
+            // most others deliver these reliably, unlike Ctrl+arrow or Ctrl+digit.
+            KeyCode::F(2) => {
+                self.prev_tab();
+                return Ok(ReadResult::Continue);
+            }
+            KeyCode::F(3) => {
+                self.next_tab();
+                return Ok(ReadResult::Continue);
+            }
             KeyCode::Enter => {
                 if self.active_tab().completion.visible {
                     self.tab_complete();
@@ -362,12 +446,28 @@ impl AnvilTui {
                 self.switch_tab(n.saturating_sub(1));
             }
             KeyCode::Char('o' | 'O') => {
-                self.focus_mode = !self.focus_mode;
-                self.push_system(if self.focus_mode {
-                    "Focus view enabled (Ctrl+O to toggle)".to_string()
-                } else {
-                    "Focus view disabled".to_string()
-                });
+                // Priority: if there's a ToolCall entry in the active log, toggle
+                // its expanded flag (Ctrl+O expand/collapse the latest tool card).
+                // If no ToolCall exists, fall through to focus_mode toggle.
+                let mut toggled_tool = false;
+                {
+                    let tab = self.active_tab_mut();
+                    for entry in tab.log.iter_mut().rev() {
+                        if let super::state::LogEntry::ToolCall { expanded, .. } = entry {
+                            *expanded = !*expanded;
+                            toggled_tool = true;
+                            break;
+                        }
+                    }
+                }
+                if !toggled_tool {
+                    self.focus_mode = !self.focus_mode;
+                    self.push_system(if self.focus_mode {
+                        "Focus view enabled (Ctrl+O to toggle)".to_string()
+                    } else {
+                        "Focus view disabled".to_string()
+                    });
+                }
             }
             KeyCode::Char('c' | 'C') => {
                 if self.active_tab().input.is_empty() {

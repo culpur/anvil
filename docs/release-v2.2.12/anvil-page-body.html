@@ -1,0 +1,274 @@
+<div class="anvil-wrap">
+
+<!-- Hero -->
+<div class="anvil-hero">
+  <div class="anvil-badge">[anvil_version] &mdash; Latest Release</div>
+  <h1><span>&#9874;</span> Anvil</h1>
+  <p class="tagline">The only AI coding assistant that doesn&rsquo;t lock you in.</p>
+  <p class="tagline-sub">Your providers. Your credentials. Your data. Your cost.</p>
+  <div class="anvil-stats">
+    <div class="anvil-stat"><strong>[anvil_commands]</strong><span>Commands</span></div>
+    <div class="anvil-stat"><strong>[anvil_tools]</strong><span>Tools</span></div>
+    <div class="anvil-stat"><strong>7</strong><span>Agent Types</span></div>
+    <div class="anvil-stat"><strong>[anvil_providers]</strong><span>AI Providers</span></div>
+    <div class="anvil-stat"><strong>[anvil_binary_size]</strong><span>Single Binary</span></div>
+  </div>
+  <div class="anvil-cta-row">
+    <a class="anvil-btn-primary" href="https://github.com/culpur/anvil/releases/latest">Get Anvil Free</a>
+    <a class="anvil-btn-secondary" href="https://anvilhub.culpur.net">Browse AnvilHub</a>
+  </div>
+</div>
+
+<!-- Install -->
+<div class="anvil-install">
+  <span class="anvil-install-label">Install &mdash; macOS / Linux (Homebrew)</span>
+  <code>brew install culpur/anvil/anvil</code>
+</div>
+<div class="anvil-install">
+  <span class="anvil-install-label">Install &mdash; macOS / Linux (curl)</span>
+  <code>curl -fsSL https://anvilhub.culpur.net/install.sh | bash</code>
+</div>
+<div class="anvil-install">
+  <span class="anvil-install-label">Install &mdash; Windows (PowerShell)</span>
+  <code>irm https://anvilhub.culpur.net/install.ps1 | iex</code>
+</div>
+<div class="anvil-install">
+  <span class="anvil-install-label">Already installed? Update in place</span>
+  <code>anvil upgrade</code>
+  <span class="anvil-install-note">SHA256 verified &bull; out-of-band checksum manifest &bull; refuses to install unverified binaries &bull; shell completions included for bash, zsh, fish, PowerShell</span>
+</div>
+
+<!-- Why Anvil -->
+<div class="anvil-new">
+  <div class="anvil-section-label">Why Anvil</div>
+  <div class="anvil-section-title">Every other tool comes with a leash</div>
+  <p style="color: var(--anvil-text-muted, #a0a8b8); font-size: 1.05rem; line-height: 1.7; max-width: 780px; margin: 0 auto 2.5rem; text-align: center;">Other AI coding assistants lock you to one vendor&rsquo;s pipes &mdash; one provider, one pricing model, one set of rate limits. Your code, your data, your costs all flow through infrastructure you don&rsquo;t control.<br><br><strong style="color: var(--anvil-text, #e8ebf0);">Anvil is the inverse.</strong> Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch freely mid-conversation. When one hits a rate limit, fall over to the next. When the provider does something you don&rsquo;t like, leave.</p>
+  <div class="anvil-new-grid">
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128273;</span>
+      <h4>Your Providers</h4>
+      <p>Anthropic, OpenAI, Google, xAI, Ollama local, or Ollama Cloud. Configure priority chains. Automatic failover when one throttles. Never locked in.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128274;</span>
+      <h4>Your Credentials</h4>
+      <p>AES-256-GCM encrypted vault with Argon2id KDF. 21 credential types. Nothing touches disk unencrypted. Per-project scopes.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128737;</span>
+      <h4>Your Data</h4>
+      <p>Single binary. Zero telemetry. Local Ollama support. Run air-gapped. Your prompts and code never leave your machine unless you send them.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128176;</span>
+      <h4>Your Cost</h4>
+      <p>Per-provider budgets. Per-session tracking. Hard caps. See every token&rsquo;s cost before you spend it. Zero-cost inference with Ollama.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128225;</span>
+      <h4>Your Access</h4>
+      <p>Type <code>/remote-control</code> and hand any session to any browser. 6-digit pairing. Full bidirectional control. Code from your phone.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#127969;</span>
+      <h4>Your Deployment</h4>
+      <p>Run on your laptop. Run on a server. Share a session across devices. Nothing to install on the browser side. Your infrastructure, your rules.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Who this is for -->
+<div class="anvil-features">
+  <div class="anvil-section-label">Who it&rsquo;s for</div>
+  <div class="anvil-section-title">Built for people who want to own their workflow</div>
+  <div class="anvil-features-grid">
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128100;</span>
+      <h3>Privacy-conscious developers</h3>
+      <p>You don&rsquo;t want every prompt going to a cloud API &mdash; and you can&rsquo;t afford a $50K local-inference stack. Ollama plus Anvil is the answer.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128188;</span>
+      <h3>Consultants &amp; contractors</h3>
+      <p>You juggle credentials across clients and need isolation between projects. Anvil&rsquo;s vault + per-tab sandboxing solves it.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#127757;</span>
+      <h3>Open-source maintainers</h3>
+      <p>You&rsquo;re tired of single-provider lock-in and pricing changes. Own your keys, own your models, switch when you want.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128101;</span>
+      <h3>Small teams</h3>
+      <p>You want deployment choice. Cloud providers, local Ollama, or a mix. Per-tab policy lets each engineer pick what fits the task.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Live Remote Control -->
+<div class="anvil-new">
+  <div class="anvil-section-label">Signature Feature</div>
+  <div class="anvil-section-title">Live Remote Control</div>
+  <p style="color: var(--anvil-text-muted, #a0a8b8); font-size: 1.05rem; line-height: 1.7; max-width: 780px; margin: 0 auto 2.5rem; text-align: center;"><strong style="color: var(--anvil-text, #e8ebf0);">No other AI coding assistant does this.</strong> Type <code>/remote-control</code> in your terminal. Open the generated URL on your phone, your tablet, a colleague&rsquo;s laptop. Enter the 6-digit code. Both sides have full control.</p>
+  <div class="anvil-new-grid">
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128241;</span>
+      <h4>Full bidirectional control</h4>
+      <p>Type messages, run commands, manage tabs from any device. Not a transcript &mdash; a live session.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#9889;</span>
+      <h4>Real-time streaming</h4>
+      <p>See AI responses token-by-token in the browser. WebSocket relay with automatic reconnection.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#9881;</span>
+      <h4>Configure from the browser</h4>
+      <p>Swap providers, change models, manage credentials &mdash; 17 config panels with full parity to the TUI.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128272;</span>
+      <h4>Encrypted pairing</h4>
+      <p>6-digit secure pairing code. Encrypted relay. Your session is yours.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Parallel Work + Transparent Tools (NEW v2.2.12 section) -->
+<div class="anvil-new">
+  <div class="anvil-section-label">New in [anvil_version]</div>
+  <div class="anvil-section-title">Parallel work, transparent tools</div>
+  <p style="color: var(--anvil-text-muted, #a0a8b8); font-size: 1.05rem; line-height: 1.7; max-width: 780px; margin: 0 auto 2.5rem; text-align: center;">The app gets out of your way. Fire prompts in multiple tabs simultaneously. See exactly what the model is doing as it does it. Open a terminal to your server right next to your AI session.</p>
+  <div class="anvil-new-grid">
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#9889;</span>
+      <h4>Per-tab parallel inference</h4>
+      <p>Each tab owns its own runtime and runs turns concurrently. Fire a prompt in tab 1, switch to tab 2, fire another &mdash; both stream at the same time. The entire app was serialized on one runtime before this. Not anymore.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128270;</span>
+      <h4>Tool-call cards</h4>
+      <p>Every Glob, Grep, Read, Write, Bash, WebSearch, and MCP call renders a bordered card showing the actual input &mdash; pattern, path, command &mdash; the moment it fires. Ctrl+O expands to full JSON and result. No more black box.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128187;</span>
+      <h4>SSH tabs</h4>
+      <p><code>/ssh host</code> opens a modal connection form with russh backend and vt100 rendering. Ctrl+B prefix keys (tmux-style). Saved connections go into the encrypted vault. An AI session and a live terminal, side by side.</p>
+    </div>
+    <div class="anvil-new-item">
+      <span class="anvil-new-item-icon">&#128065;</span>
+      <h4>Interactive throughout streaming</h4>
+      <p>Ctrl+T, tab switching, <code>/ssh</code>, and cross-tab prompts all respond immediately during inference. The TUI is live. You never wait for the model to finish before the app responds to you.</p>
+    </div>
+  </div>
+</div>
+
+<!-- AI Providers -->
+<div class="anvil-providers">
+  <div class="anvil-section-label">Models</div>
+  <div class="anvil-section-title">Six providers, one terminal</div>
+  <div class="anvil-provider-grid">
+    <div class="anvil-provider-card">
+      <h4>Anthropic</h4>
+      <p>claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 &mdash; full model family with OAuth and API key support.</p>
+    </div>
+    <div class="anvil-provider-card">
+      <h4>OpenAI</h4>
+      <p>GPT-5, o3, o4-mini &mdash; all current OpenAI models. Bring your own key.</p>
+    </div>
+    <div class="anvil-provider-card">
+      <h4>Google Gemini</h4>
+      <p>Gemini 2.5 Pro, Flash &mdash; via OpenAI-compatible endpoint.</p>
+    </div>
+    <div class="anvil-provider-card featured">
+      <span class="provider-tag">Recommended</span>
+      <h4>Ollama (Local)</h4>
+      <p>Run any model locally &mdash; Llama, Qwen, Mistral, DeepSeek, Phi. Zero cost, full privacy, air-gap ready. Hardware-aware tuning built in.</p>
+    </div>
+    <div class="anvil-provider-card">
+      <h4>xAI Grok</h4>
+      <p>Grok-3, Grok-3-mini &mdash; xAI&rsquo;s latest models with competitive pricing.</p>
+    </div>
+    <div class="anvil-provider-card">
+      <h4>Ollama Cloud</h4>
+      <p>kimi-k2.6:cloud, gpt-oss:120b-cloud &mdash; routed through the local Ollama daemon via ed25519 device key. No separate account; your daemon handles auth.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Capabilities -->
+<div class="anvil-features">
+  <div class="anvil-section-label">Also in the box</div>
+  <div class="anvil-section-title">Everything you expect, none of the lock-in</div>
+  <div class="anvil-features-grid">
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128268;</span>
+      <h3>MCP integration</h3>
+      <p>Full Model Context Protocol support. Auto-discover MCP tools at startup. <code>/mcp list</code> for live status. Plug in any MCP server.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#127760;</span>
+      <h3>Per-tab parallel inference</h3>
+      <p>Each tab is an independent runtime &mdash; own model, own provider, own conversation. Fire prompts concurrently. Tab bar shows unread and pending-permission markers live.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128187;</span>
+      <h3>SSH tabs</h3>
+      <p><code>/ssh host</code> opens a vt100 terminal tab via russh, right next to your AI sessions. Connections saved to the encrypted vault as named aliases.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#9881;</span>
+      <h3>[anvil_commands] slash commands</h3>
+      <p>Deep hierarchical autocomplete. <code>/vault</code>, <code>/mcp</code>, <code>/fork</code>, <code>/share</code>, <code>/daily</code>, <code>/ollama</code> &mdash; full palette for AI-assisted development.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#127912;</span>
+      <h3>37-widget status line</h3>
+      <p>16 presets. Interactive visual editor in TUI and web. Drag-and-drop. Per-widget category colors. Build your perfect status bar.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#129302;</span>
+      <h3>7 agent types</h3>
+      <p>Multi-agent orchestration for complex workflows. Spawn background agents, track progress, review output &mdash; with a reviewer-agent approval gate.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128230;</span>
+      <h3>AnvilHub marketplace</h3>
+      <p>Skills, plugins, agents, and themes. Install from the TUI or the web viewer. Free to use, free to contribute.</p>
+    </div>
+    <div class="anvil-feature-card">
+      <span class="anvil-feature-icon">&#128293;</span>
+      <h3>[anvil_version] &mdash; Parallel and Transparent</h3>
+      <p>Per-tab parallel inference. Tool-call cards with Ctrl+O expand. SSH tabs. Mid-turn TUI responsiveness. Session continuity fixes. Scrollback correctness. First-run wizard. anvil(1) manpage. 318 tests passing, ~22&nbsp;MB binary.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Platforms / Availability -->
+<div class="anvil-platforms">
+  <div class="anvil-section-label">Downloads</div>
+  <div class="anvil-section-title">Every platform. No account. No sign-in.</div>
+  <div class="anvil-platform-list">
+    <a href="https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-apple-darwin" class="anvil-platform-pill">macOS ARM64 (Apple Silicon)</a>
+    <a href="https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-apple-darwin" class="anvil-platform-pill">macOS Intel (x86_64)</a>
+    <a href="https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-linux-gnu" class="anvil-platform-pill">Linux x86_64</a>
+    <a href="https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-unknown-linux-gnu" class="anvil-platform-pill">Linux ARM64</a>
+    <a href="https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-pc-windows-gnu.exe" class="anvil-platform-pill">Windows x86_64</a>
+  </div>
+</div>
+
+<!-- Bottom CTA -->
+<div class="anvil-bottom-cta">
+  <h2>Own your workflow</h2>
+  <p>One binary. Six providers. No lock-in. No telemetry. No account required. Free and open to use.</p>
+  <div class="anvil-cta-row">
+    <a class="anvil-btn-primary" href="https://github.com/culpur/anvil/releases/latest">Download [anvil_version]</a>
+    <a class="anvil-btn-secondary" href="https://anvilhub.culpur.net/about">Full Changelog</a>
+  </div>
+</div>
+
+<div class="anvil-footer-note">
+  Built by <a href="https://culpur.net">Culpur Defense</a> &bull; <a href="https://anvilhub.culpur.net">AnvilHub</a> &bull; <a href="https://github.com/culpur/anvil">GitHub</a>
+</div>
+
+</div>

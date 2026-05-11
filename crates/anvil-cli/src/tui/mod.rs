@@ -23,7 +23,8 @@ pub(super) mod input_handler;
 
 // ─── Public re-exports ────────────────────────────────────────────────────────
 
-pub use state::{TuiEvent, TuiSender};
+pub use state::{InFlightInterruption, TaggedTuiEvent, TuiEvent, TuiSender};
+pub(super) use state::{PermissionReply, PendingPermission};
 pub use configure_types::{ConfigureAction, ConfigureData};
 pub use widgets::init_ollama_model_cache;
 
@@ -92,8 +93,9 @@ pub struct AnvilTui {
     pub(super) tabs: Vec<Tab>,
     /// Index into `tabs` of the currently visible tab.
     pub(super) active_tab: usize,
-    /// Channel receiver from the model/tool pipeline.
-    pub(super) rx: Receiver<TuiEvent>,
+    /// Channel receiver from the model/tool pipeline.  Each message is a
+    /// `TaggedTuiEvent` carrying the `tab_id` of the runtime that sent it.
+    pub(super) rx: Receiver<TaggedTuiEvent>,
     /// True once /exit or Ctrl+D has been issued.
     pub(super) exiting: bool,
     /// Current git branch name (empty if not in a git repo).
@@ -163,6 +165,14 @@ pub struct AnvilTui {
     /// caller can fire it as the next prompt without going back through
     /// `read_input`.
     pub(super) pending_submit: Option<String>,
+    /// Auto-fire queue for held drafts that should bypass the input box and
+    /// submit directly on the next `read_input` poll. Used by the in-flight
+    /// turn handler to route slash commands like `/ssh` straight to dispatch
+    /// instead of stashing them back in the input box (where they'd require a
+    /// second Enter from the user, and where the previous behavior risked
+    /// them being submitted as a chat message if cleared+retyped). Drained
+    /// at the top of every `read_input` call.
+    pub(super) pending_auto_submit: Option<String>,
     /// T5-Ssh-D: true for exactly one key cycle after the user presses
     /// Ctrl+B in an SSH tab. The NEXT key consumed will be interpreted as an
     /// escape command (digit → tab switch, 'q' → close SSH tab) rather than
@@ -171,6 +181,32 @@ pub struct AnvilTui {
     /// T5-Ssh-E: active SSH connection form overlay. `Some` while the modal
     /// is open; `None` otherwise.
     pub(super) ssh_form: Option<ssh_form::SshFormState>,
+    /// Clickable-tab geometry recorded by the draw loop. The input handler
+    /// looks this up on a mouse Down(Left) event to decide whether the click
+    /// landed on a tab label (switch) or its close glyph (close).
+    pub(super) tab_hits: Vec<TabHit>,
+    /// Terminal row of the tab bar (always 0 in current layout, but recorded
+    /// explicitly so a future header reshuffle won't silently break clicks).
+    pub(super) tab_bar_row: u16,
+    /// Bug-3 Commit 4: pending permission requests from worker threads.
+    ///
+    /// Keyed by logical `tab_id`.  The worker for that tab is blocked on
+    /// the `response_tx` channel inside the `PendingPermission`.  The TUI
+    /// shows a modal when the user is on that tab; for background tabs the
+    /// tab bar shows a ⚠ marker until the user switches and approves/denies.
+    pub(super) pending_permissions: std::collections::HashMap<usize, PendingPermission>,
+}
+
+/// One clickable region on the tab bar.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TabHit {
+    pub idx: usize,
+    /// Inclusive start column (label first character).
+    pub label_start: u16,
+    /// Exclusive end column (one past the label's last character).
+    pub label_end: u16,
+    /// Column of the `×` close glyph, or `None` when only one tab is open.
+    pub close_col: Option<u16>,
 }
 
 impl AnvilTui {
@@ -189,12 +225,25 @@ impl AnvilTui {
         // Shift+Drag pass-through only worked on iTerm2/Windows Terminal/Linux
         // VTEs, never on macOS Terminal.app.
         //
-        // Users who want mouse-wheel scrolling in chat / configure overlay can
-        // opt back in with ANVIL_TUI_MOUSE=1.
-        let mouse_capture = std::env::var("ANVIL_TUI_MOUSE")
-            .ok()
-            .as_deref()
-            .map_or(false, |v| matches!(v, "1" | "true" | "yes" | "on"));
+        // Mouse capture is ON by default (enables clickable tabs + wheel-scroll).
+        // Resolution order:
+        //   1. ANVIL_TUI_MOUSE env var (if set, wins)
+        //   2. ~/.anvil/config.json "tui_mouse_capture" (set by the first-run wizard)
+        //   3. default ON
+        // Native drag-select still works because we pass Shift+Drag through to the
+        // terminal.
+        let mouse_capture = match std::env::var("ANVIL_TUI_MOUSE").ok() {
+            Some(v) => !matches!(v.as_str(), "0" | "false" | "no" | "off"),
+            None => {
+                // Try config.json.
+                let from_config = dirs_next::home_dir()
+                    .map(|h| h.join(".anvil").join("config.json"))
+                    .and_then(|p| std::fs::read_to_string(p).ok())
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| v.get("tui_mouse_capture").and_then(|b| b.as_bool()));
+                from_config.unwrap_or(true)
+            }
+        };
         if mouse_capture {
             crossterm::execute!(
                 stdout,
@@ -212,7 +261,7 @@ impl AnvilTui {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
-        let (tx, rx) = mpsc::sync_channel::<TuiEvent>(512);
+        let (tx, rx) = mpsc::sync_channel::<TaggedTuiEvent>(512);
 
         let model_str: String = model.into();
         let session_id_str: String = session_id.into();
@@ -274,8 +323,13 @@ impl AnvilTui {
                 pending_submit: None,
                 ssh_escape_pending: false,
                 ssh_form: None,
+                pending_auto_submit: None,
+                tab_hits: Vec::new(),
+                tab_bar_row: 0,
+                pending_permissions: std::collections::HashMap::new(),
             },
-            TuiSender(tx),
+            // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
+            TuiSender::new(tx, 1),
         ))
     }
 
@@ -302,6 +356,7 @@ impl AnvilTui {
         tab.last_snapshot = None;
         tab.log_len_at_snapshot = None;
         tab.scrollback = crate::tui::scrollback::ScrollbackBuffer::new();
+        tab.scrollback_pending_lines = 0;
         tab.scrollback_state = crate::tui::scrollback::ScrollbackState::live();
         tab.input_tokens = 0;
         tab.output_tokens = 0;
@@ -320,6 +375,7 @@ impl AnvilTui {
             tab.last_snapshot = None;
             tab.log_len_at_snapshot = None;
             tab.scrollback = crate::tui::scrollback::ScrollbackBuffer::new();
+            tab.scrollback_pending_lines = 0;
             tab.scrollback_state = crate::tui::scrollback::ScrollbackState::live();
             tab.input_tokens = 0;
             tab.output_tokens = 0;
@@ -334,6 +390,21 @@ impl AnvilTui {
         let tab = Tab::new(id, name, model, session_id);
         self.tabs.push(tab);
         self.tabs.len() - 1
+    }
+
+    /// Return the tab-id (`Tab::id`) for the tab at a 0-based index.
+    pub fn tab_id_at(&self, index: usize) -> Option<usize> {
+        self.tabs.get(index).map(|t| t.id)
+    }
+
+    /// Mark the tab at a 0-based index as having a runtime installed.
+    ///
+    /// Called from `run_repl_tui` after `push_tab_runtime` succeeds for a new
+    /// tab, and once at startup to stamp the bootstrap tab.
+    pub fn mark_tab_has_runtime(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.has_runtime = true;
+        }
     }
 
     /// Switch to the tab at 0-based index.  Clears the unread marker on the target.
@@ -457,6 +528,14 @@ impl AnvilTui {
         tab.input = s;
     }
 
+    /// Queue a line to be auto-submitted on the next `read_input` poll,
+    /// bypassing the input box. Used when the previous turn held a slash
+    /// command that the user clearly meant to EXECUTE (e.g. `/ssh` typed
+    /// during streaming) rather than enqueue as a draft chat message.
+    pub fn set_pending_submission(&mut self, text: impl Into<String>) {
+        self.pending_auto_submit = Some(text.into());
+    }
+
     // ─── Redraw scheduler API ────────────────────────────────────────────────
 
     /// Mark one or more dirty regions, deferring the actual paint until the
@@ -500,23 +579,63 @@ impl AnvilTui {
             let theme = self.theme.clone();
             let tab = self.active_tab_mut();
             // Build the full set of plain-text lines from log + pending.
-            let log_plain: Vec<String> = tab
-                .log
+            // Scrollback population strategy:
+            //
+            // The challenge is that pending_text grows incrementally as text
+            // streams in (each TextDelta is a chunk like "#", " Anvil", etc.),
+            // and even the LAST `log` entry can still mutate (a ToolCall card's
+            // detail/result fields update as tool events arrive). Naively
+            // appending lines as they arrive caches early prefixes like "#"
+            // forever, which is what users saw as truncated text in
+            // HISTORICAL VIEW.
+            //
+            // Strategy:
+            //   - Treat all but the last log entry as STABLE (append-only).
+            //   - Treat the last log entry + pending_text as MUTABLE (re-render
+            //     every draw by popping and re-pushing the tail).
+            //   - The `scrollback_pending_lines` count tracks how many lines
+            //     at the back came from the mutable region so we can pop them.
+            //
+            // For long sessions this still amortises well: only the last entry
+            // and pending text re-render each frame, not the full log.
+            tab.scrollback.pop_back_n(tab.scrollback_pending_lines);
+            tab.scrollback_pending_lines = 0;
+
+            // Render the stable part of the log (all but the last entry) and
+            // append any new lines past what's already cached. We compute the
+            // stable line iterator lazily so we don't re-render every prior
+            // entry per frame — `skip(already)` consumes without allocating.
+            let stable_end = tab.log.len().saturating_sub(1);
+            let stable_already = tab.scrollback.len();
+            let new_stable_lines: Vec<String> = tab.log[..stable_end]
                 .iter()
                 .flat_map(|entry| {
                     entry.to_lines(approx_width, &theme).into_iter().map(|line| {
                         line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
                     })
                 })
+                .skip(stable_already)
                 .collect();
-            let pending_plain: Vec<String> =
-                tab.pending_text.lines().map(|l| strip_ansi(l)).collect();
-            let expected = log_plain.len() + pending_plain.len();
-            if tab.scrollback.len() < expected {
-                let already = tab.scrollback.len();
-                for line in log_plain.into_iter().chain(pending_plain).skip(already) {
-                    tab.scrollback.push(line);
+            for line in new_stable_lines {
+                tab.scrollback.push(line);
+            }
+
+            // Render the mutable region (last log entry + pending text) and
+            // push it onto the back. Next draw will pop these and re-render.
+            let mut mutable_lines: Vec<String> = Vec::new();
+            if let Some(last_entry) = tab.log.last() {
+                for line in last_entry.to_lines(approx_width, &theme) {
+                    let plain: String =
+                        line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    mutable_lines.push(plain);
                 }
+            }
+            for raw_line in tab.pending_text.lines() {
+                mutable_lines.push(strip_ansi(raw_line));
+            }
+            for line in mutable_lines {
+                tab.scrollback.push(line);
+                tab.scrollback_pending_lines += 1;
             }
         }
 
@@ -564,13 +683,24 @@ impl AnvilTui {
                 vp.offset(total, POPUP_BODY_HEIGHT);
         }
         let completion_view_offset = self.active_tab().completion.view_offset;
-        // Snapshot tab bar state.
-        let tab_infos: Vec<(usize, String, bool, bool)> = self
+        // Snapshot tab bar state.  The 5th bool is `has_pending_permission`
+        // (Bug-3 Commit 4) — true when a worker on that tab is blocked
+        // waiting for the user to approve/deny a tool.
+        let tab_infos: Vec<(usize, String, bool, bool, bool)> = self
             .tabs
             .iter()
             .enumerate()
-            .map(|(i, t)| (t.id, t.name.clone(), i == self.active_tab, t.has_unread))
+            .map(|(i, t)| {
+                let has_perm = self.pending_permissions.contains_key(&t.id);
+                (t.id, t.name.clone(), i == self.active_tab, t.has_unread, has_perm)
+            })
             .collect();
+        // Snapshot the active tab's pending permission modal data (if any).
+        let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
+        let active_permission_modal: Option<(String, String, String, String)> =
+            self.pending_permissions.get(&active_tab_id).map(|p| {
+                (p.tool_name.clone(), p.required_mode.clone(), p.current_mode.clone(), p.input_summary.clone())
+            });
         let git_branch = self.git_branch.clone();
         let git_diff_stats = self.git_diff_stats.clone();
         let permission_mode = self.permission_mode.clone();
@@ -742,6 +872,13 @@ impl AnvilTui {
             }
         };
         let is_ssh_tab = ssh_screen.is_some();
+        // Click-to-switch tab geometry — populated by the draw closure as it
+        // builds the tab-bar spans, then copied back to self.tab_hits after
+        // the closure returns. We can't borrow self mutably inside draw() so
+        // we collect into a local first.
+        let mut new_tab_hits: Vec<TabHit> = Vec::new();
+        let mut new_tab_bar_row: u16 = 0;
+        let can_close_tab = self.tabs.len() > 1;
         // T5-Ssh-E: pre-snapshot the SSH form state so the draw closure can
         // render it without borrowing self. SshFormState is cloned here;
         // mutations (from handle_key) happen on self.ssh_form, not on this copy.
@@ -756,6 +893,7 @@ impl AnvilTui {
             copy.alias = f.alias.clone();
             copy.focused = f.focused;
             copy.error = f.error.clone();
+            copy.picker = f.picker.clone();
             copy
         });
 
@@ -822,15 +960,27 @@ impl AnvilTui {
                 .split(header_area);
             let tab_bar_area = header_rows[0];
             let model_bar_area = header_rows[1];
+            new_tab_bar_row = tab_bar_area.y;
 
             // ── tab bar (row 0) ──────────────────────────────────────────────
+            // Layout: " [id: name]  ×  [id: name]  ×  …   <right-aligned hint>"
+            // We record the column ranges as we go so the input handler can
+            // dispatch clicks to switch_tab / close_active_tab(idx).
             let mut tab_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-            for (tab_id, tab_name, is_active, has_unread) in &tab_infos {
-                let label = if *has_unread {
+            let mut cursor_col: u16 = tab_bar_area.x + 1; // matches the leading space
+            for (idx, (tab_id, tab_name, is_active, has_unread, has_perm)) in tab_infos.iter().enumerate() {
+                let label = if *has_unread && *has_perm {
+                    format!("[{tab_id}: {tab_name}*⚠]")
+                } else if *has_unread {
                     format!("[{tab_id}: {tab_name}*]")
+                } else if *has_perm {
+                    format!("[{tab_id}: {tab_name}⚠]")
                 } else {
                     format!("[{tab_id}: {tab_name}]")
                 };
+                let label_len = label.chars().count() as u16;
+                let label_start = cursor_col;
+                let label_end = cursor_col + label_len;
                 let style = if *is_active {
                     Style::default()
                         .fg(rgb(theme.accent))
@@ -841,11 +991,35 @@ impl AnvilTui {
                         .add_modifier(Modifier::DIM)
                 };
                 tab_spans.push(Span::styled(label, style));
-                tab_spans.push(Span::raw(" "));
+                cursor_col = label_end;
+                // Close glyph " × " (only when more than one tab is open).
+                let close_col = if can_close_tab {
+                    let col = cursor_col + 1; // after one space
+                    tab_spans.push(Span::raw(" "));
+                    tab_spans.push(Span::styled(
+                        "×",
+                        Style::default()
+                            .fg(rgb(theme.border))
+                            .add_modifier(Modifier::DIM),
+                    ));
+                    tab_spans.push(Span::raw(" "));
+                    cursor_col += 3; // " × "
+                    Some(col)
+                } else {
+                    tab_spans.push(Span::raw(" "));
+                    cursor_col += 1;
+                    None
+                };
+                new_tab_hits.push(TabHit {
+                    idx,
+                    label_start,
+                    label_end,
+                    close_col,
+                });
             }
             // Hint on the right side of the tab bar
             let hint = Span::styled(
-                "Ctrl+T new  Ctrl+W close  Ctrl+←/→ switch",
+                "F2/F3 switch  Ctrl+T new  Ctrl+W close  /help nav",
                 Style::default().fg(rgb(theme.border)),
             );
             let tab_bar_left_len: usize = tab_spans.iter().map(|s| s.content.chars().count()).sum();
@@ -1406,7 +1580,80 @@ impl AnvilTui {
             if let Some(ref form) = ssh_form_snapshot {
                 form.render(frame, size);
             }
+
+            // Bug-3 Commit 4: render permission approval modal when the
+            // active tab has a pending request.  The modal sits on top of
+            // everything else (including the SSH form, though in practice
+            // both can't be open simultaneously on the same tab).
+            if let Some((ref tool_name, ref req_mode, ref cur_mode, ref input_summary)) = active_permission_modal {
+                use ratatui::widgets::{Block, Borders, Clear};
+                use ratatui::text::Text as RatText;
+
+                let modal_w = (size.width.saturating_sub(8)).min(72);
+                let modal_h = 10u16;
+                let modal_x = (size.width.saturating_sub(modal_w)) / 2;
+                let modal_y = (size.height.saturating_sub(modal_h)) / 2;
+                let modal_area = ratatui::layout::Rect {
+                    x: modal_x,
+                    y: modal_y,
+                    width: modal_w,
+                    height: modal_h,
+                };
+
+                frame.render_widget(Clear, modal_area);
+
+                let inner_w = modal_w.saturating_sub(4) as usize;
+                // Truncate the input summary to fit the modal width.
+                let summary_display = if input_summary.chars().count() > inner_w {
+                    let mut s: String = input_summary.chars().take(inner_w.saturating_sub(1)).collect();
+                    s.push('…');
+                    s
+                } else {
+                    input_summary.clone()
+                };
+
+                let lines = vec![
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from(vec![
+                        Span::styled("  Tool:     ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(tool_name.clone()),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        Span::styled("  Requires: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(req_mode.clone(), Style::default().fg(Color::Yellow)),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        Span::styled("  Current:  ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(cur_mode.clone()),
+                    ]),
+                    ratatui::text::Line::from(vec![
+                        Span::styled("  Input:    ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(summary_display, Style::default().fg(Color::DarkGray)),
+                    ]),
+                    ratatui::text::Line::from(""),
+                    ratatui::text::Line::from(Span::styled(
+                        "  [y] Allow   [a] Allow Always   [n] Deny",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    ratatui::text::Line::from(""),
+                ];
+
+                let block = Block::default()
+                    .title(" Permission Required ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+
+                let paragraph = Paragraph::new(RatText::from(lines))
+                    .block(block);
+                frame.render_widget(paragraph, modal_area);
+            }
         })?;
+        // Persist clickable-tab geometry for the input handler to consult on
+        // the next mouse Down event.
+        self.tab_hits = new_tab_hits;
+        self.tab_bar_row = new_tab_bar_row;
         Ok(())
     }
 
@@ -1422,9 +1669,16 @@ impl AnvilTui {
 
     /// Drain all queued TUI events without blocking.
     fn drain_events(&mut self) {
-        while let Ok(event) = self.rx.try_recv() {
-            self.apply_tui_event(event);
+        while let Ok(tagged) = self.rx.try_recv() {
+            self.apply_tagged_event(tagged);
         }
+    }
+
+    /// Resolve a `Tab.id` (logical identifier) to its current Vec index.
+    /// Returns `None` when no tab with that id exists (e.g. it was closed
+    /// mid-stream).
+    fn tab_index_for_id(&self, tab_id: usize) -> Option<usize> {
+        self.tabs.iter().position(|t| t.id == tab_id)
     }
 
     /// Set a relay broadcast sender for forwarding TUI events to web clients.
@@ -1444,9 +1698,35 @@ impl AnvilTui {
         }
     }
 
-    fn apply_tui_event(&mut self, event: TuiEvent) {
-        // Mirror events to relay for remote viewers
-        let tab_id = self.active_tab;
+    /// Route a tagged event to the correct tab.
+    ///
+    /// The `tagged.tab_id` field carries the logical `Tab.id` of the runtime
+    /// that sent the event.  We resolve that to a Vec index via
+    /// `tab_index_for_id`; if the tab no longer exists (closed mid-stream) the
+    /// event is silently dropped.
+    ///
+    /// The relay forwarding uses `tagged.tab_id` (the logical id) so that the
+    /// remote viewer sees a stable, per-tab identifier rather than a position
+    /// in the Vec that shifts when tabs are closed.
+    ///
+    /// TODO (Commit 3): `wait_for_turn_end` currently returns on ANY
+    /// `TurnDone`; future commits will gate on `tagged.tab_id ==
+    /// active_tab_id` so background tabs don't prematurely unblock the input.
+    fn apply_tagged_event(&mut self, tagged: TaggedTuiEvent) {
+        let TaggedTuiEvent { tab_id, event } = tagged;
+
+        // Resolve tab_id → Vec index.  Drop events for closed tabs.
+        let idx = match self.tab_index_for_id(tab_id) {
+            Some(i) => i,
+            None => {
+                // Tab was closed mid-stream — drop the event silently.
+                let _ = (tab_id, event);
+                return;
+            }
+        };
+
+        // Mirror events to relay for remote viewers (using the stable logical
+        // tab_id, not the Vec index).
         match &event {
             TuiEvent::TextDelta(text) => {
                 self.relay_forward(runtime::relay::RelayMessage::TextDelta { tab_id, text: text.clone() });
@@ -1469,11 +1749,14 @@ impl AnvilTui {
                     let summary = format!(
                         "Files changed this turn: +{net_added} −{net_removed} (run /diff for full unified diff)"
                     );
-                    self.active_tab_mut().log.push(LogEntry::System(summary));
+                    self.tabs[idx].log.push(LogEntry::System(summary));
                 }
             }
             TuiEvent::ToolCallStart { name } => {
                 self.relay_forward(runtime::relay::RelayMessage::ToolStart { tab_id, name: name.clone(), detail: String::new() });
+            }
+            TuiEvent::ToolCallActive { name, detail, .. } => {
+                self.relay_forward(runtime::relay::RelayMessage::ToolStart { tab_id, name: name.clone(), detail: detail.clone() });
             }
             TuiEvent::ToolResult { name, summary, is_error } => {
                 self.relay_forward(runtime::relay::RelayMessage::ToolResult { tab_id, name: name.clone(), summary: summary.clone(), is_error: *is_error });
@@ -1492,35 +1775,58 @@ impl AnvilTui {
 
         match event {
             TuiEvent::TextDelta(text) => {
-                self.active_tab_mut().pending_text.push_str(&text);
+                self.tabs[idx].pending_text.push_str(&text);
             }
             TuiEvent::TextDone | TuiEvent::TurnDone => {
+                // flush_pending_text always operates on the active tab.
+                // When idx == active_tab this is correct.  When a background
+                // tab finishes (future commits), we'll need a
+                // flush_pending_text_for(idx) variant — tracked as a TODO.
                 self.flush_pending_text();
-                let tab = self.active_tab_mut();
+                let tab = &mut self.tabs[idx];
                 tab.think_label.clear();
                 tab.think_start = None;
             }
             TuiEvent::ToolCallStart { name } => {
                 self.flush_pending_text();
-                self.active_tab_mut().log.push(LogEntry::ToolCall {
+                self.tabs[idx].log.push(LogEntry::ToolCall {
                     name,
                     detail: String::new(),
                     done: false,
                     is_error: false,
+                    expanded: false,
+                    full_input: None,
+                    full_result: None,
                 });
             }
-            TuiEvent::ToolCallActive { name, detail } => {
-                for entry in self.active_tab_mut().log.iter_mut().rev() {
+            TuiEvent::ToolCallActive { name, detail, full_input } => {
+                self.flush_pending_text();
+                let mut found = false;
+                for entry in self.tabs[idx].log.iter_mut().rev() {
                     if let LogEntry::ToolCall {
                         name: n,
                         detail: d,
+                        full_input: fi,
                         done,
                         ..
                     } = entry
                         && *n == name && !*done {
-                            *d = detail;
+                            *d = detail.clone();
+                            *fi = Some(full_input.clone());
+                            found = true;
                             break;
                         }
+                }
+                if !found {
+                    self.tabs[idx].log.push(LogEntry::ToolCall {
+                        name,
+                        detail,
+                        done: false,
+                        is_error: false,
+                        expanded: false,
+                        full_input: Some(full_input),
+                        full_result: None,
+                    });
                 }
             }
             TuiEvent::ToolResult {
@@ -1528,46 +1834,50 @@ impl AnvilTui {
                 summary,
                 is_error,
             } => {
-                for entry in self.active_tab_mut().log.iter_mut().rev() {
+                let mut matched = false;
+                for entry in self.tabs[idx].log.iter_mut().rev() {
                     if let LogEntry::ToolCall {
                         name: n,
                         done,
                         is_error: err,
+                        full_result,
                         ..
                     } = entry
                         && *n == name && !*done {
                             *done = true;
                             *err = is_error;
+                            *full_result = Some(summary.clone());
+                            matched = true;
                             break;
                         }
                 }
-                let label = if is_error { "error" } else { "ok" };
-                // Build a meaningful one-line summary instead of the raw JSON's
-                // first character. Without this, JSON-returning tools (bash,
-                // TeamCreate, anything that returns `{"foo":...}`) all showed
-                // up as `{name} [ok]: {` — completely useless to the user.
-                let pretty = crate::format_tool::tool_result_summary(&name, &summary, is_error);
-                let pretty = truncate_str(&pretty, 200);
-                if !pretty.is_empty() {
-                    self.active_tab_mut().log.push(LogEntry::System(format!(
-                        "{name} [{label}]: {pretty}"
-                    )));
+                // Fallback: if no card existed, emit a system line so the result
+                // is never silently dropped (e.g. out-of-order tool result).
+                if !matched {
+                    let label = if is_error { "error" } else { "ok" };
+                    let pretty = crate::format_tool::tool_result_summary(&name, &summary, is_error);
+                    let pretty = truncate_str(&pretty, 200);
+                    if !pretty.is_empty() {
+                        self.tabs[idx].log.push(LogEntry::System(format!(
+                            "{name} [{label}]: {pretty}"
+                        )));
+                    }
                 }
             }
             TuiEvent::ThinkLabel(label) => {
-                let tab = self.active_tab_mut();
+                let tab = &mut self.tabs[idx];
                 if tab.think_label.is_empty() && !label.is_empty() {
                     tab.think_start = Some(Instant::now());
                 }
                 tab.think_label = label;
             }
             TuiEvent::Tokens { input, output } => {
-                let tab = self.active_tab_mut();
+                let tab = &mut self.tabs[idx];
                 tab.input_tokens = tab.input_tokens.saturating_add(input);
                 tab.output_tokens = tab.output_tokens.saturating_add(output);
             }
             TuiEvent::System(msg) => {
-                self.active_tab_mut().log.push(LogEntry::System(msg));
+                self.tabs[idx].log.push(LogEntry::System(msg));
             }
             TuiEvent::WorkspaceClear { all_tabs } => {
                 if all_tabs {
@@ -1575,6 +1885,23 @@ impl AnvilTui {
                 } else {
                     self.clear_active_tab_display();
                 }
+            }
+            // Bug-3 Commit 4: queue the permission request keyed by tab_id.
+            // The worker is already blocking on its Receiver; the TUI will
+            // show the modal when the user is on that tab and dispatch the
+            // reply via handle_key.
+            TuiEvent::PermissionRequired {
+                tool_name,
+                required_mode,
+                current_mode,
+                input_summary,
+                response_tx,
+            } => {
+                self.pending_permissions.insert(
+                    tab_id,
+                    PendingPermission { tool_name, required_mode, current_mode, input_summary, response_tx },
+                );
+                self.redraw.request(redraw::DirtyRegions::ALL);
             }
         }
     }
@@ -1653,15 +1980,17 @@ impl AnvilTui {
 
         loop {
             // ── Drain streaming events non-blocking ──
+            // TODO (Commit 3): gate TurnDone on tagged.tab_id == active_tab_id
+            // so background tab completions don't unblock the active tab's input.
             loop {
                 match self.rx.try_recv() {
-                    Ok(TuiEvent::TurnDone) => {
-                        self.apply_tui_event(TuiEvent::TurnDone);
+                    Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone) => {
+                        self.apply_tagged_event(tagged);
                         self.scroll_to_bottom();
                         self.draw()?;
                         return Ok(self.pending_submit.take());
                     }
-                    Ok(event) => self.apply_tui_event(event),
+                    Ok(tagged) => self.apply_tagged_event(tagged),
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         // T4-L: when the streaming channel disconnects without
@@ -1722,14 +2051,15 @@ impl AnvilTui {
             self.draw()?;
 
             // ── Block briefly for a streaming event ──
+            // TODO (Commit 3): gate TurnDone on tagged.tab_id == active_tab_id.
             match self.rx.recv_timeout(Duration::from_millis(80)) {
-                Ok(TuiEvent::TurnDone) => {
-                    self.apply_tui_event(TuiEvent::TurnDone);
+                Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone) => {
+                    self.apply_tagged_event(tagged);
                     self.scroll_to_bottom();
                     self.draw()?;
                     return Ok(self.pending_submit.take());
                 }
-                Ok(event) => self.apply_tui_event(event),
+                Ok(tagged) => self.apply_tagged_event(tagged),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     self.flush_pending_text();
@@ -1741,6 +2071,362 @@ impl AnvilTui {
                     self.draw()?;
                     return Ok(self.pending_submit.take());
                 }
+            }
+        }
+    }
+
+    /// Drain the TUI event channel without blocking.
+    ///
+    /// Routes each event to the correct tab via `apply_tagged_event`. Intended
+    /// to be called by the main loop each iteration so that background tabs
+    /// (whose turns the main loop is NOT actively waiting on) continue to
+    /// receive and render streaming events.
+    ///
+    /// Returns the number of events processed.
+    pub fn pump_events_nonblocking(&mut self) -> usize {
+        let mut count = 0;
+        while let Ok(tagged) = self.rx.try_recv() {
+            self.apply_tagged_event(tagged);
+            count += 1;
+        }
+        count
+    }
+
+    /// Like `wait_for_turn_end` but gates the return on a specific tab's
+    /// `TurnDone` instead of any `TurnDone`, and surfaces user actions that
+    /// should be handled by the caller rather than swallowing them.
+    ///
+    /// Background tab `TurnDone` events are processed (routed to their tab)
+    /// but do NOT cause this function to return.  Only a `TurnDone` tagged
+    /// with `target_tab_id` returns `InFlightInterruption::TurnDone`.
+    ///
+    /// Tab-switch keys, Ctrl+T, Ctrl+W, slash-command Enter, and chat-submit
+    /// Enter on an idle tab each return the corresponding `InFlightInterruption`
+    /// variant so the caller's loop can dispatch them.
+    ///
+    /// Enter pressed while the active tab IS the target (in-flight) tab
+    /// captures the draft into the tab's input for the Bug-1 "type-ahead"
+    /// path; it does not return from the wait.
+    pub fn wait_for_turn_end_for_tab(
+        &mut self,
+        target_tab_id: usize,
+    ) -> io::Result<InFlightInterruption> {
+        loop {
+            // ── Drain streaming events non-blocking ──
+            loop {
+                match self.rx.try_recv() {
+                    Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone)
+                        && tagged.tab_id == target_tab_id =>
+                    {
+                        self.apply_tagged_event(tagged);
+                        self.scroll_to_bottom();
+                        self.draw()?;
+                        return Ok(InFlightInterruption::TurnDone);
+                    }
+                    Ok(tagged) => self.apply_tagged_event(tagged),
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // Channel disconnected — treat as turn done.
+                        let had_partial = !self.active_tab().pending_text.trim().is_empty();
+                        self.flush_pending_text();
+                        {
+                            let tab = self.active_tab_mut();
+                            tab.think_label.clear();
+                            if had_partial {
+                                tab.log.push(LogEntry::System(
+                                    "↯ turn interrupted — partial response preserved above"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                        self.scroll_to_bottom();
+                        self.draw()?;
+                        return Ok(InFlightInterruption::ChannelClosed);
+                    }
+                }
+            }
+
+            // ── Poll keyboard input non-blocking ──
+            while crossterm::event::poll(Duration::from_millis(0))? {
+                match crossterm::event::read()? {
+                    crossterm::event::Event::Key(key)
+                        if matches!(
+                            key.kind,
+                            crossterm::event::KeyEventKind::Press
+                                | crossterm::event::KeyEventKind::Repeat
+                        ) =>
+                    {
+                        if let Some(interruption) =
+                            self.handle_in_flight_key_extended(key, target_tab_id)
+                        {
+                            // Draw before returning so the UI reflects the
+                            // most recent state (e.g. newly-active tab).
+                            self.draw()?;
+                            return Ok(interruption);
+                        }
+                    }
+                    crossterm::event::Event::Mouse(mouse_event) => {
+                        // Mouse clicks on tab labels should switch tabs.
+                        use crossterm::event::MouseEventKind;
+                        if matches!(
+                            mouse_event.kind,
+                            MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                        ) {
+                            let col = mouse_event.column;
+                            let row = mouse_event.row;
+                            let prev_active = self.active_tab;
+                            self.handle_mouse_tab_click(col, row);
+                            if self.active_tab != prev_active {
+                                self.draw()?;
+                                return Ok(InFlightInterruption::TabSwitched);
+                            }
+                        }
+                    }
+                    crossterm::event::Event::Paste(text) => {
+                        let cleaned = text.replace('\r', "");
+                        for ch in cleaned.chars() {
+                            self.insert_char(ch);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Frame tick + draw ──
+            {
+                let frame = self.active_tab().think_frame.wrapping_add(1);
+                self.active_tab_mut().think_frame = frame;
+            }
+            self.draw()?;
+
+            // ── Block briefly for a streaming event ──
+            match self.rx.recv_timeout(Duration::from_millis(80)) {
+                Ok(tagged)
+                    if matches!(tagged.event, TuiEvent::TurnDone)
+                        && tagged.tab_id == target_tab_id =>
+                {
+                    self.apply_tagged_event(tagged);
+                    self.scroll_to_bottom();
+                    self.draw()?;
+                    return Ok(InFlightInterruption::TurnDone);
+                }
+                Ok(tagged) => self.apply_tagged_event(tagged),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.flush_pending_text();
+                    {
+                        let tab = self.active_tab_mut();
+                        tab.think_label.clear();
+                    }
+                    self.scroll_to_bottom();
+                    self.draw()?;
+                    return Ok(InFlightInterruption::ChannelClosed);
+                }
+            }
+        }
+    }
+
+    /// Handle a key event that arrived while `wait_for_turn_end_for_tab` is
+    /// polling, returning `Some(reason)` for actions that should cause the
+    /// wait to return early, or `None` to continue waiting.
+    ///
+    /// Tab-navigation keys (F2/F3, Ctrl+Left/Right, Ctrl+1-9, Alt+1-9) switch
+    /// the TUI's active tab internally and return `TabSwitched`.
+    ///
+    /// Ctrl+T returns `OpenNewTab` (caller creates tab + runtime).
+    /// Ctrl+W returns `CloseActiveTab` (caller closes tab + updates state).
+    ///
+    /// Enter on the active-tab-is-target case: captures draft into the
+    /// tab's input buffer (Bug-1 type-ahead) and returns `None` — the wait
+    /// continues and the draft fires as the next turn after streaming ends.
+    ///
+    /// Enter on the active-tab-is-idle case: returns `SubmitChatPrompt`.
+    ///
+    /// If the trimmed buffer starts with `/`, Enter returns `SlashCommand`
+    /// regardless of which tab is active (slash commands are always immediate).
+    fn handle_in_flight_key_extended(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        target_tab_id: usize,
+    ) -> Option<InFlightInterruption> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        // ── Tab-switch and meta keys ───────────────────────────────────────
+        // These are checked first so they take priority over plain-char input.
+
+        // Ctrl+T → new tab request
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('t' | 'T'))
+        {
+            return Some(InFlightInterruption::OpenNewTab);
+        }
+
+        // Ctrl+W → close active tab request
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('w' | 'W'))
+        {
+            return Some(InFlightInterruption::CloseActiveTab);
+        }
+
+        // F2 → previous tab
+        if matches!(key.code, KeyCode::F(2)) {
+            self.prev_tab();
+            return Some(InFlightInterruption::TabSwitched);
+        }
+
+        // F3 → next tab
+        if matches!(key.code, KeyCode::F(3)) {
+            self.next_tab();
+            return Some(InFlightInterruption::TabSwitched);
+        }
+
+        // Ctrl+Left / Ctrl+[ → previous tab
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Left | KeyCode::Char('['))
+        {
+            self.prev_tab();
+            return Some(InFlightInterruption::TabSwitched);
+        }
+
+        // Ctrl+Right / Ctrl+] → next tab
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Right | KeyCode::Char(']'))
+        {
+            self.next_tab();
+            return Some(InFlightInterruption::TabSwitched);
+        }
+
+        // Ctrl+digit (1-9) → switch to tab by index
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char(ch) = key.code {
+                if ch.is_ascii_digit() && ch != '0' {
+                    let n = ch as usize - '0' as usize;
+                    self.switch_tab(n.saturating_sub(1));
+                    return Some(InFlightInterruption::TabSwitched);
+                }
+            }
+        }
+
+        // Alt+digit (1-9) → switch to tab by index
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            if let KeyCode::Char(ch) = key.code {
+                if let Some(n) = ch.to_digit(10) {
+                    if n >= 1 {
+                        self.switch_tab((n as usize).saturating_sub(1));
+                        return Some(InFlightInterruption::TabSwitched);
+                    }
+                }
+            }
+        }
+
+        // ── Enter key ─────────────────────────────────────────────────────
+        // Behaviour depends on whether the active tab is the one that is
+        // in-flight (target_tab_id) or an idle tab.
+
+        if matches!(key.code, KeyCode::Enter) && !key.modifiers.contains(KeyModifiers::CONTROL) {
+            // Take out whatever was typed into the input buffer.
+            let draft = {
+                let tab = self.active_tab_mut();
+                let d = std::mem::take(&mut tab.input);
+                tab.cursor = 0;
+                d.trim().to_string()
+            };
+            self.redraw.request(redraw::DirtyRegions::INPUT);
+
+            if draft.is_empty() {
+                // Nothing to submit; keep waiting.
+                return None;
+            }
+
+            // Slash commands are always dispatched immediately, regardless of
+            // which tab is active or whether it is in-flight.
+            if draft.starts_with('/') {
+                return Some(InFlightInterruption::SlashCommand(draft));
+            }
+
+            // Determine whether the active tab is the in-flight target.
+            let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
+            if active_tab_id == target_tab_id {
+                // Active tab IS the streaming tab.  Store as pending_submit
+                // (Bug-1 type-ahead): the main loop will auto-fire it after
+                // TurnDone is received.  Don't interrupt the wait.
+                self.pending_submit = Some(draft);
+                return None;
+            }
+
+            // Active tab is idle — fire immediately as a new turn.
+            return Some(InFlightInterruption::SubmitChatPrompt(draft));
+        }
+
+        // ── Plain editing (printable chars, Backspace, Left/Right cursor) ─
+        // These are the same as handle_in_flight_key: accumulate the draft
+        // on the active tab without interrupting the wait.
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL)
+                && !m.contains(KeyModifiers::ALT) =>
+            {
+                self.insert_char(c);
+                self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            (KeyCode::Backspace, _) => {
+                let tab = self.active_tab_mut();
+                if tab.cursor > 0 {
+                    let prev = helpers::prev_char_boundary(&tab.input, tab.cursor);
+                    tab.input.replace_range(prev..tab.cursor, "");
+                    tab.cursor = prev;
+                }
+                self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            _ => {}
+        }
+
+        None
+    }
+
+    /// Flush pending streaming text for a specific tab index.
+    ///
+    /// Used when a background tab's `TurnDone` arrives — the pending text
+    /// must be flushed to that tab's log even though it is not the active tab.
+    /// For the active tab, the existing `flush_pending_text` (which operates
+    /// on `active_tab`) is still used.
+    pub(super) fn flush_pending_text_for(&mut self, idx: usize) {
+        if idx < self.tabs.len() {
+            let text = std::mem::take(&mut self.tabs[idx].pending_text);
+            if !text.trim().is_empty() {
+                self.tabs[idx].log.push(LogEntry::Assistant(text));
+            }
+        }
+    }
+
+    /// Append a system message to a specific tab's log (by Vec index).
+    ///
+    /// Used by the main loop to surface background-tab turn errors into the
+    /// correct tab's log without switching focus.
+    pub fn push_system_to_tab(&mut self, idx: usize, text: impl Into<String>) {
+        let text = text.into();
+        if !text.is_empty() && idx < self.tabs.len() {
+            self.tabs[idx].log.push(LogEntry::System(text));
+        }
+    }
+
+    /// Handle a mouse click that may have landed on a tab label in the tab bar.
+    ///
+    /// Looks up `(col, row)` against `self.tab_hits` / `self.tab_bar_row`
+    /// (geometry populated by the last `draw` call) and calls `switch_tab` if
+    /// a label hit is found.  Matching the close-column (×) is intentionally
+    /// skipped here — close during in-flight is not permitted; the caller can
+    /// handle `CloseActiveTab` via Ctrl+W.
+    pub(super) fn handle_mouse_tab_click(&mut self, col: u16, row: u16) {
+        if row != self.tab_bar_row {
+            return;
+        }
+        let hits = self.tab_hits.clone();
+        for hit in &hits {
+            if col >= hit.label_start && col < hit.label_end {
+                self.switch_tab(hit.idx);
+                self.redraw.request(redraw::DirtyRegions::ALL);
+                return;
             }
         }
     }
@@ -1895,11 +2581,11 @@ impl AnvilTui {
                     state::LogEntry::System(text) => {
                         runtime::relay::LogEntrySnapshot::System { text: text.clone() }
                     }
-                    state::LogEntry::ToolCall { name, detail, done: _, is_error } => {
+                    state::LogEntry::ToolCall { name, detail, is_error, full_result, .. } => {
                         runtime::relay::LogEntrySnapshot::ToolCall {
                             name: name.clone(),
                             detail: detail.clone(),
-                            result: None,
+                            result: full_result.clone(),
                             is_error: *is_error,
                         }
                     }
@@ -1963,6 +2649,17 @@ impl AnvilTui {
     /// Enter the interactive configure menu.  Call this when the user runs
     /// `/configure` in the TUI.  `data` is a snapshot of live config values
     /// built by the caller (`LiveCli`).
+    /// True if a modal overlay is currently active and needs the main
+    /// `read_input` loop to drive it.
+    ///
+    /// Used by the in-flight wait loop to detect that a slash command (e.g.
+    /// `/ssh`) dispatched mid-turn has opened a modal — the wait loop's key
+    /// handler can't operate modals, so the caller must break out and return
+    /// to `read_input` so the user can interact with the overlay.
+    pub fn has_active_modal(&self) -> bool {
+        self.ssh_form.is_some() || self.configure_state != ConfigureState::Inactive
+    }
+
     pub fn enter_configure_mode(&mut self, data: ConfigureData) {
         self.configure_data = data;
         self.configure_state = ConfigureState::MainMenu { selected: 0 };
