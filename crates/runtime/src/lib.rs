@@ -16,6 +16,7 @@ pub mod memory;
 pub mod nominations;
 pub mod private_memory;
 pub mod qmd;
+pub mod routines;
 pub mod search;
 pub mod task;
 pub mod team;
