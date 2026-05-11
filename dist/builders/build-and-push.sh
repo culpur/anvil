@@ -1,52 +1,51 @@
 #!/usr/bin/env bash
 #
-# Build the three Culpur-owned anvil-builder images and push to registry.culpur.net.
-# Run this on dev0001 (Linux x86_64) or any host with docker login to the registry.
+# Build the local anvil-builder images used by scripts/release.sh for BSD
+# cross-compile targets. Runs on the release host (the Mac that runs the rest
+# of release.sh) — same model as the existing anvil-builder-linux + anvil-builder-win
+# images that release.sh builds inline.
 #
-# Usage:   ./build-and-push.sh
-# Tag:     each image is tagged registry.culpur.net/culpur/anvil-builder-<target>:rust-<version>
-#          plus a :latest tag for the most recent.
+# Usage:   ./build-and-push.sh    # builds + tags locally (no push)
 #
-# Cadence: only re-run when the Rust toolchain version bumps, when a BSD sysroot
-# needs refreshing, or when the Dockerfile changes. The release.sh pipeline pulls
-# pinned :rust-<version> tags, not :latest, so day-to-day releases are independent.
+# Tag:     each image is tagged culpur/anvil-builder-<target>:test
+#          (matches the BUILDER_FREEBSD_X86_64 / BUILDER_NETBSD_X86_64 defaults
+#          in scripts/release.sh)
+#
+# Cadence: re-run when Rust toolchain bumps, when a BSD sysroot needs refreshing,
+# or when a Dockerfile changes. release.sh resolves images from the local docker
+# daemon, so no registry push is required.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 RUST_VERSION="${RUST_VERSION:-1.94}"
-REGISTRY="${REGISTRY:-registry.culpur.net/culpur}"
+TAG="${TAG:-test}"
 
+# FreeBSD ARM64 is intentionally not built — rustup ships no
+# aarch64-unknown-freebsd rust-std today. Source-only path is documented
+# in install/install.sh and release-notes.
 IMAGES=(
     "freebsd-x86_64"
-    "freebsd-aarch64"
     "netbsd-x86_64"
 )
 
-echo "Building anvil-builder images for rust-${RUST_VERSION}"
-echo "Registry: ${REGISTRY}"
+echo "Building anvil-builder images locally (rust ${RUST_VERSION}, tag :${TAG})"
 echo ""
 
 for image in "${IMAGES[@]}"; do
-    full_tag="${REGISTRY}/anvil-builder-${image}:rust-${RUST_VERSION}"
-    latest_tag="${REGISTRY}/anvil-builder-${image}:latest"
+    full_tag="culpur/anvil-builder-${image}:${TAG}"
 
-    echo "==> Building ${image}"
+    echo "==> Building ${full_tag}"
     docker buildx build \
         --platform linux/amd64 \
         --tag "${full_tag}" \
-        --tag "${latest_tag}" \
         --file "${image}.Dockerfile" \
         --load \
         .
-
-    echo "==> Pushing ${full_tag}"
-    docker push "${full_tag}"
-    docker push "${latest_tag}"
 
     echo "==> Done with ${image}"
     echo ""
 done
 
-echo "All ${#IMAGES[@]} anvil-builder images built and pushed."
+echo "All ${#IMAGES[@]} anvil-builder images built. release.sh will resolve them locally."

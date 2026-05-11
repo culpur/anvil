@@ -103,10 +103,11 @@ TARGETS=(
     "x86_64-unknown-freebsd"
     "x86_64-unknown-netbsd"
 )
-# Builder images for cross-compile BSD targets — pinned to a rust toolchain version,
-# pushed from dev0001 (see dist/builders/build-and-push.sh).
-BUILDER_RUST_VERSION="${BUILDER_RUST_VERSION:-rust-1.94}"
-BUILDER_REGISTRY="${BUILDER_REGISTRY:-registry.culpur.net/culpur}"
+# Builder images for cross-compile BSD targets — built locally from
+# dist/builders/*.Dockerfile, tagged with the local docker daemon.
+# Image names match `docker images` output; release.sh resolves them locally.
+BUILDER_FREEBSD_X86_64="${BUILDER_FREEBSD_X86_64:-culpur/anvil-builder-freebsd-x86_64:test}"
+BUILDER_NETBSD_X86_64="${BUILDER_NETBSD_X86_64:-culpur/anvil-builder-netbsd-x86_64:test}"
 OUTPUT_DIR="$PROJECT_DIR/target/release-artifacts"
 mkdir -p "$OUTPUT_DIR"
 
@@ -168,22 +169,25 @@ DOCKERFILE
     cp target/x86_64-pc-windows-gnu/release/anvil.exe "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe" | awk '{print $5}')"
 
-    # 1f. FreeBSD x86_64 (Culpur-owned builder image — Tier-2, hard fail on error)
+    # 1f. FreeBSD x86_64 (local builder image — Tier-2, hard fail on error)
     # Image source: dist/builders/freebsd-x86_64.Dockerfile (rust + FreeBSD 14.3 sysroot).
+    # Built via:  cd dist/builders && docker buildx build --platform linux/amd64 \
+    #                 -t culpur/anvil-builder-freebsd-x86_64:test \
+    #                 -f freebsd-x86_64.Dockerfile --load .
     echo "  [6/7] FreeBSD x86_64 (x86_64-unknown-freebsd)..."
     docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
-        "${BUILDER_REGISTRY}/anvil-builder-freebsd-x86_64:${BUILDER_RUST_VERSION}" \
+        "${BUILDER_FREEBSD_X86_64}" \
         cargo build --release --target x86_64-unknown-freebsd
     cp target/x86_64-unknown-freebsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd" | awk '{print $5}')"
 
-    # 1g. NetBSD x86_64 (Culpur-owned builder image — Tier-3, soft fail on error)
+    # 1g. NetBSD x86_64 (local builder image — Tier-3, soft fail on error)
     # Image source: dist/builders/netbsd-x86_64.Dockerfile (rust + NetBSD 9.3 sysroot).
     # NetBSD is Rust Tier-3; if the build breaks on a future toolchain bump,
     # users can build from source via cargo install.
     echo "  [7/7] NetBSD x86_64 (x86_64-unknown-netbsd)..."
     if docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" -w /build \
-        "${BUILDER_REGISTRY}/anvil-builder-netbsd-x86_64:${BUILDER_RUST_VERSION}" \
+        "${BUILDER_NETBSD_X86_64}" \
         cargo build --release --target x86_64-unknown-netbsd; then
         cp target/x86_64-unknown-netbsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd"
         echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd" | awk '{print $5}')"

@@ -1,14 +1,18 @@
 # culpur/anvil-builder-netbsd-x86_64
 #
-# Cross-compile Rust binaries for NetBSD x86_64 (Tier-3 target) from a Linux x86_64 host.
-# NetBSD is Tier-3 in Rust; this image may break on complex deps and the release.sh
-# pipeline treats it as soft-fail.
+# Cross-compile Rust binaries for NetBSD x86_64 (Tier-3 target) from a Linux x86_64
+# container running on the local release host. NetBSD is Tier-3 in Rust; this image
+# may break on toolchain bumps and release.sh treats it as soft-fail.
 #
-# Build: docker buildx build --platform linux/amd64 -t registry.culpur.net/culpur/anvil-builder-netbsd-x86_64:rust-1.94 -f netbsd-x86_64.Dockerfile .
-# Push:  docker push registry.culpur.net/culpur/anvil-builder-netbsd-x86_64:rust-1.94
+# Build: cd dist/builders && docker buildx build --platform linux/amd64 \
+#            -t culpur/anvil-builder-netbsd-x86_64:test \
+#            -f netbsd-x86_64.Dockerfile --load .
 # Use:   docker run --platform linux/amd64 --rm -v "$(pwd):/build" -w /build \
-#            registry.culpur.net/culpur/anvil-builder-netbsd-x86_64:rust-1.94 \
+#            culpur/anvil-builder-netbsd-x86_64:test \
 #            cargo build --release --target x86_64-unknown-netbsd
+#
+# scripts/release.sh phase 1g resolves the image from the local docker daemon
+# (BUILDER_NETBSD_X86_64 env var, defaults to culpur/anvil-builder-netbsd-x86_64:test).
 
 FROM rust:1.94-bookworm
 
