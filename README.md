@@ -77,9 +77,27 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.13
+
+**Windows is back, BSD joins, routines on disk.**
+
+### Seven platforms
+
+v2.2.13 ships native binaries for **macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, and NetBSD x86_64**. Windows returns from the v2.2.12 hold &mdash; the SSH agent code now `#[cfg(unix)]`-gates the Unix-domain-socket path, and the rest of SSH (key-file, password, keyboard-interactive) works on Windows exactly as it does on Unix. FreeBSD and NetBSD users get drop-in binaries for the first time &mdash; download, `chmod +x`, run.
+
+### Routines foundation on disk
+
+A new module sits quietly in the runtime: `crates/runtime/src/routines/`. Schedule grammar (duration / interval / cron / ISO 8601), on-disk output archive with atomic writes and 0o700 perms, and a packet schema that wraps routine output in anti-injection delimiters with a SHA-256 input hash. No user-facing command surfaces it yet &mdash; this is foundation for the v2.2.14 daemon. **63 new tests.**
+
+### Release pipeline hardening
+
+The v2.2.12 release shipped four binaries instead of five because a subprocess output filter masked the Windows build failure and a stale artifact was published. v2.2.13 removes the mask: failed cross-compiles now hard-fail before any artifact gets uploaded. Combined with v2.2.12's tag-vs-HEAD pre-flight, build-from-tagged-commit, and render-time changelog injection, partial or stale releases are no longer possible.
+
+---
+
 ## Parallel work, transparent tools
 
-**v2.2.12 rewrites how the TUI handles concurrent work.**
+**Per-tab inference, tool-call cards, and SSH terminals all live in the same window.**
 
 ### Per-tab parallel inference
 
