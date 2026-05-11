@@ -276,7 +276,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; Windows: correct `HOME` / `PATH` / `PATHEXT` handling, `.exe` on respawn, cmd.exe-aware install detection
 - &#10003; QMD cross-platform discovery &mdash; no more hard-coded Unix socket paths
 - &#10003; Ollama tool-use: multi-format parser (Anthropic, OpenAI, XML, JSON-fence, natural language) with fail-loud on ambiguity
-- &#10003; Remote-control 503 fixed &mdash; `anvil-relay-ws` now a declared pm2 app in the passage ecosystem
+- &#10003; Remote-control 503 fixed &mdash; relay WebSocket process declaration corrected
 - &#10003; Release pipeline: per-binary embedded-version audit gate &mdash; makes the v2.2.6 Windows-exe-labeled-as-2.2.1 class of bug impossible
 - &#10003; 618 tests passing, zero warnings
 
