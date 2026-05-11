@@ -6,15 +6,15 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.11-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.12-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
-[![5 Providers](https://img.shields.io/badge/5%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![6 AI Providers](https://img.shields.io/badge/6%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
 
 **Your providers. Your credentials. Your data. Your cost.**<br>
-**Five AI providers, one terminal. Switch freely. Own your workflow.**
+**Six AI providers, one terminal. Switch freely. Own your workflow.**
 
-[**Download**](https://github.com/culpur/anvil/releases/latest) &#8226; [**AnvilHub**](https://anvilhub.culpur.net) &#8226; [**Changelog**](#changelog) &#8226; [**Product Page**](https://culpur.net/anvil/)
+[**Download**](https://github.com/culpur/anvil/releases/latest) &bull; [**AnvilHub**](https://anvilhub.culpur.net) &bull; [**Changelog**](#changelog) &bull; [**Product Page**](https://culpur.net/anvil/)
 
 <br>
 </div>
@@ -23,11 +23,11 @@
 
 ## Why Anvil?
 
-Every other AI coding assistant comes with a leash. Claude Code locks you to Anthropic. Copilot locks you to GitHub. Cursor locks you to their wrapper and their pricing. Your code, your data, your costs &mdash; all flow through one vendor's pipes.
+Other AI coding assistants come with a leash. One vendor's pipe, one vendor's pricing, one vendor's rate limits — and when that vendor changes something you don't like, you're stuck. Your code, your data, your costs all flow through infrastructure you don't control.
 
-**Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between Claude, GPT, Gemini, Grok, and local models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
+**Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
 
-No account required. No telemetry. No lock-in. One 15 MB binary, zero dependencies, five providers.
+No account required. No telemetry. No lock-in. One ~22 MB binary, zero dependencies, six providers.
 
 ---
 
@@ -35,7 +35,7 @@ No account required. No telemetry. No lock-in. One 15 MB binary, zero dependenci
 
 | | |
 |---|---|
-| &#128273; **Your providers** | Anthropic, OpenAI, Google, xAI, or local Ollama. Configure priority chains. Automatic failover when one throttles. Never locked in. |
+| &#128273; **Your providers** | Anthropic, OpenAI, Google, xAI, Ollama local, or Ollama Cloud. Configure priority chains. Automatic failover when one throttles. Never locked in. |
 | &#128274; **Your credentials** | Typed credential vault &mdash; AES-256-GCM encrypted with Argon2id. API keys, SSH keys, TLS certs, TOTP codes, DB URLs. Nothing touches disk unencrypted. |
 | &#128737; **Your data** | Single binary, zero telemetry, local Ollama support. Run air-gapped. Your prompts and code never leave your machine unless you send them. |
 | &#128176; **Your cost** | Per-provider budgets. Per-session cost tracking. Hard caps. See what every token costs before you spend it. Run Ollama for zero-cost inference. |
@@ -46,7 +46,7 @@ No account required. No telemetry. No lock-in. One 15 MB binary, zero dependenci
 
 ## Who this is for
 
-- **Privacy-conscious developers** who don't want every prompt going to OpenAI or Anthropic &mdash; and can't afford a $50K local-inference stack
+- **Privacy-conscious developers** who don't want every prompt going to a cloud API &mdash; and can't afford a $50K local-inference stack
 - **Consultants and contractors** juggling credentials across clients, needing isolation between projects
 - **Open-source maintainers** tired of single-provider lock-in
 - **Teams** who want deployment choice &mdash; cloud providers, local Ollama, or a mix
@@ -69,11 +69,33 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 - **Full bidirectional control** &mdash; type messages, run commands, manage tabs from any device
 - **Real-time streaming** &mdash; see AI responses token-by-token in the browser
-- **Same 98 slash commands** as the terminal, with deep autocomplete
+- **Same slash commands** as the terminal, with deep autocomplete
 - **Configure from the browser** &mdash; swap providers, change models, manage credentials
 - **Encrypted** &mdash; secure WebSocket relay with automatic reconnection
 
 *Perfect for pair programming, teaching, demos, monitoring long-running tasks, or coding from your phone while your workstation does the heavy lifting.*
+
+---
+
+## Parallel work, transparent tools
+
+**v2.2.12 rewrites how the TUI handles concurrent work.**
+
+### Per-tab parallel inference
+
+Each tab owns its own runtime. Fire a prompt in tab 1, switch to tab 2, fire another &mdash; both stream concurrently and independently. The `*` (unread) and `&#9888;` (pending permission) markers in the tab bar update live. You navigate tabs with F2/F3, Ctrl+arrow, Alt+digit, or a click. None of it waits for a turn to finish.
+
+### Tool-call cards
+
+Every tool call &mdash; Glob, Grep, Read, Write, Edit, Bash, WebSearch, any MCP tool &mdash; renders as a bordered card showing the exact input the model sent (pattern, path, command) the moment it fires. Not a summary after the fact. Ctrl+O expands any card to the full input JSON and full result. You see exactly what the model is doing, as it's doing it.
+
+### SSH tabs
+
+`/ssh host` opens a modal connection form &mdash; host, port, user, auth method, key file, passphrase, and an alias to save the connection to your vault. The default key root is `~/.ssh`; Ctrl+F opens a bare-name key picker. Sessions run via russh with vt100 rendering and Ctrl+B prefix keys (tmux-style). An AI session and a live terminal to your server, side by side, in the same window.
+
+### Mid-turn responsiveness
+
+Ctrl+T (new tab), tab switching, `/ssh`, and submitting prompts in other tabs all respond immediately during streaming. The app is interactive throughout a turn &mdash; no waiting for the model to finish before the interface moves.
 
 ---
 
@@ -84,8 +106,7 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 brew install culpur/anvil/anvil
 
 # Or download directly
-curl -LO https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-apple-darwin
-chmod +x anvil-* && sudo mv anvil-* /usr/local/bin/anvil
+curl -fsSL https://anvilhub.culpur.net/install.sh | bash
 ```
 
 | Platform | Download |
@@ -100,15 +121,16 @@ No account. No sign-in. Download, run, configure your providers.
 
 ---
 
-## Five providers, one terminal
+## Six providers, one terminal
 
 | Provider | Models | Auth |
 |----------|--------|------|
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5 | OAuth or API Key |
+| **Anthropic** | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 | OAuth or API Key |
 | **OpenAI** | GPT-5, o3, o4-mini | API Key |
 | **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash | API Key |
 | **xAI** | Grok-3, Grok-3-mini | API Key |
 | **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma | Local &mdash; no key needed |
+| **Ollama Cloud** | kimi-k2.6:cloud, gpt-oss:120b-cloud | ed25519 device key (via local daemon) |
 
 Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Cost tracking per session. Zero-cost local inference with Ollama.
 
@@ -119,9 +141,10 @@ Configure priority chains. Automatic failover when one hits a rate limit. Per-pr
 ```bash
 anvil                               # Start interactive session
 /remote-control                     # Share via browser
-/model claude-opus-4-6              # Switch model
+/model claude-opus-4-7              # Switch model
 /provider anthropic                 # Switch provider
 /vault add                          # Store a credential
+/ssh myserver                       # Open SSH tab
 /productivity                       # Session stats
 /mcp list                           # MCP server status
 /fork experiment                    # Branch the conversation
@@ -133,7 +156,7 @@ anvil                               # Start interactive session
 
 ## Also in the box
 
-**98 slash commands.** 45 built-in tools. MCP integration. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. All of it optional. None of it required.
+**114 slash commands.** 45 built-in tools. MCP integration. Per-tab parallel inference. SSH tabs. Tool-call cards with Ctrl+O expand. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. First-run setup wizard. anvil(1) manpage. All of it optional. None of it required.
 
 Feature list is in [the changelog below](#changelog) and [anvilhub.culpur.net/about](https://anvilhub.culpur.net/about). The feature list isn't the story. The freedom is.
 
@@ -157,6 +180,24 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 ---
 
 ## Changelog
+
+### v2.2.12 &mdash; May 11, 2026
+
+**Parallel and Transparent** &mdash; the app gets out of your way.
+
+- &#10003; Per-tab parallel inference &mdash; each tab owns its own `Arc<Mutex<ConversationRuntime>>` and runs turns on dedicated worker threads; fire prompts in multiple tabs simultaneously
+- &#10003; Mid-turn TUI responsiveness &mdash; Ctrl+T, F2/F3, `/ssh`, and cross-tab submit all respond immediately during streaming; the app is interactive throughout a turn
+- &#10003; Tool-call cards &mdash; every Glob/Grep/Read/Write/Edit/Bash/WebSearch/MCP call renders a bordered card with actual input (pattern, path, command) the moment it fires; Ctrl+O expands to full JSON + result
+- &#10003; SSH tabs &mdash; `/ssh host` opens a modal connection form with russh backend, vt100 rendering, Ctrl+B prefix keys; connections saved as vault `HostCredential` aliases
+- &#10003; Tab bar markers &mdash; `*` (unread), `&#9888;` (pending permission), `&#215;` (clickable close); terminal-friendly navigation (F2/F3/Ctrl+arrow/Alt+digit/click)
+- &#10003; Session continuity &mdash; `anvil --continue` honors saved model from `.meta.json` sidecar; Ollama sessions reconnect without credential errors; exit prints resume commands
+- &#10003; Scrollback fix &mdash; HISTORICAL VIEW was showing only 1&ndash;4 chars per assistant line; pending text growth now invalidates cached scrollback line vectors
+- &#10003; `/quit` no longer deadlocks &mdash; self-recursive mutex in `record_daily` fixed
+- &#10003; First-run setup wizard &mdash; mouse capture, theme, permission mode opt-ins on first launch; `anvil setup` / `anvil --first-run` to reconfigure
+- &#10003; anvil(1) manpage ships with Homebrew installs
+- &#10003; `/clear` clears workspace context across all tabs, not just the active one
+- &#10003; Release pipeline hardening &mdash; tag-vs-HEAD pre-flight, build-from-tag, php-lint guard, changelog.json render-time injection on AnvilHub
+- &#10003; 318 tests passing, ~22 MB binary
 
 ### v2.2.11 &mdash; May 9, 2026
 
