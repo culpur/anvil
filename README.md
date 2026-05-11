@@ -7,7 +7,7 @@
 ### The only AI coding assistant that doesn't lock you in.
 
 [![Version](https://img.shields.io/badge/version-2.2.13-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
-[![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![6 AI Providers](https://img.shields.io/badge/6%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
 
@@ -27,7 +27,7 @@ Other AI coding assistants come with a leash. One vendor's pipe, one vendor's pr
 
 **Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
 
-No account required. No telemetry. No lock-in. One ~22 MB binary, zero dependencies, six providers.
+No account required. No telemetry. No lock-in. A single ~22&ndash;27 MB binary, zero dependencies, six providers, seven platforms.
 
 ---
 
@@ -116,6 +116,8 @@ curl -fsSL https://anvilhub.culpur.net/install.sh | bash
 | **Linux x86_64** | [`anvil-x86_64-unknown-linux-gnu`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-linux-gnu) |
 | **Linux ARM64** | [`anvil-aarch64-unknown-linux-gnu`](https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-unknown-linux-gnu) |
 | **Windows x86_64** | [`anvil-x86_64-pc-windows-gnu.exe`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-pc-windows-gnu.exe) |
+| **FreeBSD x86_64** | [`anvil-x86_64-unknown-freebsd`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-freebsd) |
+| **NetBSD x86_64** | [`anvil-x86_64-unknown-netbsd`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-netbsd) |
 
 No account. No sign-in. Download, run, configure your providers.
 
