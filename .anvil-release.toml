@@ -1,6 +1,6 @@
 [targets]
 anvilhub_path = "/opt/projects/anvilhub/packages/web"
-anvilhub_pm2_process = "anvilhub-web"
+anvilhub_pm2_process = "anvilhub"
 culpur_wp_page_id = 619
 culpur_wp_slug = "anvil"
 
@@ -14,5 +14,5 @@ anvilhub_files = [
 ]
 
 [wordpress]
-shortcode_file = "/var/www/html/wp-content/mu-plugins/culpur-hardening.php"
+shortcode_file = "/data/compose/4/v1/wp-content/mu-plugins/culpur-hardening.php"
 shortcode_name = "anvil_version"
