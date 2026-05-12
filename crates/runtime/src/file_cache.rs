@@ -431,6 +431,45 @@ impl FileCacheManager {
 }
 
 // ---------------------------------------------------------------------------
+// Best-effort wiring helpers
+// ---------------------------------------------------------------------------
+
+/// Best-effort cache touch — silently swallows all errors. Used from
+/// file_ops on the hot read/write/edit paths so a busted cache directory
+/// can never break a tool call. The caller passes a project root; the
+/// cache lives under `~/.anvil/projects/<hash>/file-cache/`.
+///
+/// Strategy:
+///   - If the file already has an entry whose mtime+size are unchanged,
+///     just increment `access_count` via `touch`.
+///   - Otherwise re-`store` it (preserving any existing access_count).
+///
+/// Errors are intentionally ignored — the file_cache is purely advisory.
+pub fn refresh_entry_best_effort(project_root: &Path, file_path: &Path) {
+    let manager = match FileCacheManager::new(project_root.to_path_buf()) {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+    match manager.lookup(file_path) {
+        Ok(Some(_)) => {
+            let _ = manager.touch(file_path);
+        }
+        Ok(None) => {
+            let _ = manager.store(file_path, None, Vec::new());
+        }
+        Err(_) => {}
+    }
+}
+
+/// Best-effort cache invalidation — used after a destructive op (delete,
+/// move out from under us). Silent on error.
+pub fn forget_entry_best_effort(project_root: &Path, file_path: &Path) {
+    if let Ok(manager) = FileCacheManager::new(project_root.to_path_buf()) {
+        let _ = manager.forget(file_path);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // System-prompt injection
 // ---------------------------------------------------------------------------
 
@@ -578,7 +617,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_known_files_block, detect_language, truncate_to, FileCacheEntry, FileCacheManager,
+        build_known_files_block, detect_language, forget_entry_best_effort,
+        refresh_entry_best_effort, truncate_to, FileCacheEntry, FileCacheManager,
         LARGE_FILE_THRESHOLD_BYTES, MAX_KEY_SYMBOLS, MAX_SUMMARY_LEN,
     };
 
@@ -972,6 +1012,55 @@ mod tests {
             fake_large.sha256.is_empty(),
             "large-file entries must have empty sha256"
         );
+    }
+
+    // ── 11. refresh_entry_best_effort populates a missing entry ───────────────
+
+    #[test]
+    fn refresh_entry_best_effort_stores_missing_entry() {
+        let proj = tmp_project();
+        let mgr = make_manager(&proj);
+        let file = proj.path().join("freshly_seen.txt");
+        write_file(&file, "hello world");
+
+        // First refresh: no entry exists → store path.
+        refresh_entry_best_effort(proj.path(), &file);
+        let hit = mgr.lookup(&file).expect("lookup").expect("entry");
+        assert_eq!(hit.access_count, 0, "store doesn't bump access");
+
+        // Second refresh: entry exists & matches → touch path.
+        refresh_entry_best_effort(proj.path(), &file);
+        let hit2 = mgr.lookup(&file).expect("lookup").expect("entry");
+        assert_eq!(hit2.access_count, 1, "touch increments access_count");
+    }
+
+    // ── 12. refresh_entry_best_effort never panics on bad input ───────────────
+
+    #[test]
+    fn refresh_entry_best_effort_silent_on_missing_file() {
+        let proj = tmp_project();
+        let nowhere = proj.path().join("does_not_exist.txt");
+        // Must not panic and must not produce an entry.
+        refresh_entry_best_effort(proj.path(), &nowhere);
+        let mgr = make_manager(&proj);
+        let result = mgr.lookup(&nowhere).expect("lookup");
+        assert!(result.is_none());
+    }
+
+    // ── 13. forget_entry_best_effort removes the entry ────────────────────────
+
+    #[test]
+    fn forget_entry_best_effort_removes_existing_entry() {
+        let proj = tmp_project();
+        let mgr = make_manager(&proj);
+        let file = proj.path().join("about_to_be_forgotten.txt");
+        write_file(&file, "bye");
+
+        mgr.store(&file, None, vec![]).expect("store");
+        assert!(mgr.lookup(&file).expect("lookup").is_some());
+
+        forget_entry_best_effort(proj.path(), &file);
+        assert!(mgr.lookup(&file).expect("lookup").is_none());
     }
 
     // ── 18. system_prompt_injection_only_includes_entries_with_summary ────────

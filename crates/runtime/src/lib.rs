@@ -171,9 +171,9 @@ pub use requirements::{
     validate as validate_requirements, PolicyViolation, RequirementsPolicy,
 };
 pub use file_cache::{
-    build_known_files_block, FileCacheEntry, FileCacheError, FileCacheManager, FileCacheStats,
-    LARGE_FILE_THRESHOLD_BYTES, MAX_KEY_SYMBOLS, MAX_PROMPT_BYTES, MAX_PROMPT_ENTRIES,
-    MAX_SUMMARY_LEN,
+    build_known_files_block, forget_entry_best_effort, refresh_entry_best_effort, FileCacheEntry,
+    FileCacheError, FileCacheManager, FileCacheStats, LARGE_FILE_THRESHOLD_BYTES, MAX_KEY_SYMBOLS,
+    MAX_PROMPT_BYTES, MAX_PROMPT_ENTRIES, MAX_SUMMARY_LEN,
 };
 pub use command_cache::{
     is_cacheable as command_is_cacheable, default_ttl as command_cache_default_ttl,

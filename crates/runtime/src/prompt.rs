@@ -208,6 +208,36 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// W11: inject the `<known-files>` block from the on-disk file cache.
+    /// Silently no-ops when the cache is empty or unreachable.
+    #[must_use]
+    pub fn with_known_files_from_cache(mut self) -> Self {
+        let cwd = match self
+            .project_context
+            .as_ref()
+            .map(|p| p.cwd.clone())
+            .or_else(|| std::env::current_dir().ok())
+        {
+            Some(c) => c,
+            None => return self,
+        };
+        if let Ok(manager) = crate::file_cache::FileCacheManager::new(cwd) {
+            if let Ok(entries) = manager.list() {
+                let mut sorted = entries;
+                // Most-recently-used first, then most-accessed.
+                sorted.sort_by(|a, b| {
+                    b.access_count
+                        .cmp(&a.access_count)
+                        .then_with(|| b.last_seen.cmp(&a.last_seen))
+                });
+                if let Some(block) = crate::file_cache::build_known_files_block(&sorted) {
+                    self.append_sections.push(block);
+                }
+            }
+        }
+        self
+    }
+
     #[must_use]
     pub fn build(&self) -> Vec<String> {
         let mut sections = Vec::new();
@@ -542,7 +572,8 @@ pub fn load_system_prompt_with_identity(
     let mut builder = SystemPromptBuilder::new()
         .with_os(os_name, os_version)
         .with_project_context(project_context)
-        .with_runtime_config(config);
+        .with_runtime_config(config)
+        .with_known_files_from_cache();
     if let Some(model) = model_name {
         builder = builder.with_model_name(model);
     }

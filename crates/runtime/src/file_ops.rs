@@ -379,6 +379,10 @@ pub fn read_file(
     });
     let selected = lines[start_index..end_index].join("\n");
 
+    // W11: best-effort file-fingerprint cache refresh. Errors are
+    // swallowed — the cache is purely advisory.
+    crate::file_cache::refresh_entry_best_effort(&find_project_root(), &absolute_path);
+
     Ok(ReadFileOutput {
         kind: String::from("text"),
         file: TextFilePayload {
@@ -399,6 +403,10 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
         fs::create_dir_all(parent)?;
     }
     fs::write(&absolute_path, content)?;
+
+    // W11: refresh cache entry after write so the new mtime/sha is
+    // captured and stale entries don't linger.
+    crate::file_cache::refresh_entry_best_effort(&find_project_root(), &absolute_path);
 
     Ok(WriteFileOutput {
         kind: if original_file.is_some() {
@@ -442,6 +450,9 @@ pub fn edit_file(
         original_file.replacen(old_string, new_string, 1)
     };
     fs::write(&absolute_path, &updated)?;
+
+    // W11: refresh cache after edit.
+    crate::file_cache::refresh_entry_best_effort(&find_project_root(), &absolute_path);
 
     Ok(EditFileOutput {
         file_path: absolute_path.to_string_lossy().into_owned(),
