@@ -3968,7 +3968,26 @@ impl LiveCli {
             .ok()
             .and_then(|g| g.clone());
 
+        // CC parity v2.2.14: capture per-session env for the worker thread to
+        // install via session_ctx::set(). The thread-local partitions across
+        // parallel tabs (see #433 per-tab inference); each spawned thread
+        // sees its own snapshot. Source values from LiveCli at spawn time:
+        // session_id is the active session ID, effort_level reflects the
+        // current /effort choice, project_dir is the process cwd.
+        //
+        // Known imperfection: for tab spawns that target a non-active tab
+        // (e.g., remote-control submission to tab 2 while tab 1 is active),
+        // the session_id reflects the active session rather than the target
+        // tab's. Matching CC's single-session env behavior is acceptable
+        // here — CC has no per-tab parallelism at all.
+        let session_ctx_snapshot = runtime::session_ctx::SessionContext {
+            session_id: self.session_id().to_string(),
+            effort_level: self.effort_level.as_str().to_string(),
+            project_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        };
+
         let handle = std::thread::spawn(move || -> Result<(), String> {
+            runtime::session_ctx::set(session_ctx_snapshot);
             let mut rt = runtime_arc
                 .lock()
                 .map_err(|_| "runtime mutex poisoned".to_string())?;
@@ -4023,7 +4042,16 @@ impl LiveCli {
             .ok()
             .and_then(|g| g.clone());
 
+        // CC parity v2.2.14: same per-session env propagation as
+        // spawn_turn_for_tab — keep this branch in sync if you change either.
+        let session_ctx_snapshot = runtime::session_ctx::SessionContext {
+            session_id: self.session_id().to_string(),
+            effort_level: self.effort_level.as_str().to_string(),
+            project_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        };
+
         let handle = std::thread::spawn(move || -> Result<(), String> {
+            runtime::session_ctx::set(session_ctx_snapshot);
             let mut rt = runtime_arc
                 .lock()
                 .map_err(|_| "runtime mutex poisoned".to_string())?;

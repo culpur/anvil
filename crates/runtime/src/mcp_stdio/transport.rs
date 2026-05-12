@@ -32,6 +32,18 @@ impl McpStdioProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         apply_env(&mut command, &transport.env);
+        // CC parity v2.2.14: MCP servers receive ANVIL_PROJECT_DIR so they
+        // can resolve workspace-relative paths (matches CC v2.1.139's
+        // CLAUDE_PROJECT_DIR). Source from the process cwd because MCP servers
+        // are spawned at startup/configure time, before any per-turn
+        // session_ctx is set. Per-MCP env from the user's transport config
+        // (apply_env above) wins on collision.
+        if let Ok(cwd) = std::env::current_dir() {
+            // Only set if the user's transport didn't already provide it.
+            if !transport.env.contains_key("ANVIL_PROJECT_DIR") {
+                command.env("ANVIL_PROJECT_DIR", cwd.as_os_str());
+            }
+        }
 
         let mut child = command.spawn()?;
         let stdin = child

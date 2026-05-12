@@ -914,6 +914,14 @@ impl HookRunner {
         if let Some(tool_output) = request.tool_output {
             child.env("HOOK_TOOL_OUTPUT", tool_output);
         }
+        // CC parity v2.2.14: propagate per-session env from the thread-local
+        // SessionContext so hook scripts can see ANVIL_SESSION_ID / ANVIL_EFFORT
+        // / ANVIL_PROJECT_DIR (matches CC v2.1.132 / v2.1.133 / v2.1.139).
+        if let Some(ctx) = crate::session_ctx::get() {
+            child.env("ANVIL_SESSION_ID", &ctx.session_id);
+            child.env("ANVIL_EFFORT", &ctx.effort_level);
+            child.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
+        }
 
         match child.output_with_stdin(request.payload.as_bytes()) {
             Ok(output) => {

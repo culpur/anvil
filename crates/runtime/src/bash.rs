@@ -298,20 +298,22 @@ fn prepare_command(
         prepare_sandbox_dirs(cwd);
     }
 
-    if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
+    let mut prepared = if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
         let mut prepared = Command::new(launcher.program);
         prepared.args(launcher.args);
         prepared.current_dir(cwd);
         prepared.envs(launcher.env);
-        return prepared;
-    }
-
-    let mut prepared = Command::new("sh");
-    prepared.arg("-lc").arg(command).current_dir(cwd);
-    if sandbox_status.filesystem_active {
-        prepared.env("HOME", cwd.join(".sandbox-home"));
-        prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
-    }
+        prepared
+    } else {
+        let mut prepared = Command::new("sh");
+        prepared.arg("-lc").arg(command).current_dir(cwd);
+        if sandbox_status.filesystem_active {
+            prepared.env("HOME", cwd.join(".sandbox-home"));
+            prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
+        }
+        prepared
+    };
+    inject_session_ctx_env(&mut prepared);
     prepared
 }
 
@@ -325,21 +327,48 @@ fn prepare_tokio_command(
         prepare_sandbox_dirs(cwd);
     }
 
-    if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
+    let mut prepared = if let Some(launcher) = build_linux_sandbox_command(command, cwd, sandbox_status) {
         let mut prepared = TokioCommand::new(launcher.program);
         prepared.args(launcher.args);
         prepared.current_dir(cwd);
         prepared.envs(launcher.env);
-        return prepared;
-    }
-
-    let mut prepared = TokioCommand::new("sh");
-    prepared.arg("-lc").arg(command).current_dir(cwd);
-    if sandbox_status.filesystem_active {
-        prepared.env("HOME", cwd.join(".sandbox-home"));
-        prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
-    }
+        prepared
+    } else {
+        let mut prepared = TokioCommand::new("sh");
+        prepared.arg("-lc").arg(command).current_dir(cwd);
+        if sandbox_status.filesystem_active {
+            prepared.env("HOME", cwd.join(".sandbox-home"));
+            prepared.env("TMPDIR", cwd.join(".sandbox-tmp"));
+        }
+        prepared
+    };
+    inject_session_ctx_env_tokio(&mut prepared);
     prepared
+}
+
+/// Inject `ANVIL_SESSION_ID`, `ANVIL_EFFORT`, `ANVIL_PROJECT_DIR` into a
+/// `std::process::Command`'s env if a session context is present on the
+/// current thread.
+///
+/// CC parity v2.2.14: matches CC's `CLAUDE_CODE_SESSION_ID` (v2.1.132),
+/// `CLAUDE_EFFORT` (v2.1.133), and `CLAUDE_PROJECT_DIR` (v2.1.139).
+/// Two-form factor (sync + tokio variant below) because `std::process::Command`
+/// and `tokio::process::Command` are unrelated types despite identical API.
+fn inject_session_ctx_env(cmd: &mut Command) {
+    if let Some(ctx) = crate::session_ctx::get() {
+        cmd.env("ANVIL_SESSION_ID", &ctx.session_id);
+        cmd.env("ANVIL_EFFORT", &ctx.effort_level);
+        cmd.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
+    }
+}
+
+/// Tokio variant of `inject_session_ctx_env`. Same semantics, different type.
+fn inject_session_ctx_env_tokio(cmd: &mut TokioCommand) {
+    if let Some(ctx) = crate::session_ctx::get() {
+        cmd.env("ANVIL_SESSION_ID", &ctx.session_id);
+        cmd.env("ANVIL_EFFORT", &ctx.effort_level);
+        cmd.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
+    }
 }
 
 fn prepare_sandbox_dirs(cwd: &std::path::Path) {

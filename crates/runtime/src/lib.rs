@@ -3,6 +3,7 @@ mod bootstrap;
 pub mod ssh;
 pub mod auto_promote;
 pub mod effort;
+pub mod session_ctx;
 pub mod requirements;
 pub mod goals;
 pub mod hub;
