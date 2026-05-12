@@ -349,4 +349,38 @@ mod tests {
         assert!(!is_valid_name("dotted.name"));      // dot
         assert!(!is_valid_name(&"x".repeat(65)));    // too long
     }
+
+    // CC-136-B5 VERIFY: --resume/--continue must work with names that
+    // contain underscores. The resolver path that powers `anvil --resume
+    // <name>` is `resolve_name_to_id` → exact `==` match on the stored
+    // sidecar "name" field, so any name accepted by is_valid_name is
+    // resolvable. is_valid_name explicitly allows ASCII `_`, so the
+    // verification is: confirm both `_`-only and `_`-mixed names pass
+    // validation. These tests would catch a regression where a future
+    // tightening of the regex (e.g. `[A-Za-z0-9-]` without `_`) silently
+    // broke saved sessions that already used underscores.
+
+    #[test]
+    fn name_validation_accepts_underscore_only() {
+        assert!(is_valid_name("snake_case_name"));
+        assert!(is_valid_name("_leading"));
+        assert!(is_valid_name("trailing_"));
+        assert!(is_valid_name("__double__"));
+        assert!(is_valid_name("a_b_c_d_e"));
+    }
+
+    #[test]
+    fn name_validation_accepts_mixed_underscore_and_dash() {
+        assert!(is_valid_name("v2_2_14-cc-parity"));
+        assert!(is_valid_name("auth_refactor-attempt-3"));
+        assert!(is_valid_name("123_abc-XYZ"));
+    }
+
+    #[test]
+    fn name_validation_accepts_single_char_underscore() {
+        // Edge case: the minimum-length name (1 char) must allow `_`
+        // since otherwise users would be locked out of the shortest
+        // session-name convention.
+        assert!(is_valid_name("_"));
+    }
 }
