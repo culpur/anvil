@@ -234,6 +234,7 @@ mod tests {
             has_runtime: false,
             cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             message_queue: std::collections::VecDeque::new(),
+            in_flight: false,
         }
     }
 

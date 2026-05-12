@@ -2849,20 +2849,23 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
                     tui.push_system(format!("Cannot start turn: {reason}"));
                 } else {
+                    tui.set_tab_in_flight(active, true);
                     // Dispatch loop: handle user actions that arrive while the
                     // remote-triggered turn is in flight (tab switching, new
-                    // tabs, etc.).  Only TurnDone / ChannelClosed end the wait.
-                    let mut wait_tab_id = active_tab_id;
+                    // tabs, etc.).  Only the originally-spawned tab's TurnDone
+                    // (or ChannelClosed) ends this wait — v2.2.14 TUI-2 deep:
+                    // do NOT rebind wait_tab_id on TabSwitched / new-tab / etc.
+                    // The wait tracks the turn we just spawned, not whatever
+                    // is on screen now. Background tabs' TurnDones are routed
+                    // via `apply_tagged_event` and reaped after the wait.
+                    let wait_tab_id = active_tab_id;
                     'remote_wait: loop {
                         match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
                             InFlightInterruption::TurnDone
                             | InFlightInterruption::ChannelClosed => break 'remote_wait,
                             InFlightInterruption::TabSwitched => {
                                 cli.active_tab_idx = tui.active_tab_index();
-                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !still_running { break 'remote_wait; }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
+                                if !tui.is_any_tab_in_flight() { break 'remote_wait; }
                             }
                             InFlightInterruption::OpenNewTab => {
                                 let new_session = create_managed_session_handle()?;
@@ -2893,8 +2896,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     tab_idx + 1,
                                     new_session.id,
                                 ));
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::CloseActiveTab => {
                                 let idx = tui.active_tab_index();
@@ -2902,8 +2903,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     tui.close_tab_by_index(idx);
                                     cli.active_tab_idx = tui.active_tab_index();
                                 }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::SlashCommand(line) => {
                                 let trimmed = line.trim();
@@ -2931,31 +2930,28 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 if tui.has_active_modal() {
                                     break 'remote_wait;
                                 }
-                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !still_running { break 'remote_wait; }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
+                                if !tui.is_any_tab_in_flight() { break 'remote_wait; }
                             }
                             InFlightInterruption::SubmitChatPrompt(prompt) => {
                                 let idle_idx = tui.active_tab_index();
-                                let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
-                                let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !in_flight {
+                                if !tui.is_any_tab_in_flight() {
                                     tui.set_pending_submission(prompt);
                                     break 'remote_wait;
                                 }
                                 let eff = cli.build_input_with_qmd_context(&prompt);
                                 if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
-                                    // Tab busy — stash for after current turn ends.
-                                    tui.set_pending_submission(prompt);
-                                    break 'remote_wait;
+                                    // Tab busy — queue onto its own message_queue so it
+                                    // dispatches when its current turn ends (TUI-3 path).
+                                    tui.enqueue_on_tab(idle_idx, prompt);
+                                } else {
+                                    tui.set_tab_in_flight(idle_idx, true);
                                 }
-                                wait_tab_id = idle_tab_id;
                             }
                         }
                     }
                     let reaped = cli.try_reap_finished_turns();
                     for (idx, result) in reaped {
+                        tui.set_tab_in_flight(idx, false);
                         if let Err(e) = result {
                             if idx == active {
                                 tui.push_system(format!("Turn error: {e}"));
@@ -2984,6 +2980,18 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 // Drain any pending TUI events from background tabs so their
                 // streaming output renders while the user is typing in another tab.
                 tui.pump_events_nonblocking();
+                // v2.2.14 TUI-2 (deep): reap background workers that finished
+                // while the main thread was idle, so the per-tab `in_flight`
+                // flag mirrors reality before the next Submit decision (which
+                // would otherwise hit "tab already has a turn in flight" and
+                // queue when it could have dispatched).
+                let reaped = cli.try_reap_finished_turns();
+                for (idx, result) in reaped {
+                    tui.set_tab_in_flight(idx, false);
+                    if let Err(e) = result {
+                        tui.push_system_to_tab(idx, format!("Turn error: {e}"));
+                    }
+                }
             }
             ReadResult::Exit => {
                 let drained = cli.drain_all_in_flight_workers();
@@ -3245,17 +3253,18 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         if let Err(reason) = cli.spawn_file_drop_turn_for_tab(active, cli.permission_mode) {
                             tui.push_system(format!("Cannot start turn: {reason}"));
                         } else {
-                            let mut wait_tab_id = active_tab_id;
+                            tui.set_tab_in_flight(active, true);
+                            // v2.2.14 TUI-2 (deep): wait stays bound to the
+                            // tab we just spawned; do NOT rebind on user
+                            // actions (see remote_wait above).
+                            let wait_tab_id = active_tab_id;
                             'file_wait: loop {
                                 match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
                                     InFlightInterruption::TurnDone
                                     | InFlightInterruption::ChannelClosed => break 'file_wait,
                                     InFlightInterruption::TabSwitched => {
                                         cli.active_tab_idx = tui.active_tab_index();
-                                        let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                        if !still_running { break 'file_wait; }
-                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                            .unwrap_or(tui.active_tab_index() + 1);
+                                        if !tui.is_any_tab_in_flight() { break 'file_wait; }
                                     }
                                     InFlightInterruption::OpenNewTab => {
                                         let new_session = create_managed_session_handle()?;
@@ -3286,8 +3295,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                             tab_idx + 1,
                                             new_session.id,
                                         ));
-                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                            .unwrap_or(tui.active_tab_index() + 1);
                                     }
                                     InFlightInterruption::CloseActiveTab => {
                                         let idx = tui.active_tab_index();
@@ -3295,8 +3302,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                             tui.close_tab_by_index(idx);
                                             cli.active_tab_idx = tui.active_tab_index();
                                         }
-                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                            .unwrap_or(tui.active_tab_index() + 1);
                                     }
                                     InFlightInterruption::SlashCommand(line) => {
                                         let trimmed = line.trim();
@@ -3316,30 +3321,26 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                         if tui.has_active_modal() {
                                             break 'file_wait;
                                         }
-                                        let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                        if !still_running { break 'file_wait; }
-                                        wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                            .unwrap_or(tui.active_tab_index() + 1);
+                                        if !tui.is_any_tab_in_flight() { break 'file_wait; }
                                     }
                                     InFlightInterruption::SubmitChatPrompt(prompt) => {
                                         let idle_idx = tui.active_tab_index();
-                                        let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
-                                        let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                        if !in_flight {
+                                        if !tui.is_any_tab_in_flight() {
                                             tui.set_pending_submission(prompt);
                                             break 'file_wait;
                                         }
                                         let eff = cli.build_input_with_qmd_context(&prompt);
                                         if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
-                                            tui.set_pending_submission(prompt);
-                                            break 'file_wait;
+                                            tui.enqueue_on_tab(idle_idx, prompt);
+                                        } else {
+                                            tui.set_tab_in_flight(idle_idx, true);
                                         }
-                                        wait_tab_id = idle_tab_id;
                                     }
                                 }
                             }
                             let reaped = cli.try_reap_finished_turns();
                             for (idx, result) in reaped {
+                                tui.set_tab_in_flight(idx, false);
                                 if let Err(e) = result {
                                     if idx == active {
                                         tui.push_system(format!("Turn error: {e}"));
@@ -3387,13 +3388,31 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 let effective_input = cli.build_input_with_qmd_context(trimmed);
                 let active = cli.active_tab_idx;
                 let active_tab_id = tui.tab_id_at(active).unwrap_or(active + 1);
+                // v2.2.14 TUI-2 (deep): if the active tab is itself still
+                // streaming a background turn spawned earlier (e.g. via
+                // SubmitChatPrompt on an idle tab during a previous wait),
+                // queue the user's prompt onto that tab's message_queue so
+                // it fires when the current turn finishes (TUI-3 path)
+                // instead of being dropped with "tab already in flight".
+                let active_busy = cli.tab_runtimes
+                    .get(active)
+                    .is_some_and(|t| t.in_flight.is_some());
+                if active_busy {
+                    tui.enqueue_on_tab(active, trimmed);
+                    tui.push_system("↳ queued: tab still finishing previous turn".to_string());
+                    continue;
+                }
                 if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
                     tui.push_system(format!("Cannot start turn: {reason}"));
                 } else {
-                    // Wait for active tab's TurnDone; handle user actions that
-                    // arrive mid-turn (tab switch, new tab, slash command, etc.)
-                    // without blocking the streaming turn on another tab.
-                    let mut wait_tab_id = active_tab_id;
+                    tui.set_tab_in_flight(active, true);
+                    // v2.2.14 TUI-2 (deep): wait stays bound to the originally
+                    // spawned tab. Background turns spawned from
+                    // SubmitChatPrompt are reaped here after the wait or in
+                    // the read_input Continue path; the user's draft on an
+                    // idle background tab dispatches IMMEDIATELY (no longer
+                    // gated behind the original target tab's TurnDone).
+                    let wait_tab_id = active_tab_id;
                     'chat_wait: loop {
                         match tui.wait_for_turn_end_for_tab(wait_tab_id)? {
                             InFlightInterruption::TurnDone
@@ -3405,13 +3424,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             }
                             InFlightInterruption::TabSwitched => {
                                 cli.active_tab_idx = tui.active_tab_index();
-                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !still_running {
+                                if !tui.is_any_tab_in_flight() {
                                     held_submit = tui.pending_submit.take();
                                     break 'chat_wait;
                                 }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::OpenNewTab => {
                                 let new_session = create_managed_session_handle()?;
@@ -3442,8 +3458,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     tab_idx + 1,
                                     new_session.id,
                                 ));
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::CloseActiveTab => {
                                 let idx = tui.active_tab_index();
@@ -3451,8 +3465,6 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     tui.close_tab_by_index(idx);
                                     cli.active_tab_idx = tui.active_tab_index();
                                 }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::SlashCommand(line) => {
                                 let cmd_trimmed = line.trim();
@@ -3472,29 +3484,26 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 if tui.has_active_modal() {
                                     break 'chat_wait;
                                 }
-                                let still_running = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !still_running {
+                                if !tui.is_any_tab_in_flight() {
                                     break 'chat_wait;
                                 }
-                                wait_tab_id = tui.tab_id_at(tui.active_tab_index())
-                                    .unwrap_or(tui.active_tab_index() + 1);
                             }
                             InFlightInterruption::SubmitChatPrompt(prompt) => {
                                 let idle_idx = tui.active_tab_index();
-                                let idle_tab_id = tui.tab_id_at(idle_idx).unwrap_or(idle_idx + 1);
-                                let in_flight = cli.tab_runtimes.iter().any(|t| t.in_flight.is_some());
-                                if !in_flight {
+                                if !tui.is_any_tab_in_flight() {
                                     // No turn running — stash as pending and exit.
                                     tui.set_pending_submission(prompt);
                                     break 'chat_wait;
                                 }
                                 let eff = cli.build_input_with_qmd_context(&prompt);
                                 if cli.spawn_turn_for_tab(idle_idx, eff, cli.permission_mode).is_err() {
-                                    // Tab busy — stash for after current turn ends.
-                                    tui.set_pending_submission(prompt);
-                                    break 'chat_wait;
+                                    // Tab is itself in-flight — queue onto its
+                                    // own message_queue so it fires when its
+                                    // current turn finishes (TUI-3 path).
+                                    tui.enqueue_on_tab(idle_idx, prompt);
+                                } else {
+                                    tui.set_tab_in_flight(idle_idx, true);
                                 }
-                                wait_tab_id = idle_tab_id;
                             }
                         }
                     }
@@ -3502,6 +3511,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     // may still be running and will be reaped on future iterations).
                     let reaped = cli.try_reap_finished_turns();
                     for (idx, result) in reaped {
+                        tui.set_tab_in_flight(idx, false);
                         if let Err(e) = result {
                             if idx == active {
                                 tui.push_system(format!("Turn error: {e}"));
@@ -8479,6 +8489,7 @@ impl LiveCli {
                     has_runtime: true,
                     cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     message_queue: std::collections::VecDeque::new(),
+                    in_flight: false,
                 };
                 self.share_manager.stop_share(&synthetic)
             }

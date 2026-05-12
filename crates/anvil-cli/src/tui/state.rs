@@ -511,6 +511,13 @@ pub(crate) struct Tab {
     /// as the next turn the moment `TurnDone` lands. Visually rendered as
     /// `[N queued]` above the input line.
     pub message_queue: std::collections::VecDeque<String>,
+    /// v2.2.14 TUI-2 (deep): mirrors `LiveCli.tab_runtimes[idx].in_flight.is_some()`
+    /// for the wait-loop's input router. Set true when `spawn_turn_for_tab`
+    /// succeeds for this tab; cleared when `try_reap_finished_turns` joins
+    /// the worker. Without this flag the in-flight key handler can't tell
+    /// "active tab is streaming → queue the typed message" from "active tab
+    /// is idle while another tab streams → fire immediately on this tab".
+    pub in_flight: bool,
 }
 
 impl Tab {
@@ -548,6 +555,7 @@ impl Tab {
             has_runtime: false,
             cancel_token: Arc::new(AtomicBool::new(false)),
             message_queue: std::collections::VecDeque::new(),
+            in_flight: false,
         }
     }
 

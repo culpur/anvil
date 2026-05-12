@@ -469,6 +469,31 @@ impl AnvilTui {
         self.tabs.get(index).map(|t| std::sync::Arc::clone(&t.cancel_token))
     }
 
+    /// v2.2.14 TUI-2 (deep): mirror `LiveCli.tab_runtimes[idx].in_flight.is_some()`
+    /// onto the TUI's per-tab flag. Called by `run_repl_tui` after every
+    /// `spawn_turn_for_tab` (true) and `try_reap_finished_turns` (false) so
+    /// the in-flight key router can tell streaming tabs from idle ones.
+    pub fn set_tab_in_flight(&mut self, index: usize, in_flight: bool) {
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.in_flight = in_flight;
+        }
+    }
+
+    /// v2.2.14 TUI-2 (deep): true iff the visually-active tab has a turn
+    /// streaming. Read by `handle_in_flight_key_extended` to decide whether
+    /// Enter should queue (active tab is the in-flight one) or fire as a
+    /// new turn (active tab is idle while another tab streams).
+    pub fn is_active_tab_in_flight(&self) -> bool {
+        self.tabs.get(self.active_tab).is_some_and(|t| t.in_flight)
+    }
+
+    /// v2.2.14 TUI-2 (deep): true iff any tab is streaming. Used by the
+    /// main-loop dispatcher to decide whether to re-enter the event-pump
+    /// wait or fall back to the idle `read_input` loop.
+    pub fn is_any_tab_in_flight(&self) -> bool {
+        self.tabs.iter().any(|t| t.in_flight)
+    }
+
     /// Switch to the tab at 0-based index.  Clears the unread marker on the target.
     pub fn switch_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -612,6 +637,22 @@ impl AnvilTui {
             true
         } else {
             false
+        }
+    }
+
+    /// v2.2.14 TUI-2 (deep): push a user message onto a specific tab's
+    /// `message_queue`, by Vec index. Used by the main-loop dispatcher
+    /// when `spawn_turn_for_tab` returns "tab already in flight" — the
+    /// queued draft fires when that tab's current turn finishes via the
+    /// existing TUI-3 promote-on-TurnDone path.
+    pub fn enqueue_on_tab(&mut self, idx: usize, message: impl Into<String>) {
+        let s = message.into();
+        if s.is_empty() {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.message_queue.push_back(s);
+            self.redraw.request(redraw::DirtyRegions::INPUT);
         }
     }
 
@@ -1869,9 +1910,6 @@ impl AnvilTui {
     /// remote viewer sees a stable, per-tab identifier rather than a position
     /// in the Vec that shifts when tabs are closed.
     ///
-    /// TODO (Commit 3): `wait_for_turn_end` currently returns on ANY
-    /// `TurnDone`; future commits will gate on `tagged.tab_id ==
-    /// active_tab_id` so background tabs don't prematurely unblock the input.
     fn apply_tagged_event(&mut self, tagged: TaggedTuiEvent) {
         let TaggedTuiEvent { tab_id, event } = tagged;
 
@@ -1938,11 +1976,11 @@ impl AnvilTui {
                 self.tabs[idx].pending_text.push_str(&text);
             }
             TuiEvent::TextDone | TuiEvent::TurnDone => {
-                // flush_pending_text always operates on the active tab.
-                // When idx == active_tab this is correct.  When a background
-                // tab finishes (future commits), we'll need a
-                // flush_pending_text_for(idx) variant — tracked as a TODO.
-                self.flush_pending_text();
+                // Flush onto the tab the event came from, not the visually-
+                // active tab. Otherwise a background tab's stream end would
+                // either leak its pending_text into the wrong log or wipe
+                // the active tab's still-streaming buffer.
+                self.flush_pending_text_for(idx);
                 let tab = &mut self.tabs[idx];
                 tab.think_label.clear();
                 tab.think_start = None;
@@ -2146,8 +2184,6 @@ impl AnvilTui {
 
         loop {
             // ── Drain streaming events non-blocking ──
-            // TODO (Commit 3): gate TurnDone on tagged.tab_id == active_tab_id
-            // so background tab completions don't unblock the active tab's input.
             loop {
                 match self.rx.try_recv() {
                     Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone) => {
@@ -2259,21 +2295,29 @@ impl AnvilTui {
         count
     }
 
-    /// Like `wait_for_turn_end` but gates the return on a specific tab's
-    /// `TurnDone` instead of any `TurnDone`, and surfaces user actions that
-    /// should be handled by the caller rather than swallowing them.
+    /// Pump TUI events and keystrokes while waiting for `target_tab_id`'s
+    /// `TurnDone`. The caller stays in this loop for the lifetime of the
+    /// turn it just spawned; other tabs' turns run in parallel on their own
+    /// worker threads and their events are routed to the right tab here
+    /// without unblocking the caller.
     ///
-    /// Background tab `TurnDone` events are processed (routed to their tab)
-    /// but do NOT cause this function to return.  Only a `TurnDone` tagged
-    /// with `target_tab_id` returns `InFlightInterruption::TurnDone`.
+    /// `target_tab_id` is bound to the tab the caller spawned for; it is
+    /// NOT updated when the user switches the visually-active tab — the
+    /// wait is for the originally-spawned turn, not "whatever tab is on
+    /// screen right now". (v2.2.14 TUI-2 deep fix.)
     ///
-    /// Tab-switch keys, Ctrl+T, Ctrl+W, slash-command Enter, and chat-submit
-    /// Enter on an idle tab each return the corresponding `InFlightInterruption`
-    /// variant so the caller's loop can dispatch them.
+    /// Returns when one of:
+    ///   - `target_tab_id`'s `TurnDone` lands → `TurnDone`.
+    ///   - The streaming channel disconnects → `ChannelClosed`.
+    ///   - The user did something the caller must handle (tab switch, new/
+    ///     close tab, slash command, Enter on an idle tab) →
+    ///     `TabSwitched` / `OpenNewTab` / `CloseActiveTab` /
+    ///     `SlashCommand(s)` / `SubmitChatPrompt(s)`.
     ///
-    /// Enter pressed while the active tab IS the target (in-flight) tab
-    /// captures the draft into the tab's input for the Bug-1 "type-ahead"
-    /// path; it does not return from the wait.
+    /// Enter pressed while the active tab is itself streaming queues the
+    /// draft onto the tab's `pending_submit`/`message_queue` (TUI-3) and
+    /// does NOT return; Enter on a non-streaming active tab returns
+    /// `SubmitChatPrompt` regardless of which tab `target_tab_id` names.
     pub fn wait_for_turn_end_for_tab(
         &mut self,
         target_tab_id: usize,
@@ -2562,16 +2606,21 @@ impl AnvilTui {
                 return Some(InFlightInterruption::SlashCommand(draft));
             }
 
-            // Determine whether the active tab is the in-flight target.
+            // v2.2.14 TUI-2 (deep): route by the active tab's own in_flight
+            // state, not by equality with `target_tab_id`. Previously the
+            // wait re-bound `target_tab_id` to whatever tab the user just
+            // switched to — so Enter on an idle tab evaluated `active ==
+            // target` true and got queued instead of dispatching.
             let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
-            if active_tab_id == target_tab_id {
-                // v2.2.14 TUI-3: active tab IS the streaming tab. The first
-                // type-ahead message goes into `pending_submit` (the slot
-                // the main loop's TurnDone consumer reads). Anything beyond
-                // that stacks in the per-tab `message_queue`, drained FIFO
-                // by `drain_next_queued` after each subsequent turn ends.
-                // `[N queued]` renders above the input line.
-                if self.pending_submit.is_none() {
+            if self.is_active_tab_in_flight() {
+                // v2.2.14 TUI-3: active tab IS streaming. The first type-
+                // ahead message goes into `pending_submit` (the slot the
+                // main loop's TurnDone consumer reads when target's turn
+                // ends) only if active == target — that's the original
+                // "type-ahead fires as next turn on the same tab" path.
+                // Otherwise the draft queues onto the active tab's own
+                // `message_queue` so it dispatches when that tab finishes.
+                if active_tab_id == target_tab_id && self.pending_submit.is_none() {
                     self.pending_submit = Some(draft);
                 } else {
                     self.active_tab_mut().message_queue.push_back(draft);
