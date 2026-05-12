@@ -304,6 +304,30 @@ fn render_profile_command(action: Option<&str>) -> String {
     }
 }
 
+/// CC-139-F3: `/scroll-speed [N]` — get/set mouse-wheel speed.
+///
+/// `None` / empty input prints the current value. An integer 1..=10
+/// sets it via the runtime's process-scoped AtomicU8, taking effect on
+/// the next wheel event (no redraw needed). Out-of-range and
+/// non-numeric input return a usage message without mutating state.
+fn run_scroll_speed_command(arg: Option<&str>) -> String {
+    let trimmed = arg.map(str::trim).filter(|s| !s.is_empty());
+    match trimmed {
+        None => format!(
+            "Current scroll-speed: {} lines/tick. Use /scroll-speed N (1..=10) to change.",
+            runtime::get_scroll_speed()
+        ),
+        Some(raw) => match raw.parse::<u8>() {
+            Ok(n) if (1..=10).contains(&n) => {
+                runtime::set_scroll_speed(n);
+                format!("Scroll speed set to {n} lines per wheel tick.")
+            }
+            Ok(_) => "Scroll speed must be between 1 and 10.".to_string(),
+            Err(_) => format!("Not a number: {raw}. Usage: /scroll-speed [1..=10]"),
+        },
+    }
+}
+
 fn render_cli_error(problem: &str) -> String {
     let mut lines = vec!["Error".to_string()];
     for (index, line) in problem.lines().enumerate() {
@@ -1738,6 +1762,7 @@ fn run_resume_command(
         | SlashCommand::Goal { .. }
         | SlashCommand::FileCache { .. }
         | SlashCommand::CmdCache { .. }
+        | SlashCommand::ScrollSpeed { .. }
         | SlashCommand::Profile { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
@@ -5417,6 +5442,9 @@ impl LiveCli {
             SlashCommand::CmdCache { .. } => {
                 ("Use /cmd-cache list, stats, prune, or forget <cmd>".to_string(), false)
             }
+            SlashCommand::ScrollSpeed { lines } => {
+                (run_scroll_speed_command(lines.as_deref()), false)
+            }
             SlashCommand::Profile { action } => {
                 let msg = render_profile_command(action.as_deref());
                 (msg, false)
@@ -7118,6 +7146,10 @@ impl LiveCli {
             }
             SlashCommand::CmdCache { .. } => {
                 println!("Use /cmd-cache list, stats, prune, or forget <cmd>");
+                false
+            }
+            SlashCommand::ScrollSpeed { lines } => {
+                println!("{}", run_scroll_speed_command(lines.as_deref()));
                 false
             }
             SlashCommand::Profile { action } => {

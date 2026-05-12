@@ -109,19 +109,23 @@ impl AnvilTui {
                         // Otherwise it falls through to the chat scrollback.
                         let in_configure = self.configure_state
                             != super::configure_types::ConfigureState::Inactive;
+                        // CC-139-F3: pull the live wheel-tick speed each
+                        // event so `/scroll-speed N` takes effect on the
+                        // next scroll without rebuilding the runtime.
+                        let speed = runtime::get_scroll_speed() as usize;
                         match mouse.kind {
                             crossterm::event::MouseEventKind::ScrollUp => {
                                 if in_configure {
-                                    self.configure_scroll_wheel(-3);
+                                    self.configure_scroll_wheel(-(speed as i32));
                                 } else {
-                                    self.scroll_up(3);
+                                    self.scroll_up(speed);
                                 }
                             }
                             crossterm::event::MouseEventKind::ScrollDown => {
                                 if in_configure {
-                                    self.configure_scroll_wheel(3);
+                                    self.configure_scroll_wheel(speed as i32);
                                 } else {
-                                    self.scroll_down(3);
+                                    self.scroll_down(speed);
                                 }
                             }
                             // Click-to-switch on the tab bar. We compare against

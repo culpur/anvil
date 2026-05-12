@@ -612,6 +612,28 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message: msg, session: session.clone() })
         }
+        SlashCommand::ScrollSpeed { lines } => {
+            // CC-139-F3 parity. This handler runs in non-TUI contexts
+            // (anvil --print, /print-mode, daemons). In the TUI proper,
+            // main.rs intercepts and applies live. Here we just report
+            // or set the process-wide AtomicU8 so any embedded TUI
+            // picks up the change next paint.
+            let msg = match lines.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                None => format!(
+                    "Current scroll-speed: {} lines/tick. Use /scroll-speed N (1..=10) to change.",
+                    runtime::get_scroll_speed()
+                ),
+                Some(raw) => match raw.parse::<u8>() {
+                    Ok(n) if (1..=10).contains(&n) => {
+                        runtime::set_scroll_speed(n);
+                        format!("Scroll speed set to {n} lines per wheel tick.")
+                    }
+                    Ok(_) => "Scroll speed must be between 1 and 10.".to_string(),
+                    Err(_) => format!("Not a number: {raw}. Usage: /scroll-speed [1..=10]"),
+                },
+            };
+            Some(SlashCommandResult { message: msg, session: session.clone() })
+        }
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),

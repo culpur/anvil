@@ -18,6 +18,7 @@ pub mod nominations;
 pub mod private_memory;
 pub mod qmd;
 pub mod routines;
+pub mod scroll_speed;
 pub mod search;
 pub mod task;
 pub mod team;
@@ -135,6 +136,7 @@ pub use team::{
     DelegationRecord, MemberStatus, TaskSnapshot, TeamManager, TeamMember, TeamStatus,
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
+pub use scroll_speed::{get_scroll_speed, reset_scroll_speed, set_scroll_speed};
 pub use auto_promote::{
     install_default as install_auto_promote_default, install_global as install_auto_promote,
     is_installed as auto_promote_is_installed, observe as auto_promote_observe,

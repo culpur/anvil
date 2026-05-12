@@ -2033,6 +2033,20 @@ or the session ends. Set a persistent default in settings.json with:
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },
+    SlashCommandSpec {
+        name: "scroll-speed",
+        aliases: &["scroll_speed", "scrollspeed"],
+        summary: "Set mouse-wheel scroll speed (lines per tick) — CC-139-F3 parity",
+        argument_hint: Some("[1..=10]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Session,
+        detailed_help: "/scroll-speed — Mouse-wheel scroll speed (CC-139-F3)\n\nUsage:\n  /scroll-speed           Show the current value\n  /scroll-speed N         Set to N lines per wheel tick (1..=10, default 3)\n\nThe value is process-scoped. Persist a default in settings.json:\n  { \"scroll_speed\": 5 }",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
 ];
 
 #[must_use]

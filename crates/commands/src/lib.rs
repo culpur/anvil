@@ -462,6 +462,12 @@ pub enum SlashCommand {
     CmdCache {
         action: Option<String>,
     },
+    /// `/scroll-speed [N]` — wheel-tick line count.  CC-139-F3 parity.
+    ///   - no arg: prints the current value
+    ///   - integer 1..=10: sets immediately + persists for the session
+    ScrollSpeed {
+        lines: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -869,6 +875,9 @@ impl SlashCommand {
             },
             "file-cache" | "fc" => Self::FileCache { action: remainder_after_command(trimmed, command) },
             "cmd-cache" | "cc" => Self::CmdCache { action: remainder_after_command(trimmed, command) },
+            "scroll-speed" | "scroll_speed" | "scrollspeed" => Self::ScrollSpeed {
+                lines: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
+            },
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1360,7 +1369,8 @@ mod tests {
         // v2.2.7+: +3 new commands (agent, output-style, skill) — see spec count audit
         // v2.2.11 W2: +1 (effort), W3: +1 (goal), W4: +1 (profile) = 108 total
         // v2.3 W11: +1 (file-cache), W12: +1 (cmd-cache) = 110 total
-        assert_eq!(slash_command_specs().len(), 110);
+        // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
+        assert_eq!(slash_command_specs().len(), 111);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -2002,6 +2012,8 @@ mod tests {
                 SlashCommand::Goal { .. } => "goal",
                 SlashCommand::FileCache { .. } => "file-cache",
                 SlashCommand::CmdCache { .. } => "cmd-cache",
+                // /scroll-speed (v2.2.14 CC-139-F3):
+                SlashCommand::ScrollSpeed { .. } => "scroll-speed",
                 // Named profiles (v2.2.11 W4):
                 SlashCommand::Profile { .. } => "profile",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
@@ -2121,6 +2133,7 @@ mod tests {
             // Named profiles (v2.2.11 W4):
             SlashCommand::FileCache { action: None },
             SlashCommand::CmdCache { action: None },
+            SlashCommand::ScrollSpeed { lines: None },
             SlashCommand::Profile { action: None },
         ];
 
