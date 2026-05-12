@@ -2051,6 +2051,12 @@ impl AnvilTui {
         // accumulating a new one.
         self.pending_submit = None;
 
+        // v2.2.14 TUI-2: shorter poll interval (was 80ms) so keystrokes echo
+        // within ~20ms. Spinner ticks are rate-limited separately.
+        const POLL_INTERVAL: Duration = Duration::from_millis(20);
+        const SPINNER_TICK_INTERVAL: Duration = Duration::from_millis(80);
+        let mut last_spinner_tick = Instant::now();
+
         loop {
             // ── Drain streaming events non-blocking ──
             // TODO (Commit 3): gate TurnDone on tagged.tab_id == active_tab_id
@@ -2116,16 +2122,17 @@ impl AnvilTui {
                 }
             }
 
-            // ── Frame tick + draw ──
-            {
+            // ── Spinner frame tick + draw ──
+            if last_spinner_tick.elapsed() >= SPINNER_TICK_INTERVAL {
                 let frame = self.active_tab().think_frame.wrapping_add(1);
                 self.active_tab_mut().think_frame = frame;
+                last_spinner_tick = Instant::now();
             }
             self.draw()?;
 
-            // ── Block briefly for a streaming event ──
-            // TODO (Commit 3): gate TurnDone on tagged.tab_id == active_tab_id.
-            match self.rx.recv_timeout(Duration::from_millis(80)) {
+            // ── Short blocking recv so input typed during this window gets
+            // picked up on the very next iteration. ──
+            match self.rx.recv_timeout(POLL_INTERVAL) {
                 Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone) => {
                     self.apply_tagged_event(tagged);
                     self.scroll_to_bottom();
@@ -2184,6 +2191,17 @@ impl AnvilTui {
         &mut self,
         target_tab_id: usize,
     ) -> io::Result<InFlightInterruption> {
+        // v2.2.14 TUI-2: the inter-iteration sleep used to be a single 80ms
+        // `recv_timeout`. When the user typed on a background tab while
+        // another tab was streaming, the character sat in crossterm's queue
+        // for up to 80ms before the wait loop processed it — visibly laggy.
+        // Lowering the budget to 20ms drops the worst-case echo latency to
+        // ~20ms; the spinner is rate-limited separately so it still ticks at
+        // ~12fps.
+        const POLL_INTERVAL: Duration = Duration::from_millis(20);
+        const SPINNER_TICK_INTERVAL: Duration = Duration::from_millis(80);
+        let mut last_spinner_tick = Instant::now();
+
         loop {
             // ── Drain streaming events non-blocking ──
             loop {
@@ -2265,15 +2283,18 @@ impl AnvilTui {
                 }
             }
 
-            // ── Frame tick + draw ──
-            {
+            // ── Spinner frame tick + draw ──
+            // Rate-limit so a 20ms poll loop doesn't burn the spinner.
+            if last_spinner_tick.elapsed() >= SPINNER_TICK_INTERVAL {
                 let frame = self.active_tab().think_frame.wrapping_add(1);
                 self.active_tab_mut().think_frame = frame;
+                last_spinner_tick = Instant::now();
             }
             self.draw()?;
 
-            // ── Block briefly for a streaming event ──
-            match self.rx.recv_timeout(Duration::from_millis(80)) {
+            // ── Short blocking recv so input typed during this window gets
+            // picked up on the very next iteration. ──
+            match self.rx.recv_timeout(POLL_INTERVAL) {
                 Ok(tagged)
                     if matches!(tagged.event, TuiEvent::TurnDone)
                         && tagged.tab_id == target_tab_id =>
