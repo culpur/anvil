@@ -9015,9 +9015,12 @@ fn format_elapsed(secs: u64) -> String {
 #[cfg(test)]
 mod cc_139_f1_tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::Mutex;
 
-    // Snapshot tests mutate ANVIL_CONFIG_HOME — serialise them.
+    // Snapshot tests mutate ANVIL_CONFIG_HOME — serialise them across this module
+    // AND cross-module via `serial(anvil_config_home)` to avoid races with
+    // uninstall::tests which also mutates the same env var.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
@@ -9046,6 +9049,7 @@ mod cc_139_f1_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn empty_state_message() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -9056,6 +9060,7 @@ mod cc_139_f1_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn lists_live_snapshot_entries() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -9093,6 +9098,7 @@ mod cc_139_f1_tests {
     // CC-DRIFT-F1: long session IDs in `anvil agents` listings must be
     // truncated to the short width so each row stays scannable.
     #[test]
+    #[serial(anvil_config_home)]
     fn live_listing_truncates_long_session_ids() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");

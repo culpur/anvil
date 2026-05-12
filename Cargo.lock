@@ -105,6 +105,7 @@ dependencies = [
  "rust-i18n",
  "rustyline",
  "serde_json",
+ "serial_test",
  "syntect",
  "tempfile",
  "tokio",

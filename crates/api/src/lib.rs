@@ -30,7 +30,7 @@ pub use providers::ollama_registry::{
 };
 pub use providers::ollama_show::{
     fetch_model_meta_cached, fetch_models_list, fetch_running_models, Architecture, ModelMeta,
-    ModelMetaError, OllamaModel, Quantization, RunningModel,
+    ModelMetaError, OllamaModel, OllamaModelDetails, Quantization, RunningModel,
 };
 pub use providers::ollama_tool_parser::{
     parse_ollama_text_for_tool_calls, silent_write_warning, ExtractedToolCall, OllamaParseResult,

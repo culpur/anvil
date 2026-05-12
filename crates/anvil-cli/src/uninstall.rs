@@ -127,21 +127,32 @@ pub(crate) fn run_uninstall() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial(anvil_config_home)]
     fn anvil_home_from_env() {
-        // Override via ANVIL_CONFIG_HOME
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
         unsafe { std::env::set_var("ANVIL_CONFIG_HOME", "/tmp/anvil-test-home") };
         let home = anvil_home();
-        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ANVIL_CONFIG_HOME", v),
+                None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+            }
+        }
         assert_eq!(home, PathBuf::from("/tmp/anvil-test-home"));
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn anvil_home_fallback_to_dot_anvil() {
-        // Without the env override, must end in ".anvil"
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
         let home = anvil_home();
+        if let Some(v) = prev {
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", v) };
+        }
         assert_eq!(home.file_name().and_then(|n| n.to_str()), Some(".anvil"));
     }
 
