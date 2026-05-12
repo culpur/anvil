@@ -789,10 +789,6 @@ impl AnvilTui {
     /// instrumentation log, the `terminal.clear()` is to be removed.
     pub(super) fn draw_full(&mut self) -> io::Result<()> {
         // DIAGNOSTIC v2.2.14 BUG-fix-real: force full clear to bypass
-        // ratatui's frame-diff coalescing. If echo appears with this, the
-        // bug is in ratatui's dirty-frame detection. To be removed once
-        // the root cause is confirmed via the instrumented run.
-        self.terminal.clear()?;
         self.draw()
     }
 
@@ -888,15 +884,6 @@ impl AnvilTui {
         let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
         let input_text = tab.input.clone();
 
-        // v2.2.14 BUG-fix-real instrumentation: log the input snapshot the
-        // draw closure is about to render with. Paired with [DRAW-END]
-        // below so we can correlate "what was supposed to be on screen"
-        // with "did we actually commit bytes to the terminal".
-        eprintln!(
-            "[DRAW-BEGIN] active={} input={:?}",
-            self.active_tab,
-            tab.input
-        );
         // v2.2.14 TUI-3: snapshot for the queued-messages indicator. The
         // visible count is `pending_submit + queue` so the user sees the
         // total drafts waiting to fire after the current turn.
@@ -1967,13 +1954,6 @@ impl AnvilTui {
         self.tab_hits = new_tab_hits;
         self.tab_bar_row = new_tab_bar_row;
 
-        // v2.2.14 BUG-fix-real instrumentation: force a backend flush so
-        // [DRAW-END] really does mean "bytes have left ratatui's buffer".
-        // Logged AFTER the flush so the marker can't fire on a no-op draw.
-        use std::io::Write;
-        let _ = self.terminal.backend_mut().flush();
-        eprintln!("[DRAW-END] active={} flushed=true", self.active_tab);
-
         Ok(())
     }
 
@@ -2799,6 +2779,20 @@ impl AnvilTui {
             }
 
             // Active tab is idle — fire immediately as a new turn.
+            // Record the User message on this tab's log + history so the
+            // submitted prompt appears in the visible scrollback before
+            // the assistant's streaming response arrives. The non-in-flight
+            // path (`submit_input`) does this; the in-flight path was
+            // missing it, so the user's prompt vanished while the model
+            // response showed up alone.
+            {
+                use crate::tui::state::LogEntry;
+                let tab = self.active_tab_mut();
+                tab.history.push(draft.clone());
+                tab.log.push(LogEntry::User(draft.clone()));
+            }
+            self.scroll_to_bottom();
+            self.redraw.request(redraw::DirtyRegions::ALL);
             return Some(InFlightInterruption::SubmitChatPrompt(draft));
         }
 
@@ -2824,16 +2818,6 @@ impl AnvilTui {
                 && !m.contains(KeyModifiers::ALT) =>
             {
                 self.insert_char(c);
-                // v2.2.14 BUG-fix-real: log AFTER insert_char so we can
-                // confirm the data path landed the char on the active
-                // tab's buffer. If [KEY] shows the correct input but no
-                // visible echo, the breakage is in render/commit.
-                eprintln!(
-                    "[KEY] char={:?} active={} input={:?}",
-                    c,
-                    self.active_tab,
-                    self.active_tab().input
-                );
                 self.redraw.request(redraw::DirtyRegions::INPUT);
                 self.request_redraw_reason(RedrawReason::KeyEvent);
                 edited = true;

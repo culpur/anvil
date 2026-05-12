@@ -4118,6 +4118,14 @@ impl LiveCli {
             if let Some(sender) = tui_sender.clone() {
                 prompter = prompter.with_tui_sender(sender);
             }
+            // Surface the thinking indicator on the target tab's TUI sender so
+            // background-tab spawns get the same "Thinking..." line that the
+            // active-tab path emits. Without this, a turn dispatched from a
+            // tab the user just switched to runs silently until the first
+            // TextDelta arrives.
+            if let Some(ref tx) = tui_sender {
+                tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
+            }
             match rt.run_turn(&effective_input, Some(&mut prompter)) {
                 Ok(ref summary) => {
                     if let Some(ref tx) = tui_sender {
@@ -4179,6 +4187,12 @@ impl LiveCli {
             let mut prompter = CliPermissionPrompter::new(permission_mode);
             if let Some(sender) = tui_sender.clone() {
                 prompter = prompter.with_tui_sender(sender);
+            }
+            // Surface the thinking indicator on the target tab's TUI sender so
+            // background-tab preloaded spawns get the same "Thinking..." line
+            // that the active-tab path emits.
+            if let Some(ref tx) = tui_sender {
+                tx.send(TuiEvent::ThinkLabel("Thinking...".to_string()));
             }
             match rt.run_turn_preloaded(Some(&mut prompter)) {
                 Ok(ref summary) => {

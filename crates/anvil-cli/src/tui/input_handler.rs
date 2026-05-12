@@ -528,9 +528,6 @@ impl AnvilTui {
                 }
             }
             KeyCode::Char('e' | 'E') => self.cursor_end(),
-            KeyCode::Char('j' | 'J') => {
-                self.insert_char('\n');
-            }
             KeyCode::Char('p' | 'P') => self.history_up(),
             KeyCode::Char('n' | 'N') => self.history_down(),
             KeyCode::Char('v' | 'V') => {
