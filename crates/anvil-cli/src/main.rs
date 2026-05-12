@@ -188,25 +188,40 @@ fn main() {
     });
 
     // Install panic hook to clean up terminal state (disable mouse capture, leave alt screen)
+    // CC parity (v2.2.14): only leave alt-screen if we would have entered it.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        if crate::tui::alternate_screen_enabled() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::terminal::LeaveAlternateScreen
+            );
+        } else {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+            );
+        }
         default_hook(info);
     }));
 
     if let Err(error) = run() {
         // Ensure terminal is cleaned up on error exit too
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::event::DisableMouseCapture,
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        if crate::tui::alternate_screen_enabled() {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::terminal::LeaveAlternateScreen
+            );
+        } else {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::event::DisableMouseCapture,
+            );
+        }
         eprintln!("{}", render_cli_error(&error.to_string()));
         std::process::exit(1);
     }
@@ -4546,7 +4561,7 @@ impl LiveCli {
                 // Image generation takes 10-30 seconds — temporarily leave the alternate
                 // screen so the user sees progress output directly on their terminal.
                 let _ = terminal::disable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen);
+                crate::tui::leave_alt_screen_for_inline_op();
                 println!();
                 let result = self.run_generate_image(prompt, wp_post_id.as_deref());
                 println!("{result}");
@@ -4554,9 +4569,8 @@ impl LiveCli {
                 let _ = io::stdout().flush();
                 let mut buf = String::new();
                 let _ = io::stdin().read_line(&mut buf);
-                // Re-enter alternate screen.
                 let _ = terminal::enable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), terminal::EnterAlternateScreen);
+                crate::tui::restore_alt_screen();
                 tui.push_system(result);
                 return Ok(false);
             }
@@ -6315,7 +6329,7 @@ impl LiveCli {
         match provider_name.to_lowercase().as_str() {
             "anthropic" | "claude" => {
                 let _ = crossterm::terminal::disable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+                crate::tui::leave_alt_screen_for_inline_op();
 
                 println!("\n⚒ Anthropic Login\n");
                 println!("  1) OAuth (browser login via claude.ai)");
@@ -6344,12 +6358,12 @@ impl LiveCli {
                 if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
                     let _ = crossterm::event::read();
                 }
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen);
+                crate::tui::restore_alt_screen();
                 "Anthropic login complete. Token refreshed.".to_string()
             }
             "openai" | "gpt" => {
                 let _ = crossterm::terminal::disable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+                crate::tui::leave_alt_screen_for_inline_op();
 
                 println!("\n⚒ OpenAI API Key Setup\n");
                 match run_openai_apikey_setup("OpenAI", "OPENAI_API_KEY", "openai_api_key", "sk-") {
@@ -6365,12 +6379,12 @@ impl LiveCli {
                 if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
                     let _ = crossterm::event::read();
                 }
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen);
+                crate::tui::restore_alt_screen();
                 "OpenAI API key configured.".to_string()
             }
             "ollama" | "local" => {
                 let _ = crossterm::terminal::disable_raw_mode();
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+                crate::tui::leave_alt_screen_for_inline_op();
 
                 match run_ollama_setup() {
                     Ok(()) => {
@@ -6385,7 +6399,7 @@ impl LiveCli {
                 if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
                     let _ = crossterm::event::read();
                 }
-                let _ = crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen);
+                crate::tui::restore_alt_screen();
                 "Ollama configured.".to_string()
             }
             other => {

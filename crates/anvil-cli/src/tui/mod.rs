@@ -209,6 +209,44 @@ pub(super) struct TabHit {
     pub close_col: Option<u16>,
 }
 
+/// Whether the TUI should enter/leave the terminal's alternate screen.
+///
+/// CC parity: `ANVIL_DISABLE_ALTERNATE_SCREEN=1` keeps the conversation in
+/// the terminal's native scrollback (matches CC v2.1.132 `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN`).
+/// Useful for users who want scrollback to persist across sessions, or for
+/// debugging when alt-screen renderer behaviour is suspect.
+///
+/// Read once and cached; env changes mid-session don't take effect (matches
+/// CC behaviour — alt-screen state is a process-start decision).
+pub fn alternate_screen_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        match std::env::var("ANVIL_DISABLE_ALTERNATE_SCREEN") {
+            Ok(v) => !matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+            Err(_) => true,
+        }
+    })
+}
+
+/// Temporarily leave the alternate screen (for inline operations like image
+/// generation or OAuth login). No-op when alt-screen is disabled.
+///
+/// Pairs with [`restore_alt_screen`].
+pub fn leave_alt_screen_for_inline_op() {
+    if alternate_screen_enabled() {
+        let _ = crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen);
+    }
+}
+
+/// Re-enter the alternate screen after an inline operation completed.
+/// No-op when alt-screen is disabled.
+pub fn restore_alt_screen() {
+    if alternate_screen_enabled() {
+        let _ = crossterm::execute!(io::stdout(), terminal::EnterAlternateScreen);
+    }
+}
+
 impl AnvilTui {
     /// Enter alternate screen and return the TUI + the sender for model events.
     pub fn new(
@@ -244,19 +282,32 @@ impl AnvilTui {
                 from_config.unwrap_or(true)
             }
         };
-        if mouse_capture {
-            crossterm::execute!(
+        // CC parity (v2.2.14): respect ANVIL_DISABLE_ALTERNATE_SCREEN so the
+        // conversation can stay in the terminal's native scrollback when the
+        // user prefers that. Mouse capture and bracketed paste are independent
+        // and still apply.
+        let use_alt = alternate_screen_enabled();
+        match (use_alt, mouse_capture) {
+            (true, true) => crossterm::execute!(
                 stdout,
                 terminal::EnterAlternateScreen,
                 crossterm::event::EnableMouseCapture,
                 crossterm::event::EnableBracketedPaste
-            )?;
-        } else {
-            crossterm::execute!(
+            )?,
+            (true, false) => crossterm::execute!(
                 stdout,
                 terminal::EnterAlternateScreen,
                 crossterm::event::EnableBracketedPaste
-            )?;
+            )?,
+            (false, true) => crossterm::execute!(
+                stdout,
+                crossterm::event::EnableMouseCapture,
+                crossterm::event::EnableBracketedPaste
+            )?,
+            (false, false) => crossterm::execute!(
+                stdout,
+                crossterm::event::EnableBracketedPaste
+            )?,
         }
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
@@ -3619,12 +3670,21 @@ impl AnvilTui {
 impl Drop for AnvilTui {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            io::stdout(),
-            crossterm::event::DisableBracketedPaste,
-            crossterm::event::DisableMouseCapture,
-            terminal::LeaveAlternateScreen
-        );
+        // CC parity (v2.2.14): only leave alt-screen if we entered it.
+        if alternate_screen_enabled() {
+            let _ = crossterm::execute!(
+                io::stdout(),
+                crossterm::event::DisableBracketedPaste,
+                crossterm::event::DisableMouseCapture,
+                terminal::LeaveAlternateScreen
+            );
+        } else {
+            let _ = crossterm::execute!(
+                io::stdout(),
+                crossterm::event::DisableBracketedPaste,
+                crossterm::event::DisableMouseCapture,
+            );
+        }
     }
 }
 
