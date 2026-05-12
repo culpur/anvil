@@ -598,6 +598,32 @@ impl AnvilTui {
         self.pending_auto_submit = Some(text.into());
     }
 
+    /// v2.2.14 TUI-3: pop the next queued message off the active tab's
+    /// `message_queue` and stage it in `pending_submit` so the in-flight
+    /// handler picks it up when the next turn starts streaming. Returns
+    /// `true` if a message was promoted.
+    pub fn promote_next_queued_for_active(&mut self) -> bool {
+        if self.pending_submit.is_some() {
+            return false;
+        }
+        if let Some(next) = self.active_tab_mut().message_queue.pop_front() {
+            self.pending_submit = Some(next);
+            self.redraw.request(redraw::DirtyRegions::INPUT);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// v2.2.14 TUI-3: count of queued user messages on the active tab.
+    /// Used by the input renderer to show `[N queued]` above the input.
+    pub fn active_tab_queue_len(&self) -> usize {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.message_queue.len())
+            .unwrap_or(0)
+    }
+
     // ─── Redraw scheduler API ────────────────────────────────────────────────
 
     /// Mark one or more dirty regions, deferring the actual paint until the
@@ -719,6 +745,27 @@ impl AnvilTui {
         let think = tab.think_label.clone();
         let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
         let input_text = tab.input.clone();
+        // v2.2.14 TUI-3: snapshot for the queued-messages indicator. The
+        // visible count is `pending_submit + queue` so the user sees the
+        // total drafts waiting to fire after the current turn.
+        let queued_count = tab.message_queue.len()
+            + usize::from(self.pending_submit.is_some());
+        let queued_preview: Vec<String> = {
+            let preview_iter = self.pending_submit.iter()
+                .chain(tab.message_queue.iter());
+            preview_iter
+                .take(3)
+                .map(|s| {
+                    let cap = 40;
+                    if s.chars().count() > cap {
+                        let trimmed: String = s.chars().take(cap).collect();
+                        format!("{trimmed}…")
+                    } else {
+                        s.clone()
+                    }
+                })
+                .collect()
+        };
         let cursor_pos = tab.cursor;
         let scroll = tab.scroll;
         let scrollback_state = tab.scrollback_state;
@@ -981,9 +1028,12 @@ impl AnvilTui {
 
             // How many visual rows does the current input occupy? (1–5)
             let input_line_count = compute_input_lines(&input_text, width);
-            // Total footer height: separator(1) + input rows + blank(1) + N status lines.
+            // Total footer height: separator(1) + queued indicator(0|1) +
+            // input rows + blank(1) + N status lines.
             let status_line_count = sl_config.line_count();
-            let footer_height: u16 = (2 + input_line_count + status_line_count) as u16;
+            let queued_indicator_height: usize = usize::from(queued_count > 0);
+            let footer_height: u16 =
+                (2 + queued_indicator_height + input_line_count + status_line_count) as u16;
 
             // Agent panel height: 2 lines for border + 1 per agent row (max 6).
             let agent_panel_height: u16 = if agent_panel_visible && !agent_rows.is_empty() {
@@ -1541,9 +1591,41 @@ impl AnvilTui {
             };
             let status_lines = render_status_lines(&sl_config, &sl_data, width);
 
+            // v2.2.14 TUI-3: optional `[N queued]` indicator above the
+            // input line. Shows when the user has stacked submissions while
+            // a turn is streaming. We render the count plus up to 3 short
+            // previews so the user remembers what's waiting.
+            let queued_indicator: Option<Line<'static>> = if queued_count > 0 {
+                let mut spans: Vec<Span<'static>> = Vec::new();
+                spans.push(Span::styled(
+                    format!("[{queued_count} queued]"),
+                    Style::default()
+                        .fg(rgb(theme.warning))
+                        .add_modifier(Modifier::BOLD),
+                ));
+                for preview in &queued_preview {
+                    spans.push(Span::styled(
+                        format!(" • {preview}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                if queued_count > queued_preview.len() {
+                    spans.push(Span::styled(
+                        format!(" • +{} more", queued_count - queued_preview.len()),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                Some(Line::from(spans))
+            } else {
+                None
+            };
+
             // Assemble footer.
             let mut footer_lines: Vec<Line<'static>> = Vec::new();
             footer_lines.push(line0);
+            if let Some(indicator) = queued_indicator {
+                footer_lines.push(indicator);
+            }
             footer_lines.extend(input_lines_rendered);
             footer_lines.push(line_blank);
             footer_lines.extend(status_lines);
@@ -1639,10 +1721,15 @@ impl AnvilTui {
             }
 
             // Position the terminal cursor within the (possibly multi-row) input area.
+            // v2.2.14 TUI-3: shift one row down when the queued-messages
+            // indicator is rendered above the input box.
             let (cursor_row_offset, cursor_col) =
                 cursor_visual_position(&input_text, cursor_pos, width);
             let cursor_x = footer_area.x + cursor_col as u16;
-            let cursor_y = footer_area.y + 1 + cursor_row_offset as u16;
+            let cursor_y = footer_area.y
+                + 1
+                + queued_indicator_height as u16
+                + cursor_row_offset as u16;
             let max_x = footer_area.x + footer_area.width.saturating_sub(1);
             frame.set_cursor_position(Position {
                 x: cursor_x.min(max_x),
@@ -2359,6 +2446,29 @@ impl AnvilTui {
             return None;
         }
 
+        // v2.2.14 TUI-3: Esc / Ctrl+Shift+Esc drain the per-tab message
+        // queue (the in-flight tab's queue, not the visually-active tab's).
+        // Ctrl+Shift+Esc clears every queued message; plain Esc drops only
+        // the most-recently submitted one.
+        if matches!(key.code, KeyCode::Esc) {
+            if let Some(idx) = self.tabs.iter().position(|t| t.id == target_tab_id) {
+                let queue = &mut self.tabs[idx].message_queue;
+                let dirty = if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.modifiers.contains(KeyModifiers::SHIFT)
+                {
+                    let had_any = !queue.is_empty();
+                    queue.clear();
+                    had_any
+                } else {
+                    queue.pop_back().is_some()
+                };
+                if dirty {
+                    self.redraw.request(redraw::DirtyRegions::INPUT);
+                }
+            }
+            return None;
+        }
+
         // ── Tab-switch and meta keys ───────────────────────────────────────
         // These are checked first so they take priority over plain-char input.
 
@@ -2455,10 +2565,18 @@ impl AnvilTui {
             // Determine whether the active tab is the in-flight target.
             let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
             if active_tab_id == target_tab_id {
-                // Active tab IS the streaming tab.  Store as pending_submit
-                // (Bug-1 type-ahead): the main loop will auto-fire it after
-                // TurnDone is received.  Don't interrupt the wait.
-                self.pending_submit = Some(draft);
+                // v2.2.14 TUI-3: active tab IS the streaming tab. The first
+                // type-ahead message goes into `pending_submit` (the slot
+                // the main loop's TurnDone consumer reads). Anything beyond
+                // that stacks in the per-tab `message_queue`, drained FIFO
+                // by `drain_next_queued` after each subsequent turn ends.
+                // `[N queued]` renders above the input line.
+                if self.pending_submit.is_none() {
+                    self.pending_submit = Some(draft);
+                } else {
+                    self.active_tab_mut().message_queue.push_back(draft);
+                }
+                self.redraw.request(redraw::DirtyRegions::INPUT);
                 return None;
             }
 
@@ -2581,15 +2699,44 @@ impl AnvilTui {
                 self.redraw.request(redraw::DirtyRegions::INPUT);
             }
             (KeyCode::Enter, _) => {
-                // Capture draft as pending_submit and clear input
-                let tab = self.active_tab_mut();
-                let draft = std::mem::take(&mut tab.input);
-                tab.cursor = 0;
-                let trimmed = draft.trim().to_string();
-                if !trimmed.is_empty() {
-                    self.pending_submit = Some(trimmed);
+                // v2.2.14 TUI-3: first held draft populates `pending_submit`
+                // (the existing held-submit slot the main loop reads).
+                // Subsequent drafts stack in the active tab's message queue
+                // and fire FIFO after each turn ends.
+                let draft = {
+                    let tab = self.active_tab_mut();
+                    let d = std::mem::take(&mut tab.input);
+                    tab.cursor = 0;
+                    d.trim().to_string()
+                };
+                if !draft.is_empty() {
+                    if self.pending_submit.is_none() {
+                        self.pending_submit = Some(draft);
+                    } else {
+                        self.active_tab_mut().message_queue.push_back(draft);
+                    }
                 }
                 self.redraw.request(redraw::DirtyRegions::INPUT);
+            }
+            (KeyCode::Esc, m) if m.contains(KeyModifiers::CONTROL)
+                && m.contains(KeyModifiers::SHIFT) =>
+            {
+                // v2.2.14 TUI-3: Ctrl+Shift+Esc clears the entire queue.
+                let tab = self.active_tab_mut();
+                if !tab.message_queue.is_empty() {
+                    tab.message_queue.clear();
+                    self.redraw.request(redraw::DirtyRegions::INPUT);
+                }
+            }
+            (KeyCode::Esc, _) => {
+                // v2.2.14 TUI-3: Esc drops the most-recently queued message
+                // (the user's "oops, didn't mean to send that"). Plain Esc
+                // does NOT cancel the in-flight turn — Ctrl+C is the cancel
+                // key now (TUI-1).
+                let tab = self.active_tab_mut();
+                if tab.message_queue.pop_back().is_some() {
+                    self.redraw.request(redraw::DirtyRegions::INPUT);
+                }
             }
             // All other keys are ignored during in-flight typing —
             // arrow keys, function keys, modifiers, etc.

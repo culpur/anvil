@@ -3567,13 +3567,22 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(draft) = held_submit
                     && !draft.is_empty()
                 {
+                    // v2.2.14 TUI-3: held drafts (whether slash commands or
+                    // free text) auto-dispatch on the next read_input pass.
+                    // The user explicitly queued them while the prior turn
+                    // streamed; making them re-press Enter would defeat
+                    // the queueing UX. After dispatch, the next-in-queue is
+                    // promoted to `pending_submit` for the following turn.
                     if draft.starts_with('/') {
                         tui.push_system(format!("↳ executing held command: {draft}"));
-                        tui.set_pending_submission(draft);
                     } else {
-                        tui.push_system(format!("↳ resuming with held draft: {draft}"));
-                        tui.set_input(draft);
+                        tui.push_system(format!("↳ dispatching held message: {draft}"));
                     }
+                    tui.set_pending_submission(draft);
+                    // Promote the next queued message (if any) into
+                    // pending_submit so the in-flight handler picks it up
+                    // for the upcoming turn.
+                    tui.promote_next_queued_for_active();
                 }
                 // Update footer QMD/archive status after each turn
                 if cli.qmd.is_enabled()
@@ -8469,6 +8478,7 @@ impl LiveCli {
                     ssh: None,
                     has_runtime: true,
                     cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    message_queue: std::collections::VecDeque::new(),
                 };
                 self.share_manager.stop_share(&synthetic)
             }

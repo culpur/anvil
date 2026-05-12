@@ -506,6 +506,11 @@ pub(crate) struct Tab {
     /// while a turn is streaming; the runtime polls between SSE frames and
     /// bails with `RuntimeError::cancelled()`.
     pub cancel_token: Arc<AtomicBool>,
+    /// v2.2.14 TUI-3: queued user prompts waiting for the in-flight turn to
+    /// finish. Submissions are pushed to the back; the front is dispatched
+    /// as the next turn the moment `TurnDone` lands. Visually rendered as
+    /// `[N queued]` above the input line.
+    pub message_queue: std::collections::VecDeque<String>,
 }
 
 impl Tab {
@@ -542,6 +547,7 @@ impl Tab {
             ssh: None,
             has_runtime: false,
             cancel_token: Arc::new(AtomicBool::new(false)),
+            message_queue: std::collections::VecDeque::new(),
         }
     }
 
