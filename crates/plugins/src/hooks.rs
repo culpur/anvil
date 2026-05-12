@@ -18,6 +18,16 @@ use crate::{PluginError, PluginHooks, PluginRegistry};
 /// backward compatibility.  Tagged objects with `"type": "prompt"` inject
 /// a message into the next model turn instead of running a subprocess.
 ///
+/// CC parity (v2.2.14, mirrors CC v2.1.139):
+/// - **`exec` form** (`args: ["script.sh", "$file"]`) spawns the command
+///   directly with `Command::new(args[0]).args(&args[1..])` — no shell,
+///   so path placeholders never need quoting and the user is immune to
+///   shell-injection from interpolated values.
+/// - **`continue_on_block`** on `PostToolUse` hooks: when `true`, a hook
+///   that exits with code 2 (deny) instead feeds the hook's rejection
+///   reason back to the model and continues the turn, rather than hard-
+///   denying the tool result. Defaults to `false` for backward compat.
+///
 /// # Examples (JSON)
 /// ```json
 /// // Legacy bare-string form — still works unchanged
@@ -28,6 +38,12 @@ use crate::{PluginError, PluginHooks, PluginRegistry};
 ///
 /// // Prompt hook — injects text into the next model turn
 /// { "type": "prompt", "body": "verify the edit you just made still compiles" }
+///
+/// // Exec hook — args[]: no shell, no quoting hazards
+/// { "args": ["./hooks/pre.sh", "{tool_name}"] }
+///
+/// // PostToolUse hook that surfaces denial without aborting the turn
+/// { "args": ["./hooks/review.sh"], "continue_on_block": true }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -39,6 +55,20 @@ pub enum HookSpec {
         #[serde(rename = "type")]
         kind: HookKind,
         body: String,
+    },
+    /// Exec form: spawn directly without a shell.  CC v2.1.139 parity.
+    ///
+    /// `args[0]` is the program; `args[1..]` are passed verbatim. Path
+    /// placeholders like `{file}` are substituted into the values without
+    /// shell quoting because no shell is involved.
+    ///
+    /// `continue_on_block` only applies to `PostToolUse` hooks; ignored
+    /// elsewhere. When `true`, an exit-code-2 (deny) outcome becomes a
+    /// model-visible warning instead of a hard block.
+    Exec {
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continue_on_block: Option<bool>,
     },
 }
 
@@ -55,28 +85,68 @@ impl HookSpec {
         )
     }
 
+    /// Returns `true` when this spec is an exec-form hook (args array, no shell).
+    #[must_use]
+    pub const fn is_exec(&self) -> bool {
+        matches!(self, Self::Exec { .. })
+    }
+
+    /// Returns `true` when this PostToolUse-targeting hook should convert
+    /// denial into a model-visible warning instead of a hard block.
+    /// Always `false` for non-`Exec` variants.
+    #[must_use]
+    pub fn continues_on_block(&self) -> bool {
+        match self {
+            Self::Exec { continue_on_block, .. } => continue_on_block.unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Returns the body/command string regardless of variant.
+    ///
+    /// For `Exec`, returns the first arg (the program) — useful for
+    /// logging and validation but not for execution (use [`exec_args`]).
     #[must_use]
     pub fn body(&self) -> &str {
         match self {
             Self::Command(s) => s,
             Self::Tagged { body, .. } => body,
+            Self::Exec { args, .. } => args.first().map(String::as_str).unwrap_or(""),
+        }
+    }
+
+    /// Returns the full args slice for `Exec` variants; `None` otherwise.
+    #[must_use]
+    pub fn exec_args(&self) -> Option<&[String]> {
+        match self {
+            Self::Exec { args, .. } => Some(args.as_slice()),
+            _ => None,
         }
     }
 
     /// Validate that the body is non-empty.
     pub fn validate_non_empty(&self) -> Result<(), String> {
-        if self.body().trim().is_empty() {
-            Err(format!(
-                "hook {} body must not be empty",
-                match self {
-                    Self::Command(_) => "command",
-                    Self::Tagged { kind, .. } => kind.as_str(),
+        match self {
+            Self::Command(s) => {
+                if s.trim().is_empty() {
+                    return Err("hook command body must not be empty".to_string());
                 }
-            ))
-        } else {
-            Ok(())
+            }
+            Self::Tagged { kind, body } => {
+                if body.trim().is_empty() {
+                    return Err(format!("hook {} body must not be empty", kind.as_str()));
+                }
+            }
+            Self::Exec { args, .. } => {
+                if args.is_empty() {
+                    return Err("hook exec args[] must not be empty".to_string());
+                }
+                if args[0].trim().is_empty() {
+                    return Err("hook exec args[0] (program) must not be empty".to_string());
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -802,5 +872,96 @@ mod tests {
         );
         let valid = super::HookSpec::Command("./hooks/pre.sh".to_string());
         assert!(valid.validate_non_empty().is_ok());
+    }
+
+    // ─── CC parity v2.2.14: Exec form + continue_on_block ────────────────
+
+    #[test]
+    fn exec_form_deserializes_from_args_array() {
+        let json = r#"{"args": ["./hooks/pre.sh", "{tool_name}", "extra arg"]}"#;
+        let spec: super::HookSpec = serde_json::from_str(json).expect("deserialize");
+        assert!(spec.is_exec());
+        assert_eq!(
+            spec.exec_args(),
+            Some(["./hooks/pre.sh", "{tool_name}", "extra arg"].as_slice()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .as_slice())
+        );
+        assert!(!spec.continues_on_block());
+    }
+
+    #[test]
+    fn exec_form_with_continue_on_block_true() {
+        let json = r#"{"args": ["./hooks/review.sh"], "continue_on_block": true}"#;
+        let spec: super::HookSpec = serde_json::from_str(json).expect("deserialize");
+        assert!(spec.is_exec());
+        assert!(spec.continues_on_block());
+    }
+
+    #[test]
+    fn non_exec_variants_never_continue_on_block() {
+        let cmd = super::HookSpec::Command("./hooks/pre.sh".to_string());
+        assert!(!cmd.continues_on_block());
+        let tagged = super::HookSpec::Tagged {
+            kind: super::HookKind::Prompt,
+            body: "anything".to_string(),
+        };
+        assert!(!tagged.continues_on_block());
+    }
+
+    #[test]
+    fn exec_form_validates_empty_args() {
+        let empty = super::HookSpec::Exec {
+            args: Vec::new(),
+            continue_on_block: None,
+        };
+        let err = empty.validate_non_empty().unwrap_err();
+        assert!(
+            err.contains("exec args[] must not be empty"),
+            "got: {err}"
+        );
+
+        let blank_program = super::HookSpec::Exec {
+            args: vec!["   ".to_string(), "x".to_string()],
+            continue_on_block: None,
+        };
+        assert!(blank_program.validate_non_empty().is_err());
+    }
+
+    #[test]
+    fn exec_form_validates_ok() {
+        let ok = super::HookSpec::Exec {
+            args: vec!["./hooks/run".to_string(), "arg1".to_string()],
+            continue_on_block: Some(true),
+        };
+        assert!(ok.validate_non_empty().is_ok());
+    }
+
+    #[test]
+    fn exec_form_serialize_roundtrip() {
+        let spec = super::HookSpec::Exec {
+            args: vec!["prog".to_string(), "a".to_string(), "b".to_string()],
+            continue_on_block: Some(true),
+        };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        // continue_on_block should serialize when Some, skip when None
+        assert!(json.contains("\"continue_on_block\":true"));
+        let back: super::HookSpec = serde_json::from_str(&json).expect("roundtrip");
+        assert_eq!(spec, back);
+    }
+
+    #[test]
+    fn exec_form_skips_continue_on_block_when_none() {
+        let spec = super::HookSpec::Exec {
+            args: vec!["prog".to_string()],
+            continue_on_block: None,
+        };
+        let json = serde_json::to_string(&spec).expect("serialize");
+        assert!(
+            !json.contains("continue_on_block"),
+            "None should not serialize, got: {json}"
+        );
     }
 }

@@ -802,21 +802,29 @@ impl HookRunner {
         let mut messages = Vec::new();
 
         for spec in specs {
+            let request = HookCommandRequest {
+                event,
+                tool_name,
+                tool_input,
+                tool_output,
+                is_error,
+                payload: &payload,
+            };
             let outcome = match spec {
                 RuntimeHookSpec::Plugin(plugin) if plugin.is_prompt() => {
                     run_prompt_spec(plugin, event, tool_name, &ctx)
                 }
-                RuntimeHookSpec::Plugin(plugin) => Self::run_command(
-                    plugin.body(),
-                    HookCommandRequest {
-                        event,
-                        tool_name,
-                        tool_input,
-                        tool_output,
-                        is_error,
-                        payload: &payload,
-                    },
-                ),
+                // CC parity v2.2.14: exec form. Spawns the command directly
+                // without a shell, so path placeholders never need quoting.
+                // Honors `continue_on_block` for PostToolUse: a denial is
+                // rewritten to a warning so the model can see the rejection
+                // reason and continue the turn.
+                RuntimeHookSpec::Plugin(plugin) if plugin.is_exec() => {
+                    let args = plugin.exec_args().unwrap_or(&[]);
+                    let raw = Self::run_exec(args, request);
+                    apply_continue_on_block(raw, event, plugin.continues_on_block())
+                }
+                RuntimeHookSpec::Plugin(plugin) => Self::run_command(plugin.body(), request),
                 RuntimeHookSpec::McpTool {
                     server,
                     tool,
@@ -956,6 +964,117 @@ impl HookRunner {
                 ),
             },
         }
+    }
+
+    /// CC parity v2.2.14: exec-form hook runner. Spawns `args[0]` with
+    /// `args[1..]` passed verbatim — no shell, so neither path nor argument
+    /// values need quoting. All other semantics (env, stdin payload, exit
+    /// codes 0/2/other → Allow/Deny/Warn, session_ctx propagation) match
+    /// `run_command` to keep the user-visible behavior identical.
+    fn run_exec(args: &[String], request: HookCommandRequest<'_>) -> HookCommandOutcome {
+        let program = match args.first() {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => {
+                return HookCommandOutcome::Warn {
+                    message: format!(
+                        "{} hook exec args[] empty for `{}`; skipping",
+                        request.event.as_str(),
+                        request.tool_name
+                    ),
+                };
+            }
+        };
+        let mut command = std::process::Command::new(program);
+        command.args(&args[1..]);
+        command.stdin(std::process::Stdio::piped());
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        command.env("HOOK_EVENT", request.event.as_str());
+        command.env("HOOK_TOOL_NAME", request.tool_name);
+        command.env("HOOK_TOOL_INPUT", request.tool_input);
+        command.env(
+            "HOOK_TOOL_IS_ERROR",
+            if request.is_error { "1" } else { "0" },
+        );
+        if let Some(tool_output) = request.tool_output {
+            command.env("HOOK_TOOL_OUTPUT", tool_output);
+        }
+        if let Some(ctx) = crate::session_ctx::get() {
+            command.env("ANVIL_SESSION_ID", &ctx.session_id);
+            command.env("ANVIL_EFFORT", &ctx.effort_level);
+            command.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
+        }
+
+        // Spawn + feed stdin + capture output. Mirrors CommandWithStdin::output_with_stdin.
+        let spawn_result = command.spawn();
+        let mut child = match spawn_result {
+            Ok(c) => c,
+            Err(error) => {
+                return HookCommandOutcome::Warn {
+                    message: format!(
+                        "{} hook exec `{program}` failed to start for `{}`: {error}",
+                        request.event.as_str(),
+                        request.tool_name
+                    ),
+                };
+            }
+        };
+        if let Some(mut child_stdin) = child.stdin.take() {
+            use std::io::Write;
+            let _ = child_stdin.write_all(request.payload.as_bytes());
+            drop(child_stdin);
+        }
+        let output = match child.wait_with_output() {
+            Ok(o) => o,
+            Err(error) => {
+                return HookCommandOutcome::Warn {
+                    message: format!(
+                        "{} hook exec `{program}` failed for `{}`: {error}",
+                        request.event.as_str(),
+                        request.tool_name
+                    ),
+                };
+            }
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = (!stdout.is_empty()).then_some(stdout);
+        match output.status.code() {
+            Some(0) => HookCommandOutcome::Allow { message },
+            Some(2) => HookCommandOutcome::Deny { message },
+            Some(code) => HookCommandOutcome::Warn {
+                message: format_hook_warning(program, code, message.as_deref(), stderr.as_str()),
+            },
+            None => HookCommandOutcome::Warn {
+                message: format!(
+                    "{} hook exec `{program}` terminated by signal while handling `{}`",
+                    request.event.as_str(),
+                    request.tool_name
+                ),
+            },
+        }
+    }
+}
+
+/// CC parity v2.2.14 (`continue_on_block`): for PostToolUse hooks marked
+/// `continue_on_block: true`, rewrite a Deny outcome into a Warn so the
+/// model sees the rejection reason and continues instead of hard-blocking.
+/// All other event types and `false`/unset values pass through unchanged.
+fn apply_continue_on_block(
+    outcome: HookCommandOutcome,
+    event: HookEvent,
+    continue_on_block: bool,
+) -> HookCommandOutcome {
+    if !continue_on_block || !matches!(event, HookEvent::PostToolUse) {
+        return outcome;
+    }
+    match outcome {
+        HookCommandOutcome::Deny { message } => HookCommandOutcome::Warn {
+            message: message.unwrap_or_else(|| {
+                "PostToolUse hook blocked (continue_on_block: true — surfacing as warning)".to_string()
+            }),
+        },
+        other => other,
     }
 }
 
@@ -1114,7 +1233,8 @@ mod tests {
     use serde_json::{json, Value as JsonValue};
 
     use super::{
-        HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker, RuntimeHookSpec,
+        HookCommandOutcome, HookEvent, HookRunResult, HookRunner, McpHookInvocationResult,
+        McpHookInvoker, RuntimeHookSpec,
     };
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
     use plugins::{HookKind, HookSpec};
@@ -1550,6 +1670,63 @@ mod tests {
         });
         assert!(!result.is_denied(), "Notification must not deny");
         assert_eq!(result.messages(), &["notify-ok".to_string()]);
+    }
+
+    #[test]
+    fn apply_continue_on_block_rewrites_post_tool_deny_to_warn() {
+        use super::apply_continue_on_block;let outcome = HookCommandOutcome::Deny {
+            message: Some("nope".to_string()),
+        };
+        let result = apply_continue_on_block(outcome, HookEvent::PostToolUse, true);
+        match result {
+            HookCommandOutcome::Warn { message } => assert_eq!(message, "nope"),
+            _ => panic!("expected Warn"),
+        }
+    }
+
+    #[test]
+    fn apply_continue_on_block_passes_through_when_disabled() {
+        use super::apply_continue_on_block;let outcome = HookCommandOutcome::Deny {
+            message: Some("nope".to_string()),
+        };
+        let result = apply_continue_on_block(outcome, HookEvent::PostToolUse, false);
+        assert!(matches!(result, HookCommandOutcome::Deny { .. }));
+    }
+
+    #[test]
+    fn apply_continue_on_block_does_not_apply_to_pretool() {
+        use super::apply_continue_on_block;let outcome = HookCommandOutcome::Deny {
+            message: Some("nope".to_string()),
+        };
+        let result = apply_continue_on_block(outcome, HookEvent::PreToolUse, true);
+        assert!(
+            matches!(result, HookCommandOutcome::Deny { .. }),
+            "PreToolUse must not rewrite Deny"
+        );
+    }
+
+    #[test]
+    fn apply_continue_on_block_default_message_when_deny_has_no_message() {
+        use super::apply_continue_on_block;let outcome = HookCommandOutcome::Deny { message: None };
+        let result = apply_continue_on_block(outcome, HookEvent::PostToolUse, true);
+        match result {
+            HookCommandOutcome::Warn { message } => {
+                assert!(message.contains("continue_on_block"));
+            }
+            _ => panic!("expected Warn"),
+        }
+    }
+
+    #[test]
+    fn apply_continue_on_block_leaves_allow_unchanged() {
+        use super::apply_continue_on_block;let outcome = HookCommandOutcome::Allow {
+            message: Some("ok".to_string()),
+        };
+        let result = apply_continue_on_block(outcome, HookEvent::PostToolUse, true);
+        match result {
+            HookCommandOutcome::Allow { message } => assert_eq!(message.as_deref(), Some("ok")),
+            _ => panic!("expected Allow"),
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

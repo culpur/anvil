@@ -358,6 +358,20 @@ fn resolve_hook_spec(root: &Path, spec: &HookSpec) -> HookSpec {
             kind: HookKind::Command,
             body: resolve_hook_entry(root, body),
         },
+        // CC parity v2.2.14: exec-form hooks resolve args[0] (the program)
+        // against the plugin root the same way Command does; args[1..] are
+        // user values and pass through verbatim (the whole point of args[]
+        // is no shell, no path mangling on argument values).
+        HookSpec::Exec { args, continue_on_block } => {
+            let mut resolved = args.clone();
+            if let Some(program) = resolved.first_mut() {
+                *program = resolve_hook_entry(root, program);
+            }
+            HookSpec::Exec {
+                args: resolved,
+                continue_on_block: *continue_on_block,
+            }
+        }
     }
 }
 
