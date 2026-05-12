@@ -100,6 +100,28 @@ pub fn emit_event(event_name: &'static str, attrs: &[(&str, &str)]) {
         return;
     }
 
+    // CC-139-F16: when a subagent is active, prepend agent_id /
+    // parent_agent_id to the attribute list so the event carries
+    // trace-reassembly headers without every caller threading them
+    // through. The clone is paid only when OTel is enabled *and* a
+    // subagent is active.
+    let ctx = crate::agent_ctx::current();
+    if let Some(ref c) = ctx {
+        let mut prefixed: Vec<(&str, &str)> = Vec::with_capacity(attrs.len() + 2);
+        prefixed.push(("agent_id", c.agent_id.as_str()));
+        if let Some(parent) = c.parent_agent_id.as_deref() {
+            prefixed.push(("parent_agent_id", parent));
+        }
+        prefixed.extend_from_slice(attrs);
+        #[cfg(feature = "otel")]
+        emit_event_inner(event_name, &prefixed);
+        #[cfg(not(feature = "otel"))]
+        {
+            let _ = (event_name, &prefixed);
+        }
+        return;
+    }
+
     #[cfg(feature = "otel")]
     emit_event_inner(event_name, attrs);
 

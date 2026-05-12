@@ -19,6 +19,7 @@ pub mod private_memory;
 pub mod qmd;
 pub mod routines;
 pub mod scroll_speed;
+pub mod agent_ctx;
 pub mod search;
 pub mod task;
 pub mod team;

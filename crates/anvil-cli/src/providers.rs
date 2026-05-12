@@ -1789,6 +1789,14 @@ impl CliToolExecutor {
             .ok()
             .and_then(|guard| guard.clone());
 
+        // CC-139-F16: capture the parent's agent_id (if any) at spawn
+        // time so the worker thread can record it as parent_agent_id.
+        // Falls back to the session id when no enclosing subagent — that
+        // is the "root" parent.
+        let parent_agent_id: Option<String> = runtime::agent_ctx::current()
+            .map(|c| c.agent_id);
+        let child_agent_id = format!("team:{team_id}:{member_name}");
+
         let mut mgr = self
             .agent_manager
             .lock()
@@ -1800,6 +1808,16 @@ impl CliToolExecutor {
             task_desc,
             move |sender| {
                 use std::time::Instant;
+
+                // Push the subagent's context for the duration of this
+                // closure. PushGuard pops on Drop so it's safe across
+                // every early-return path below.
+                let _otel_guard = runtime::agent_ctx::PushGuard::new(
+                    runtime::agent_ctx::AgentContext {
+                        agent_id: child_agent_id.clone(),
+                        parent_agent_id: parent_agent_id.clone(),
+                    },
+                );
 
                 let start = Instant::now();
                 sender.send_line(format!(
