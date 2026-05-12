@@ -26,7 +26,7 @@ pub(super) mod input_handler;
 pub use state::{InFlightInterruption, TaggedTuiEvent, TuiEvent, TuiSender};
 pub(super) use state::{PermissionReply, PendingPermission};
 pub use configure_types::{ConfigureAction, ConfigureData};
-pub use widgets::init_ollama_model_cache;
+pub use widgets::{init_ollama_model_cache, invalidate_ollama_model_cache};
 
 
 // Internal imports used by AnvilTui methods in this file.

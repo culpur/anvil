@@ -112,6 +112,10 @@ pub fn handle_slash_command(
             message: handle_memory_command(action.as_deref()),
             session: session.clone(),
         }),
+        SlashCommand::Ollama { .. } => Some(SlashCommandResult {
+            message: "/ollama: intercepted by the CLI in interactive mode. In non-interactive contexts, use `anvil ollama …` from your shell instead.".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Init => Some(SlashCommandResult {
             message: "/init is not yet implemented. To initialize Anvil in a new project, create an ANVIL.md file in your project root with instructions for the assistant.".to_string(),
             session: session.clone(),

@@ -130,6 +130,12 @@ pub enum SlashCommand {
         /// Raw sub-command and optional arg, e.g. `Some("show anvil-md")`.
         action: Option<String>,
     },
+    /// `/ollama [list|show <model>|ps|tune <model>|option ...|policy ...|pull|rm|cp|create|bench|requantize ...]`
+    /// Read + manage local Ollama models. `args` is the raw remainder after `ollama`.
+    Ollama {
+        /// Sub-command and arguments, e.g. `Some("tune qwen3:8b")`.
+        args: Option<String>,
+    },
     Init,
     Diff,
     Version,
@@ -566,6 +572,9 @@ impl SlashCommand {
             },
             "memory" => Self::Memory {
                 action: remainder_after_command(trimmed, command),
+            },
+            "ollama" => Self::Ollama {
+                args: remainder_after_command(trimmed, command),
             },
             "init" => Self::Init,
             "diff" => Self::Diff,
@@ -1251,6 +1260,22 @@ mod tests {
                 action: Some("show anvil-md".to_string())
             })
         );
+        assert_eq!(
+            SlashCommand::parse("/ollama"),
+            Some(SlashCommand::Ollama { args: None })
+        );
+        assert_eq!(
+            SlashCommand::parse("/ollama list"),
+            Some(SlashCommand::Ollama {
+                args: Some("list".to_string())
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/ollama tune qwen3:8b"),
+            Some(SlashCommand::Ollama {
+                args: Some("tune qwen3:8b".to_string())
+            })
+        );
         assert_eq!(SlashCommand::parse("/init"), Some(SlashCommand::Init));
         assert_eq!(SlashCommand::parse("/diff"), Some(SlashCommand::Diff));
         assert_eq!(SlashCommand::parse("/version"), Some(SlashCommand::Version));
@@ -1916,6 +1941,7 @@ mod tests {
                 SlashCommand::Resume { .. } => "resume",
                 SlashCommand::Config { .. } => "config",
                 SlashCommand::Memory { .. } => "memory",
+                SlashCommand::Ollama { .. } => "ollama",
                 SlashCommand::Init => "init",
                 SlashCommand::Diff => "diff",
                 SlashCommand::Version => "version",

@@ -15,6 +15,10 @@ mod init;
 mod input;
 mod mcp_server_mode;
 mod mcp_server_tools;
+mod ollama_bench;
+mod ollama_cmds;
+mod ollama_manage;
+mod ollama_requantize;
 mod providers;
 mod remote_control;
 mod render;
@@ -1645,6 +1649,14 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_memory_report()?),
         }),
+        SlashCommand::Ollama { args } => {
+            let ollama_host = std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            Ok(ResumeCommandOutcome {
+                session: session.clone(),
+                message: Some(crate::ollama_cmds::run_ollama_command(args.as_deref(), &ollama_host)),
+            })
+        }
         SlashCommand::Init => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(init_anvil_md()?),
@@ -4861,6 +4873,12 @@ impl LiveCli {
                 let report = render_memory_report()?;
                 (report, false)
             }
+            SlashCommand::Ollama { args } => {
+                let ollama_host = std::env::var("OLLAMA_HOST")
+                    .unwrap_or_else(|_| "http://localhost:11434".to_string());
+                let out = crate::ollama_cmds::run_ollama_command(args.as_deref(), &ollama_host);
+                (out, false)
+            }
             SlashCommand::Diff => {
                 let diff = std::process::Command::new("git")
                     .args(["diff", "--stat"])
@@ -6629,6 +6647,15 @@ impl LiveCli {
             }
             SlashCommand::Memory { .. } => {
                 Self::print_memory()?;
+                false
+            }
+            SlashCommand::Ollama { args } => {
+                let ollama_host = std::env::var("OLLAMA_HOST")
+                    .unwrap_or_else(|_| "http://localhost:11434".to_string());
+                println!(
+                    "{}",
+                    crate::ollama_cmds::run_ollama_command(args.as_deref(), &ollama_host)
+                );
                 false
             }
             SlashCommand::Init => {

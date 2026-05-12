@@ -7,6 +7,9 @@ use crate::types::{MessageRequest, MessageResponse};
 pub mod anvil_provider;
 pub mod common;
 pub mod ollama;
+pub mod ollama_manage;
+pub mod ollama_registry;
+pub mod ollama_show;
 pub mod ollama_tool_parser;
 pub mod openai_compat;
 

@@ -72,35 +72,64 @@ pub(super) fn category_for_command(name: &str) -> Option<&'static str> {
 
 // ─── Ollama model cache ───────────────────────────────────────────────────────
 
-static OLLAMA_MODEL_CACHE: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+static OLLAMA_MODEL_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Vec<(String, String)>>>> =
+    std::sync::OnceLock::new();
+
+fn ollama_cache_slot() -> &'static std::sync::Mutex<Option<Vec<(String, String)>>> {
+    OLLAMA_MODEL_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn fetch_ollama_models_for_cache() -> Vec<(String, String)> {
+    let ollama_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let output = std::process::Command::new("curl")
+        .args(["-s", "--max-time", "2", &format!("{ollama_url}/api/tags")])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&o.stdout)
+                && let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
+                    return arr.iter().filter_map(|m| {
+                        let name = m.get("name").and_then(|n| n.as_str())?;
+                        let size = m.get("size").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                        let gb = size / 1_000_000_000.0;
+                        Some((name.to_string(), format!("{gb:.1}GB")))
+                    }).collect();
+                }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
 
 pub fn init_ollama_model_cache() {
-    let _ = OLLAMA_MODEL_CACHE.get_or_init(|| {
-        let ollama_url = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let output = std::process::Command::new("curl")
-            .args(["-s", "--max-time", "2", &format!("{ollama_url}/api/tags")])
-            .output();
-        match output {
-            Ok(o) if o.status.success() => {
-                if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&o.stdout)
-                    && let Some(arr) = val.get("models").and_then(|m| m.as_array()) {
-                        return arr.iter().filter_map(|m| {
-                            let name = m.get("name").and_then(|n| n.as_str())?;
-                            let size = m.get("size").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                            let gb = size / 1_000_000_000.0;
-                            Some((name.to_string(), format!("{gb:.1}GB")))
-                        }).collect();
-                    }
-                Vec::new()
-            }
-            _ => Vec::new(),
-        }
-    });
+    let mut slot = match ollama_cache_slot().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if slot.is_none() {
+        *slot = Some(fetch_ollama_models_for_cache());
+    }
+}
+
+/// Drop the cached Ollama model listing so the next call to
+/// [`cached_ollama_models`] (or the next [`init_ollama_model_cache`]) re-queries
+/// the daemon. Called from `ollama_manage` after `pull`/`rm`/`cp`/`create`
+/// so the `/model` completion list stays in sync with the real daemon state.
+pub fn invalidate_ollama_model_cache() {
+    let mut slot = match ollama_cache_slot().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *slot = None;
 }
 
 pub(super) fn cached_ollama_models() -> Vec<(String, String)> {
-    OLLAMA_MODEL_CACHE.get().cloned().unwrap_or_default()
+    let slot = match ollama_cache_slot().lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    slot.clone().unwrap_or_default()
 }
 
 // ─── Clipboard image paste ────────────────────────────────────────────────────

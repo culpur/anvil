@@ -20,6 +20,7 @@ pub mod nominations;
 pub mod private_memory;
 pub mod qmd;
 pub mod routines;
+pub mod ollama_tune;
 pub mod scroll_speed;
 pub mod agent_ctx;
 pub mod tool_pattern;

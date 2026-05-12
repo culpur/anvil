@@ -319,24 +319,24 @@ fn describe_override_value(key: &str, ov: Option<&OllamaModelOverride>) -> Strin
         return "(unset)".to_string();
     };
     match key {
-        "num_ctx" => ov.num_ctx.map_or_else(|| "(unset)".into(), |v| v.to_string()),
-        "num_gpu" => ov.num_gpu.map_or_else(|| "(unset)".into(), |v| v.to_string()),
+        "num_ctx" => ov.num_ctx.map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
+        "num_gpu" => ov.num_gpu.map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
         "num_thread" => ov
             .num_thread
-            .map_or_else(|| "(unset)".into(), |v| v.to_string()),
+            .map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
         "flash_attention" => ov
             .flash_attention
-            .map_or_else(|| "(unset)".into(), |v| v.to_string()),
+            .map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
         "kv_cache_type" => ov.kv_cache_type.map_or_else(
-            || "(unset)".into(),
+            || "(unset)".to_string(),
             |v| format_kv_cache_type(v).to_string(),
         ),
         "keep_alive_secs" => ov
             .keep_alive_secs
-            .map_or_else(|| "(unset)".into(), |v| v.to_string()),
+            .map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
         "num_batch" => ov
             .num_batch
-            .map_or_else(|| "(unset)".into(), |v| v.to_string()),
+            .map_or_else(|| "(unset)".to_string(), |v| v.to_string()),
         _ => "(unset)".into(),
     }
 }

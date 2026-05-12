@@ -123,3 +123,83 @@ struct OllamaTagsResponse {
 struct OllamaModelEntry {
     name: String,
 }
+
+/// Returns true if a model name is an Ollama Cloud model (suffix `:cloud` or `-cloud`).
+#[must_use]
+pub fn is_ollama_cloud_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.ends_with(":cloud") || lower.ends_with("-cloud")
+}
+
+/// Per-model context window for known Ollama Cloud models, in tokens.
+/// Returns `None` for unknown cloud models — callers should fall back to a
+/// conservative default (128K) rather than guess.
+#[must_use]
+pub fn cloud_model_context_window(model: &str) -> Option<u32> {
+    if !is_ollama_cloud_model(model) {
+        return None;
+    }
+    let lower = model.to_ascii_lowercase();
+    // Strip the :cloud / -cloud suffix to match the base model
+    let base = lower
+        .strip_suffix(":cloud")
+        .or_else(|| lower.strip_suffix("-cloud"))
+        .unwrap_or(&lower);
+    match base {
+        // 256K context family
+        b if b.starts_with("kimi-k2") => Some(256_000),
+        b if b.starts_with("minimax-m2") => Some(256_000),
+        b if b.starts_with("qwen3-coder") => Some(256_000),
+        // 128K context family
+        b if b.starts_with("gpt-oss") => Some(128_000),
+        b if b.starts_with("deepseek-v3") => Some(128_000),
+        _ => Some(128_000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cloud_model_context_window, is_ollama_cloud_model};
+
+    #[test]
+    fn detects_cloud_suffix() {
+        assert!(is_ollama_cloud_model("kimi-k2.6:cloud"));
+        assert!(is_ollama_cloud_model("gpt-oss:120b-cloud"));
+        assert!(is_ollama_cloud_model("MinIMax-M2.5:CLOUD"));
+        assert!(!is_ollama_cloud_model("llama3.2"));
+        assert!(!is_ollama_cloud_model("qwen3-coder:480b"));
+    }
+
+    #[test]
+    fn cloud_context_window_known_families() {
+        assert_eq!(
+            cloud_model_context_window("kimi-k2.6:cloud"),
+            Some(256_000)
+        );
+        assert_eq!(
+            cloud_model_context_window("minimax-m2.5:cloud"),
+            Some(256_000)
+        );
+        assert_eq!(
+            cloud_model_context_window("qwen3-coder:480b-cloud"),
+            Some(256_000)
+        );
+        assert_eq!(cloud_model_context_window("gpt-oss:120b-cloud"), Some(128_000));
+        assert_eq!(cloud_model_context_window("gpt-oss:20b-cloud"), Some(128_000));
+        assert_eq!(
+            cloud_model_context_window("deepseek-v3.1:671b-cloud"),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn cloud_context_window_unknown_falls_back() {
+        // Unknown cloud model falls back to 128K
+        assert_eq!(
+            cloud_model_context_window("future-mystery-model:cloud"),
+            Some(128_000)
+        );
+        // Non-cloud models return None
+        assert_eq!(cloud_model_context_window("llama3.2"), None);
+    }
+}
