@@ -2636,13 +2636,25 @@ impl AnvilTui {
         // ── Plain editing (printable chars, Backspace, Left/Right cursor) ─
         // These are the same as handle_in_flight_key: accumulate the draft
         // on the active tab without interrupting the wait.
-
+        //
+        // v2.2.14 BUG-fix (post TUI-2 deep): after every edit we force an
+        // immediate `self.draw()` so the input box on a visually-active
+        // idle tab re-renders the typed character even when another tab is
+        // firehosing TextDeltas. The wait loop's trailing draw at line
+        // ~2424 also paints, but its `recv_timeout(20ms)` immediately
+        // unblocks on each incoming background-stream event and iterates
+        // before the previous draw is fully flushed to the user's
+        // terminal — the typed character was correctly stored in the
+        // buffer (Enter dispatched the right text) but the screen showed
+        // no echo. Drawing inside the handler closes that visibility gap.
+        let mut edited = false;
         match (key.code, key.modifiers) {
             (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL)
                 && !m.contains(KeyModifiers::ALT) =>
             {
                 self.insert_char(c);
                 self.redraw.request(redraw::DirtyRegions::INPUT);
+                edited = true;
             }
             (KeyCode::Backspace, _) => {
                 let tab = self.active_tab_mut();
@@ -2650,10 +2662,17 @@ impl AnvilTui {
                     let prev = helpers::prev_char_boundary(&tab.input, tab.cursor);
                     tab.input.replace_range(prev..tab.cursor, "");
                     tab.cursor = prev;
+                    edited = true;
                 }
                 self.redraw.request(redraw::DirtyRegions::INPUT);
             }
             _ => {}
+        }
+        if edited {
+            // Errors here would be terminal I/O failures; we don't have a
+            // good recovery path inside the handler. Ignore — the next
+            // wait-loop draw at the bottom of the iteration will retry.
+            let _ = self.draw();
         }
 
         None
