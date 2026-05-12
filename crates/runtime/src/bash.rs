@@ -368,6 +368,7 @@ fn inject_session_ctx_env(cmd: &mut Command) {
         cmd.env("ANVIL_EFFORT", &ctx.effort_level);
         cmd.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
     }
+    crate::otel::traceparent::inject_into_command(cmd);
 }
 
 /// Tokio variant of `inject_session_ctx_env`. Same semantics, different type.
@@ -377,6 +378,7 @@ fn inject_session_ctx_env_tokio(cmd: &mut TokioCommand) {
         cmd.env("ANVIL_EFFORT", &ctx.effort_level);
         cmd.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
     }
+    crate::otel::traceparent::inject_into_tokio_command(cmd);
 }
 
 fn prepare_sandbox_dirs(cwd: &std::path::Path) {

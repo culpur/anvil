@@ -34,6 +34,8 @@
 
 use crate::config::OtelConfig;
 
+pub mod traceparent;
+
 // ---------------------------------------------------------------------------
 // Runtime-state singleton
 // ---------------------------------------------------------------------------
@@ -65,6 +67,15 @@ pub fn init_tracer(config: &OtelConfig) {
         || std::env::var("ANVIL_OTEL_ENABLED")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+
+    // CC-DRIFT-B5: TRACEPARENT must propagate even when the local OTel
+    // exporter is disabled — a parent process tracing through us still
+    // expects their context to reach our subprocesses and outbound HTTP.
+    // Parse `TRACEPARENT` and `TRACESTATE` unconditionally; generate a
+    // fresh local root only when OTel is enabled (otherwise we have no
+    // span tree to anchor it to and a synthetic root would just confuse
+    // downstream collectors).
+    traceparent::init_from_env(enabled);
 
     if !enabled {
         return;

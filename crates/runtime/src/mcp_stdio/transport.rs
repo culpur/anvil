@@ -45,6 +45,14 @@ impl McpStdioProcess {
             }
         }
 
+        // CC-DRIFT-B5: propagate W3C trace context so MCP servers participate
+        // in the parent trace.  User-supplied env (apply_env above) already
+        // wins on collision because env mutations are last-write semantics —
+        // we only inject if the user didn't pin their own TRACEPARENT.
+        if !transport.env.contains_key("TRACEPARENT") {
+            crate::otel::traceparent::inject_into_tokio_command(&mut command);
+        }
+
         let mut child = command.spawn()?;
         let stdin = child
             .stdin

@@ -354,6 +354,7 @@ impl AnvilApiClient {
         }
 
         request_builder = self.auth.apply(request_builder);
+        request_builder = common::apply_traceparent_header(request_builder);
         // Bug #26: serialize the request through the Anthropic-specific wire
         // builder so we can attach `cache_control` markers to the system
         // prompt and the last tool definition.  The breakpoints tell the

@@ -36,6 +36,26 @@ pub fn read_env_non_empty(key: &str) -> Result<Option<String>, ApiError> {
 }
 
 // ---------------------------------------------------------------------------
+// W3C Trace Context header injection (CC-DRIFT-B5)
+// ---------------------------------------------------------------------------
+
+/// Attach `traceparent` (and optional `tracestate`) headers to an outbound
+/// HTTP request when Anvil has an active trace context.  No-op otherwise.
+///
+/// Single chokepoint for every provider's outbound HTTP call so the W3C
+/// header is added consistently regardless of which provider is in use.
+#[must_use]
+pub fn apply_traceparent_header(mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    if let Some(header) = runtime::otel::traceparent::header_for_child() {
+        builder = builder.header("traceparent", header);
+    }
+    if let Some(state) = runtime::otel::traceparent::current_tracestate() {
+        builder = builder.header("tracestate", state);
+    }
+    builder
+}
+
+// ---------------------------------------------------------------------------
 // Request-ID extraction
 // ---------------------------------------------------------------------------
 

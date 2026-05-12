@@ -930,6 +930,9 @@ impl HookRunner {
             child.env("ANVIL_EFFORT", &ctx.effort_level);
             child.env("ANVIL_PROJECT_DIR", ctx.project_dir.as_os_str());
         }
+        // CC-DRIFT-B5: pass W3C trace context to hook scripts so a hook that
+        // calls out to another traced service extends the same trace.
+        crate::otel::traceparent::inject_into_command(child.inner_command());
 
         match child.output_with_stdin(request.payload.as_bytes()) {
             Ok(output) => {
@@ -1213,6 +1216,10 @@ impl CommandWithStdin {
     {
         self.command.env(key, value);
         self
+    }
+
+    fn inner_command(&mut self) -> &mut Command {
+        &mut self.command
     }
 
     fn output_with_stdin(&mut self, stdin: &[u8]) -> std::io::Result<std::process::Output> {
