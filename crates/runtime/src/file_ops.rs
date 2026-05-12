@@ -383,6 +383,13 @@ pub fn read_file(
     // swallowed — the cache is purely advisory.
     crate::file_cache::refresh_entry_best_effort(&find_project_root(), &absolute_path);
 
+    // W15b: notify auto-promote engine of the file read so it can seed
+    // nominations when the same file gets re-read N times.
+    crate::auto_promote::observe(
+        crate::auto_promote::AccessKind::FileRead,
+        absolute_path.to_string_lossy(),
+    );
+
     Ok(ReadFileOutput {
         kind: String::from("text"),
         file: TextFilePayload {

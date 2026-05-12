@@ -124,6 +124,14 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     let cwd = resolve_cwd_with_fallback()?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
+    // W15b: notify auto-promote engine of the command. Same command run N
+    // times → engine seeds a "Workflow" nomination so the user can promote
+    // it to ANVIL.md / MEMORY.md.
+    crate::auto_promote::observe(
+        crate::auto_promote::AccessKind::CommandRun,
+        &input.command,
+    );
+
     if input.run_in_background.unwrap_or(false) {
         let mut child = prepare_command(&input.command, &cwd, &sandbox_status, false);
         let child = child

@@ -229,6 +229,63 @@ impl AutoPromoter {
     }
 }
 
+// ─── Global engine (process-scoped) ──────────────────────────────────────────
+//
+// W15b wiring: main.rs installs an `AutoPromoter` once at startup and the
+// runtime hot paths (read_file, bash) record observations via the
+// best-effort helpers below. Recording errors are swallowed so a broken
+// engine cannot kill a tool call.
+
+use std::sync::Mutex;
+use std::sync::OnceLock;
+
+static GLOBAL: OnceLock<Mutex<AutoPromoter>> = OnceLock::new();
+
+/// Install the global auto-promoter exactly once.  Subsequent calls are
+/// no-ops, so callers can safely call this from multiple entry points
+/// (e.g. main.rs init + integration test setup).
+pub fn install_global(promoter: AutoPromoter) {
+    let _ = GLOBAL.set(Mutex::new(promoter));
+}
+
+/// Convenience: install the engine pointed at the default
+/// `~/.anvil/nominations/` directory with default thresholds.  No-op if
+/// the engine is already installed.
+pub fn install_default() {
+    if is_installed() {
+        return;
+    }
+    let dir = crate::config::default_config_home().join("nominations");
+    install_global(AutoPromoter::new(dir));
+}
+
+/// `true` iff `install_global` has been called.
+#[must_use]
+pub fn is_installed() -> bool {
+    GLOBAL.get().is_some()
+}
+
+/// Best-effort observation recording.  Silent on poisoned mutex, missing
+/// engine, or disk failure — the engine is purely advisory.
+pub fn observe(kind: AccessKind, key: impl Into<String>) {
+    let Some(cell) = GLOBAL.get() else {
+        return;
+    };
+    let Ok(mut guard) = cell.lock() else {
+        return;
+    };
+    let _ = guard.record(ObservedAccess::now(kind, key));
+}
+
+/// Read-only access to the engine's stats. Returns `None` when the
+/// engine isn't installed.
+#[must_use]
+pub fn stats() -> Option<AutoPromoterStats> {
+    let cell = GLOBAL.get()?;
+    let guard = cell.lock().ok()?;
+    Some(guard.stats())
+}
+
 // ─── Normalisation helpers ────────────────────────────────────────────────────
 
 /// Canonicalise a file path key.
@@ -410,5 +467,16 @@ mod tests {
         ap.record(ObservedAccess::now(AccessKind::CommandRun, "git status")).unwrap();
         let third = ap.record(ObservedAccess::now(AccessKind::CommandRun, "git  status")).unwrap();
         assert!(third.is_some(), "normalised commands should accumulate together");
+    }
+
+    #[test]
+    fn observe_is_silent_when_global_not_installed() {
+        // We cannot install/uninstall a OnceLock-backed global, so this
+        // test only asserts that calling `observe` and `stats` doesn't
+        // panic when the engine is absent or present.
+        super::observe(AccessKind::CommandRun, "ls");
+        // stats may be Some or None depending on test ordering; just
+        // ensure no panic.
+        let _ = super::stats();
     }
 }

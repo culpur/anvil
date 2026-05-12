@@ -3806,6 +3806,10 @@ impl LiveCli {
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        // W15b: install the auto-promote engine once per process. Wires
+        // read_file / bash observations into the nominations queue.
+        runtime::install_auto_promote_default();
+
         let provider = friendly_provider_label(&model);
         let system_prompt = build_system_prompt_with_identity(
             Some(model.clone()),

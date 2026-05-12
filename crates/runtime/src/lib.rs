@@ -135,7 +135,10 @@ pub use team::{
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
 pub use auto_promote::{
-    AccessKind, AutoPromoteError, AutoPromoter, AutoPromoterStats, ObservedAccess,
+    install_default as install_auto_promote_default, install_global as install_auto_promote,
+    is_installed as auto_promote_is_installed, observe as auto_promote_observe,
+    stats as auto_promote_stats, AccessKind, AutoPromoteError, AutoPromoter, AutoPromoterStats,
+    ObservedAccess,
 };
 pub use goals::{
     build_active_goal_prompt_fragment, format_goal_list, format_goal_show,
