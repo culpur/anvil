@@ -148,6 +148,18 @@ fn get_respawn_ctx() -> respawn::RespawnContext {
     })
 }
 
+/// RAII guard that removes this process's cross-session agent snapshot file
+/// on a clean drop (CC-139-F1, #462).  The panic hook handles the dirty exit
+/// case so a crashed process never leaves a stale `~/.anvil/agents/<pid>.json`
+/// behind.  Best-effort — errors are intentionally swallowed.
+struct AgentSnapshotGuard;
+
+impl Drop for AgentSnapshotGuard {
+    fn drop(&mut self) {
+        runtime::agent_snapshot::clear_snapshot(std::process::id());
+    }
+}
+
 fn main() {
     // Capture the launch context as early as possible, before any argument
     // parsing, so that argv[0] and the raw args are intact.
@@ -166,6 +178,12 @@ fn main() {
 
     // Write our PID file; it is removed automatically when _pid_guard drops.
     let _pid_guard = respawn::PidFileGuard::new();
+
+    // Cross-session agent snapshot cleanup on graceful exit (CC-139-F1, #462).
+    // The snapshot itself is written by AgentManager throughout the session;
+    // this guard ensures the file is reaped on a clean drop.  The panic hook
+    // below also clears it so a crash doesn't leave a stale file.
+    let _agent_snapshot_guard = AgentSnapshotGuard;
 
     // Check for a resume marker left by a previous respawn.
     if let Some(state) = respawn::load_resume_state() {
@@ -204,6 +222,9 @@ fn main() {
                 crossterm::event::DisableMouseCapture,
             );
         }
+        // Reap the cross-session agent snapshot so a panic doesn't leave a
+        // stale file behind (CC-139-F1, #462).
+        runtime::agent_snapshot::clear_snapshot(std::process::id());
         default_hook(info);
     }));
 
@@ -3898,6 +3919,15 @@ impl LiveCli {
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
         };
+        // Publish initial cross-session snapshot now that the session id is
+        // known.  Subsequent updates flow from AgentManager::spawn/poll.
+        // (CC-139-F1, #462.)
+        {
+            let session_id = cli.session.id.clone();
+            if let Ok(mut mgr) = cli.agent_manager.lock() {
+                mgr.set_session_id(session_id);
+            }
+        }
         cli.persist_session()?;
         // Emit session_start OTel event (no-op when disabled).
         {
@@ -7697,6 +7727,15 @@ impl LiveCli {
     }
 
     fn print_agents(args: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+        // `anvil agents live` / `anvil agents monitor` — list live subagents
+        // across every running Anvil process on this machine (CC-139-F1, #462).
+        // Any other arg falls through to the static agent-definition listing.
+        if let Some(arg) = args.map(str::trim)
+            && matches!(arg, "live" | "monitor")
+        {
+            println!("{}", render_live_agents_listing());
+            return Ok(());
+        }
         let cwd = env::current_dir()?;
         println!("{}", handle_agents_slash_command(args, &cwd)?);
         Ok(())
@@ -8816,6 +8855,158 @@ impl LiveCli {
     fn run_debug_tool_call(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", render_last_tool_debug_report(self.active_runtime().session())?);
         Ok(())
+    }
+}
+
+// ─── CC-139-F1 — cross-session live agent view (#462) ─────────────────────────
+
+/// Render the output of `anvil agents live` / `anvil agents monitor`.
+///
+/// Reads every live snapshot under `~/.anvil/agents/`, filters dead PIDs, and
+/// renders a one-line-per-agent table.  Empty state is announced explicitly.
+fn render_live_agents_listing() -> String {
+    let snapshots = runtime::agent_snapshot::read_all_snapshots();
+    if snapshots.is_empty() {
+        return "No live anvil agents.".to_string();
+    }
+
+    let total_agents: usize = snapshots.iter().map(|s| s.agents.len()).sum();
+    let mut out = format!(
+        "Live anvil agents ({} agent{} across {} process{}):\n",
+        total_agents,
+        if total_agents == 1 { "" } else { "s" },
+        snapshots.len(),
+        if snapshots.len() == 1 { "" } else { "es" },
+    );
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    for snap in &snapshots {
+        if snap.agents.is_empty() {
+            out.push_str(&format!(
+                "  PID {pid:<6}  {sess:<24}  (no active agents)\n",
+                pid = snap.pid,
+                sess = truncate_session_id(&snap.session_id, 24),
+            ));
+            continue;
+        }
+        for agent in &snap.agents {
+            let elapsed = now.saturating_sub(agent.started_at);
+            out.push_str(&format!(
+                "  PID {pid:<6}  {sess:<24}  task-{id:<4}  {kind:<14}  {status:<10}  {elapsed}\n",
+                pid = snap.pid,
+                sess = truncate_session_id(&snap.session_id, 24),
+                id = agent.id,
+                kind = truncate_session_id(&agent.kind, 14),
+                status = agent.status,
+                elapsed = format_elapsed(elapsed),
+            ));
+        }
+    }
+    out
+}
+
+/// Truncate a session id (or any short label) to `max` chars, replacing the
+/// tail with `…` when overlong.  Pure ASCII width is assumed — these are
+/// timestamp-based session ids, not user-supplied free text.
+fn truncate_session_id(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
+fn format_elapsed(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+#[cfg(test)]
+mod cc_139_f1_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Snapshot tests mutate ANVIL_CONFIG_HOME — serialise them.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn new(home: &std::path::Path) -> Self {
+            let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+            // SAFETY: tests are serialised by ENV_LOCK; we are the sole writer.
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", home); }
+            Self { prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: tests are serialised by ENV_LOCK; we are the sole writer.
+            unsafe {
+                match self.prev.take() {
+                    Some(value) => std::env::set_var("ANVIL_CONFIG_HOME", value),
+                    None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_state_message() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _env = EnvGuard::new(tmp.path());
+
+        let out = render_live_agents_listing();
+        assert!(out.contains("No live anvil agents"), "expected empty-state line, got: {out:?}");
+    }
+
+    #[test]
+    fn lists_live_snapshot_entries() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _env = EnvGuard::new(tmp.path());
+
+        let pid = std::process::id();
+        let entries = vec![runtime::agent_snapshot::AgentEntry {
+            id: "1".to_string(),
+            name: "scout".to_string(),
+            kind: "explore".to_string(),
+            status: "running".to_string(),
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }];
+        runtime::agent_snapshot::write_snapshot(pid, "session-xyz", &entries);
+
+        let out = render_live_agents_listing();
+        assert!(out.contains("PID"), "header expected: {out:?}");
+        assert!(out.contains("session-xyz"), "session id expected: {out:?}");
+        assert!(out.contains("explore"), "kind label expected: {out:?}");
+        assert!(out.contains("running"), "status expected: {out:?}");
+
+        runtime::agent_snapshot::clear_snapshot(pid);
+    }
+
+    #[test]
+    fn format_elapsed_renders_compactly() {
+        assert_eq!(format_elapsed(5), "5s");
+        assert_eq!(format_elapsed(75), "1m15s");
+        assert_eq!(format_elapsed(3725), "1h02m");
     }
 }
 

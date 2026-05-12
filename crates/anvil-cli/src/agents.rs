@@ -173,6 +173,12 @@ impl AgentHandle {
 pub struct AgentManager {
     agents: Vec<AgentHandle>,
     next_id: usize,
+    /// Session id used when publishing cross-session snapshots.  Empty until
+    /// [`AgentManager::set_session_id`] is called from `LiveCli` startup.
+    snapshot_session_id: String,
+    /// Last time we flushed a snapshot to `~/.anvil/agents/<pid>.json`.
+    /// Throttled to once per ~500ms to avoid disk thrash on rapid spawn/poll.
+    last_snapshot_at: Option<Instant>,
 }
 
 #[allow(dead_code)]
@@ -181,6 +187,65 @@ impl AgentManager {
         Self {
             agents: Vec::new(),
             next_id: 1,
+            snapshot_session_id: String::new(),
+            last_snapshot_at: None,
+        }
+    }
+
+    /// Record the session id used when writing cross-session snapshots.
+    /// Called once by `LiveCli` after the `Session` is created.
+    pub fn set_session_id(&mut self, session_id: impl Into<String>) {
+        self.snapshot_session_id = session_id.into();
+        // Force a flush on the next write so the new session id lands ASAP.
+        self.last_snapshot_at = None;
+        self.flush_snapshot_now();
+    }
+
+    /// Build a snapshot entry list mirroring the current in-memory agents.
+    fn build_snapshot_entries(&self) -> Vec<runtime::agent_snapshot::AgentEntry> {
+        self.agents
+            .iter()
+            .map(|a| {
+                let status = match &a.status {
+                    AgentStatus::Running => "running".to_string(),
+                    AgentStatus::Waiting => "waiting".to_string(),
+                    AgentStatus::Completed => "completed".to_string(),
+                    AgentStatus::Failed(_) => "failed".to_string(),
+                };
+                let started_at = std::time::SystemTime::now()
+                    .checked_sub(a.started_at.elapsed())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                runtime::agent_snapshot::AgentEntry {
+                    id: a.id.to_string(),
+                    name: a.name.clone(),
+                    kind: a.agent_type.label().to_string(),
+                    status,
+                    started_at,
+                }
+            })
+            .collect()
+    }
+
+    /// Write a fresh snapshot unconditionally.
+    fn flush_snapshot_now(&mut self) {
+        let entries = self.build_snapshot_entries();
+        runtime::agent_snapshot::write_snapshot(
+            std::process::id(),
+            &self.snapshot_session_id,
+            &entries,
+        );
+        self.last_snapshot_at = Some(Instant::now());
+    }
+
+    /// Write a snapshot if at least 500ms has elapsed since the last write.
+    /// Always best-effort; never blocks or fails the caller.
+    fn maybe_flush_snapshot(&mut self) {
+        let due = self
+            .last_snapshot_at
+            .is_none_or(|t| t.elapsed() >= Duration::from_millis(500));
+        if due {
+            self.flush_snapshot_now();
         }
     }
 
@@ -275,6 +340,10 @@ impl AgentManager {
             _thread: thread,
         });
 
+        // Publish a fresh snapshot so cross-session viewers see the new agent
+        // immediately (the throttle is bypassed on spawn events).
+        self.flush_snapshot_now();
+
         id
     }
 
@@ -309,6 +378,15 @@ impl AgentManager {
 
                 completed.push((handle.id, result));
             }
+        }
+        // Any completion is a state transition worth flushing immediately so
+        // cross-session viewers see `running → completed/failed` promptly.
+        // When nothing completed this turn we still throttle to ~2 Hz to keep
+        // disk traffic minimal.
+        if completed.is_empty() {
+            self.maybe_flush_snapshot();
+        } else {
+            self.flush_snapshot_now();
         }
         completed
     }
@@ -367,19 +445,26 @@ impl AgentManager {
 
     /// Mark a running agent as failed (used by the `/agents stop` command).
     pub fn stop(&mut self, id: usize) -> bool {
-        if let Some(handle) = self.agents.iter_mut().find(|a| a.id == id)
-            && matches!(handle.status, AgentStatus::Running | AgentStatus::Waiting) {
-                handle.status = AgentStatus::Failed("stopped by user".to_string());
-                handle.rx = None;
-                return true;
-            }
-        false
+        let stopped = if let Some(handle) = self.agents.iter_mut().find(|a| a.id == id)
+            && matches!(handle.status, AgentStatus::Running | AgentStatus::Waiting)
+        {
+            handle.status = AgentStatus::Failed("stopped by user".to_string());
+            handle.rx = None;
+            true
+        } else {
+            false
+        };
+        if stopped {
+            self.flush_snapshot_now();
+        }
+        stopped
     }
 
     /// Remove all agents that are in a terminal state (Completed or Failed).
     pub fn clear_completed(&mut self) {
         self.agents
             .retain(|a| matches!(a.status, AgentStatus::Running | AgentStatus::Waiting));
+        self.flush_snapshot_now();
     }
 
     /// Format a human-readable summary for the `/agents` command.

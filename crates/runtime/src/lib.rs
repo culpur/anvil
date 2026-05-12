@@ -1,3 +1,4 @@
+pub mod agent_snapshot;
 mod bash;
 mod bootstrap;
 pub mod ssh;
