@@ -7162,10 +7162,13 @@ impl LiveCli {
                 if desc.is_empty() {
                     return "Usage: /goal new \"<description>\"".to_string();
                 }
-                match mgr.new_goal(desc) {
+                // CC-139-F2 unify: auto-link the active session so the goal
+                // appears in both Anvil's project view AND CC-style
+                // session lookups.
+                match mgr.new_goal_for_session(desc, self.session_id()) {
                     Ok(goal) => format!(
-                        "Goal created: {}\nStatus: {}\n{}",
-                        goal.id, goal.status, goal.description
+                        "Goal created: {}\nStatus: {}\nSession-linked: {}\n{}",
+                        goal.id, goal.status, self.session_id(), goal.description
                     ),
                     Err(GoalError::DescriptionTooLong { len, .. }) => format!(
                         "Description too long ({len} chars). Maximum is {GOAL_DESCRIPTION_MAX} chars."

@@ -258,6 +258,27 @@ impl GoalManager {
         self.new_goal(description)
     }
 
+    /// Create a goal and link it to `session_id` in a single call.
+    ///
+    /// CC-139-F2 unify: CC's `/goal` is session-scoped while Anvil's is
+    /// project-persistent.  Auto-linking the active session on create
+    /// gives users CC's mental model (this goal belongs to this session)
+    /// without losing Anvil's cross-session goal tracking.
+    ///
+    /// # Errors
+    /// Same as [`new_goal`]; also returns [`GoalError::Io`] / [`GoalError::Json`]
+    /// if the link write fails.
+    pub fn new_goal_for_session(
+        &mut self,
+        description: impl Into<String>,
+        session_id: &str,
+    ) -> Result<Goal, GoalError> {
+        let goal = self.new_goal(description)?;
+        self.link_session(&goal.id, session_id)?;
+        // Re-load so the returned struct includes the session link.
+        self.load_goal(&goal.id)
+    }
+
     /// List all goals for this project.
     ///
     /// Sort order: Active → Paused → Done → Archived; newest-created-first
