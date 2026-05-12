@@ -1,4 +1,4 @@
-use plugins::{PluginError, PluginManager, PluginSummary};
+use plugins::{PluginError, PluginHooks, PluginManager, PluginSummary, PluginTool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginsCommandResult {
@@ -109,9 +109,27 @@ pub fn handle_plugins_slash_command(
                 reload_runtime: true,
             })
         }
+        Some("details" | "show" | "info") => {
+            // CC-139-F4 parity: `anvil plugin details <name>` (and slash
+            // aliases /plugin details / show / info) print a multi-section
+            // report with inventory + approximate token cost.
+            let Some(target) = target else {
+                return Ok(PluginsCommandResult {
+                    message: "Usage: /plugin details <name>".to_string(),
+                    reload_runtime: false,
+                });
+            };
+            let plugin = resolve_plugin_target(manager, target)?;
+            let hooks = manager.aggregated_hooks().ok();
+            let tools = manager.aggregated_tools().ok();
+            Ok(PluginsCommandResult {
+                message: render_plugin_details(&plugin, hooks.as_ref(), tools.as_deref()),
+                reload_runtime: false,
+            })
+        }
         Some(other) => Ok(PluginsCommandResult {
             message: format!(
-                "Unknown /plugins action '{other}'. Use list, install, enable, disable, uninstall, or update."
+                "Unknown /plugins action '{other}'. Use list, install, enable, disable, uninstall, update, or details."
             ),
             reload_runtime: false,
         }),
@@ -148,6 +166,71 @@ fn render_plugin_install_report(plugin_id: &str, plugin: Option<&PluginSummary>)
         "Plugins\n  Result           installed {plugin_id}\n  Name             {name}\n  Version          {version}\n  Status           {}",
         if enabled { "enabled" } else { "disabled" }
     )
+}
+
+/// CC-139-F4 parity: render a detailed inventory + token-cost estimate.
+///
+/// Note: `hooks` and `tools` here are the *aggregated* (workspace-wide)
+/// counts, since `PluginSummary` does not carry per-plugin hooks. That
+/// matches the spirit of CC's output — "what does enabling this
+/// surface cost across the runtime" — without needing a per-plugin
+/// registry walk we don't otherwise expose.
+#[must_use]
+pub fn render_plugin_details(
+    plugin: &PluginSummary,
+    hooks: Option<&PluginHooks>,
+    tools: Option<&[PluginTool]>,
+) -> String {
+    let m = &plugin.metadata;
+    let status = if plugin.enabled { "enabled" } else { "disabled" };
+    let root = m
+        .root
+        .as_ref()
+        .map_or_else(|| "—".to_string(), |p| p.display().to_string());
+
+    let (pre_hooks, post_hooks, hook_bytes) = hooks.map_or((0, 0, 0usize), |h| {
+        let pre = h.pre_tool_use.len();
+        let post = h.post_tool_use.len();
+        // Rough byte size: serialise the spec list to JSON.
+        let bytes = serde_json::to_string(h).map(|s| s.len()).unwrap_or(0);
+        (pre, post, bytes)
+    });
+    let (tool_count, tool_bytes) = tools.map_or((0, 0usize), |list| {
+        let count = list.len();
+        let bytes = list
+            .iter()
+            .map(|t| {
+                let def = t.definition();
+                def.name.len() + def.description.as_deref().map_or(0, str::len)
+            })
+            .sum::<usize>();
+        (count, bytes)
+    });
+    // Token cost: ~4 chars per token is the conventional approximation.
+    let approx_tokens = ((hook_bytes + tool_bytes) + 3) / 4;
+
+    let mut lines = vec![
+        format!("Plugin: {}", m.name),
+        format!("  ID               {}", m.id),
+        format!("  Version          {}", m.version),
+        format!("  Status           {status}"),
+        format!("  Kind             {:?}", m.kind),
+        format!("  Source           {}", m.source),
+        format!("  Root             {root}"),
+    ];
+    if !m.description.is_empty() {
+        lines.push(format!("  Description      {}", m.description));
+    }
+    lines.push(String::new());
+    lines.push("Inventory (aggregated, workspace-wide):".to_string());
+    lines.push(format!("  Pre-tool hooks   {pre_hooks}"));
+    lines.push(format!("  Post-tool hooks  {post_hooks}"));
+    lines.push(format!("  Tools            {tool_count}"));
+    lines.push(String::new());
+    lines.push("Approx. system-prompt cost:".to_string());
+    lines.push(format!("  Bytes            {}", hook_bytes + tool_bytes));
+    lines.push(format!("  Tokens (~)       {approx_tokens}"));
+    lines.join("\n")
 }
 
 fn resolve_plugin_target(
