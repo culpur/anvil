@@ -1,5 +1,8 @@
 //! Turn execution logic: drives the API request/tool-use loop for a single turn.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::session::{ContentBlock, ConversationMessage};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -31,12 +34,17 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    cancel_token: &Arc<AtomicBool>,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
     let mut tool_results = Vec::new();
     let mut iterations = 0;
 
     loop {
+        if cancel_token.load(Ordering::SeqCst) {
+            return Err(RuntimeError::cancelled());
+        }
+
         iterations += 1;
         if iterations > max_iterations {
             return Err(RuntimeError::new(
@@ -48,7 +56,11 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             system_prompt: system_prompt.to_vec(),
             messages: session.messages.clone(),
         };
+        api_client.set_cancel_token(Arc::clone(cancel_token));
         let events = api_client.stream(request)?;
+        if cancel_token.load(Ordering::SeqCst) {
+            return Err(RuntimeError::cancelled());
+        }
         let (assistant_message, usage) = build_assistant_message(events)?;
         if let Some(u) = usage {
             collect_and_record(usage_tracker, u);
@@ -79,6 +91,9 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
         let mut failure_count: usize = 0;
 
         for (tool_use_id, tool_name, input) in pending_tool_uses {
+            if cancel_token.load(Ordering::SeqCst) {
+                return Err(RuntimeError::cancelled());
+            }
             // Emit tool_use event before execution (no-op when OTel is disabled).
             crate::otel::tool_use(&tool_name, &tool_use_id, "", "");
 

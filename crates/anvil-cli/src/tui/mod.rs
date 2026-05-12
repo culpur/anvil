@@ -458,6 +458,17 @@ impl AnvilTui {
         }
     }
 
+    /// v2.2.14 TUI-1: return a clone of the cancel-flag Arc held by the tab
+    /// at `index`. Callers wire this onto the matching `ConversationRuntime`
+    /// via `set_cancel_handle` so the runtime polls the same atomic the TUI
+    /// flips from its Ctrl+C handler.
+    pub fn tab_cancel_token(
+        &self,
+        index: usize,
+    ) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        self.tabs.get(index).map(|t| std::sync::Arc::clone(&t.cancel_token))
+    }
+
     /// Switch to the tab at 0-based index.  Clears the unread marker on the target.
     pub fn switch_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -2313,6 +2324,20 @@ impl AnvilTui {
     ) -> Option<InFlightInterruption> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // v2.2.14 TUI-1: Ctrl+C while a turn is streaming cancels the
+        // in-flight turn on the in-flight tab (regardless of which tab is
+        // currently focused). Flipping the per-tab cancel flag short-circuits
+        // the runtime's next inter-frame check; the worker then emits
+        // `TurnDone` naturally and the wait returns. We do NOT exit the app
+        // here — bare Ctrl+C exit on empty input is handled by the idle
+        // input loop, not this in-flight handler.
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'C'))
+        {
+            self.cancel_turn_for_tab_id(target_tab_id);
+            return None;
+        }
+
         // ── Tab-switch and meta keys ───────────────────────────────────────
         // These are checked first so they take priority over plain-char input.
 
@@ -2510,6 +2535,15 @@ impl AnvilTui {
     fn handle_in_flight_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // v2.2.14 TUI-1: Ctrl+C cancels the active tab's in-flight turn.
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'C'))
+        {
+            let active_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
+            self.cancel_turn_for_tab_id(active_id);
+            return;
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
                 // Insert at cursor (handles utf-8 char-boundary correctly)
@@ -2540,6 +2574,37 @@ impl AnvilTui {
             // arrow keys, function keys, modifiers, etc.
             _ => {}
         }
+    }
+
+    /// v2.2.14 TUI-1: cancel the in-flight turn on the tab with `tab_id` by
+    /// flipping its shared cancel flag, preserve any partial assistant text
+    /// already on screen, and push a "⏸ cancelled" system entry. The runtime
+    /// worker will observe the flag at the next inter-frame check and emit
+    /// `TurnDone` naturally; the main wait loop returns soon after.
+    fn cancel_turn_for_tab_id(&mut self, tab_id: usize) {
+        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+        self.tabs[idx]
+            .cancel_token
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Preserve any partial streaming text in the tab's log (same pattern
+        // task #414 used for Esc-cancel + ChannelClosed).
+        let had_partial = !self.tabs[idx].pending_text.trim().is_empty();
+        self.flush_pending_text_for(idx);
+        let tab = &mut self.tabs[idx];
+        tab.think_label.clear();
+        if had_partial {
+            tab.log.push(LogEntry::System(
+                "⏸ cancelled — partial response preserved above".to_string(),
+            ));
+        } else {
+            tab.log.push(LogEntry::System("⏸ cancelled".to_string()));
+        }
+        if idx == self.active_tab {
+            self.scroll_to_bottom();
+        }
+        self.redraw.request(redraw::DirtyRegions::ALL);
     }
 
     /// Show a system message (e.g. slash command output).

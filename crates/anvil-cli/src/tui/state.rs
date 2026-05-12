@@ -1,5 +1,6 @@
 /// UI state types: events, tab state, log entries, completion popup.
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
@@ -500,6 +501,11 @@ pub(crate) struct Tab {
     /// this is set to `true` by `LiveCli::new`; for subsequent tabs it is
     /// set by the `/tab new` handler when the runtime is installed.
     pub has_runtime: bool,
+    /// v2.2.14 TUI-1: shared cancel flag wired into this tab's
+    /// `ConversationRuntime`. The TUI flips this from its Ctrl+C handler
+    /// while a turn is streaming; the runtime polls between SSE frames and
+    /// bails with `RuntimeError::cancelled()`.
+    pub cancel_token: Arc<AtomicBool>,
 }
 
 impl Tab {
@@ -535,6 +541,7 @@ impl Tab {
             transcript_verbose: false,
             ssh: None,
             has_runtime: false,
+            cancel_token: Arc::new(AtomicBool::new(false)),
         }
     }
 

@@ -1335,6 +1335,7 @@ pub(crate) struct ProviderRuntimeClient {
     pub(crate) client: ProviderClient,
     pub(crate) model: String,
     pub(crate) allowed_tools: BTreeSet<String>,
+    pub(crate) cancel_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl ProviderRuntimeClient {
@@ -1347,11 +1348,16 @@ impl ProviderRuntimeClient {
             client,
             model,
             allowed_tools,
+            cancel_token: None,
         })
     }
 }
 
 impl ApiClient for ProviderRuntimeClient {
+    fn set_cancel_token(&mut self, token: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.cancel_token = Some(token);
+    }
+
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         let tools = tool_specs_for_allowed_tools(Some(&self.allowed_tools))
             .into_iter()
@@ -1371,6 +1377,7 @@ impl ApiClient for ProviderRuntimeClient {
             stream: true,
         };
 
+        let cancel_token = self.cancel_token.clone();
         self.runtime.block_on(async {
             let mut stream = self
                 .client
@@ -1386,6 +1393,11 @@ impl ApiClient for ProviderRuntimeClient {
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?
             {
+                if let Some(token) = &cancel_token
+                    && token.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(RuntimeError::cancelled());
+                }
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
                         for block in start.message.content {

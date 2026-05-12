@@ -2151,6 +2151,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // Bootstrap tab (index 0) already has a runtime installed by LiveCli::new.
     tui.mark_tab_has_runtime(0);
 
+    // v2.2.14 TUI-1: share the bootstrap tab's cancel flag with its runtime
+    // so Ctrl+C in the TUI's in-flight handler cancels the streaming turn.
+    if let Some(token) = tui.tab_cancel_token(0) {
+        cli.active_runtime_mut().set_cancel_handle(token);
+    }
+
     // Sync thinking mode and effort level to TUI status bar.
     tui.set_thinking_enabled(cli.thinking_enabled);
     tui.set_effort_level(cli.effort_level.as_str());
@@ -2730,6 +2736,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     tui.switch_tab(tab_idx);
                     cli.active_tab_idx = tab_idx;
                     let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                    let cancel_token = tui
+                        .tab_cancel_token(tab_idx)
+                        .expect("just-created tab must have a cancel token");
                     if let Err(e) = cli.push_tab_runtime(
                         tab_id,
                         &sender_prototype,
@@ -2739,6 +2748,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         true,
                         cli.allowed_tools.clone(),
                         cli.permission_mode,
+                        cancel_token,
                     ) {
                         tui.push_system(format!("[Remote] Warning: per-tab runtime failed: {e}"));
                     } else {
@@ -2860,6 +2870,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.switch_tab(tab_idx);
                                 cli.active_tab_idx = tab_idx;
                                 let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                let cancel_token = tui
+                                    .tab_cancel_token(tab_idx)
+                                    .expect("just-created tab must have a cancel token");
                                 if let Err(e) = cli.push_tab_runtime(
                                     tab_id,
                                     &sender_prototype,
@@ -2869,6 +2882,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     true,
                                     cli.allowed_tools.clone(),
                                     cli.permission_mode,
+                                    cancel_token,
                                 ) {
                                     tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
                                 } else {
@@ -3005,6 +3019,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 tui.switch_tab(tab_idx);
                 cli.active_tab_idx = tab_idx;
                 let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                let cancel_token = tui
+                    .tab_cancel_token(tab_idx)
+                    .expect("just-created tab must have a cancel token");
                 if let Err(e) = cli.push_tab_runtime(
                     tab_id,
                     &sender_prototype,
@@ -3014,6 +3031,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     true,
                     cli.allowed_tools.clone(),
                     cli.permission_mode,
+                    cancel_token,
                 ) {
                     tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
                 } else {
@@ -3064,6 +3082,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             tui.switch_tab(tab_idx);
                             cli.active_tab_idx = tab_idx;
                             let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                            let cancel_token = tui
+                                .tab_cancel_token(tab_idx)
+                                .expect("just-created tab must have a cancel token");
                             if let Err(e) = cli.push_tab_runtime(
                                 tab_id,
                                 &sender_prototype,
@@ -3073,6 +3094,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 true,
                                 cli.allowed_tools.clone(),
                                 cli.permission_mode,
+                                cancel_token,
                             ) {
                                 tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
                             } else {
@@ -3241,6 +3263,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                         tui.switch_tab(tab_idx);
                                         cli.active_tab_idx = tab_idx;
                                         let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                        let cancel_token = tui
+                                            .tab_cancel_token(tab_idx)
+                                            .expect("just-created tab must have a cancel token");
                                         if let Err(e) = cli.push_tab_runtime(
                                             tab_id,
                                             &sender_prototype,
@@ -3250,6 +3275,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                             true,
                                             cli.allowed_tools.clone(),
                                             cli.permission_mode,
+                                            cancel_token,
                                         ) {
                                             tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
                                         } else {
@@ -3393,6 +3419,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.switch_tab(tab_idx);
                                 cli.active_tab_idx = tab_idx;
                                 let tab_id = tui.tab_id_at(tab_idx).unwrap_or(tab_idx + 1);
+                                let cancel_token = tui
+                                    .tab_cancel_token(tab_idx)
+                                    .expect("just-created tab must have a cancel token");
                                 if let Err(e) = cli.push_tab_runtime(
                                     tab_id,
                                     &sender_prototype,
@@ -3402,6 +3431,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     true,
                                     cli.allowed_tools.clone(),
                                     cli.permission_mode,
+                                    cancel_token,
                                 ) {
                                     tui.push_system(format!("Warning: per-tab runtime failed: {e}"));
                                 } else {
@@ -4244,6 +4274,10 @@ impl LiveCli {
     /// index.  The new slot is immediately enabled with `sender` stamped for
     /// `tab_id`.  Called from the `/tab new` handler and the remote-control
     /// `__new_tab:` message path.
+    ///
+    /// `cancel_token` (v2.2.14 TUI-1) is installed onto the runtime so Ctrl+C
+    /// in the TUI's in-flight handler cancels the streaming turn.
+    #[allow(clippy::too_many_arguments)]
     fn push_tab_runtime(
         &mut self,
         tab_id: usize,
@@ -4254,13 +4288,14 @@ impl LiveCli {
         enable_tools: bool,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        cancel_token: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<usize, Box<dyn std::error::Error>> {
         let new_slot: TuiSenderSlot = Arc::new(Mutex::new(None));
         // Pre-install a sender stamped with the new tab's id.
         if let Ok(mut guard) = new_slot.lock() {
             *guard = Some(sender_prototype.with_tab_id(tab_id));
         }
-        let rt = build_runtime_with_tui_slot(
+        let mut rt = build_runtime_with_tui_slot(
             session,
             model,
             system_prompt,
@@ -4272,6 +4307,7 @@ impl LiveCli {
             new_slot.clone(),
             self.agent_manager.clone(),
         )?;
+        rt.set_cancel_handle(cancel_token);
         let idx = self.tab_runtimes.len();
         self.tab_runtimes.push(TabRuntimeState {
             runtime: Arc::new(Mutex::new(rt)),
@@ -8432,6 +8468,7 @@ impl LiveCli {
                     transcript_verbose: false,
                     ssh: None,
                     has_runtime: true,
+                    cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 };
                 self.share_manager.stop_share(&synthetic)
             }
@@ -8914,27 +8951,34 @@ fn render_live_agents_listing() -> String {
     for snap in &snapshots {
         if snap.agents.is_empty() {
             out.push_str(&format!(
-                "  PID {pid:<6}  {sess:<24}  (no active agents)\n",
+                "  PID {pid:<6}  {sess:<width$}  (no active agents)\n",
                 pid = snap.pid,
-                sess = truncate_session_id(&snap.session_id, 24),
+                sess = truncate_session_id(&snap.session_id, SHORT_SESSION_ID_WIDTH),
+                width = SHORT_SESSION_ID_WIDTH,
             ));
             continue;
         }
         for agent in &snap.agents {
             let elapsed = now.saturating_sub(agent.started_at);
             out.push_str(&format!(
-                "  PID {pid:<6}  {sess:<24}  task-{id:<4}  {kind:<14}  {status:<10}  {elapsed}\n",
+                "  PID {pid:<6}  {sess:<width$}  task-{id:<4}  {kind:<14}  {status:<10}  {elapsed}\n",
                 pid = snap.pid,
-                sess = truncate_session_id(&snap.session_id, 24),
+                sess = truncate_session_id(&snap.session_id, SHORT_SESSION_ID_WIDTH),
                 id = agent.id,
                 kind = truncate_session_id(&agent.kind, 14),
                 status = agent.status,
                 elapsed = format_elapsed(elapsed),
+                width = SHORT_SESSION_ID_WIDTH,
             ));
         }
     }
     out
 }
+
+// CC-DRIFT-F1: short session ID width in `anvil agents` listings. 12 chars
+// balances CC's ~8-char convention against Anvil's timestamp-shaped session
+// ids that need a few more characters to stay distinct in lists.
+const SHORT_SESSION_ID_WIDTH: usize = 12;
 
 /// Truncate a session id (or any short label) to `max` chars, replacing the
 /// tail with `…` when overlong.  Pure ASCII width is assumed — these are
@@ -9034,6 +9078,43 @@ mod cc_139_f1_tests {
         assert_eq!(format_elapsed(5), "5s");
         assert_eq!(format_elapsed(75), "1m15s");
         assert_eq!(format_elapsed(3725), "1h02m");
+    }
+
+    // CC-DRIFT-F1: long session IDs in `anvil agents` listings must be
+    // truncated to the short width so each row stays scannable.
+    #[test]
+    fn live_listing_truncates_long_session_ids() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _env = EnvGuard::new(tmp.path());
+
+        let pid = std::process::id();
+        let long_id = "20260512T123456-abcdef-very-long-session";
+        let entries = vec![runtime::agent_snapshot::AgentEntry {
+            id: "1".to_string(),
+            name: "scout".to_string(),
+            kind: "explore".to_string(),
+            status: "running".to_string(),
+            started_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        }];
+        runtime::agent_snapshot::write_snapshot(pid, long_id, &entries);
+
+        let out = render_live_agents_listing();
+        runtime::agent_snapshot::clear_snapshot(pid);
+
+        assert!(
+            !out.contains(long_id),
+            "full session id must not appear when over short width: {out:?}"
+        );
+        let truncated = truncate_session_id(long_id, SHORT_SESSION_ID_WIDTH);
+        assert_eq!(truncated.chars().count(), SHORT_SESSION_ID_WIDTH);
+        assert!(
+            out.contains(&truncated),
+            "truncated session id `{truncated}` must appear in output: {out:?}"
+        );
     }
 }
 

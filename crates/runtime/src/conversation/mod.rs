@@ -4,6 +4,8 @@ pub mod usage_tracking;
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
@@ -40,6 +42,12 @@ pub enum AssistantEvent {
 
 pub trait ApiClient {
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError>;
+
+    /// Install a cooperative cancellation flag. Implementations that drive an
+    /// SSE / chunked stream should poll the flag between frames and bail out
+    /// with `RuntimeError::cancelled()` when it goes true. The default impl
+    /// ignores the token, which keeps every existing test client compiling.
+    fn set_cancel_token(&mut self, _token: Arc<AtomicBool>) {}
 }
 
 pub trait ToolExecutor {
@@ -71,6 +79,7 @@ impl std::error::Error for ToolError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeError {
     message: String,
+    cancelled: bool,
 }
 
 impl RuntimeError {
@@ -78,7 +87,25 @@ impl RuntimeError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            cancelled: false,
         }
+    }
+
+    /// User-requested cancellation (Ctrl+C while a turn was streaming).
+    #[must_use]
+    pub fn cancelled() -> Self {
+        Self {
+            message: "turn cancelled".to_string(),
+            cancelled: true,
+        }
+    }
+
+    /// True when the error came from a cooperative cancel rather than a real
+    /// API/runtime failure. Callers use this to suppress the usual "Error:"
+    /// surface and show a calmer "cancelled" indicator instead.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 }
 
@@ -112,6 +139,12 @@ pub struct ConversationRuntime<C, T> {
     /// Auto-mode hard-deny list (CC-136-F2). Evaluated before hooks when
     /// the active permission mode is `WorkspaceWrite`.
     auto_mode: AutoModeConfig,
+    /// v2.2.14 TUI-1: shared cancel flag wired into the streaming loop.
+    /// Cloned and installed on the `ApiClient` before every `stream()` call
+    /// so the SSE loop can bail between frames. The turn loop also polls it
+    /// between tool-use iterations. Flipped from outside (the TUI's Ctrl+C
+    /// handler) through `cancel_handle`.
+    cancel_token: Arc<AtomicBool>,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -160,7 +193,27 @@ where
             hook_runner: HookRunner::from_feature_config(&feature_config),
             reviewer,
             auto_mode,
+            cancel_token: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Clone of the per-runtime cancel flag. External code (TUI Ctrl+C
+    /// handler) flips this to `true`; the next inter-frame check inside the
+    /// streaming loop short-circuits with `RuntimeError::cancelled()`.
+    #[must_use]
+    pub fn cancel_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel_token)
+    }
+
+    /// Replace the cancel flag with an externally-owned one (typically the
+    /// per-tab token held by the TUI). After this call, flipping either side
+    /// of the shared `Arc` cancels the next inter-frame check.
+    pub fn set_cancel_handle(&mut self, token: Arc<AtomicBool>) {
+        self.cancel_token = token;
+    }
+
+    fn reset_cancel(&self) {
+        self.cancel_token.store(false, Ordering::SeqCst);
     }
 
     #[must_use]
@@ -194,6 +247,7 @@ where
         &mut self,
         prompter: &mut Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
+        self.reset_cancel();
         run_turn_inner(
             &mut self.session,
             &mut self.api_client,
@@ -206,6 +260,7 @@ where
             prompter,
             &self.reviewer,
             &self.auto_mode,
+            &self.cancel_token,
         )
     }
 
