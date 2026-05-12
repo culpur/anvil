@@ -9,6 +9,7 @@
 /// Completed agent results are returned from `poll()` so the caller can inject
 /// them as system messages.
 use std::fmt::Write as _;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -321,7 +322,24 @@ impl AgentManager {
         let thread = thread::Builder::new()
             .name(format!("anvil-agent-{id}"))
             .spawn(move || {
-                let result = runner(sender);
+                let start = Instant::now();
+                let result = match catch_unwind(AssertUnwindSafe(|| runner(sender))) {
+                    Ok(r) => r,
+                    Err(payload) => {
+                        let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+                            (*s).to_string()
+                        } else if let Some(s) = payload.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "<unknown panic>".to_string()
+                        };
+                        AgentResult {
+                            output: format!("agent panicked: {msg}"),
+                            success: false,
+                            duration: start.elapsed(),
+                        }
+                    }
+                };
                 let _ = tx_done.send(AgentMsg::Done(result));
             })
             .ok();
@@ -717,5 +735,41 @@ mod tests {
 
         // Restore a safe default so other tests are not affected.
         set_active_sandbox_mode(SandboxMode::WorkspaceWrite);
+    }
+
+    // CC-DRIFT-B4: a runner that panics must still flush AgentMsg::Done so the
+    // handle leaves the Running state — otherwise `anvil agents live` shows a
+    // permanent "Working" ghost for the lifetime of the process.
+    #[test]
+    fn panicking_runner_transitions_to_failed() {
+        let mut mgr = AgentManager::new();
+        let id = mgr.spawn("boom", AgentType::General, "panic task", |_sender| -> AgentResult {
+            panic!("kaboom from runner");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut completed = Vec::new();
+        while Instant::now() < deadline && completed.is_empty() {
+            completed = mgr.poll();
+            if completed.is_empty() {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        assert_eq!(completed.len(), 1, "expected the panicking agent to complete");
+        assert_eq!(completed[0].0, id);
+        assert!(!completed[0].1.success, "panic must surface as failure");
+        assert!(
+            completed[0].1.output.contains("kaboom from runner"),
+            "panic message must be preserved: {:?}",
+            completed[0].1.output
+        );
+
+        let agent = mgr.get(id).expect("handle exists");
+        assert!(
+            matches!(agent.status, AgentStatus::Failed(_)),
+            "status must be Failed, got {:?}",
+            agent.status
+        );
     }
 }

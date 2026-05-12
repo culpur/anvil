@@ -1015,4 +1015,27 @@ mod tests {
             cleanup_script(&script_path);
         });
     }
+
+    // CC-DRIFT-B8 contract test: empty-string values inside MCP tool
+    // arguments must survive serialization with the key intact. Pinned here
+    // to lock the contract against future serde-attr drift on
+    // McpToolCallParams::arguments.
+    #[test]
+    fn empty_string_arg_value_survives_serialization() {
+        let params = McpToolCallParams {
+            name: "echo".to_string(),
+            arguments: Some(json!({ "text": "" })),
+            meta: None,
+        };
+
+        let wire = serde_json::to_value(&params).expect("serialize");
+        let args = wire
+            .get("arguments")
+            .expect("arguments key must be present on wire");
+        let text = args
+            .get("text")
+            .expect("text key must be preserved with empty value");
+        assert_eq!(text, &json!(""), "empty-string value must round-trip");
+        assert!(text.is_string(), "value must remain a string, not null");
+    }
 }

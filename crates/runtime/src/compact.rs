@@ -1,4 +1,5 @@
 use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
+use crate::usage::TokenUsage;
 
 const COMPACT_CONTINUATION_PREAMBLE: &str =
     "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\n";
@@ -112,10 +113,21 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
     let formatted_summary = format_compact_summary(&summary);
     let continuation = get_compact_continuation_message(&summary, true, !preserved.is_empty());
 
+    // CC-DRIFT-B6: carry the removed prefix's cumulative usage onto the
+    // synthetic summary message so UsageTracker::from_session keeps the
+    // status-line tokens after compaction. Also pick up any usage previously
+    // captured on the prior summary message at index 0.
+    let prior_summary_usage = if compacted_prefix_len == 1 {
+        session.messages.first().and_then(|m| m.usage)
+    } else {
+        None
+    };
+    let summary_usage = sum_message_usage(removed, prior_summary_usage);
+
     let mut compacted_messages = vec![ConversationMessage {
         role: MessageRole::System,
         blocks: vec![ContentBlock::Text { text: continuation }],
-        usage: None,
+        usage: summary_usage,
     }];
     compacted_messages.extend(preserved);
 
@@ -127,6 +139,32 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
             messages: compacted_messages,
         },
         removed_message_count: removed.len(),
+    }
+}
+
+fn sum_message_usage(
+    messages: &[ConversationMessage],
+    seed: Option<TokenUsage>,
+) -> Option<TokenUsage> {
+    let mut acc = seed.unwrap_or_default();
+    let mut saw_any = seed.is_some();
+    for m in messages {
+        if let Some(u) = m.usage {
+            acc.input_tokens = acc.input_tokens.saturating_add(u.input_tokens);
+            acc.output_tokens = acc.output_tokens.saturating_add(u.output_tokens);
+            acc.cache_creation_input_tokens = acc
+                .cache_creation_input_tokens
+                .saturating_add(u.cache_creation_input_tokens);
+            acc.cache_read_input_tokens = acc
+                .cache_read_input_tokens
+                .saturating_add(u.cache_read_input_tokens);
+            saw_any = true;
+        }
+    }
+    if saw_any {
+        Some(acc)
+    } else {
+        None
     }
 }
 
@@ -703,5 +741,68 @@ mod tests {
         ]);
         assert_eq!(pending.len(), 1);
         assert!(pending[0].contains("Next: update tests"));
+    }
+
+    // CC-DRIFT-B6: removed-message usage must be carried onto the summary
+    // message so UsageTracker::from_session keeps cumulative tokens after
+    // compaction. Previously `/compact` zeroed the status-line tokens.
+    #[test]
+    fn compaction_preserves_cumulative_usage_for_removed_prefix() {
+        use crate::usage::{TokenUsage, UsageTracker};
+
+        let mk_msg_with_usage = |role: MessageRole, text: &str, u: TokenUsage| {
+            ConversationMessage {
+                role,
+                blocks: vec![ContentBlock::Text { text: text.to_string() }],
+                usage: Some(u),
+            }
+        };
+
+        let removed_a = TokenUsage {
+            input_tokens: 1000,
+            output_tokens: 200,
+            cache_creation_input_tokens: 50,
+            cache_read_input_tokens: 25,
+        };
+        let removed_b = TokenUsage {
+            input_tokens: 2000,
+            output_tokens: 300,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 75,
+        };
+        let preserved_a = TokenUsage {
+            input_tokens: 500,
+            output_tokens: 100,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        };
+
+        let session = Session {
+            version: 1,
+            messages: vec![
+                mk_msg_with_usage(MessageRole::User, &"one ".repeat(200), removed_a),
+                mk_msg_with_usage(MessageRole::Assistant, &"two ".repeat(200), removed_b),
+                mk_msg_with_usage(MessageRole::User, "preserved", preserved_a),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "preserved2".to_string(),
+                }]),
+            ],
+        };
+
+        let pre_total = UsageTracker::from_session(&session).cumulative_usage();
+        assert_eq!(pre_total.input_tokens, 3500);
+
+        let result = compact_session(
+            &session,
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 },
+        );
+
+        assert_eq!(result.removed_message_count, 2);
+
+        let post_total = UsageTracker::from_session(&result.compacted_session).cumulative_usage();
+        assert_eq!(
+            post_total, pre_total,
+            "cumulative usage must survive /compact"
+        );
     }
 }
