@@ -1,4 +1,5 @@
 pub mod agent_snapshot;
+pub mod auto_mode;
 mod bash;
 mod bootstrap;
 pub mod ssh;
@@ -140,6 +141,7 @@ pub use team::{
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
 pub use scroll_speed::{get_scroll_speed, reset_scroll_speed, set_scroll_speed};
+pub use auto_mode::AutoModeConfig;
 pub use auto_promote::{
     install_default as install_auto_promote_default, install_global as install_auto_promote,
     is_installed as auto_promote_is_installed, observe as auto_promote_observe,

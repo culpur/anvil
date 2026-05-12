@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::effort::EffortLevel;
 use crate::json::JsonValue;
+use crate::auto_mode::AutoModeConfig;
 use crate::permissions::{BlockAction, ReviewerConfig, ReviewerMode};
 use crate::sandbox::SandboxConfig;
 
@@ -121,6 +122,8 @@ pub struct RuntimeFeatureConfig {
     reviewer: ReviewerConfig,
     /// Worktree settings (CC-133-F1: `worktree.baseRef`).
     worktree: WorktreeConfig,
+    /// Auto-mode hard-deny list (CC-136-F2: `autoMode.hard_deny`).
+    auto_mode: AutoModeConfig,
 }
 
 #[derive(Debug)]
@@ -252,6 +255,7 @@ impl ConfigLoader {
                 parse_optional_reviewer_config(&merged_value),
             ),
             worktree: parse_optional_worktree_config(&merged_value),
+            auto_mode: parse_optional_auto_mode_config(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -518,6 +522,11 @@ impl RuntimeConfig {
     pub const fn worktree(&self) -> &WorktreeConfig {
         &self.feature_config.worktree
     }
+
+    #[must_use]
+    pub const fn auto_mode(&self) -> &AutoModeConfig {
+        &self.feature_config.auto_mode
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -597,6 +606,11 @@ impl RuntimeFeatureConfig {
     pub const fn worktree(&self) -> &WorktreeConfig {
         &self.worktree
     }
+
+    #[must_use]
+    pub const fn auto_mode(&self) -> &AutoModeConfig {
+        &self.auto_mode
+    }
 }
 
 #[must_use]
@@ -653,6 +667,33 @@ fn parse_optional_worktree_config(root: &JsonValue) -> WorktreeConfig {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     WorktreeConfig { base_ref }
+}
+
+/// Parse `autoMode.hard_deny` from the merged config JSON.
+///
+/// CC-136-F2 parity. Unknown / malformed shapes are silently ignored —
+/// hard-deny is a *safety override*, so the absence of an entry is the
+/// default of "no extra rules." Anything other than an array of strings
+/// is dropped rather than promoting it to a tolerated parse error: the
+/// failure mode "user's typo silently disabled hard-deny" is exactly
+/// what we want to avoid causing, so we only honour well-formed entries.
+fn parse_optional_auto_mode_config(root: &JsonValue) -> AutoModeConfig {
+    let hard_deny = root
+        .as_object()
+        .and_then(|o| o.get("autoMode").or_else(|| o.get("auto_mode")))
+        .and_then(JsonValue::as_object)
+        .and_then(|am| am.get("hard_deny").or_else(|| am.get("hardDeny")))
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    AutoModeConfig { hard_deny }
 }
 
 /// Parse `permissions.reviewer` from the merged config JSON.

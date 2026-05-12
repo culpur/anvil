@@ -13,6 +13,7 @@ use crate::hooks::{
     CwdChangedPayload, HookRunResult, HookRunner, NotificationPayload,
 };
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
+use crate::auto_mode::AutoModeConfig;
 use crate::permissions::reviewer::Reviewer;
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
@@ -108,6 +109,9 @@ pub struct ConversationRuntime<C, T> {
     hook_runner: HookRunner,
     /// W8 reviewer gate — compiled once from `ReviewerConfig`.
     reviewer: Reviewer,
+    /// Auto-mode hard-deny list (CC-136-F2). Evaluated before hooks when
+    /// the active permission mode is `WorkspaceWrite`.
+    auto_mode: AutoModeConfig,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -144,6 +148,7 @@ where
     ) -> Self {
         let usage_tracker = UsageTracker::from_session(&session);
         let reviewer = Reviewer::new(feature_config.reviewer());
+        let auto_mode = feature_config.auto_mode().clone();
         Self {
             session,
             api_client,
@@ -154,6 +159,7 @@ where
             usage_tracker,
             hook_runner: HookRunner::from_feature_config(&feature_config),
             reviewer,
+            auto_mode,
         }
     }
 
@@ -199,6 +205,7 @@ where
             &self.hook_runner,
             prompter,
             &self.reviewer,
+            &self.auto_mode,
         )
     }
 

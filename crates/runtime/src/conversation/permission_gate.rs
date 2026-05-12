@@ -1,12 +1,13 @@
 //! Permission checking and prompt-driven authorization for tool use.
 
+use crate::auto_mode::AutoModeConfig;
 use crate::hooks::{
     FileChangeAction, FileChangedPayload, HookPermissionDecision, HookRunResult, HookRunner,
     PermissionDeniedPayload, PermissionDeniedSource, PermissionRequestPayload,
 };
 use crate::permissions::{
-    PermissionOutcome, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
-    PermissionRequest,
+    PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
+    PermissionPrompter, PermissionRequest,
 };
 use crate::permissions::reviewer::{Recommendation, Reviewer};
 use crate::session::ConversationMessage;
@@ -30,7 +31,35 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     hook_runner: &HookRunner,
     executor: &mut T,
     reviewer: &Reviewer,
+    auto_mode: &AutoModeConfig,
 ) -> ConversationMessage {
+    // CC-136-F2: auto-mode hard-deny short-circuit.
+    //
+    // When the active mode is WorkspaceWrite ("auto-mode") and the call
+    // matches a user-listed hard-deny pattern, refuse without consulting
+    // hooks, reviewer, prompter, or "allow once" memory. This is the
+    // safety override that lets users opt into auto-mode for routine
+    // work while reserving an unbypassable veto for specific operations.
+    //
+    // ReadOnly is already more restrictive than the deny list, and
+    // DangerFullAccess is an explicit "no guardrails" mode — neither
+    // consults this list.
+    if policy.active_mode() == PermissionMode::WorkspaceWrite
+        && auto_mode.matches_hard_deny(&tool_name, input)
+    {
+        let reason = format!(
+            "tool `{tool_name}` is hard-denied in auto-mode by autoMode.hard_deny"
+        );
+        otel::permission_decision(&tool_name, "deny", "auto_mode_hard_deny");
+        let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
+            tool: tool_name.clone(),
+            input: input.to_string(),
+            reason: reason.clone(),
+            source: PermissionDeniedSource::User,
+        });
+        return ConversationMessage::tool_result(tool_use_id, tool_name, reason, true);
+    }
+
     // v2.2.11: fire PermissionRequest hooks before the policy gate.
     // A hook may inject a decision to short-circuit the normal prompt.
     let hook_permission = hook_runner.run_permission_request(&PermissionRequestPayload {
@@ -257,4 +286,178 @@ fn merge_hook_feedback(messages: &[String], output: String, denied: bool) -> Str
     };
     sections.push(format!("{label}:\n{}", messages.join("\n")));
     sections.join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RuntimeHookConfig;
+    use crate::conversation::StaticToolExecutor;
+    use crate::permissions::reviewer::ReviewerConfig;
+    use crate::session::ContentBlock;
+
+    fn empty_hook_runner() -> HookRunner {
+        HookRunner::new(RuntimeHookConfig::default())
+    }
+
+    fn make_executor() -> StaticToolExecutor {
+        StaticToolExecutor::new()
+            .register("write_file", |_| Ok("<written>".to_string()))
+            .register("edit_file", |_| Ok("<edited>".to_string()))
+            .register("Bash", |_| Ok("<ran>".to_string()))
+    }
+
+    fn result_text(msg: &crate::session::ConversationMessage) -> (String, bool) {
+        for block in &msg.blocks {
+            if let ContentBlock::ToolResult { output, is_error, .. } = block {
+                return (output.clone(), *is_error);
+            }
+        }
+        (String::new(), false)
+    }
+
+    #[test]
+    fn hard_deny_blocks_in_workspace_write_mode() {
+        let policy = PermissionPolicy::new(crate::permissions::PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("edit_file", crate::permissions::PermissionMode::WorkspaceWrite);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig {
+            hard_deny: vec!["edit_file".into()],
+        };
+
+        let msg = evaluate_and_execute(
+            "id-1".into(),
+            "edit_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(is_err, "hard-deny must produce an error tool_result");
+        assert!(
+            text.contains("hard-denied in auto-mode"),
+            "deny message should mention auto-mode hard-deny, got: {text}"
+        );
+    }
+
+    #[test]
+    fn hard_deny_skipped_in_read_only_mode() {
+        // ReadOnly is *more* restrictive than the deny list; the normal policy
+        // gate handles it. The auto-mode short-circuit must NOT fire here —
+        // the message should reflect a normal policy denial, not the auto-mode
+        // hard-deny path.
+        let policy = PermissionPolicy::new(crate::permissions::PermissionMode::ReadOnly)
+            .with_tool_requirement("edit_file", crate::permissions::PermissionMode::WorkspaceWrite);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig {
+            hard_deny: vec!["edit_file".into()],
+        };
+
+        let msg = evaluate_and_execute(
+            "id-2".into(),
+            "edit_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(is_err);
+        assert!(
+            !text.contains("hard-denied in auto-mode"),
+            "ReadOnly path must use normal policy denial, not auto-mode hard-deny"
+        );
+    }
+
+    #[test]
+    fn hard_deny_skipped_in_danger_full_access_mode() {
+        // DangerFullAccess is "I know what I'm doing" — auto-mode hard-deny
+        // doesn't apply here either. The tool should run.
+        let policy = PermissionPolicy::new(crate::permissions::PermissionMode::DangerFullAccess);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig {
+            hard_deny: vec!["edit_file".into()],
+        };
+
+        let msg = evaluate_and_execute(
+            "id-3".into(),
+            "edit_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(!is_err, "DangerFullAccess should run the tool");
+        assert_eq!(text, "<edited>");
+    }
+
+    #[test]
+    fn hard_deny_with_arg_pattern_matches_input() {
+        // Bash needs to be allowed at WorkspaceWrite for the non-matching
+        // path to actually reach the executor; otherwise normal policy
+        // denial would shadow what we're trying to test.
+        let policy = PermissionPolicy::new(crate::permissions::PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("Bash", crate::permissions::PermissionMode::WorkspaceWrite);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig {
+            hard_deny: vec!["Bash(rm -rf *)".into()],
+        };
+
+        // Matching call → denied.
+        let msg = evaluate_and_execute(
+            "id-4".into(),
+            "Bash".into(),
+            "rm -rf /tmp/x",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+        );
+        let (text, is_err) = result_text(&msg);
+        assert!(is_err && text.contains("hard-denied"));
+
+        // Non-matching call → executes normally.
+        let msg2 = evaluate_and_execute(
+            "id-5".into(),
+            "Bash".into(),
+            "echo hi",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+        );
+        let (text2, is_err2) = result_text(&msg2);
+        assert!(!is_err2, "Bash echo should not be denied");
+        assert_eq!(text2, "<ran>");
+    }
 }

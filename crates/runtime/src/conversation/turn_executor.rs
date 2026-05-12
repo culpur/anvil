@@ -8,6 +8,7 @@ use super::{
 };
 use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
+use crate::auto_mode::AutoModeConfig;
 use crate::hooks::{HookRunner, PostToolBatchPayload};
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::permissions::reviewer::Reviewer;
@@ -29,6 +30,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     hook_runner: &HookRunner,
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     reviewer: &Reviewer,
+    auto_mode: &AutoModeConfig,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
     let mut tool_results = Vec::new();
@@ -90,6 +92,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
                 hook_runner,
                 tool_executor,
                 reviewer,
+                auto_mode,
             );
             let elapsed_ms = start.elapsed().as_millis() as u64;
             durations_ms.push(elapsed_ms);
