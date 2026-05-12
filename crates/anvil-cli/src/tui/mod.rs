@@ -652,16 +652,26 @@ impl AnvilTui {
             tab.scrollback.pop_back_n(tab.scrollback_pending_lines);
             tab.scrollback_pending_lines = 0;
 
+            // CC-139-F5: in transcript verbose mode every tool card renders
+            // as expanded, which changes line counts. We pass the flag into
+            // `to_lines_with` so the scrollback feed and the live render
+            // both stay in sync with the verbose toggle.
+            let verbose = tab.transcript_verbose;
+
             // Render the stable part of the log (all but the last entry) and
             // append any new lines past what's already cached. We compute the
             // stable line iterator lazily so we don't re-render every prior
             // entry per frame — `skip(already)` consumes without allocating.
+            //
+            // Note: when `verbose` toggles, the cached `stable_already` count
+            // is no longer accurate; the toggle handler clears scrollback so
+            // this branch sees `stable_already == 0` and re-renders cleanly.
             let stable_end = tab.log.len().saturating_sub(1);
             let stable_already = tab.scrollback.len();
             let new_stable_lines: Vec<String> = tab.log[..stable_end]
                 .iter()
                 .flat_map(|entry| {
-                    entry.to_lines(approx_width, &theme).into_iter().map(|line| {
+                    entry.to_lines_with(approx_width, &theme, verbose).into_iter().map(|line| {
                         line.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
                     })
                 })
@@ -675,7 +685,7 @@ impl AnvilTui {
             // push it onto the back. Next draw will pop these and re-render.
             let mut mutable_lines: Vec<String> = Vec::new();
             if let Some(last_entry) = tab.log.last() {
-                for line in last_entry.to_lines(approx_width, &theme) {
+                for line in last_entry.to_lines_with(approx_width, &theme, verbose) {
                     let plain: String =
                         line.spans.iter().map(|s| s.content.as_ref()).collect();
                     mutable_lines.push(plain);
@@ -693,6 +703,7 @@ impl AnvilTui {
         // Snapshot per-tab data from the active tab.
         let tab = self.active_tab();
         let log_snapshot = tab.log.clone();
+        let transcript_verbose = tab.transcript_verbose;
         let pending = tab.pending_text.clone();
         let think = tab.think_label.clone();
         let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
@@ -1140,7 +1151,7 @@ impl AnvilTui {
                 let mut lines: Vec<Line<'static>> = Vec::new();
 
                 for entry in &log_snapshot {
-                    lines.extend(entry.to_lines(content_width, &theme));
+                    lines.extend(entry.to_lines_with(content_width, &theme, transcript_verbose));
                 }
 
                 // Streaming assistant text in progress

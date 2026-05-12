@@ -405,6 +405,19 @@ impl AnvilTui {
             }
             KeyCode::PageUp => self.scroll_up(10),
             KeyCode::PageDown => self.scroll_down(10),
+            KeyCode::Char(ch)
+                if matches!(ch, '?' | '{' | '}' | 'v' | 'V')
+                    && !self.active_tab().scrollback_state.is_live()
+                    && !self.active_tab().completion.visible =>
+            {
+                // CC-139-F5 (#460): transcript view nav keys. Only fire in
+                // HISTORICAL VIEW (i.e. user has scrolled away from live);
+                // in live mode these characters fall through to plain
+                // input below.  Capital `V` is folded into the `v` arm
+                // for consistency with the existing `Ctrl+O` expand/
+                // collapse toggle pattern.
+                self.handle_transcript_nav(ch);
+            }
             KeyCode::Char(ch) => {
                 self.insert_char(ch);
                 self.refresh_completion();
@@ -793,5 +806,143 @@ impl AnvilTui {
     pub(super) fn refresh_completion(&mut self) {
         let input = self.active_tab().input.clone();
         self.active_tab_mut().completion = update_completions(&input);
+    }
+
+    // ─── CC-139-F5 transcript view nav (#460) ────────────────────────────────
+
+    /// Dispatch the four transcript-mode keys (`?`, `{`, `}`, `v`).
+    ///
+    /// Only invoked from `handle_key` when the active tab is in HISTORICAL
+    /// VIEW (`scrollback_state.is_live() == false`).  Live mode lets these
+    /// characters fall through to `insert_char`, matching the spec that
+    /// transcript-nav keys must not break ordinary typing.
+    pub(super) fn handle_transcript_nav(&mut self, ch: char) {
+        match ch {
+            '?' => self.transcript_help(),
+            '{' => self.transcript_jump_user(false),
+            '}' => self.transcript_jump_user(true),
+            'v' | 'V' => self.transcript_toggle_verbose(),
+            _ => {}
+        }
+    }
+
+    /// `?` — inline transcript-mode help banner.
+    ///
+    /// Pushes a single `System` log entry instead of opening a modal so the
+    /// user can keep scrolling.  `push_system` snaps back to live view; we
+    /// stash and restore the anchor so a quick `?` in the middle of a long
+    /// transcript doesn't yank the viewport to the bottom.
+    fn transcript_help(&mut self) {
+        let saved = self.active_tab().scrollback_state;
+        self.push_system(
+            "Transcript nav: { prev user msg · } next user msg · v verbose · End live"
+                .to_string(),
+        );
+        // Restore the historical anchor.  `push_system` calls
+        // `scroll_to_bottom`, which sets state to live — we override that
+        // here so the help line appears on the next draw but the viewport
+        // stays where the user was reading.
+        self.active_tab_mut().scrollback_state = saved;
+        self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+    }
+
+    /// `v` / `V` — toggle per-tab transcript verbose mode.
+    ///
+    /// Flips `Tab::transcript_verbose` and clears the scrollback ring so the
+    /// next draw rebuilds line counts under the new flag.  Without the clear,
+    /// `scrollback_already` would skip re-rendering and the cached truncated
+    /// tool cards would stay frozen.
+    fn transcript_toggle_verbose(&mut self) {
+        let saved = self.active_tab().scrollback_state;
+        let new_flag = !self.active_tab().transcript_verbose;
+        {
+            let tab = self.active_tab_mut();
+            tab.transcript_verbose = new_flag;
+            // Invalidate the cached scrollback so the next draw re-renders
+            // every log entry under the new verbose flag.
+            tab.scrollback = super::scrollback::ScrollbackBuffer::new();
+            tab.scrollback_pending_lines = 0;
+        }
+        self.push_system(if new_flag {
+            "Transcript verbose: ON (tool I/O shown in full)".to_string()
+        } else {
+            "Transcript verbose: OFF (tool I/O truncated)".to_string()
+        });
+        // push_system snaps to live; restore the historical anchor so the
+        // user keeps their reading position.  Anchor may now point past the
+        // end of the rebuilt buffer — `effective_anchor` will clamp it.
+        self.active_tab_mut().scrollback_state = saved;
+        self.redraw.request(super::redraw::DirtyRegions::ALL);
+    }
+
+    /// `{` / `}` — jump to the previous or next user message.
+    ///
+    /// `forward = false` searches backward (`{`), `true` searches forward
+    /// (`}`).  We walk `tab.log` and compute each `User` entry's starting
+    /// scrollback line by rendering preceding entries with the same
+    /// verbosity flag — the only correct way to land on the right anchor
+    /// when verbose mode has changed tool-card line counts.
+    ///
+    /// If no further user message exists in the search direction we push a
+    /// System message and leave the scroll anchor alone.
+    fn transcript_jump_user(&mut self, forward: bool) {
+        use super::state::LogEntry;
+
+        let theme = self.theme.clone();
+        let approx_width: u16 = self.terminal.size().map(|s| s.width).unwrap_or(80);
+        let tab = self.active_tab();
+        let verbose = tab.transcript_verbose;
+
+        // Build a list of (log_idx, scrollback_line) for every User entry,
+        // skipping the very last entry which is part of the mutable tail
+        // (its position can shift mid-stream).  Empty logs short-circuit
+        // below.
+        let mut user_lines: Vec<usize> = Vec::new();
+        let mut cumulative: usize = 0;
+        let stable_end = tab.log.len().saturating_sub(1);
+        for entry in &tab.log[..stable_end] {
+            if matches!(entry, LogEntry::User(_)) {
+                user_lines.push(cumulative);
+            }
+            cumulative += entry.to_lines_with(approx_width, &theme, verbose).len();
+        }
+
+        if user_lines.is_empty() {
+            // No qualifying user message in the stable region.
+            let direction = if forward { "later" } else { "earlier" };
+            let msg = format!("No {direction} user message");
+            let saved = tab.scrollback_state;
+            self.push_system(msg);
+            self.active_tab_mut().scrollback_state = saved;
+            self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+            return;
+        }
+
+        // Current anchor — None means live (bottom of buffer).  In live mode
+        // both `{` and `}` are gated off, so this branch only runs in
+        // historical view; we still defensively fall back to `cumulative` so
+        // `{` works as "previous from the bottom".
+        let current_anchor: usize = match tab.scrollback_state.0 {
+            Some(a) => a,
+            None => cumulative,
+        };
+
+        let target =
+            super::scrollback::pick_user_anchor(&user_lines, current_anchor, forward);
+
+        match target {
+            Some(new_anchor) => {
+                self.active_tab_mut().scrollback_state =
+                    super::scrollback::ScrollbackState(Some(new_anchor));
+                self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+            }
+            None => {
+                let saved = self.active_tab().scrollback_state;
+                let direction = if forward { "later" } else { "earlier" };
+                self.push_system(format!("No {direction} user message"));
+                self.active_tab_mut().scrollback_state = saved;
+                self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
+            }
+        }
     }
 }

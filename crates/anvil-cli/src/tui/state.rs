@@ -228,7 +228,27 @@ pub(super) const fn rgb(c: Rgb) -> Color {
 
 impl LogEntry {
     /// Render this entry as a list of ratatui `Line`s for display.
+    ///
+    /// Convenience wrapper around [`Self::to_lines_with`] with
+    /// `force_expand = false`. Kept for tests and any future call site that
+    /// doesn't need the verbose override.
+    #[allow(dead_code)]
     pub(super) fn to_lines(&self, max_width: u16, theme: &Theme) -> Vec<Line<'static>> {
+        self.to_lines_with(max_width, theme, false)
+    }
+
+    /// Render with an optional `force_expand` override that treats every
+    /// `ToolCall` card as expanded regardless of its per-card `expanded`
+    /// flag. Used by CC-139-F5 transcript verbose mode (`v` in HISTORICAL
+    /// VIEW) so tool input/output renders without truncation across the
+    /// whole scrollback. `to_lines` is now a thin wrapper that passes
+    /// `false`, so non-verbose callers behave exactly as before.
+    pub(super) fn to_lines_with(
+        &self,
+        max_width: u16,
+        theme: &Theme,
+        force_expand: bool,
+    ) -> Vec<Line<'static>> {
         let width = max_width.saturating_sub(4) as usize;
         match self {
             LogEntry::User(text) => {
@@ -266,6 +286,12 @@ impl LogEntry {
                 full_input,
                 full_result,
             } => {
+                // CC-139-F5: transcript verbose mode forces every ToolCall
+                // card to render as expanded, even when the per-card flag
+                // is off. The local `expanded` shadow keeps the rest of
+                // this arm's logic untouched.
+                let expanded_local = *expanded || force_expand;
+                let expanded = &expanded_local;
                 let (border_color, icon, label) = if *is_error {
                     (rgb(theme.error), "✗", format!("{name} (error)"))
                 } else if *done {
@@ -454,6 +480,13 @@ pub(crate) struct Tab {
     pub scrollback_pending_lines: usize,
     /// Current scrollback navigation state (None = live view).
     pub scrollback_state: ScrollbackState,
+    /// CC-139-F5: transcript verbose mode. Toggled by `v` in HISTORICAL
+    /// VIEW. When `true`, every `LogEntry::ToolCall` renders as if its
+    /// per-card `expanded` flag were set — i.e. tool input/output is
+    /// shown in full instead of the usual truncated detail + one-line
+    /// result summary. Defaults to `false` and is per-tab so a verbose
+    /// transcript on one tab doesn't bleed into another.
+    pub transcript_verbose: bool,
     /// T5-Ssh-D: when present, this tab is in SSH mode and renders the
     /// vt100 virtual screen instead of the chat log. All chat-related
     /// fields above are unused when `ssh.is_some()`.
@@ -499,6 +532,7 @@ impl Tab {
             scrollback: ScrollbackBuffer::new(),
             scrollback_pending_lines: 0,
             scrollback_state: ScrollbackState::live(),
+            transcript_verbose: false,
             ssh: None,
             has_runtime: false,
         }

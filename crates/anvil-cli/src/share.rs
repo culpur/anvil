@@ -229,6 +229,7 @@ mod tests {
             scrollback: crate::tui::scrollback::ScrollbackBuffer::new(),
             scrollback_pending_lines: 0,
             scrollback_state: crate::tui::scrollback::ScrollbackState::live(),
+            transcript_verbose: false,
             ssh: None,
             has_runtime: false,
         }

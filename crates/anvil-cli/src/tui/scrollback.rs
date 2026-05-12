@@ -225,6 +225,27 @@ impl ScrollbackState {
     }
 }
 
+/// CC-139-F5 helper: given a sorted ascending list of scrollback line
+/// indices that mark user-message starts, find the previous or next one
+/// relative to `current_anchor`.
+///
+/// `forward = false` ⇒ largest entry strictly less than `current_anchor`
+/// `forward = true`  ⇒ smallest entry strictly greater than `current_anchor`
+///
+/// Returns `None` when no qualifying entry exists in that direction; the
+/// caller is expected to surface a "No earlier/later user message" system
+/// message instead of moving the viewport.
+///
+/// Extracted as a free function so the navigation logic can be unit-tested
+/// without standing up an `AnvilTui`.
+pub fn pick_user_anchor(user_lines: &[usize], current_anchor: usize, forward: bool) -> Option<usize> {
+    if forward {
+        user_lines.iter().copied().find(|&p| p > current_anchor)
+    } else {
+        user_lines.iter().copied().rev().find(|&p| p < current_anchor)
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -405,6 +426,72 @@ mod tests {
     }
 
     // ── Modifier-shift detection helper ──────────────────────────────────────
+
+    // ── CC-139-F5 transcript user-anchor picker (#460) ───────────────────────
+
+    #[test]
+    fn pick_user_anchor_finds_previous_user_message() {
+        // Three user messages at scrollback rows 0, 12, 27.
+        // Cursor at row 30 — backward jump should land on 27.
+        let users = vec![0usize, 12, 27];
+        let prev = pick_user_anchor(&users, 30, false);
+        assert_eq!(prev, Some(27), "`{{` from row 30 should jump to row 27");
+    }
+
+    #[test]
+    fn pick_user_anchor_finds_next_user_message() {
+        // Cursor at row 5 — forward jump should land on 12.
+        let users = vec![0usize, 12, 27];
+        let next = pick_user_anchor(&users, 5, true);
+        assert_eq!(next, Some(12), "`}}` from row 5 should jump to row 12");
+    }
+
+    #[test]
+    fn pick_user_anchor_strictly_less_than_current() {
+        // Cursor exactly on a user-message row — backward must skip it (no
+        // pointless no-op jumps).
+        let users = vec![0usize, 12, 27];
+        let prev = pick_user_anchor(&users, 12, false);
+        assert_eq!(prev, Some(0), "`{{` from row 12 should skip 12 and land on 0");
+    }
+
+    #[test]
+    fn pick_user_anchor_strictly_greater_than_current() {
+        // Cursor exactly on a user-message row — forward must skip it.
+        let users = vec![0usize, 12, 27];
+        let next = pick_user_anchor(&users, 12, true);
+        assert_eq!(next, Some(27), "`}}` from row 12 should skip 12 and land on 27");
+    }
+
+    #[test]
+    fn pick_user_anchor_returns_none_when_no_earlier_message() {
+        // Cursor before the earliest user row — backward returns None so
+        // the caller can push "No earlier user message".
+        let users = vec![5usize, 18, 33];
+        let prev = pick_user_anchor(&users, 4, false);
+        assert_eq!(prev, None);
+        // Also for cursor at the earliest entry itself.
+        let prev2 = pick_user_anchor(&users, 5, false);
+        assert_eq!(prev2, None, "exact match must not be returned");
+    }
+
+    #[test]
+    fn pick_user_anchor_returns_none_when_no_later_message() {
+        // Cursor at or past the last user row — forward returns None.
+        let users = vec![5usize, 18, 33];
+        let next = pick_user_anchor(&users, 33, true);
+        assert_eq!(next, None, "exact match must not be returned");
+        let next2 = pick_user_anchor(&users, 100, true);
+        assert_eq!(next2, None);
+    }
+
+    #[test]
+    fn pick_user_anchor_handles_empty_input() {
+        // No user messages — both directions return None.
+        let users: Vec<usize> = Vec::new();
+        assert_eq!(pick_user_anchor(&users, 0, false), None);
+        assert_eq!(pick_user_anchor(&users, 0, true), None);
+    }
 
     /// Verify that our shift-modifier check is correct for the event kinds
     /// we use.  This is a pure logic test — no terminal required.
