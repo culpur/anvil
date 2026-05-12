@@ -65,7 +65,8 @@ pub use config::{
     McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
     BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,
     PolicyCheckError, ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig,
-    RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig, ANVIL_SETTINGS_SCHEMA_NAME,
+    RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig, WorktreeConfig,
+    ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
 pub use config::schema::{emit_schema as emit_config_schema, write_schema_to as write_config_schema_to};

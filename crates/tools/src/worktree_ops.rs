@@ -105,15 +105,22 @@ pub(crate) fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, St
     std::fs::create_dir_all(worktree_path.parent().unwrap_or(&worktree_path))
         .map_err(|e| format!("cannot create worktrees directory: {e}"))?;
 
-    // `git worktree add <path> -b <branch>`
+    // CC-133-F1: when `worktree.baseRef` is set in settings.json, pass it
+    // as the start-point argument so the new branch is created off that
+    // ref instead of HEAD.  Absent → original behaviour (HEAD).
+    let base_ref = ConfigLoader::default_for(&repo_root)
+        .load()
+        .ok()
+        .and_then(|cfg| cfg.worktree().base_ref().map(str::to_string));
+
+    let worktree_path_str = worktree_path.to_str().ok_or("worktree path is not valid UTF-8")?;
+    let mut git_args: Vec<&str> = vec!["worktree", "add", worktree_path_str, "-b", &branch_name];
+    if let Some(ref base) = base_ref {
+        git_args.push(base);
+    }
+
     let add_output = Command::new("git")
-        .args([
-            "worktree",
-            "add",
-            worktree_path.to_str().ok_or("worktree path is not valid UTF-8")?,
-            "-b",
-            &branch_name,
-        ])
+        .args(&git_args)
         .current_dir(&repo_root)
         .output()
         .map_err(|e| format!("failed to run git worktree add: {e}"))?;

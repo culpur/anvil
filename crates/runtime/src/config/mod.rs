@@ -77,6 +77,31 @@ pub struct RuntimeConfig {
     active_profile: Option<String>,
 }
 
+/// Settings for the `EnterWorktree` tool / `/worktree` flow.
+///
+/// CC-133-F1 parity: lets a user pin worktree creation to a specific ref
+/// (e.g. `"main"`, `"origin/main"`, a tag, or a SHA) so the worktree is
+/// branched from a known base instead of HEAD.  When absent → HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorktreeConfig {
+    /// Optional ref to base new worktrees off.  When `None`, worktrees are
+    /// branched from `HEAD` (existing behaviour).
+    base_ref: Option<String>,
+}
+
+impl WorktreeConfig {
+    #[must_use]
+    pub fn base_ref(&self) -> Option<&str> {
+        self.base_ref.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_base_ref(mut self, base_ref: impl Into<String>) -> Self {
+        self.base_ref = Some(base_ref.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
     hooks: RuntimeHookConfig,
@@ -94,6 +119,8 @@ pub struct RuntimeFeatureConfig {
     effort_level: Option<EffortLevel>,
     /// Reviewer gate config (disabled by default).
     reviewer: ReviewerConfig,
+    /// Worktree settings (CC-133-F1: `worktree.baseRef`).
+    worktree: WorktreeConfig,
 }
 
 #[derive(Debug)]
@@ -224,6 +251,7 @@ impl ConfigLoader {
                 "permissions.reviewer",
                 parse_optional_reviewer_config(&merged_value),
             ),
+            worktree: parse_optional_worktree_config(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -485,6 +513,11 @@ impl RuntimeConfig {
     pub const fn reviewer(&self) -> &ReviewerConfig {
         &self.feature_config.reviewer
     }
+
+    #[must_use]
+    pub const fn worktree(&self) -> &WorktreeConfig {
+        &self.feature_config.worktree
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -559,6 +592,11 @@ impl RuntimeFeatureConfig {
     pub const fn reviewer(&self) -> &ReviewerConfig {
         &self.reviewer
     }
+
+    #[must_use]
+    pub const fn worktree(&self) -> &WorktreeConfig {
+        &self.worktree
+    }
 }
 
 #[must_use]
@@ -589,6 +627,32 @@ fn parse_optional_effort_level(root: &JsonValue) -> Option<EffortLevel> {
         .and_then(|object| object.get("effort_level"))
         .and_then(JsonValue::as_str)
         .and_then(EffortLevel::from_str)
+}
+
+/// Parse `worktree.baseRef` from the merged config JSON (CC-133-F1).
+///
+/// Accepts:
+///   { "worktree": { "baseRef": "main" } }
+/// or the snake_case fallback:
+///   { "worktree": { "base_ref": "main" } }
+///
+/// Returns `WorktreeConfig::default()` when the section is absent or
+/// malformed.  This is intentionally lenient — bad config shouldn't
+/// crash the runtime.
+fn parse_optional_worktree_config(root: &JsonValue) -> WorktreeConfig {
+    let base_ref = root
+        .as_object()
+        .and_then(|o| o.get("worktree"))
+        .and_then(JsonValue::as_object)
+        .and_then(|wt| {
+            wt.get("baseRef")
+                .or_else(|| wt.get("base_ref"))
+                .and_then(JsonValue::as_str)
+        })
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    WorktreeConfig { base_ref }
 }
 
 /// Parse `permissions.reviewer` from the merged config JSON.
@@ -1220,5 +1284,79 @@ mod tests {
         );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
+    }
+
+    // ─── CC-133-F1: worktree.baseRef parse tests ──────────────────────────
+
+    #[test]
+    fn worktree_base_ref_parses_camel_case() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"worktree": {"baseRef": "main"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert_eq!(loaded.worktree().base_ref(), Some("main"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn worktree_base_ref_accepts_snake_case_fallback() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"worktree": {"base_ref": "origin/main"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert_eq!(loaded.worktree().base_ref(), Some("origin/main"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn worktree_base_ref_absent_returns_none() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(home.join("settings.json"), r#"{}"#).expect("write");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.worktree().base_ref().is_none());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn worktree_base_ref_empty_string_treated_as_absent() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"worktree": {"baseRef": "   "}}"#,
+        )
+        .expect("write");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.worktree().base_ref().is_none());
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 }
