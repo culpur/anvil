@@ -195,6 +195,45 @@ pub struct AnvilTui {
     /// shows a modal when the user is on that tab; for background tabs the
     /// tab bar shows a ⚠ marker until the user switches and approves/denies.
     pub(super) pending_permissions: std::collections::HashMap<usize, PendingPermission>,
+    /// v2.2.14 BUG-fix-real: central render gate. Set by `request_redraw`
+    /// from any code path that produced a visible change (key events, text
+    /// delta batches, tab switches, spinner ticks). The wait loop and main
+    /// loop consult this flag and, when set, call `draw_full()` + explicit
+    /// `backend.flush()` to force a fully-committed terminal frame.
+    ///
+    /// `24bbe50` fixed the wrong layer — `insert_char` was already correct;
+    /// the actual broken step was the terminal frame commit during a hot
+    /// `TextDelta` firehose. Routing every "needs paint" decision through
+    /// this gate gives us a single chokepoint that we can instrument and
+    /// (per Step 3) augment with a forced `terminal.clear()` to bypass
+    /// ratatui's frame-diff coalescing.
+    pub(super) redraw_pending: bool,
+    /// Most recent reason the gate was set; recorded so the instrumentation
+    /// log can attribute each commit to a specific cause.
+    pub(super) redraw_reason: Option<RedrawReason>,
+}
+
+/// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
+///
+/// Recorded on `AnvilTui.redraw_reason` and emitted via the [DRAW-BEGIN]
+/// instrumentation so we can correlate each committed frame with the event
+/// that requested it. Specifically: when the user types on tab 2 while
+/// tab 1 firehoses, we should see the [KEY] markers and the [DRAW-BEGIN]
+/// markers interleaved with [DRAW-END] markers in the same order. A
+/// missing [DRAW-END] points the finger at terminal commit; a present
+/// [DRAW-END] without visible echo points at frame-diff coalescing.
+#[derive(Debug, Clone, Copy)]
+pub enum RedrawReason {
+    /// A user key event mutated input/cursor state.
+    KeyEvent,
+    /// One or more `TextDelta` events landed via `apply_tagged_event`.
+    TextDeltaBatch,
+    /// The streaming spinner advanced one frame.
+    Spinner,
+    /// The user switched tabs (or the active tab changed for any reason).
+    TabSwitch,
+    /// Catch-all for paths that haven't been classified yet.
+    Other,
 }
 
 /// One clickable region on the tab bar.
@@ -378,6 +417,8 @@ impl AnvilTui {
                 tab_hits: Vec::new(),
                 tab_bar_row: 0,
                 pending_permissions: std::collections::HashMap::new(),
+                redraw_pending: false,
+                redraw_reason: None,
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -695,6 +736,66 @@ impl AnvilTui {
         }
     }
 
+    /// v2.2.14 BUG-fix-real: set the central render gate with a reason tag.
+    ///
+    /// Separate from `request_redraw(DirtyRegions)` (which feeds the frame-
+    /// budget scheduler) — this is the simple flag the wait-loop and main-
+    /// loop check at the top of every iteration to force a full
+    /// `draw_full()` + explicit terminal flush. The diff coalescing inside
+    /// `RedrawScheduler::commit_pending` is part of why typed characters
+    /// failed to echo while a background tab firehosed TextDeltas; this
+    /// gate intentionally bypasses the budget.
+    pub fn request_redraw_reason(&mut self, reason: RedrawReason) {
+        self.redraw_pending = true;
+        self.redraw_reason = Some(reason);
+    }
+
+    /// v2.2.14 BUG-fix-real: drain the central gate. Returns Ok(true) if a
+    /// full redraw fired, Ok(false) if the gate was clear. The wait loop
+    /// calls this after every handled key event and after every TextDelta
+    /// batch, plus once per iteration as the trailing draw.
+    ///
+    /// On commit:
+    ///   1. Calls `draw_full()` — which clears the terminal then re-runs
+    ///      `draw()`, bypassing ratatui's frame-diff coalescing.
+    ///   2. Calls `backend.flush()` explicitly so the bytes leave the
+    ///      crossterm buffer immediately (no waiting for stdout's normal
+    ///      line/page boundary).
+    ///   3. Clears the gate.
+    ///
+    /// Step 5 of the user's diagnosis hangs off the [DRAW-END] marker that
+    /// `draw()` emits AFTER the terminal write — if that line appears but
+    /// the typed char doesn't, the bug is below ratatui (likely
+    /// stdout/alternate-screen state corruption).
+    pub fn commit_pending_redraw(&mut self) -> io::Result<bool> {
+        if !self.redraw_pending {
+            return Ok(false);
+        }
+        self.draw_full()?;
+        use std::io::Write;
+        self.terminal.backend_mut().flush()?;
+        self.redraw_pending = false;
+        self.redraw_reason = None;
+        Ok(true)
+    }
+
+    /// v2.2.14 BUG-fix-real: forced full repaint.
+    ///
+    /// Calls `terminal.clear()` BEFORE the main `terminal.draw(...)` to
+    /// bypass ratatui's frame-diff coalescing. This is a diagnostic —
+    /// per Step 3 of the user's plan, we leave it in for one release so
+    /// we can confirm whether the missing echo was caused by the diff or
+    /// by a deeper terminal-commit problem. Once confirmed via the
+    /// instrumentation log, the `terminal.clear()` is to be removed.
+    pub(super) fn draw_full(&mut self) -> io::Result<()> {
+        // DIAGNOSTIC v2.2.14 BUG-fix-real: force full clear to bypass
+        // ratatui's frame-diff coalescing. If echo appears with this, the
+        // bug is in ratatui's dirty-frame detection. To be removed once
+        // the root cause is confirmed via the instrumented run.
+        self.terminal.clear()?;
+        self.draw()
+    }
+
     // ─── Draw ────────────────────────────────────────────────────────────────
 
     /// Draw the current state.
@@ -786,6 +887,16 @@ impl AnvilTui {
         let think = tab.think_label.clone();
         let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
         let input_text = tab.input.clone();
+
+        // v2.2.14 BUG-fix-real instrumentation: log the input snapshot the
+        // draw closure is about to render with. Paired with [DRAW-END]
+        // below so we can correlate "what was supposed to be on screen"
+        // with "did we actually commit bytes to the terminal".
+        eprintln!(
+            "[DRAW-BEGIN] active={} input={:?}",
+            self.active_tab,
+            tab.input
+        );
         // v2.2.14 TUI-3: snapshot for the queued-messages indicator. The
         // visible count is `pending_submit + queue` so the user sees the
         // total drafts waiting to fire after the current turn.
@@ -1855,6 +1966,14 @@ impl AnvilTui {
         // the next mouse Down event.
         self.tab_hits = new_tab_hits;
         self.tab_bar_row = new_tab_bar_row;
+
+        // v2.2.14 BUG-fix-real instrumentation: force a backend flush so
+        // [DRAW-END] really does mean "bytes have left ratatui's buffer".
+        // Logged AFTER the flush so the marker can't fire on a no-op draw.
+        use std::io::Write;
+        let _ = self.terminal.backend_mut().flush();
+        eprintln!("[DRAW-END] active={} flushed=true", self.active_tab);
+
         Ok(())
     }
 
@@ -1974,6 +2093,13 @@ impl AnvilTui {
         match event {
             TuiEvent::TextDelta(text) => {
                 self.tabs[idx].pending_text.push_str(&text);
+                // v2.2.14 BUG-fix-real: route through the central gate so
+                // the wait loop's commit step picks up every batch with a
+                // forced full repaint + flush. Without this, the streaming
+                // tab's frame-diff would coalesce with the active idle
+                // tab's "just typed a char" diff and the latter could be
+                // dropped.
+                self.request_redraw_reason(RedrawReason::TextDeltaBatch);
             }
             TuiEvent::TextDone | TuiEvent::TurnDone => {
                 // Flush onto the tab the event came from, not the visually-
@@ -2335,6 +2461,13 @@ impl AnvilTui {
 
         loop {
             // ── Drain streaming events non-blocking ──
+            //
+            // v2.2.14 BUG-fix-real: each `apply_tagged_event` that lands a
+            // `TextDelta` calls `request_redraw_reason(TextDeltaBatch)` —
+            // the commit step after this drain picks up every batch with a
+            // forced clear + draw + flush so the user's typed char on tab
+            // 2 isn't lost to ratatui's diff coalescing with tab 1's
+            // streaming buffer.
             loop {
                 match self.rx.try_recv() {
                     Ok(tagged) if matches!(tagged.event, TuiEvent::TurnDone)
@@ -2342,7 +2475,8 @@ impl AnvilTui {
                     {
                         self.apply_tagged_event(tagged);
                         self.scroll_to_bottom();
-                        self.draw()?;
+                        self.request_redraw_reason(RedrawReason::Other);
+                        self.commit_pending_redraw()?;
                         return Ok(InFlightInterruption::TurnDone);
                     }
                     Ok(tagged) => self.apply_tagged_event(tagged),
@@ -2362,11 +2496,20 @@ impl AnvilTui {
                             }
                         }
                         self.scroll_to_bottom();
-                        self.draw()?;
+                        self.request_redraw_reason(RedrawReason::Other);
+                        self.commit_pending_redraw()?;
                         return Ok(InFlightInterruption::ChannelClosed);
                     }
                 }
             }
+
+            // v2.2.14 BUG-fix-real: commit any TextDelta-batch redraws the
+            // drain just requested. Pulling the commit out of the drain
+            // loop coalesces multiple batches into a single forced repaint
+            // — at most one full draw per wait-loop iteration, but always
+            // at least one when streaming is active and the active tab is
+            // visible.
+            self.commit_pending_redraw()?;
 
             // ── Poll keyboard input non-blocking ──
             while crossterm::event::poll(Duration::from_millis(0))? {
@@ -2383,9 +2526,17 @@ impl AnvilTui {
                         {
                             // Draw before returning so the UI reflects the
                             // most recent state (e.g. newly-active tab).
-                            self.draw()?;
+                            self.request_redraw_reason(RedrawReason::TabSwitch);
+                            self.commit_pending_redraw()?;
                             return Ok(interruption);
                         }
+                        // v2.2.14 BUG-fix-real: commit per-keystroke. The
+                        // key handler set `redraw_pending` via
+                        // `request_redraw_reason(KeyEvent)`; commit now so
+                        // the typed char hits the terminal before the
+                        // wait loop's next `recv_timeout` parks waiting
+                        // for tab 1's next TextDelta.
+                        self.commit_pending_redraw()?;
                     }
                     crossterm::event::Event::Mouse(mouse_event) => {
                         // Mouse clicks on tab labels should switch tabs.
@@ -2399,7 +2550,8 @@ impl AnvilTui {
                             let prev_active = self.active_tab;
                             self.handle_mouse_tab_click(col, row);
                             if self.active_tab != prev_active {
-                                self.draw()?;
+                                self.request_redraw_reason(RedrawReason::TabSwitch);
+                                self.commit_pending_redraw()?;
                                 return Ok(InFlightInterruption::TabSwitched);
                             }
                         }
@@ -2409,6 +2561,11 @@ impl AnvilTui {
                         for ch in cleaned.chars() {
                             self.insert_char(ch);
                         }
+                        // v2.2.14 BUG-fix-real: paste is a multi-char key
+                        // event — drive the same gate so the pasted text
+                        // shows up in the input box on the active tab.
+                        self.request_redraw_reason(RedrawReason::KeyEvent);
+                        self.commit_pending_redraw()?;
                     }
                     _ => {}
                 }
@@ -2420,8 +2577,15 @@ impl AnvilTui {
                 let frame = self.active_tab().think_frame.wrapping_add(1);
                 self.active_tab_mut().think_frame = frame;
                 last_spinner_tick = Instant::now();
+                self.request_redraw_reason(RedrawReason::Spinner);
             }
-            self.draw()?;
+            // v2.2.14 BUG-fix-real: trailing commit routed through the
+            // central gate. Idempotent — when nothing requested a redraw
+            // this iteration the call is cheap and skips the draw entirely.
+            // When a key handler or TextDelta batch DID request a redraw
+            // but no per-event commit fired (e.g. paste in a wedge case),
+            // this catches it.
+            self.commit_pending_redraw()?;
 
             // ── Short blocking recv so input typed during this window gets
             // picked up on the very next iteration. ──
@@ -2432,7 +2596,8 @@ impl AnvilTui {
                 {
                     self.apply_tagged_event(tagged);
                     self.scroll_to_bottom();
-                    self.draw()?;
+                    self.request_redraw_reason(RedrawReason::Other);
+                    self.commit_pending_redraw()?;
                     return Ok(InFlightInterruption::TurnDone);
                 }
                 Ok(tagged) => self.apply_tagged_event(tagged),
@@ -2444,10 +2609,14 @@ impl AnvilTui {
                         tab.think_label.clear();
                     }
                     self.scroll_to_bottom();
-                    self.draw()?;
+                    self.request_redraw_reason(RedrawReason::Other);
+                    self.commit_pending_redraw()?;
                     return Ok(InFlightInterruption::ChannelClosed);
                 }
             }
+            // v2.2.14 BUG-fix-real: the recv_timeout branch may have
+            // landed another TextDelta batch; commit before iterating.
+            self.commit_pending_redraw()?;
         }
     }
 
@@ -2637,23 +2806,36 @@ impl AnvilTui {
         // These are the same as handle_in_flight_key: accumulate the draft
         // on the active tab without interrupting the wait.
         //
-        // v2.2.14 BUG-fix (post TUI-2 deep): after every edit we force an
-        // immediate `self.draw()` so the input box on a visually-active
-        // idle tab re-renders the typed character even when another tab is
-        // firehosing TextDeltas. The wait loop's trailing draw at line
-        // ~2424 also paints, but its `recv_timeout(20ms)` immediately
-        // unblocks on each incoming background-stream event and iterates
-        // before the previous draw is fully flushed to the user's
-        // terminal — the typed character was correctly stored in the
-        // buffer (Enter dispatched the right text) but the screen showed
-        // no echo. Drawing inside the handler closes that visibility gap.
+        // v2.2.14 BUG-fix-real (post TUI-2 deep, replaces 24bbe50):
+        //
+        // `24bbe50` added an ad-hoc `self.draw()` here on the diagnosis
+        // that the wait loop's recv_timeout(20ms) was iterating too fast
+        // for the trailing draw to commit. That was the wrong layer:
+        // `draw()` is being called, but the terminal frame is not
+        // reliably committed while tab 1's TextDelta firehose keeps the
+        // wait loop hot. Per user diagnosis: route every "needs paint"
+        // signal through `request_redraw_reason(KeyEvent)`; the wait
+        // loop's top-of-iteration `commit_pending_redraw` then forces a
+        // `terminal.clear()` + `draw()` + `backend.flush()` that bypasses
+        // ratatui's frame-diff coalescing.
         let mut edited = false;
         match (key.code, key.modifiers) {
             (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL)
                 && !m.contains(KeyModifiers::ALT) =>
             {
                 self.insert_char(c);
+                // v2.2.14 BUG-fix-real: log AFTER insert_char so we can
+                // confirm the data path landed the char on the active
+                // tab's buffer. If [KEY] shows the correct input but no
+                // visible echo, the breakage is in render/commit.
+                eprintln!(
+                    "[KEY] char={:?} active={} input={:?}",
+                    c,
+                    self.active_tab,
+                    self.active_tab().input
+                );
                 self.redraw.request(redraw::DirtyRegions::INPUT);
+                self.request_redraw_reason(RedrawReason::KeyEvent);
                 edited = true;
             }
             (KeyCode::Backspace, _) => {
@@ -2665,15 +2847,18 @@ impl AnvilTui {
                     edited = true;
                 }
                 self.redraw.request(redraw::DirtyRegions::INPUT);
+                if edited {
+                    self.request_redraw_reason(RedrawReason::KeyEvent);
+                }
             }
             _ => {}
         }
-        if edited {
-            // Errors here would be terminal I/O failures; we don't have a
-            // good recovery path inside the handler. Ignore — the next
-            // wait-loop draw at the bottom of the iteration will retry.
-            let _ = self.draw();
-        }
+        // v2.2.14 BUG-fix-real: the immediate `self.draw()` call from
+        // 24bbe50 is gone — the wait loop now drives commit via the
+        // central gate, which calls `draw_full()` (clear + draw) and
+        // `backend.flush()`. Leaving the draw here would defeat the gate
+        // (double-commit, no clear) and obscure the diagnostic signal.
+        let _ = edited;
 
         None
     }
