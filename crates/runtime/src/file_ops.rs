@@ -1147,4 +1147,58 @@ mod tests {
             "Unset sandbox should mirror WorkspaceWrite: {err}"
         );
     }
+
+    // ─── CC-136-B6 SECURITY: Plan-mode (ReadOnly) cannot be bypassed ────────
+
+    /// The env-var escape hatch `ANVIL_ALLOW_GLOBAL_WRITES=1` exists to let
+    /// historical scripts work without a `--permissions` flag, but it must
+    /// NOT override `ReadOnly` mode. If a future refactor moves the env-var
+    /// check above the `writes_forbidden()` check in `enforce_write_boundary`,
+    /// this test will fail loudly.
+    #[test]
+    fn read_only_mode_is_not_overridden_by_global_writes_env_var() {
+        let _mode = SandboxModeGuard::new(SandboxMode::ReadOnly);
+        unsafe { std::env::set_var("ANVIL_ALLOW_GLOBAL_WRITES", "1"); }
+
+        let tmp_file = temp_path("readonly-vs-env-bypass");
+        let err = write_file(tmp_file.to_string_lossy().as_ref(), "nope")
+            .expect_err("ReadOnly must beat the env-var bypass");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("read-only"),
+            "ReadOnly should win over env-var bypass: {err}"
+        );
+
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+    }
+
+    /// `edit_file` is the second write entry point. ReadOnly must block it
+    /// just like `write_file`. A Plan-mode escape via Edit would let the
+    /// model mutate without the user noticing the mode mismatch.
+    #[test]
+    fn read_only_mode_denies_edit_file() {
+        // Set up a file we can attempt to edit, before locking the sandbox.
+        let path = {
+            let _setup = SandboxModeGuard::new(SandboxMode::WorkspaceWrite);
+            let p = temp_path("readonly-edit-target");
+            std::fs::write(&p, "original").expect("seed file");
+            p
+        };
+
+        let _mode = SandboxModeGuard::new(SandboxMode::ReadOnly);
+        unsafe { std::env::remove_var("ANVIL_ALLOW_GLOBAL_WRITES"); }
+
+        let err = edit_file(
+            path.to_string_lossy().as_ref(),
+            "original",
+            "modified",
+            false,
+        )
+        .expect_err("ReadOnly must deny edit_file");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            err.to_string().contains("read-only"),
+            "edit_file should fire the read-only guard: {err}"
+        );
+    }
 }
