@@ -107,7 +107,7 @@ Note: "CC" used throughout per `feedback-cc-only-naming.md`. Items prefixed with
 | 136-B45: `/settings` language change reverted on Escape | **N/A** | i18n not in Anvil. |
 | 136-B46: `/terminal-setup` autocomplete partial-prefix | **N/A** | CC-specific. |
 | 136-B47: "Chat about this" on AskUserQuestion erasing question | **VERIFY** | Anvil follow-up-chat flow. |
-| 136-B48: MCP tool results invisible when server returns content blocks | **HIGH-PRI VERIFY** | Anvil MCP content-block handling — verify result display. **File for v2.2.14.** |
+| 136-B48: MCP tool results invisible when server returns content blocks | **PASS (v2.2.14 audit)** | Anvil already iterates `result.content.iter()` at `crates/anvil-cli/src/providers.rs:1418-1432`; text blocks joined, non-text serialised as JSON. No fix required. |
 | 136-B49: Plugin marketplace removal key collision (`r` → retry) | **N/A** | CC-specific keybind. |
 
 **v2.1.136 count:** 49 items → 1 missing, 5 high-pri verify, 28 verify, 1 low-pri, 14 N/A.
@@ -160,15 +160,15 @@ Note: "CC" used throughout per `feedback-cc-only-naming.md`. Items prefixed with
 | 139-B3: Hook writing to terminal corrupting interactive prompt | **VERIFY** | Hook execution stdout/stderr capture. |
 | 139-B4: HTTP/SSE MCP unbounded memory growth | **VERIFY** | MCP transport buffer caps — 16 MB per SSE frame in CC. **File for verification.** |
 | 139-B5: `Skill(name *)` wildcard not working as prefix match | **HIGH-PRI VERIFY** | Anvil permission rules — test `Skill(*)` prefix vs exact match against `Bash(ls *)` parity. **File for v2.2.14.** |
-| 139-B6: Settings hot-reload not detecting symlinked `~/.claude/settings.json` edits | **HIGH-PRI VERIFY** | Anvil settings hot-reload (#417 ANVIL.md/MEMORY.md hot-reload) — extend to symlink case. **File for v2.2.14.** |
+| 139-B6: Settings hot-reload not detecting symlinked `~/.claude/settings.json` edits | **NO_HOT_RELOAD (v2.2.14 audit)** | Anvil has no settings.json watcher — `notify` crate is not a dependency. ANVIL.md/MEMORY.md are mtime-polled per turn. Settings hot-reload is a v2.3 feature gap, not a v2.2.14 bug. When built, the watcher should canonicalize the path at registration to land symlink-correct on day one. |
 | 139-B7: Plugin details failing when marketplace key ≠ manifest name | **VERIFY** | Plugin attribution mismatch handling. |
 | 139-B8: `/model` picker "Default" row not reflecting env overrides | **VERIFY** | Anvil `/model` env override display (#341, #355). |
-| 139-B9: Spurious "stream idle timeout" 5 min after response complete | **HIGH-PRI VERIFY** | Anvil stream-idle watchdog (#264, #338) — confirm watchdog cleared on stream cancellation, not just on next stream start. **File for verification.** |
+| 139-B9: Spurious "stream idle timeout" 5 min after response complete | **PASS (v2.2.14 audit)** | Anvil uses per-chunk single-shot `tokio::time::timeout` at `crates/api/src/providers/anvil_provider.rs:746` and `crates/api/src/providers/openai_compat.rs:360-364`. No long-lived watchdog task; the timeout future is cancelled by drop when the stream ends. Structurally immune to after-complete false-fire. |
 | 139-B10: Silent `exit 1` with 10+ MCP servers + unwritable cache dir | **VERIFY** | Anvil MCP cache directory error path. |
 | 139-B11: Typing cursor blinking on tab names, list pointers, dialog rows | **VERIFY** | TUI cursor positioning in non-input contexts. |
 | 139-B12: Transcript letter shortcuts not working after mouse click | **VERIFY** | Click-to-focus + keyboard interaction. |
 | 139-B13: Bash-mode up-arrow history clobbering in-progress draft | **VERIFY** | Anvil bash-mode history nav. |
-| 139-B14: Pasting/dropping multiple images inserting only the last | **HIGH-PRI VERIFY** | Anvil image paste (#318 image downscale, #357 paste parity) — multi-image case. **File for v2.2.14.** |
+| 139-B14: Pasting/dropping multiple images inserting only the last | **NOT_APPLICABLE (v2.2.14 audit)** | Anvil's clipboard path shells out to `osascript`/`xclip` (`crates/anvil-cli/src/tui/widgets.rs:109`); both OS APIs return a single image per pasteboard. Drag-drop iterates correctly in `crates/anvil-cli/src/file_drop.rs:59`. CC-139's fix targets a Node-style multi-entry clipboard API that doesn't apply to Anvil's primitives. |
 | 139-B15: Hyperlinks unreadable on dark themes | **VERIFY** | Theme-aware link colors. |
 | 139-B16: `/model` picker redundant "Current model" row for opus-alias 3P | **VERIFY** | 3P provider model display. |
 | 139-B17: Legacy Opus picker entry on PAYG 3P resolving same model | **N/A** | CC-specific 3P billing. |
