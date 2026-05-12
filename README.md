@@ -2,13 +2,134 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.11-blue)
+![Version](https://img.shields.io/badge/version-2.2.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
-![Tests](https://img.shields.io/badge/tests-1077%20passed-brightgreen)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey)
+![Tests](https://img.shields.io/badge/tests-1657%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 101 slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
+
+---
+
+## What's New in v2.2.14 — Parallel tabs become solid
+
+**Per-tab parallel inference, debugged to the layer.** v2.2.13 introduced
+the architecture for concurrent turn dispatch across multiple TUI tabs.
+v2.2.14 makes it actually work end-to-end.
+
+Three bugs surfaced during real concurrent use:
+
+1. **Apple Terminal's Enter key was being eaten** — Apple Terminal sends
+   Enter as raw byte `0x0A`, which crossterm reports as `Char('j') +
+   CONTROL`. A legacy handler interpreted that as "insert literal
+   newline" instead of submitting. The Ctrl+J branch is gone; Enter
+   submits on every terminal Anvil supports.
+2. **Submitted prompts vanished from tab 2's scrollback** — the
+   in-flight wait-loop's Enter branch consumed the draft via `mem::take`
+   without pushing a `LogEntry::User` to the tab's log. Fixed: the
+   in-flight path now mirrors the idle path.
+3. **"Thinking..." indicator never appeared on tab 2** — the per-tab
+   spawn worker threads jumped straight to `run_turn` without emitting
+   `ThinkLabel`. Both spawn paths now surface the indicator on the
+   target tab's sender as their first action.
+
+**CC parity through v2.1.139.** Twenty-one items from the v2.1.132 →
+v2.1.139 audit ship: hook `args[]` exec form, hook `continueOnBlock`,
+`/scroll-speed`, `/plugin details`, `/goal` auto-link, transcript-view
+nav keys, `anvil agents` cross-session monitor, `worktree.baseRef`
+setting, per-session env propagation (`ANVIL_SESSION_ID`,
+`ANVIL_PROJECT_DIR`, `ANVIL_EFFORT`, `ANVIL_DISABLE_ALTERNATE_SCREEN`),
+OTEL TRACEPARENT propagation, subagent OTel headers, autoMode hard-deny
+short-circuit, `--resume` underscore-path support.
+
+**W11 and W15b finally wired.** The file-fingerprint cache shipped as
+dormant code in v2.2.11. v2.2.14 wires it into `read_file`,
+`write_file`, `edit_file`, and the system prompt. The auto-promote
+engine for `/memory` notes is now active too.
+
+**Two security boundaries tightened.** ReadOnly mode now hard-blocks
+even when an `Edit` allow rule in `~/.anvil/settings.json` would
+otherwise grant write capability — mode gate runs before allow-rule
+match. Tool allow-rule wildcards (`Skill(name *)`) gain a delimiter
+check so prefix matches can't slip through on unexpected characters.
+
+**TUI architecture cleanup.** Ctrl+C now cancels mid-flight streaming.
+In-flight wait-loop latency cut from 80ms to 20ms. Mid-stream typed
+messages are queued instead of dropped.
+
+See [RELEASE-NOTES-v2.2.14.md](RELEASE-NOTES-v2.2.14.md) for the full
+narrative.
+
+---
+
+## What's New in v2.2.13 — Windows is back, BSD joins, routines on disk
+
+**Windows x86_64 is back in the release matrix.** v2.2.12 deferred
+Windows because the new SSH agent code called
+`russh::AgentClient::connect_uds()` — a Unix-only function. v2.2.13
+gates the agent path with `#[cfg(unix)]` and provides a clear-error
+stub on Windows. Key-file, password, and keyboard-interactive auth
+work on Windows exactly as on Unix.
+
+**FreeBSD x86_64 and NetBSD x86_64 join the build matrix.** Seven
+binaries now ship per release: macOS ARM64, macOS Intel, Linux x86_64,
+Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Cross-compile
+runs through Culpur-owned builder images at
+`registry.culpur.net/culpur/anvil-builder-<target>`. FreeBSD ARM64 and
+OpenBSD x86_64 remain source-only — Rust ships no precompiled stdlib
+for those targets yet.
+
+**Release pipeline hardening.** v2.2.12 shipped one stale binary
+because `cargo build … 2>&1 | tail -1` was masking the cross-compile
+exit code. v2.2.13 strips every `| tail -1` mask from `release.sh`.
+`set -euo pipefail` now actually catches build failures.
+
+**Routines foundation on disk (no behavior change).** A new
+`crates/runtime/src/routines/` module lands with `schedule`, `archive`,
+and `packet` components — duration / interval / cron / ISO-8601
+schedule grammar, atomic markdown output archive at
+`~/.anvil/routines/output/`, anti-injection packet schema with
+`<<<ROUTINE-PACKET-START>>>` delimiters, and a `[SILENT]` early-stop
+marker. No code consumes the module in v2.2.13; the runtime daemon
+and `/routine` slash command are queued for v2.3.
+
+See [RELEASE-NOTES-v2.2.13.md](RELEASE-NOTES-v2.2.13.md) for the full
+narrative.
+
+---
+
+## What's New in v2.2.12 — Live-typing during turns + /ssh tabs
+
+**Live typing during in-flight turns.** Previously, Anvil's TUI froze
+input while a turn was streaming — your keystrokes went nowhere until
+the response landed. v2.2.12 turns the input box into a live draft
+buffer that captures everything you type during a streaming turn. On
+`TurnDone`, the draft becomes the next prompt automatically. No
+keystrokes lost.
+
+**`/ssh` tabs.** A new `TabKind::Ssh` opens a russh-backed vt100
+terminal tab against any host. Modal connection form (host / port /
+user / auth method / secret / alias) with Ctrl+F key-picker against
+`~/.ssh/`. Vault-stored `HostCredential` schema for aliased
+connections. Same Ctrl+B prefix keys as the rest of Anvil.
+
+**Session UX polish.** On exit, the last line shows the session ID +
+`anvil --continue` / `anvil --resume <id>` resume commands. `/fork`
+became O(1) (pointer-based, not O(N) clone). `/rename` lands for
+sessions. `/diff` auto-shows after file-modifying turns. Esc cancel
+preserves the partial assistant message instead of nuking it. `/clear`
+clears workspace context, not just the active tab. `MEMORY.md` and
+`ANVIL.md` hot-reload on file change.
+
+**Release-pipeline T1 batch.** `release.sh` gains a tag-vs-HEAD
+pre-flight, builds from the tagged commit instead of the working tree,
+a php-lint guard runs after every WP/AnvilHub page write, and AnvilHub
+`/about` sources its changelog from `changelog.json` with render-time
+injection.
+
+See [RELEASE-NOTES-v2.2.12.md](RELEASE-NOTES-v2.2.12.md) for the full
+narrative.
 
 ---
 
