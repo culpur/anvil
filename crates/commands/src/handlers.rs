@@ -2404,14 +2404,16 @@ mod memory_tests {
     fn memory_show_nominations_alias_carries_deprecation_banner() {
         // L3 §1 acceptance: the legacy top-level `nominations` tier is
         // kept for one cycle, but the output explains the rename so
-        // users discover the new canonical form.
+        // users discover the new canonical form. Phase 4.4 unified the
+        // banner phrasing to `[deprecated] <old> will be removed next
+        // release; use <new>`.
         let result = memory_show(Some("nominations"), &MemoryContext::default());
         assert!(
-            result.contains("deprecated alias"),
-            "should warn about the rename; got: {result}"
+            result.contains("[deprecated]"),
+            "should carry Phase 4.4 deprecation banner; got: {result}"
         );
         assert!(
-            result.contains("semantic --pending"),
+            result.contains("/memory show semantic --pending"),
             "should advertise the new path; got: {result}"
         );
     }
