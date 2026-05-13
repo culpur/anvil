@@ -1743,3 +1743,156 @@ pub const CMD_CACHE_SUBCOMMANDS: &[SubcommandSpec] = &[
         subcommands: &[],
     },
 ];
+
+// ─── /permissions subcommands (v2.2.14 — drift-prevention) ───────────────────
+
+/// /permissions — switch the active permission mode for tool execution.
+///
+/// These tokens match `normalize_permission_mode()` in
+/// `crates/anvil-cli/src/utils.rs` (the single source of truth).
+pub const PERMISSIONS_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "read-only",
+        summary: "Read-only mode (no writes, no shell execution)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "workspace-write",
+        summary: "Default mode — writes confined to the workspace, prompts on escalation",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "danger-full-access",
+        summary: "Unrestricted host access (no prompts) — use with caution",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
+// ─── /config subcommands (v2.2.14 — drift-prevention) ────────────────────────
+
+/// /config — inspect merged config sections.
+///
+/// These names match the `match section` arms in `render_config_report()`
+/// (`crates/anvil-cli/src/utils.rs`).
+pub const CONFIG_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "env",
+        summary: "Show the merged 'env' section",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "hooks",
+        summary: "Show the merged 'hooks' section",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "model",
+        summary: "Show the merged 'model' section",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "plugins",
+        summary: "Show the merged 'plugins' (or 'enabledPlugins') section",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
+// ─── /effort subcommands (v2.2.14 — drift-prevention) ────────────────────────
+
+/// /effort — get or set the per-session reasoning effort.
+///
+/// These tokens match `EffortLevel::from_str()` in
+/// `crates/runtime/src/effort.rs` (the single source of truth).
+pub const EFFORT_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "low",
+        summary: "Low reasoning effort (fastest, cheapest)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "medium",
+        summary: "Medium reasoning effort (balanced)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "high",
+        summary: "High reasoning effort (more thinking budget)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "xhigh",
+        summary: "Maximum reasoning effort (slowest, highest cost)",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
+// ─── /agent subcommands (v2.2.14 — drift-prevention) ─────────────────────────
+
+/// /agent — trait-based agent composition.
+///
+/// These match the `AgentSubcommand` variants and the dispatch in
+/// `crates/anvil-cli/src/main.rs` (`SlashCommand::Agent { subcommand }`).
+pub const AGENT_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "traits",
+        summary: "List all bundled traits in the agent catalogue",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "compose",
+        summary: "Compose a temporary agent from a comma-separated trait list and run a task",
+        args: &[
+            ArgSpec::FreeText { hint: "<trait1,trait2,...>" },
+            ArgSpec::FreeText { hint: "\"<task>\"" },
+        ],
+        subcommands: &[],
+    },
+];
+
+// ─── /search subcommands (v2.2.14 — drift-prevention) ────────────────────────
+
+/// /search — multi-provider web search.
+///
+/// These match the dispatch in `run_search_command()` in
+/// `crates/anvil-cli/src/main.rs`. Note: a bare `/search <query>` (with no
+/// recognised sub-token) is also supported and falls through to the default
+/// provider; the picker surfaces only the keyword subcommands.
+pub const SEARCH_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "providers",
+        summary: "List all configured search providers",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "provider",
+        summary: "Search with a specific provider: /search provider <name> <query>",
+        args: &[
+            ArgSpec::FreeText { hint: "<name>" },
+            ArgSpec::FreeText { hint: "<query>" },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "config",
+        summary: "Set a provider config value: /search config <provider> <key> <value>",
+        args: &[
+            ArgSpec::FreeText { hint: "<provider>" },
+            ArgSpec::FreeText { hint: "<key>" },
+            ArgSpec::FreeText { hint: "<value>" },
+        ],
+        subcommands: &[],
+    },
+];

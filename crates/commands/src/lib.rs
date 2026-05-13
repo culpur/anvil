@@ -2594,4 +2594,64 @@ mod tests {
              to the SlashCommand enum (and to this test's exemplar list).",
         );
     }
+
+    // Second drift-prevention test — pairs with
+    // `every_slash_command_variant_has_a_spec` above.
+    //
+    // Background:
+    //   Even when a spec exists, the menu can still strand the user mid-input
+    //   if the spec advertises subcommand grammar via `argument_hint` (e.g.
+    //   `"[low|medium|high|xhigh]"`) but ships `subcommands: &[]`. The picker
+    //   has nothing to render, so typing `/effort <space>` looks broken.
+    //   /permissions, /config, /search, /agent, /effort all shipped this
+    //   shape until v2.2.14-phase1.
+    //
+    // What this test enforces:
+    //   For every spec whose `argument_hint` contains the visual `|`
+    //   alternation indicator (the universal sign of "more than one choice"),
+    //   `subcommands` MUST NOT be empty. The Rust compiler does not (and
+    //   cannot) enforce this — the spec is `&[SubcommandSpec]`, and `&[]` is
+    //   always a legal value.
+    //
+    // What this test does NOT catch:
+    //   * Specs where subcommands exist in dispatch but the hint doesn't show
+    //     them (e.g. a future `/foo` with `argument_hint: Some("[bar]")`
+    //     containing no `|`). Those need ad-hoc audit, like the one in the
+    //     v2.2.14-phase1 commit that introduced this test.
+    //   * Specs where the `|` legitimately appears INSIDE a flag value list
+    //     (e.g. `"[--type fn|class|struct]"`). Authors of such specs should
+    //     reword the hint with commas instead — see `/semantic-search` for
+    //     the canonical example.
+    //
+    // How to fix a failure:
+    //   1. If the command really has subcommands, populate
+    //      `crate::subcommands::FOO_SUBCOMMANDS` and wire it into the spec.
+    //   2. If the `|` is a flag-value list (not a top-level subcommand),
+    //      rewrite the hint to use commas (`fn,class,struct`) so it doesn't
+    //      look like a subcommand picker to the menu code or to this test.
+    #[test]
+    fn specs_with_subcommand_argument_hints_have_subcommand_lists() {
+        use super::specs::slash_command_specs;
+
+        let mut missing: Vec<(&'static str, &'static str)> = Vec::new();
+        for spec in slash_command_specs() {
+            let Some(hint) = spec.argument_hint else {
+                continue;
+            };
+            // The `|` is the universal "alternation" character in CLI
+            // grammar — every spec whose hint contains it advertises more
+            // than one subcommand or option to the user.
+            if hint.contains('|') && spec.subcommands.is_empty() {
+                missing.push((spec.name, hint));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "specs with multi-choice argument_hints (containing `|`) must populate `subcommands`:\n  \
+             {missing:#?}\n\
+             Fix: either add a SubcommandSpec list in crates/commands/src/subcommands.rs and wire it\n\
+             into the spec, or — if `|` is inside a flag-value list, not a subcommand picker — rewrite\n\
+             the hint with commas (e.g. `fn,class,struct` instead of `fn|class|struct`).",
+        );
+    }
 }

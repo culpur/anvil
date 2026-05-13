@@ -128,7 +128,7 @@ Examples:
         category: SlashCommandCategory::Core,
         detailed_help: "",
 
-        subcommands: &[],
+        subcommands: crate::subcommands::PERMISSIONS_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
@@ -232,7 +232,7 @@ Examples:
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
 
-        subcommands: &[],
+        subcommands: crate::subcommands::CONFIG_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
@@ -729,7 +729,7 @@ EXAMPLES
         category: SlashCommandCategory::Automation,
         detailed_help: "",
 
-        subcommands: &[],
+        subcommands: crate::subcommands::SEARCH_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
@@ -815,7 +815,13 @@ EXAMPLES
         name: "semantic-search",
         aliases: &["symsearch"],
         summary: "Search for symbols (functions, classes, structs, imports) grouped by type",
-        argument_hint: Some("<query> [--lang <ext>] [--type fn|class|struct|import]"),
+        // NOTE: hint uses commas inside the `--type` value list (not pipes) so
+        // the drift-prevention test does not flag this as a subcommand-bearing
+        // hint. /semantic-search has no subcommands — the dispatch in
+        // `cmd_static::run_semantic_search` is a free-form query plus optional
+        // `--lang` and `--type` flags. Picker enumeration would mislead users
+        // into thinking `fn`/`class`/etc. are top-level subcommands.
+        argument_hint: Some("<query> [--lang <ext>] [--type fn,class,struct,import]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",
@@ -1849,7 +1855,7 @@ Notes:
 Usage:
   /agent traits                              List available traits
   /agent compose <trait1,trait2> \"<task>\"   Compose and run a one-shot agent",
-        subcommands: &[],
+        subcommands: crate::subcommands::AGENT_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
@@ -1999,7 +2005,7 @@ Provider mapping:
 The session override applies for all subsequent turns until /effort is called again
 or the session ends. Set a persistent default in settings.json with:
   { \"effort_level\": \"high\" }",
-        subcommands: &[],
+        subcommands: crate::subcommands::EFFORT_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
         requires_vault: false,
