@@ -719,11 +719,22 @@ fn anvil_home() -> std::path::PathBuf {
 }
 
 fn memory_summary() -> String {
-    use runtime::{CommandCacheManager, FileCacheManager, MemoryManager};
+    use runtime::{CommandCacheManager, FileCacheManager, HistoryArchiver, MemoryManager};
 
     let home = anvil_home();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut lines = vec!["Memory tier summary:".to_string()];
+
+    // L2 episodic — Phase 2 / Bucket 2 / L2 §1: count the HistoryArchiver
+    // archive *.md files plus the daily JSON store so the summary
+    // surfaces the session history layer alongside the day-rolled
+    // structured summaries.
+    let archiver = HistoryArchiver::new();
+    let archive_count = archiver.list_archives().len();
+    lines.push(format!(
+        "  episodic      {} archived session(s)",
+        archive_count
+    ));
 
     // L3 — anvil-md tier lives under the per-project memory dir managed by
     // `MemoryManager`, not at `~/.anvil/memory/`. The previous summary read
@@ -781,14 +792,25 @@ fn memory_summary() -> String {
 fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
     use runtime::{DailyStore, GoalManager, MemoryManager};
 
-    let tier = match tier {
+    let raw = match tier {
         Some(t) => t,
         None => {
-            return "Usage: /memory show <tier>\n\
-                Tiers: working, anvil-md, vault, private, nominations, daily, \
-                file-cache, cmd-cache, goals"
+            return "Usage: /memory show <tier> [sub-view]\n\
+                Tiers: working, episodic, anvil-md, vault, private, nominations, \
+                daily, file-cache, cmd-cache, goals\n\
+                Episodic sub-views: episodic (default = archive list), episodic daily"
                 .to_string()
         }
+    };
+
+    // Parse `<tier> [<sub>]`. The sub-view supports `--daily` as an alias
+    // for `daily` so callers can use either flag-style or word-style.
+    let (tier, sub) = if let Some(idx) = raw.find(char::is_whitespace) {
+        let (a, b) = raw.split_at(idx);
+        let b = b.trim().trim_start_matches("--");
+        (a, if b.is_empty() { None } else { Some(b) })
+    } else {
+        (raw, None)
     };
 
     let home = anvil_home();
@@ -799,6 +821,11 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         // Phase 2 / Bucket 2 / L1 §4: dump the actual sections rather than
         // printing the static explanation that used to live in /memory why.
         "working" => render_working_memory_show(ctx),
+        // L2 episodic memory — Phase 2 / Bucket 2 / L2 §1: count archived
+        // sessions via HistoryArchiver, plus the daily sub-view that
+        // surfaces the structured DailySummary entries (alias kept for
+        // backwards compat below).
+        "episodic" => render_episodic_show(sub),
         "anvil-md" => {
             let mgr = MemoryManager::new(&cwd);
             let rendered = mgr.render_for_prompt();
@@ -840,9 +867,82 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
         other => format!(
             "Unknown tier: {other}\n\
-             Known tiers: working, anvil-md, vault, private, nominations, daily, \
-             file-cache, cmd-cache, goals"
+             Known tiers: working, episodic, anvil-md, vault, private, nominations, \
+             daily, file-cache, cmd-cache, goals"
         ),
+    }
+}
+
+/// Render `/memory show episodic [daily]`.
+///
+/// Phase 2 / Bucket 2 / L2 §1: episodic memory is the cumulative archive of
+/// past sessions. The default view counts `HistoryArchiver` archive files
+/// and the most recent few; the `daily` sub-view promotes today's
+/// structured `DailySummary` (sessions completed + open items).
+fn render_episodic_show(sub: Option<&str>) -> String {
+    use runtime::{DailyStore, HistoryArchiver};
+
+    match sub {
+        Some("daily") => {
+            let store = DailyStore::with_dir(anvil_home().join("daily"));
+            let summary = store.today();
+            if summary.sessions.is_empty() && summary.open_items.is_empty() {
+                "No daily summary entries for today.".to_string()
+            } else {
+                format!(
+                    "=== L2 Episodic — daily summary ===\n{}",
+                    store.format_summary(&summary)
+                )
+            }
+        }
+        Some(other) => format!(
+            "Unknown episodic sub-view: {other}\n\
+             Known sub-views: daily"
+        ),
+        None => {
+            let archiver = HistoryArchiver::new();
+            let mut entries = archiver.list_archives();
+            let total = entries.len();
+            let mut total_bytes = 0u64;
+            for entry in &entries {
+                let path = archiver
+                    .history_dir()
+                    .join(format!("{}-{}.md", entry.session_id, entry.timestamp));
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    total_bytes += meta.len();
+                }
+            }
+            entries.truncate(10);
+            let mut lines = vec![format!(
+                "=== L2 Episodic memory ===\n\
+                archived_sessions={}  total_bytes={}  history_dir={}",
+                total,
+                total_bytes,
+                archiver.history_dir().display()
+            )];
+            if total == 0 {
+                lines.push(String::new());
+                lines.push(
+                    "No archived sessions yet (HistoryArchiver writes on compaction).".to_string(),
+                );
+            } else {
+                lines.push(String::new());
+                lines.push("Recent archives (newest first, up to 10):".to_string());
+                for entry in &entries {
+                    let date = runtime::daily::epoch_secs_to_date(entry.timestamp);
+                    lines.push(format!(
+                        "  {}  {}  model={}  msgs={}",
+                        date, entry.session_id, entry.model, entry.message_count
+                    ));
+                }
+            }
+            lines.push(String::new());
+            lines.push(
+                "Use `/memory show episodic daily` for today's structured task summary."
+                    .to_string(),
+            );
+            lines.join("\n")
+        }
     }
 }
 
@@ -1081,7 +1181,7 @@ Nominations are SUGGESTED only -- they only enter the prompt after /memory promo
 }
 
 fn memory_budget(ctx: &MemoryContext<'_>) -> String {
-    use runtime::{CommandCacheManager, FileCacheManager, MemoryManager};
+    use runtime::{CommandCacheManager, FileCacheManager, HistoryArchiver, MemoryManager};
 
     let home = anvil_home();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -1133,6 +1233,16 @@ fn memory_budget(ctx: &MemoryContext<'_>) -> String {
         grand_bytes += bytes;
         let tokens = bytes / 4;
         lines.push(format!("  {name:<14}  {bytes:>10}  {tokens:>12}"));
+    }
+    // L2 episodic row — Phase 2 / Bucket 2 / L2 §1: cumulative bytes of the
+    // HistoryArchiver markdown archives, separate from the daily/json
+    // structured summaries already accounted for in dir_tiers.
+    {
+        let archiver = HistoryArchiver::new();
+        let bytes = dir_total_bytes(archiver.history_dir());
+        grand_bytes += bytes;
+        let tokens = bytes / 4;
+        lines.push(format!("  {:<14}  {:>10}  {:>12}", "episodic", bytes, tokens));
     }
     {
         let bytes = file_cache_bytes;
@@ -1404,6 +1514,57 @@ mod memory_tests {
         let result = memory_budget(&ctx);
         assert!(result.contains("working"), "should include working row");
         assert!(result.contains("TOTAL"), "should still show total row");
+    }
+
+    #[test]
+    fn memory_show_episodic_default_lists_archive_count() {
+        // L2 §1 acceptance: the episodic tier surfaces the HistoryArchiver
+        // archive count and tells the user where it lives. The directory
+        // may be empty in CI; we just assert the framing and stat row.
+        let result = memory_show(Some("episodic"), &MemoryContext::default());
+        assert!(
+            result.contains("L2 Episodic memory"),
+            "header should be present"
+        );
+        assert!(result.contains("archived_sessions="));
+        assert!(result.contains("history_dir="));
+    }
+
+    #[test]
+    fn memory_show_episodic_daily_routes_to_daily_summary() {
+        // L2 §1 acceptance: `episodic daily` (or `episodic --daily`) shows
+        // the structured DailySummary. The directory is likely empty under
+        // test, so we assert the empty-state copy.
+        let result = memory_show(Some("episodic daily"), &MemoryContext::default());
+        assert!(
+            result.contains("No daily summary entries for today.")
+                || result.contains("=== L2 Episodic — daily summary ==="),
+            "should route to daily store; got: {result}"
+        );
+
+        // The `--daily` flag form must produce the same output as `daily`.
+        let alt = memory_show(Some("episodic --daily"), &MemoryContext::default());
+        assert_eq!(result, alt, "--daily must alias to daily");
+    }
+
+    #[test]
+    fn memory_summary_lists_episodic_tier() {
+        // L2 §1 acceptance: `/memory` (no args) summary mentions episodic.
+        let result = memory_summary();
+        assert!(
+            result.contains("episodic"),
+            "summary should list episodic tier; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_budget_lists_episodic_row() {
+        // L2 §1 acceptance: `/memory budget` includes an episodic row.
+        let result = memory_budget(&MemoryContext::default());
+        assert!(
+            result.contains("episodic"),
+            "budget should include episodic row; got: {result}"
+        );
     }
 
     #[test]
