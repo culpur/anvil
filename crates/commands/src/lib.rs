@@ -974,6 +974,79 @@ mod tests {
         AgentSubcommand, CommitPushPrRequest, SkillSubcommand, SlashCommand,
     };
 
+    /// Phase 4.4 alias deprecations: typing the legacy command must emit
+    /// a one-line `[deprecated] …` warning above the normal payload. The
+    /// legacy command keeps working — this is a soft deprecation.
+    #[test]
+    fn phase4_4_deprecation_banner_format() {
+        let line = super::handlers::phase4_4_deprecation_banner(
+            "/file-cache",
+            "/memory show cache file",
+        );
+        // Format spec from the Phase 4 directive (line 264 of the
+        // synthesis): `[deprecated] /file-cache will be removed next
+        // release; use /memory show cache file`
+        assert!(
+            line.starts_with("[deprecated] /file-cache will be removed next release; use /memory show cache file"),
+            "wrong banner format: {line:?}",
+        );
+        assert!(line.ends_with('\n'), "banner must trail with \\n for concat");
+    }
+
+    #[test]
+    fn phase4_4_file_cache_dispatch_emits_deprecation() {
+        let session = runtime::Session::default();
+        let result = handle_slash_command(
+            "/file-cache stats",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("/file-cache dispatch");
+        assert!(
+            result.message.contains("[deprecated] /file-cache"),
+            "expected deprecation prefix; got: {}",
+            result.message,
+        );
+        assert!(
+            result.message.contains("/memory show cache file"),
+            "must point at the new canonical path",
+        );
+    }
+
+    #[test]
+    fn phase4_4_cmd_cache_dispatch_emits_deprecation() {
+        let session = runtime::Session::default();
+        let result = handle_slash_command(
+            "/cmd-cache stats",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("/cmd-cache dispatch");
+        assert!(
+            result.message.contains("[deprecated] /cmd-cache"),
+            "expected deprecation prefix; got: {}",
+            result.message,
+        );
+        assert!(result.message.contains("/memory show cache cmd"));
+    }
+
+    #[test]
+    fn phase4_4_history_archive_dispatch_emits_deprecation() {
+        let session = runtime::Session::default();
+        let result = handle_slash_command(
+            "/history-archive",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("/history-archive dispatch");
+        assert!(
+            result.message.contains("[deprecated] /history-archive"),
+            "expected deprecation prefix; got: {}",
+            result.message,
+        );
+        assert!(result.message.contains("/memory show episodic"));
+    }
+
     /// Phase 4.3 (L4 §11) audit: `/goal` is the unified slash command and
     /// mixes read-only subcommands (`list`, `show`) with write subcommands
     /// (`new`, `resume`, `pause`, `done`). Because `SlashCommandSpec` only

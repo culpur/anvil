@@ -3,6 +3,22 @@ use runtime::{compact_session, CompactionConfig, Session, WorkingMemorySnapshot}
 use crate::specs::{render_command_detailed_help, render_slash_command_help};
 use crate::SlashCommand;
 
+/// Phase 4.4 alias-deprecation banner.
+///
+/// Render a one-line warning prefix shown above the legacy command's
+/// normal output. The legacy command keeps working — this is a SOFT
+/// deprecation kept for one release cycle, per the synthesis rule
+/// "keep alias for one cycle, then hard-error".
+///
+/// `old` is the deprecated command verbatim (e.g. `/file-cache`).
+/// `new` is the canonical replacement (e.g. `/memory show cache file`).
+/// The banner has a trailing newline so the caller can concatenate it
+/// directly with the legacy command's payload.
+#[must_use]
+pub fn phase4_4_deprecation_banner(old: &str, new: &str) -> String {
+    format!("[deprecated] {old} will be removed next release; use {new}\n")
+}
+
 /// Live runtime context threaded into `/memory` handlers for
 /// Phase 2 / Bucket 2 inspector views. Handlers default to filesystem-only
 /// inspection when no context is supplied (the parser path doesn't have a
@@ -259,7 +275,16 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::HistoryArchive { .. } => Some(SlashCommandResult {
-            message: "/history-archive is not yet implemented. Conversation archiving is not yet available. Export your terminal output manually to preserve a session.".to_string(),
+            // Phase 4.4: deprecation banner — `/history-archive` is a soft
+            // alias for the L2 (episodic) view exposed by `/memory show
+            // episodic`. Keep the original payload so existing scripts
+            // don't change behavior; surface a one-line deprecation
+            // warning on top.
+            message: format!(
+                "{}{}",
+                phase4_4_deprecation_banner("/history-archive", "/memory show episodic"),
+                "/history-archive is not yet implemented. Conversation archiving is not yet available. Export your terminal output manually to preserve a session.",
+            ),
             session: session.clone(),
         }),
         SlashCommand::Configure { .. } => Some(SlashCommandResult {
@@ -600,7 +625,13 @@ pub fn handle_slash_command(
             })
         }
         SlashCommand::FileCache { action: _ } => Some(SlashCommandResult {
-            message: "/file-cache: use /file-cache list, stats, prune, or forget <path>".to_string(),
+            // Phase 4.4: deprecation banner. The legacy `/file-cache` still
+            // works but the new canonical form is `/memory show cache file`.
+            message: format!(
+                "{}{}",
+                phase4_4_deprecation_banner("/file-cache", "/memory show cache file"),
+                "/file-cache: use /file-cache list, stats, prune, or forget <path>",
+            ),
             session: session.clone(),
         }),
         SlashCommand::CmdCache { action } => {
@@ -660,6 +691,13 @@ pub fn handle_slash_command(
                     "Unknown /cmd-cache subcommand: {other}\nUsage: /cmd-cache [list|stats|prune|forget <command>]"
                 ),
             };
+            // Phase 4.4: deprecation banner. Prepend without dropping the
+            // original (working) payload — `/cmd-cache` still functions.
+            let msg = format!(
+                "{}{}",
+                phase4_4_deprecation_banner("/cmd-cache", "/memory show cache cmd"),
+                msg,
+            );
             Some(SlashCommandResult { message: msg, session: session.clone() })
         }
         SlashCommand::ScrollSpeed { lines } => {
@@ -859,14 +897,18 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
             }
         }
         "nominations" => {
-            // Deprecated alias retained for one cycle (Phase 4 will
-            // hard-error this path). Add a header explaining the rename
-            // so users discover the new canonical form.
+            // Phase 4.4: deprecation banner — `/memory show nominations`
+            // is a soft alias for `/memory show semantic --pending`. The
+            // alias keeps working for one release cycle, then hard-errors.
             let store =
                 runtime::nominations::NominationStore::with_dir(home.join("nominations"));
             format!(
-                "(deprecated alias — prefer `/memory show semantic --pending`)\n\n{}",
-                store.format_pending()
+                "{}{}",
+                phase4_4_deprecation_banner(
+                    "/memory show nominations",
+                    "/memory show semantic --pending",
+                ),
+                store.format_pending(),
             )
         }
         // L3 semantic memory — Phase 2 / Bucket 2 / L3 §1: anvil-md is
