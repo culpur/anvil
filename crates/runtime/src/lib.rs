@@ -34,6 +34,7 @@ pub mod vault_session;
 pub mod file_cache;
 pub mod command_cache;
 pub mod release_notes;
+pub mod prompt_section;
 mod compact;
 mod config;
 mod content_filter;
@@ -76,6 +77,9 @@ pub use config::{
     ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
+pub use prompt_section::{
+    PromptSection, PromptSectionKind, PromptSectionsExt, WorkingMemorySnapshot,
+};
 pub use config::schema::{emit_schema as emit_config_schema, write_schema_to as write_config_schema_to};
 pub use conversation::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
