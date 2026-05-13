@@ -590,11 +590,17 @@ impl CommandCacheManager {
     /// - none of its `touched_files` have been modified since the entry was stored.
     ///
     /// Records a session invocation for hot-path detection.
+    ///
+    /// Phase 3.5 (SECURITY): silently returns `Ok(None)` when `cwd` is
+    /// inside the vault directory.
     pub fn lookup(
         &self,
         command: &str,
         cwd: &Path,
     ) -> Result<Option<CommandCacheEntry>, CommandCacheError> {
+        if crate::file_cache::is_l5_path(cwd) {
+            return Ok(None);
+        }
         let canonical = normalize_command(command);
         record_cacheable_invocation(&canonical, cwd);
 
@@ -648,6 +654,12 @@ impl CommandCacheManager {
     /// Store a command result in the cache.
     ///
     /// Automatically infers `touched_files` and `stale_after_secs`.
+    ///
+    /// Phase 3.5 (SECURITY): silently skips storage when `cwd` is inside
+    /// the vault directory. The `touched_files` list is also filtered so
+    /// no L5 path ends up in any cache entry — a `debug_assert!` enforces
+    /// this in debug builds so a misclassified touched_file caller is
+    /// caught immediately.
     pub fn store(
         &self,
         command: &str,
@@ -657,8 +669,27 @@ impl CommandCacheManager {
         exit_code: i32,
         duration_ms: u64,
     ) -> Result<CommandCacheEntry, CommandCacheError> {
+        if crate::file_cache::is_l5_path(cwd) {
+            // Silent skip — return a stub entry so the caller's contract
+            // (Ok(entry)) is preserved without writing anything to disk.
+            return Ok(CommandCacheEntry {
+                command: normalize_command(command),
+                cwd: cwd.to_path_buf(),
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: 0,
+                duration_ms: 0,
+                captured_at: 0,
+                touched_files: Vec::new(),
+                stale_after_secs: 0,
+                hits: 0,
+            });
+        }
         let canonical = normalize_command(command);
-        let touched_files = infer_touched_files(&canonical, cwd);
+        let mut touched_files = infer_touched_files(&canonical, cwd);
+        // Filter any L5 paths defensively. If a caller hands us an L5
+        // touched_file, scrub it before the entry hits disk.
+        touched_files.retain(|p| !crate::file_cache::is_l5_path(p));
         let stale_after_secs = default_ttl(&canonical);
 
         let entry = CommandCacheEntry {
@@ -673,6 +704,15 @@ impl CommandCacheManager {
             stale_after_secs,
             hits: 0,
         };
+
+        // L7 invariant: no L5 path in touched_files. The filter above
+        // SHOULD have caught all cases; this assert catches any future
+        // bug that bypasses the filter.
+        debug_assert!(
+            !entry.touched_files.iter().any(|p| crate::file_cache::is_l5_path(p)),
+            "L7 cache stored entry with L5 path in touched_files: {:?}",
+            entry.touched_files
+        );
 
         std::fs::create_dir_all(&self.cache_dir).map_err(CommandCacheError::DirCreate)?;
         let path = self.entry_path(&canonical, cwd);

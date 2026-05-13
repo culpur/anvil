@@ -1,3 +1,6 @@
+// Allow `unsafe` only in test code (env::set_var for ANVIL_CONFIG_HOME).
+#![cfg_attr(test, allow(unsafe_code))]
+
 /// File-fingerprint cache for Anvil's token-economy build (W11).
 ///
 /// Stores per-file metadata (sha256, mtime, line count, language, optional
@@ -6,6 +9,11 @@
 ///
 /// The cache is purely advisory — a stale entry (mtime or sha256 changed)
 /// causes `lookup` to return `None` and auto-prune the stale file.
+///
+/// Phase 3.5 (SECURITY): all store/lookup paths are gated behind
+/// [`is_l5_path`] so vault content (`~/.anvil/vault/...`) NEVER enters the
+/// L7 cache. The gate silent-skips — no log lines (logging a vault path
+/// could still leak info about which secrets exist).
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,6 +24,39 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::memory::project_path_hash;
+
+/// Phase 3.5: returns `true` if `path` is inside the vault directory.
+///
+/// Canonicalises both the input path and the vault directory before
+/// comparing, so symlinks pointing into the vault are caught.
+///
+/// When the path itself can't be canonicalized (it may not exist yet),
+/// the function walks up the path's ancestors until it finds one that
+/// CAN be canonicalized, then checks whether THAT ancestor lives under
+/// the vault. This catches the "store a not-yet-created vault file" case.
+///
+/// SECURITY: this function is the sentinel for the L5 ↔ L7 invariant.
+/// No L7 cache store/lookup site may bypass it.
+#[must_use]
+pub fn is_l5_path(path: &Path) -> bool {
+    let vault_dir = crate::config::default_config_home().join("vault");
+    let vault_canonical = vault_dir.canonicalize().unwrap_or(vault_dir);
+
+    // Fast path: the path itself canonicalizes (exists + resolves).
+    if let Ok(p) = path.canonicalize() {
+        return p.starts_with(&vault_canonical);
+    }
+
+    // Slow path: walk up to the deepest existing ancestor.
+    let mut cursor: Option<&Path> = path.parent();
+    while let Some(parent) = cursor {
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            return canonical_parent.starts_with(&vault_canonical);
+        }
+        cursor = parent.parent();
+    }
+    false
+}
 
 /// Monotonic per-process counter so concurrent `write_entry_atomic` calls
 /// always produce distinct tmp filenames, even when their `subsec_nanos`
@@ -152,7 +193,13 @@ impl FileCacheManager {
     /// Returns `Some(entry)` only when the on-disk mtime + size match the
     /// cached values **and** (for small files) the sha256 matches the live
     /// file contents.  Stale entries are deleted automatically.
+    ///
+    /// Phase 3.5 (SECURITY): silently returns `Ok(None)` for paths inside
+    /// the vault directory — vault content is L5 and must never enter L7.
     pub fn lookup(&self, path: &Path) -> Result<Option<FileCacheEntry>, FileCacheError> {
+        if is_l5_path(path) {
+            return Ok(None);
+        }
         let canonical = match path.canonicalize() {
             Ok(p) => p,
             Err(_) => return Ok(None),
@@ -198,12 +245,32 @@ impl FileCacheManager {
     ///
     /// Reads the file, computes sha256 (for files ≤ threshold), counts lines,
     /// detects language, and writes the entry atomically (`.tmp` + rename).
+    ///
+    /// Phase 3.5 (SECURITY): silent-skips vault paths. The returned entry
+    /// for a silent-skip is a stub (`size_bytes = 0`, empty sha256, empty
+    /// symbols). The L7 cache directory is left untouched.
     pub fn store(
         &self,
         path: &Path,
         summary: Option<String>,
         key_symbols: Vec<String>,
     ) -> Result<FileCacheEntry, FileCacheError> {
+        if is_l5_path(path) {
+            // Silent-skip: never log the path itself (logging vault paths
+            // could leak the existence of specific labels).
+            return Ok(FileCacheEntry {
+                path: path.to_path_buf(),
+                sha256: String::new(),
+                size_bytes: 0,
+                mtime: 0,
+                last_seen: 0,
+                line_count: 0,
+                language: None,
+                summary: None,
+                key_symbols: Vec::new(),
+                access_count: 0,
+            });
+        }
         let canonical = path
             .canonicalize()
             .map_err(FileCacheError::Io)?;
@@ -260,7 +327,12 @@ impl FileCacheManager {
     }
 
     /// Increment `access_count` and update `last_seen`.
+    ///
+    /// Phase 3.5 (SECURITY): vault paths are silently skipped.
     pub fn touch(&self, path: &Path) -> Result<(), FileCacheError> {
+        if is_l5_path(path) {
+            return Ok(());
+        }
         let canonical = match path.canonicalize() {
             Ok(p) => p,
             Err(e) => return Err(FileCacheError::Io(e)),
@@ -637,6 +709,157 @@ mod tests {
             fs::create_dir_all(parent).expect("create dir");
         }
         fs::write(path, content).expect("write");
+    }
+
+    // ── Phase 3.5 SECURITY: is_l5_path + cache gates ──────────────────────
+
+    /// Process-local lock for ANVIL_CONFIG_HOME-mutating tests.
+    fn l5_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// SAFETY: env::set_var is unsafe in Rust 2024. Tests serialise on
+    /// l5_env_lock() so the mutation is race-free.
+    fn set_anvil_home_l5(path: &std::path::Path) {
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", path); }
+    }
+
+    fn restore_anvil_home(prev: Option<std::ffi::OsString>) {
+        match prev {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+    }
+
+    #[test]
+    fn is_l5_path_returns_true_for_vault_paths() {
+        let _lock = l5_env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let vault_dir = home.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        set_anvil_home_l5(home.path());
+
+        assert!(super::is_l5_path(&vault_dir));
+        assert!(super::is_l5_path(&vault_dir.join("creds")));
+        let nested = vault_dir.join("deep").join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert!(super::is_l5_path(&nested));
+
+        restore_anvil_home(prev);
+    }
+
+    #[test]
+    fn is_l5_path_returns_false_for_non_vault_paths() {
+        let _lock = l5_env_lock();
+        let home = tempfile::tempdir().expect("home");
+        std::fs::create_dir_all(home.path().join("vault")).unwrap();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        set_anvil_home_l5(home.path());
+
+        // Regular project files must not be flagged.
+        let proj = tempfile::tempdir().expect("proj");
+        let file = proj.path().join("foo.rs");
+        std::fs::write(&file, "code").unwrap();
+        assert!(!super::is_l5_path(&file));
+        // Sibling dirs under .anvil but not under vault must pass.
+        let memdir = home.path().join("memory");
+        std::fs::create_dir_all(&memdir).unwrap();
+        assert!(!super::is_l5_path(&memdir));
+
+        restore_anvil_home(prev);
+    }
+
+    #[test]
+    fn is_l5_path_catches_symlinks_into_vault() {
+        let _lock = l5_env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let vault_dir = home.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let real = vault_dir.join("real-file");
+        std::fs::write(&real, "secret").unwrap();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        set_anvil_home_l5(home.path());
+
+        let outside = tempfile::tempdir().expect("outside");
+        let link = outside.path().join("symlink-to-vault");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        #[cfg(unix)]
+        assert!(
+            super::is_l5_path(&link),
+            "symlink pointing into vault must be detected"
+        );
+
+        restore_anvil_home(prev);
+    }
+
+    #[test]
+    fn file_cache_store_silent_skips_vault_paths() {
+        let _lock = l5_env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let vault_dir = home.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let secret_file = vault_dir.join("secret.txt");
+        std::fs::write(&secret_file, "sk-ant-api03-secret").unwrap();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        set_anvil_home_l5(home.path());
+
+        // Create a manager in a totally separate project root so any
+        // accidental write would land somewhere we can verify is empty.
+        let proj = tempfile::tempdir().expect("proj");
+        let mgr = FileCacheManager::new(proj.path().to_path_buf()).expect("manager");
+        let result = mgr.store(&secret_file, Some("a secret".to_string()), vec!["api_key".to_string()]);
+        assert!(result.is_ok(), "store must return Ok stub for L5 paths");
+        // Verify nothing was actually written.
+        assert_eq!(mgr.list().expect("list").len(), 0, "L5 paths must not enter cache");
+
+        restore_anvil_home(prev);
+    }
+
+    #[test]
+    fn file_cache_lookup_silent_returns_none_for_vault_paths() {
+        let _lock = l5_env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let vault_dir = home.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let secret_file = vault_dir.join("forged.txt");
+        std::fs::write(&secret_file, "secret").unwrap();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        set_anvil_home_l5(home.path());
+
+        let proj = tempfile::tempdir().expect("proj");
+        let mgr = FileCacheManager::new(proj.path().to_path_buf()).expect("manager");
+
+        // Manually forge an entry on disk to simulate a hypothetical
+        // bypass — lookup must still refuse to return it.
+        let canonical = secret_file.canonicalize().unwrap();
+        let entry = FileCacheEntry {
+            path: canonical.clone(),
+            sha256: "abc".to_string(),
+            size_bytes: 100,
+            mtime: 0,
+            last_seen: 0,
+            line_count: 1,
+            language: None,
+            summary: Some("a secret".to_string()),
+            key_symbols: vec![],
+            access_count: 0,
+        };
+        // Bypass the gate by writing the entry file directly.
+        let _ = mgr.write_entry_atomic(&entry);
+
+        // Public lookup MUST still return None — the gate refuses to
+        // surface vault content even if it's somehow on disk.
+        let result = mgr.lookup(&secret_file).expect("lookup");
+        assert!(result.is_none(), "lookup must refuse vault paths");
+
+        restore_anvil_home(prev);
     }
 
     // ── 1. lookup_returns_none_for_unknown_file ────────────────────────────────
