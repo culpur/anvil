@@ -1646,9 +1646,15 @@ fn run_resume_command(
             session: session.clone(),
             message: Some(render_config_report(section.as_deref())?),
         }),
-        SlashCommand::Memory { .. } => Ok(ResumeCommandOutcome {
+        SlashCommand::Memory { action } => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(render_memory_report()?),
+            // Phase 2 / Bucket 2: resume-replay has no live runtime, so the
+            // working-memory view falls back to the static explanation. All
+            // other tiers run identically.
+            message: Some(commands::handle_memory_command(
+                action.as_deref(),
+                &commands::MemoryContext::default(),
+            )),
         }),
         SlashCommand::Ollama { args } => {
             let ollama_host = std::env::var("OLLAMA_HOST")
@@ -4966,9 +4972,24 @@ impl LiveCli {
                 let report = render_config_report(section.as_deref())?;
                 (report, false)
             }
-            SlashCommand::Memory { .. } => {
-                let report = render_memory_report()?;
-                (report, false)
+            SlashCommand::Memory { action } => {
+                // Phase 2 / Bucket 2 / L1 §4-5: dispatch `/memory <action>` to
+                // the shared handler with a live working-memory snapshot so
+                // `show working`, `why`, and `budget` can introspect the
+                // actual system_prompt instead of static text. The pure
+                // read-side handler runs on the TUI input thread; no LLM
+                // calls, no network IO — instant by construction (191cf16).
+                let runtime = self.active_runtime();
+                let snapshot = runtime.working_memory_snapshot();
+                let msg_count = runtime.session().messages.len();
+                let msg_tokens = runtime.estimated_tokens();
+                drop(runtime);
+                let ctx = commands::MemoryContext::with_working(
+                    &snapshot,
+                    msg_count,
+                    msg_tokens,
+                );
+                (commands::handle_memory_command(action.as_deref(), &ctx), false)
             }
             SlashCommand::Ollama { args } => {
                 let ollama_host = std::env::var("OLLAMA_HOST")
@@ -6766,8 +6787,24 @@ impl LiveCli {
                 Self::print_config(section.as_deref())?;
                 false
             }
-            SlashCommand::Memory { .. } => {
-                Self::print_memory()?;
+            SlashCommand::Memory { action } => {
+                // Phase 2 / Bucket 2: same shared handler the TUI uses,
+                // with a live working-memory snapshot so `show working`
+                // and `why` reflect the active session.
+                let runtime = self.active_runtime();
+                let snapshot = runtime.working_memory_snapshot();
+                let msg_count = runtime.session().messages.len();
+                let msg_tokens = runtime.estimated_tokens();
+                drop(runtime);
+                let ctx = commands::MemoryContext::with_working(
+                    &snapshot,
+                    msg_count,
+                    msg_tokens,
+                );
+                println!(
+                    "{}",
+                    commands::handle_memory_command(action.as_deref(), &ctx)
+                );
                 false
             }
             SlashCommand::Ollama { args } => {

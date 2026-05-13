@@ -1,7 +1,38 @@
-use runtime::{compact_session, CompactionConfig, Session};
+use runtime::{compact_session, CompactionConfig, Session, WorkingMemorySnapshot};
 
 use crate::specs::{render_command_detailed_help, render_slash_command_help};
 use crate::SlashCommand;
+
+/// Live runtime context threaded into `/memory` handlers for
+/// Phase 2 / Bucket 2 inspector views. Handlers default to filesystem-only
+/// inspection when no context is supplied (the parser path doesn't have a
+/// live runtime); the CLI passes a real context so `/memory show working`
+/// and `/memory why` can read the live system_prompt instead of stale text.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryContext<'a> {
+    /// Live working-memory snapshot from `ConversationRuntime::working_memory_snapshot()`.
+    pub working: Option<&'a WorkingMemorySnapshot>,
+    /// Estimated tokens for the message buffer (separate from system_prompt).
+    pub message_estimated_tokens: usize,
+    /// Number of messages in the live session buffer.
+    pub message_count: usize,
+}
+
+impl<'a> MemoryContext<'a> {
+    /// Construct a context referring to a live snapshot + session-buffer stats.
+    #[must_use]
+    pub fn with_working(
+        snapshot: &'a WorkingMemorySnapshot,
+        message_count: usize,
+        message_estimated_tokens: usize,
+    ) -> Self {
+        Self {
+            working: Some(snapshot),
+            message_estimated_tokens,
+            message_count,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCommandResult {
@@ -109,7 +140,7 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Memory { action } => Some(SlashCommandResult {
-            message: handle_memory_command(action.as_deref()),
+            message: handle_memory_command(action.as_deref(), &MemoryContext::default()),
             session: session.clone(),
         }),
         SlashCommand::Ollama { .. } => Some(SlashCommandResult {
@@ -647,7 +678,12 @@ pub fn handle_slash_command(
 
 // ─── /memory command implementation (v2.3.0 W15) ────────────────────────────
 
-fn handle_memory_command(action: Option<&str>) -> String {
+/// Dispatch a `/memory` action.
+///
+/// `ctx` carries the live runtime snapshot when the caller has one (the CLI
+/// in interactive mode). When `ctx.working` is `None` (parser tests, batch
+/// path), L1 inspector views fall back to a static explanation.
+pub fn handle_memory_command(action: Option<&str>, ctx: &MemoryContext<'_>) -> String {
     match action {
         None => memory_summary(),
         Some(rest) => {
@@ -659,12 +695,12 @@ fn handle_memory_command(action: Option<&str>) -> String {
                 (rest, "")
             };
             match sub {
-                "show"    => memory_show(if arg.is_empty() { None } else { Some(arg) }),
+                "show"    => memory_show(if arg.is_empty() { None } else { Some(arg) }, ctx),
                 "inspect" => memory_inspect(arg),
                 "promote" => memory_promote(arg),
                 "forget"  => memory_forget(arg),
-                "why"     => memory_why(),
-                "budget"  => memory_budget(),
+                "why"     => memory_why(ctx),
+                "budget"  => memory_budget(ctx),
                 "prune"   => memory_prune(),
                 other     => format!(
                     "Unknown /memory subcommand: {other}\n\
@@ -742,14 +778,15 @@ fn memory_summary() -> String {
     lines.join("\n")
 }
 
-fn memory_show(tier: Option<&str>) -> String {
+fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
     use runtime::{DailyStore, GoalManager, MemoryManager};
 
     let tier = match tier {
         Some(t) => t,
         None => {
             return "Usage: /memory show <tier>\n\
-                Tiers: anvil-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+                Tiers: working, anvil-md, vault, private, nominations, daily, \
+                file-cache, cmd-cache, goals"
                 .to_string()
         }
     };
@@ -758,6 +795,10 @@ fn memory_show(tier: Option<&str>) -> String {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     match tier {
+        // L1 working memory — live introspection of the assembled system_prompt.
+        // Phase 2 / Bucket 2 / L1 §4: dump the actual sections rather than
+        // printing the static explanation that used to live in /memory why.
+        "working" => render_working_memory_show(ctx),
         "anvil-md" => {
             let mgr = MemoryManager::new(&cwd);
             let rendered = mgr.render_for_prompt();
@@ -799,9 +840,67 @@ fn memory_show(tier: Option<&str>) -> String {
         "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
         other => format!(
             "Unknown tier: {other}\n\
-             Known tiers: anvil-md, vault, private, nominations, daily, file-cache, cmd-cache, goals"
+             Known tiers: working, anvil-md, vault, private, nominations, daily, \
+             file-cache, cmd-cache, goals"
         ),
     }
+}
+
+/// Render `/memory show working`.
+///
+/// When `ctx.working` is `Some(snapshot)` we walk the live system_prompt
+/// vector and emit one line per section, labelled by [`PromptSectionKind`].
+/// When `None` we explain that this view requires an active runtime — the
+/// parser/test path does not have one.
+fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
+    let Some(snapshot) = ctx.working else {
+        return "No live working-memory snapshot available in this context.\n\
+            (the `/memory show working` view requires a running interactive session)"
+            .to_string();
+    };
+    let total_bytes: usize = snapshot.sections.iter().map(|s| s.body.len()).sum();
+    let mut lines = vec![format!(
+        "=== L1 Working memory snapshot ===\n\
+        sections={}  prompt_bytes={}  ~tokens={}  generated_at={}",
+        snapshot.sections.len(),
+        total_bytes,
+        total_bytes / 4,
+        snapshot.generated_at
+    )];
+    lines.push(String::new());
+    for (idx, section) in snapshot.sections.iter().enumerate() {
+        let label = section
+            .label
+            .as_deref()
+            .map(|l| format!(" [{l}]"))
+            .unwrap_or_default();
+        let preview = section
+            .body
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(80)
+            .collect::<String>();
+        lines.push(format!(
+            "  {:>2}. {:<24}{}  ({} bytes, ~{} tok)",
+            idx + 1,
+            section.kind.as_tag(),
+            label,
+            section.body.len(),
+            section.body.len() / 4
+        ));
+        if !preview.is_empty() {
+            lines.push(format!("      {preview}"));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Session message buffer: {} message(s), ~{} tokens",
+        ctx.message_count, ctx.message_estimated_tokens
+    ));
+    lines.join("\n")
 }
 
 fn memory_inspect(key: &str) -> String {
@@ -925,16 +1024,55 @@ fn memory_forget(key: &str) -> String {
     }
 }
 
-fn memory_why() -> String {
-    "\
-System prompt injection order for this session:
+fn memory_why(ctx: &MemoryContext<'_>) -> String {
+    // Phase 2 / Bucket 2 / L1 §4: read live snapshot when available so the
+    // model's actual injection order is what the user sees. The static
+    // fallback covers the parser path that doesn't carry a runtime.
+    if let Some(snapshot) = ctx.working {
+        let mut lines = vec![
+            "System prompt injection order for this session (LIVE snapshot):".to_string(),
+            String::new(),
+        ];
+        if snapshot.sections.is_empty() {
+            lines.push(
+                "  (no sections — system prompt has not been assembled yet)".to_string(),
+            );
+        } else {
+            for (idx, section) in snapshot.sections.iter().enumerate() {
+                let label = section
+                    .label
+                    .as_deref()
+                    .map(|l| format!(" [{l}]"))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  {:>2}. {}{}",
+                    idx + 1,
+                    section.kind.as_tag(),
+                    label
+                ));
+            }
+        }
+        lines.push(String::new());
+        lines.push(
+            "The vault, private memory, and encrypted tiers are NEVER injected automatically.\n\
+             Nominations are SUGGESTED only — they only enter the prompt after /memory promote."
+                .to_string(),
+        );
+        return lines.join("\n");
+    }
 
-  1. Base system prompt (hardcoded assistant instructions)
-  2. ANVIL.md files (project root, then ~/.anvil/memory/*.md)
-  3. Active goal fragment (if a goal is active via /goal)
-  4. Skill body (if a skill was loaded via /skill load)
-  5. File-cache known-files block (compact per-file summaries, W11)
-  6. Daily task reconciliation fragment (pending tasks from yesterday)
+    "\
+System prompt injection order (no live runtime — static documentation):
+
+  Intro / output style / system / doing-tasks / actions sections
+  Dynamic boundary marker
+  Environment, retrieval-order, project context
+  ANVIL.md files (project root, then ~/.anvil/memory/*.md)
+  Persistent memory (MEMORY.md)
+  QMD context (when present)
+  Configuration block
+  <known-files> from L7 FileCacheManager (W11)
+  Goal, Skill, FastMode/OutputStyle sections are layered on top
 
 The vault, private memory, and encrypted tiers are NEVER injected automatically.
 Nominations are SUGGESTED only -- they only enter the prompt after /memory promote.
@@ -942,7 +1080,7 @@ Nominations are SUGGESTED only -- they only enter the prompt after /memory promo
     .to_string()
 }
 
-fn memory_budget() -> String {
+fn memory_budget(ctx: &MemoryContext<'_>) -> String {
     use runtime::{CommandCacheManager, FileCacheManager, MemoryManager};
 
     let home = anvil_home();
@@ -975,6 +1113,21 @@ fn memory_budget() -> String {
     lines.push(format!("  {}", "-".repeat(40)));
 
     let mut grand_bytes = 0u64;
+
+    // L1 working row — Phase 2 / Bucket 2 / L1 §5: surface the actual bytes
+    // hand-shaped into every API request. Token estimate = bytes/4 to match
+    // the rest of the table (no separate tokeniser dependency here).
+    if let Some(snapshot) = ctx.working {
+        let working_bytes: u64 =
+            snapshot.sections.iter().map(|s| s.body.len() as u64).sum();
+        grand_bytes += working_bytes;
+        let tokens = working_bytes / 4;
+        lines.push(format!(
+            "  {:<14}  {:>10}  {:>12}",
+            "working", working_bytes, tokens
+        ));
+    }
+
     for (name, dir) in dir_tiers {
         let bytes = dir_total_bytes(dir);
         grand_bytes += bytes;
@@ -1118,19 +1271,19 @@ mod memory_tests {
 
     #[test]
     fn memory_show_unknown_tier_returns_error() {
-        let result = memory_show(Some("nonexistent-tier"));
+        let result = memory_show(Some("nonexistent-tier"), &MemoryContext::default());
         assert!(result.contains("Unknown tier"), "should report unknown tier");
     }
 
     #[test]
     fn memory_show_no_tier_returns_usage() {
-        let result = memory_show(None);
+        let result = memory_show(None, &MemoryContext::default());
         assert!(result.contains("Usage"), "should show usage when no tier given");
     }
 
     #[test]
     fn memory_show_vault_tier_returns_security_message() {
-        let result = memory_show(Some("vault"));
+        let result = memory_show(Some("vault"), &MemoryContext::default());
         assert!(
             result.contains("security") || result.contains("encrypted"),
             "vault show should mention security/encryption"
@@ -1139,11 +1292,43 @@ mod memory_tests {
 
     #[test]
     fn memory_show_private_tier_returns_security_message() {
-        let result = memory_show(Some("private"));
+        let result = memory_show(Some("private"), &MemoryContext::default());
         assert!(
             result.contains("encrypted") || result.contains("vault"),
             "private show should mention encryption"
         );
+    }
+
+    #[test]
+    fn memory_show_working_without_snapshot_explains_requirement() {
+        // L1 §4 acceptance: without a live runtime, the working view should
+        // tell the user why no data is shown — not silently return empty.
+        let result = memory_show(Some("working"), &MemoryContext::default());
+        assert!(
+            result.contains("No live working-memory snapshot"),
+            "should explain missing live runtime"
+        );
+    }
+
+    #[test]
+    fn memory_show_working_with_snapshot_lists_sections() {
+        // L1 §4 acceptance: with a live snapshot, every section should
+        // appear with its kind tag and a byte count.
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![
+            PromptSection::new(PromptSectionKind::Intro, "intro body"),
+            PromptSection::new(PromptSectionKind::Environment, "env body"),
+            PromptSection::labeled(PromptSectionKind::Skill, "skill body", "alpha"),
+        ]);
+        let ctx = MemoryContext::with_working(&snap, 3, 42);
+        let result = memory_show(Some("working"), &ctx);
+        assert!(result.contains("L1 Working memory snapshot"), "header");
+        assert!(result.contains("intro"), "intro kind tag");
+        assert!(result.contains("environment"), "environment kind tag");
+        assert!(result.contains("skill"), "skill kind tag");
+        assert!(result.contains("[alpha]"), "skill label should appear");
+        assert!(result.contains("sections=3"), "section count");
+        assert!(result.contains("message(s)"), "buffer count line");
     }
 
     #[test]
@@ -1172,20 +1357,53 @@ mod memory_tests {
 
     #[test]
     fn memory_why_mentions_injection_order() {
-        let result = memory_why();
-        assert!(result.contains("system prompt"), "should describe system prompt");
+        let result = memory_why(&MemoryContext::default());
+        assert!(result.contains("System prompt"), "should describe system prompt");
         assert!(result.contains("ANVIL.md"), "should mention ANVIL.md");
     }
 
     #[test]
+    fn memory_why_live_snapshot_lists_kinds() {
+        // L1 §4 acceptance: with a live snapshot, /memory why enumerates
+        // every section kind in the order it ends up in the prompt.
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![
+            PromptSection::new(PromptSectionKind::Intro, "intro"),
+            PromptSection::new(PromptSectionKind::InstructionFiles, "instr"),
+            PromptSection::new(PromptSectionKind::KnownFiles, "kf"),
+        ]);
+        let ctx = MemoryContext::with_working(&snap, 0, 0);
+        let result = memory_why(&ctx);
+        assert!(result.contains("LIVE snapshot"), "should mark as live");
+        assert!(result.contains("intro"));
+        assert!(result.contains("instruction_files"));
+        assert!(result.contains("known_files"));
+    }
+
+    #[test]
     fn memory_budget_shows_tiers_and_totals() {
-        let result = memory_budget();
+        let result = memory_budget(&MemoryContext::default());
         assert!(result.contains("anvil-md"), "should show anvil-md tier");
         assert!(result.contains("TOTAL"), "should show total row");
         assert!(
             result.contains("Tokens") || result.contains("token"),
             "should show token estimate"
         );
+    }
+
+    #[test]
+    fn memory_budget_adds_working_row_when_snapshot_present() {
+        // L1 §5 acceptance: budget shows the live working-memory bytes
+        // alongside the on-disk tiers — only when a snapshot is provided.
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![PromptSection::new(
+            PromptSectionKind::Intro,
+            "x".repeat(120),
+        )]);
+        let ctx = MemoryContext::with_working(&snap, 0, 0);
+        let result = memory_budget(&ctx);
+        assert!(result.contains("working"), "should include working row");
+        assert!(result.contains("TOTAL"), "should still show total row");
     }
 
     #[test]
@@ -1197,19 +1415,19 @@ mod memory_tests {
 
     #[test]
     fn handle_memory_command_none_dispatches_to_summary() {
-        let result = handle_memory_command(None);
+        let result = handle_memory_command(None, &MemoryContext::default());
         assert!(result.contains("anvil-md"), "summary should contain tier info");
     }
 
     #[test]
     fn handle_memory_command_dispatches_subcommands() {
-        let why = handle_memory_command(Some("why"));
-        assert!(why.contains("system prompt"), "why should describe injection");
+        let why = handle_memory_command(Some("why"), &MemoryContext::default());
+        assert!(why.contains("System prompt"), "why should describe injection");
 
-        let budget = handle_memory_command(Some("budget"));
+        let budget = handle_memory_command(Some("budget"), &MemoryContext::default());
         assert!(budget.contains("TOTAL"), "budget should show totals");
 
-        let unknown = handle_memory_command(Some("explode"));
+        let unknown = handle_memory_command(Some("explode"), &MemoryContext::default());
         assert!(unknown.contains("Unknown"), "unknown subcommand should error");
     }
 }

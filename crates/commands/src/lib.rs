@@ -25,7 +25,7 @@ pub use git::{
     detect_default_branch, handle_branch_slash_command, handle_commit_push_pr_slash_command,
     handle_commit_slash_command, handle_worktree_slash_command, CommitPushPrRequest,
 };
-pub use handlers::{handle_slash_command, SlashCommandResult};
+pub use handlers::{handle_memory_command, handle_slash_command, MemoryContext, SlashCommandResult};
 pub use plugins::{handle_plugins_slash_command, render_plugins_report, PluginsCommandResult};
 pub use specs::{
     render_command_detailed_help, render_slash_command_help, resume_supported_slash_commands,

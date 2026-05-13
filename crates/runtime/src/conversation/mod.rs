@@ -386,6 +386,29 @@ where
         self.system_prompt = prompt;
     }
 
+    /// Read-only access to the live system-prompt vector.
+    ///
+    /// This is the source of truth for L1 working-memory introspection
+    /// (`/memory show working`, `/memory why`, `/memory budget`). It is the
+    /// exact sequence handed to the API client at turn-start by
+    /// [`run_turn_inner`].
+    #[must_use]
+    pub fn system_prompt(&self) -> &[crate::PromptSection] {
+        &self.system_prompt
+    }
+
+    /// Build a [`WorkingMemorySnapshot`] of the live L1 working memory.
+    ///
+    /// Phase 2 / Bucket 2 / L1 §4-5: the snapshot wraps the current
+    /// `system_prompt` Vec so handlers can introspect what the model
+    /// actually sees this turn — no static text, no guessing. The
+    /// returned snapshot also serves the v2.2.14 daemon's resume path
+    /// (it's the same struct).
+    #[must_use]
+    pub fn working_memory_snapshot(&self) -> crate::WorkingMemorySnapshot {
+        crate::WorkingMemorySnapshot::new(self.system_prompt.clone())
+    }
+
     // -----------------------------------------------------------------------
     // v2.2.11: hook dispatch helpers exposed to the TUI / CLI layer.
     // -----------------------------------------------------------------------
