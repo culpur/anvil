@@ -469,7 +469,7 @@ mod tests {
                 instruction_files: Vec::new(),
             })
             .with_os("linux", "6.8")
-            .build();
+            .build_strings();
         let mut runtime = ConversationRuntime::new(
             Session::new(),
             api_client,

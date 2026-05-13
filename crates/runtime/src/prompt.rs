@@ -8,6 +8,7 @@ use std::process::Command;
 
 use crate::config::{ConfigError, ConfigLoader, RuntimeConfig};
 use crate::memory::MemoryManager;
+use crate::prompt_section::{PromptSection, PromptSectionKind, PromptSectionsExt};
 use crate::qmd::{render_qmd_context, QmdClient, QmdResult};
 use lsp::LspContextEnrichment;
 
@@ -238,44 +239,114 @@ impl SystemPromptBuilder {
         self
     }
 
+    /// Build a structured list of prompt sections, each tagged with its
+    /// [`PromptSectionKind`].
+    ///
+    /// This is the v2.2.14+ canonical form — callers that need to mutate
+    /// the prompt by kind (toggle fast mode, replace output style, load a
+    /// skill) operate on this `Vec<PromptSection>` via [`PromptSectionsExt`].
+    ///
+    /// For callers that still want a `Vec<String>` (the legacy shape used
+    /// at the API-client wire boundary), [`Self::build_strings`] projects
+    /// this output via [`PromptSectionsExt::to_strings`].
     #[must_use]
-    pub fn build(&self) -> Vec<String> {
-        let mut sections = Vec::new();
-        sections.push(get_simple_intro_section(self.output_style_name.is_some()));
+    pub fn build(&self) -> Vec<PromptSection> {
+        let mut sections: Vec<PromptSection> = Vec::new();
+        sections.push(PromptSection::new(
+            PromptSectionKind::Intro,
+            get_simple_intro_section(self.output_style_name.is_some()),
+        ));
         if let (Some(name), Some(prompt)) = (&self.output_style_name, &self.output_style_prompt) {
-            sections.push(format!("# Output Style: {name}\n{prompt}"));
+            sections.push(PromptSection::new(
+                PromptSectionKind::OutputStyle,
+                format!("# Output Style: {name}\n{prompt}"),
+            ));
         }
-        sections.push(get_simple_system_section());
-        sections.push(get_simple_doing_tasks_section());
-        sections.push(get_actions_section());
-        sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
-        sections.push(self.environment_section());
-        sections.push(get_retrieval_order_section());
+        sections.push(PromptSection::new(
+            PromptSectionKind::System,
+            get_simple_system_section(),
+        ));
+        sections.push(PromptSection::new(
+            PromptSectionKind::DoingTasks,
+            get_simple_doing_tasks_section(),
+        ));
+        sections.push(PromptSection::new(
+            PromptSectionKind::Actions,
+            get_actions_section(),
+        ));
+        sections.push(PromptSection::new(
+            PromptSectionKind::DynamicBoundary,
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string(),
+        ));
+        sections.push(PromptSection::new(
+            PromptSectionKind::Environment,
+            self.environment_section(),
+        ));
+        sections.push(PromptSection::new(
+            PromptSectionKind::RetrievalOrder,
+            get_retrieval_order_section(),
+        ));
         if let Some(project_context) = &self.project_context {
-            sections.push(render_project_context(project_context));
+            sections.push(PromptSection::new(
+                PromptSectionKind::ProjectContext,
+                render_project_context(project_context),
+            ));
             if !project_context.instruction_files.is_empty() {
-                sections.push(render_instruction_files(&project_context.instruction_files));
+                sections.push(PromptSection::new(
+                    PromptSectionKind::InstructionFiles,
+                    render_instruction_files(&project_context.instruction_files),
+                ));
             }
             let memory_section = MemoryManager::new(&project_context.cwd).render_for_prompt();
             if !memory_section.is_empty() {
-                sections.push(memory_section);
+                sections.push(PromptSection::new(
+                    PromptSectionKind::PersistentMemory,
+                    memory_section,
+                ));
             }
         }
         // Inject QMD workspace knowledge when results were pre-fetched.
         let qmd_section = render_qmd_context(&self.qmd_results);
         if !qmd_section.is_empty() {
-            sections.push(qmd_section);
+            sections.push(PromptSection::new(PromptSectionKind::Qmd, qmd_section));
         }
         if let Some(config) = &self.config {
-            sections.push(render_config_section(config));
+            sections.push(PromptSection::new(
+                PromptSectionKind::Config,
+                render_config_section(config),
+            ));
         }
-        sections.extend(self.append_sections.iter().cloned());
+        // `append_sections` collects LSP enrichment, KnownFiles, and any
+        // free-form `append_section()` calls. The KnownFiles section is the
+        // only one we can distinguish heuristically (it starts with
+        // `<known-files>`); everything else is opaque `Custom`.
+        for body in &self.append_sections {
+            let kind = if body.starts_with("<known-files>") {
+                PromptSectionKind::KnownFiles
+            } else {
+                PromptSectionKind::Custom
+            };
+            sections.push(PromptSection::new(kind, body.clone()));
+        }
         sections
     }
 
+    /// Legacy projection: build, then drop the kind tags.
+    ///
+    /// Prefer [`Self::build`] for new code. This shim exists so the
+    /// API-client wire boundary (currently `Vec<String>`) can be migrated
+    /// incrementally without breaking every caller in one commit.
+    #[must_use]
+    pub fn build_strings(&self) -> Vec<String> {
+        self.build().to_strings()
+    }
+
+    /// Render the assembled prompt to a single string, sections joined by
+    /// `\n\n`. Used by tests and by callers that talk to APIs that take
+    /// `system: String` directly.
     #[must_use]
     pub fn render(&self) -> String {
-        self.build().join("\n\n")
+        self.build_strings().join("\n\n")
     }
 
     fn environment_section(&self) -> String {
@@ -580,6 +651,34 @@ pub fn load_system_prompt_with_identity(
     provider_name: Option<String>,
     tab_id: Option<String>,
 ) -> Result<Vec<String>, PromptBuildError> {
+    Ok(load_system_prompt_sections_with_identity(
+        cwd,
+        current_date,
+        os_name,
+        os_version,
+        model_name,
+        provider_name,
+        tab_id,
+    )?
+    .to_strings())
+}
+
+/// Typed equivalent of [`load_system_prompt_with_identity`] — returns
+/// `Vec<PromptSection>` so callers that need to mutate by kind (toggle
+/// fast mode, replace output style, load a skill) can use the
+/// [`PromptSectionsExt`] helpers instead of positional string splicing.
+///
+/// The v2.2.14 daemon will call this and persist the result as a
+/// [`WorkingMemorySnapshot`].
+pub fn load_system_prompt_sections_with_identity(
+    cwd: impl Into<PathBuf>,
+    current_date: impl Into<String>,
+    os_name: impl Into<String>,
+    os_version: impl Into<String>,
+    model_name: Option<String>,
+    provider_name: Option<String>,
+    tab_id: Option<String>,
+) -> Result<Vec<PromptSection>, PromptBuildError> {
     let cwd = cwd.into();
     let project_context = ProjectContext::discover_with_git(&cwd, current_date.into())?;
     let config = ConfigLoader::default_for(&cwd).load()?;
