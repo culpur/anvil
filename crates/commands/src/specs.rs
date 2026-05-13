@@ -2356,6 +2356,48 @@ pub fn suggest_completions(
     // Remaining tokens after the command name
     let rest = &tokens[1..];
 
+    // ── Stage 2b: /model gets live provider-aware completions ────────────────
+    //
+    // `/model` has no subcommands (it's `/model <name>`), but the user expects
+    // to see every model from every configured provider when they hit TAB.
+    // The static spec tree can't represent "list all models, grouped by
+    // provider" so we route through `CompletionContext::model_choices()` here.
+    //
+    // This was the regression behind task #374 — when the registry-driven
+    // completion replaced `subcommands_for("/model")` in tui.rs, the /model
+    // arm fell through to the empty `subcommands: &[]` and returned nothing.
+    //
+    // We only intercept when `rest` is empty: once the user has typed a
+    // partial model name (e.g. `/model opus`), we still substring-match
+    // through the same path so the picker filters live.
+    if spec.name == "model" && rest.len() <= 1 {
+        // If `rest.len() == 1` and no trailing space, the spec walker has
+        // already stripped that token into `partial`; if `rest.len() == 1`
+        // *with* trailing space, we treat it as past-the-arg and return empty
+        // (mirroring the no-second-positional contract).
+        if trailing_space && !rest.is_empty() {
+            return vec![];
+        }
+        let choices = ctx.model_choices();
+        if !choices.is_empty() {
+            let needle = partial.as_str();
+            return choices
+                .into_iter()
+                .filter(|(name, _)| {
+                    needle.is_empty() || name.to_ascii_lowercase().contains(needle)
+                })
+                .map(|(name, provider)| Completion {
+                    text: name,
+                    description: provider,
+                    category: Some(spec.category),
+                })
+                .collect();
+        }
+        // Fall back to walking the (empty) subcommand tree so the test
+        // assertion that /model returns no completions when the context
+        // doesn't supply any still holds.
+    }
+
     // ── Stage 3: walk the subcommand tree ────────────────────────────────────
     walk_subcommands(spec.subcommands, spec.category, rest, &partial, ctx)
 }

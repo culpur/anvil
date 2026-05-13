@@ -1395,7 +1395,8 @@ mod tests {
         // v2.2.11 W2: +1 (effort), W3: +1 (goal), W4: +1 (profile) = 108 total
         // v2.3 W11: +1 (file-cache), W12: +1 (cmd-cache) = 110 total
         // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
-        assert_eq!(slash_command_specs().len(), 111);
+        // v2.2.14: +1 (/ollama spec re-added in 142d5fa to close W4-merge drift) = 112 total
+        assert_eq!(slash_command_specs().len(), 112);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -1932,6 +1933,69 @@ mod tests {
         let completions = suggest_completions("/va", &ctx);
         assert!(completions.iter().all(|c| c.text.starts_with("/va")));
         assert!(completions.iter().any(|c| c.text == "/vault"));
+    }
+
+    /// Verify /model <space> returns live provider-aware completions
+    /// supplied by `CompletionContext::model_choices`. Regression test for
+    /// task #374 — when the registry-driven completion replaced the old
+    /// `subcommands_for("/model")` table in tui.rs, the /model arm fell
+    /// through to the empty static `subcommands: &[]` and returned nothing.
+    #[test]
+    fn completion_model_subcommands() {
+        use super::{
+            suggest_completions, CompletionContext, DynamicEnumSource,
+        };
+
+        struct ModelChoicesCtx;
+        impl CompletionContext for ModelChoicesCtx {
+            fn resolve(&self, _src: DynamicEnumSource) -> Vec<String> {
+                vec![]
+            }
+            fn model_choices(&self) -> Vec<(String, String)> {
+                vec![
+                    ("claude-sonnet-4-6".into(), "Anthropic".into()),
+                    ("gpt-5.4".into(), "OpenAI".into()),
+                    ("qwen3:8b".into(), "Ollama (local)".into()),
+                ]
+            }
+        }
+
+        let ctx = ModelChoicesCtx;
+        let completions = suggest_completions("/model ", &ctx);
+        let names: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "'/model ' should return exactly the 3 mocked models, got {names:?}"
+        );
+        assert!(names.contains(&"claude-sonnet-4-6"));
+        assert!(names.contains(&"gpt-5.4"));
+        assert!(names.contains(&"qwen3:8b"));
+
+        // Provider labels surface as the description on each completion.
+        let qwen = completions
+            .iter()
+            .find(|c| c.text == "qwen3:8b")
+            .expect("qwen3:8b in completions");
+        assert_eq!(qwen.description, "Ollama (local)");
+
+        // Substring partials filter the list.
+        let filtered = suggest_completions("/model qwen", &ctx);
+        let filtered_names: Vec<&str> = filtered.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(filtered_names, vec!["qwen3:8b"]);
+
+        // Empty context still falls through gracefully (no panic, no junk).
+        struct EmptyCtx;
+        impl CompletionContext for EmptyCtx {
+            fn resolve(&self, _src: DynamicEnumSource) -> Vec<String> {
+                vec![]
+            }
+        }
+        let empty = suggest_completions("/model ", &EmptyCtx);
+        assert!(
+            empty.is_empty(),
+            "empty ctx should yield no completions, got {empty:?}"
+        );
     }
 
     /// Verify /vault <space> returns the vault subcommands.

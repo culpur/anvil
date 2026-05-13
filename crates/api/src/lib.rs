@@ -39,8 +39,8 @@ pub use providers::ollama_tool_parser::{
 pub use ollama_tune::{OllamaConfig, OllamaModelOverride};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
-    detect_provider_kind, max_tokens_for_model, provider_display_name, resolve_model_alias,
-    ProviderKind,
+    detect_provider_kind, known_models, max_tokens_for_model, provider_display_name,
+    resolve_model_alias, ProviderKind,
 };
 pub use sse::{parse_frame, SseParser};
 pub use types::{

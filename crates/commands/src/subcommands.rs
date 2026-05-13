@@ -107,6 +107,22 @@ pub struct SubcommandSpec {
 /// offline use.
 pub trait CompletionContext {
     fn resolve(&self, source: DynamicEnumSource) -> Vec<String>;
+
+    /// Live model choices for `/model <TAB>` completion.
+    ///
+    /// Returns `(model_name, provider_label)` tuples gathered from every
+    /// currently-configured provider (Anthropic, OpenAI, xAI, Gemini, local
+    /// Ollama, Ollama Cloud, …).  Unlike [`DynamicEnumSource::Models`], the
+    /// provider label is preserved so the completion popup can show
+    /// "claude-sonnet-4-6 — Anthropic (Anvil)" alongside the bare model
+    /// names.
+    ///
+    /// Implementations that don't have access to provider configuration
+    /// (offline web viewer, unit tests) may return an empty list — callers
+    /// fall back to the static [`DynamicEnumSource::Models`] resolver.
+    fn model_choices(&self) -> Vec<(String, String)> {
+        vec![]
+    }
 }
 
 /// Fallback implementation — always returns an empty list.
@@ -188,6 +204,16 @@ impl CompletionContext for StaticDefaultCompletionContext {
             ],
             DynamicEnumSource::Profiles => vec![],
         }
+    }
+
+    fn model_choices(&self) -> Vec<(String, String)> {
+        vec![
+            ("claude-opus-4-5".into(), "Anthropic".into()),
+            ("claude-sonnet-4-5".into(), "Anthropic".into()),
+            ("claude-haiku-4-5".into(), "Anthropic".into()),
+            ("gpt-4o".into(), "OpenAI".into()),
+            ("gpt-4o-mini".into(), "OpenAI".into()),
+        ]
     }
 }
 

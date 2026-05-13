@@ -139,6 +139,40 @@ impl CompletionContext for TuiCompletionContext {
             DynamicEnumSource::Profiles => list_profile_names(),
         }
     }
+
+    /// Live `/model <TAB>` choices.
+    ///
+    /// Aggregates:
+    /// - Every alias from the static `api::known_models()` registry
+    ///   (Anthropic, OpenAI, xAI, Google Gemini), labelled with the
+    ///   provider display name.
+    /// - Every locally-discovered Ollama model from the startup cache,
+    ///   distinguishing Ollama Cloud (`:cloud` / `-cloud` suffix) from
+    ///   the local daemon.
+    ///
+    /// Dedupes by model name (Ollama-side names like `llama3.2` take the
+    /// real local size from the cache rather than the registry stub).
+    fn model_choices(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = api::known_models()
+            .into_iter()
+            .map(|(name, kind)| (name.to_string(), api::provider_display_name(kind).to_string()))
+            .collect();
+
+        for (name, _size) in &self.ollama_models {
+            // Drop any registry entry the user actually has installed locally
+            // so the live entry (with provider label distinguishing local vs
+            // cloud) wins.
+            out.retain(|(existing, _)| existing != name);
+            let label = if api::is_ollama_cloud_model(name) {
+                "Ollama Cloud"
+            } else {
+                "Ollama (local)"
+            };
+            out.push((name.clone(), label.to_string()));
+        }
+
+        out
+    }
 }
 
 // ─── Helper: vault credential type tokens ────────────────────────────────────
@@ -383,6 +417,22 @@ mod tests {
     }
 
     impl commands::CompletionContext for MockCompletionContext {
+        fn model_choices(&self) -> Vec<(String, String)> {
+            self.models
+                .iter()
+                .map(|name| {
+                    let provider = if name.starts_with("claude") {
+                        "Anthropic"
+                    } else if name.starts_with("gpt") || name.starts_with("o3") {
+                        "OpenAI"
+                    } else {
+                        "Ollama (local)"
+                    };
+                    (name.clone(), provider.to_string())
+                })
+                .collect()
+        }
+
         fn resolve(&self, source: DynamicEnumSource) -> Vec<String> {
             match source {
                 DynamicEnumSource::VaultCredentialTypes => vault_credential_type_tokens(),
@@ -571,21 +621,57 @@ mod tests {
         );
     }
 
-    // ── Input: "/model " — root-level dynamic args are a v2.2.7 feature ──────
-    // Phase 0's SlashCommandSpec has subcommands but no root-level `args`
-    // field, so a Level-1 DynamicEnum arg (e.g. /model <name>) doesn't yet
-    // auto-complete. The registry returns empty and the user types the model
-    // name freehand. Future work: extend the spec with a root `args` field.
+    // ── Input: "/model " — live provider-aware completions ───────────────────
+    //
+    // `/model` has no static subcommand tree. It routes through
+    // `CompletionContext::model_choices()` so the popup reflects whatever
+    // providers are actually configured in this session (Anthropic, OpenAI,
+    // local Ollama, Ollama Cloud, etc.). Each entry carries the provider
+    // display name in the `description` field so the user can distinguish
+    // `llama3.2` (Ollama local) from `claude-sonnet-4-6` (Anthropic) at a
+    // glance.
 
     #[test]
-    #[ignore = "requires SlashCommandSpec.args field — scheduled for v2.2.7"]
     fn model_space_shows_models() {
         let ctx = MockCompletionContext::new();
         let completions = suggest_completions("/model ", &ctx);
-        assert!(
-            !completions.is_empty(),
-            "'/model ' should show model completions (once root args ship)"
+        assert_eq!(
+            completions.len(),
+            3,
+            "'/model ' should return all three mocked models, got {}: {completions:?}",
+            completions.len()
         );
+        let texts: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert!(texts.contains(&"claude-sonnet-4-6"));
+        assert!(texts.contains(&"gpt-5.4"));
+        assert!(texts.contains(&"llama3.2"));
+        // Provider labels surface as the description field.
+        let claude = completions
+            .iter()
+            .find(|c| c.text == "claude-sonnet-4-6")
+            .expect("claude-sonnet-4-6 present");
+        assert_eq!(claude.description, "Anthropic");
+        let llama = completions
+            .iter()
+            .find(|c| c.text == "llama3.2")
+            .expect("llama3.2 present");
+        assert_eq!(llama.description, "Ollama (local)");
+    }
+
+    #[test]
+    fn model_partial_filters_substring() {
+        let ctx = MockCompletionContext::new();
+        let completions = suggest_completions("/model llama", &ctx);
+        let texts: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["llama3.2"]);
+    }
+
+    #[test]
+    fn model_partial_filters_case_insensitive() {
+        let ctx = MockCompletionContext::new();
+        let completions = suggest_completions("/model CLAUDE", &ctx);
+        let texts: Vec<&str> = completions.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["claude-sonnet-4-6"]);
     }
 
     // ── vault_credential_type_tokens() count ─────────────────────────────────

@@ -227,6 +227,21 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     None
 }
 
+/// Returns every model alias known to the static registry, paired with the
+/// provider that serves it.
+///
+/// Drives `/model <TAB>` completion alongside any locally-discovered Ollama
+/// models cached at startup.  The returned slice is alphabetically stable
+/// (same order as `MODEL_REGISTRY`) so completion popups don't reshuffle
+/// between keystrokes.
+#[must_use]
+pub fn known_models() -> Vec<(&'static str, ProviderKind)> {
+    MODEL_REGISTRY
+        .iter()
+        .map(|(alias, meta)| (*alias, meta.provider))
+        .collect()
+}
+
 #[must_use]
 pub fn detect_provider_kind(model: &str) -> ProviderKind {
     if let Some(metadata) = metadata_for_model(model) {
@@ -320,7 +335,41 @@ pub(super) fn crate_env_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_provider_kind, max_tokens_for_model, resolve_model_alias, ProviderKind};
+    use super::{
+        detect_provider_kind, known_models, max_tokens_for_model, resolve_model_alias,
+        ProviderKind,
+    };
+
+    #[test]
+    fn known_models_covers_every_provider() {
+        let models = known_models();
+        assert!(
+            models.iter().any(|(_, k)| *k == ProviderKind::AnvilApi),
+            "missing Anthropic entries"
+        );
+        assert!(
+            models.iter().any(|(_, k)| *k == ProviderKind::OpenAi),
+            "missing OpenAI entries"
+        );
+        assert!(
+            models.iter().any(|(_, k)| *k == ProviderKind::Xai),
+            "missing xAI entries"
+        );
+        assert!(
+            models.iter().any(|(_, k)| *k == ProviderKind::Gemini),
+            "missing Gemini entries"
+        );
+        assert!(
+            models.iter().any(|(_, k)| *k == ProviderKind::Ollama),
+            "missing Ollama entries"
+        );
+        let names: Vec<&str> = models.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"claude-sonnet-4-6"));
+        assert!(names.contains(&"gpt-4o"));
+        assert!(names.contains(&"grok-3"));
+        assert!(names.contains(&"gemini-2.5-pro"));
+        assert!(names.contains(&"llama3.2"));
+    }
 
     #[test]
     fn resolves_grok_aliases() {
