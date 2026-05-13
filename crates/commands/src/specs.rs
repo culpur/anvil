@@ -252,9 +252,14 @@ SUBCOMMANDS
   (none)              Print a one-line count for every active memory tier
   show <tier> [sub]   Dump contents of a specific tier, with optional sub-view
   inspect <key>       Search every searchable tier (incl. L7 caches) for <key>
-  promote <id>        Accept a pending nomination into ANVIL.md
+  promote [--dry-run] <id>
+                      Accept a pending nomination into ANVIL.md.
+                      --dry-run shows the planned write without committing.
   forget <key>        Remove an entry from ANVIL.md (or reject a nomination)
-  why                 Walk the LIVE system_prompt and list every section in order
+  why                 List the LIVE system_prompt sections in injection order.
+                      Reads ONLY the current working-memory snapshot (L1).
+                      Does NOT walk DailyStore (L2) or reconcile across tiers.
+                      For tier-by-tier tables, use /memory show <tier>.
   budget              Per-tier byte/~token table including the working row
   prune               Remove stale entries from daily/nominations tiers
 

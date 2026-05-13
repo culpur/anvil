@@ -1844,7 +1844,9 @@ fn memory_why(ctx: &MemoryContext<'_>) -> String {
         lines.push(String::new());
         lines.push(
             "The vault, private memory, and encrypted tiers are NEVER injected automatically.\n\
-             Nominations are SUGGESTED only — they only enter the prompt after /memory promote."
+             Nominations are SUGGESTED only — they only enter the prompt after /memory promote.\n\
+             /memory why reads ONLY the working-memory snapshot (L1) — it does NOT walk DailyStore (L2)\n\
+             or reconcile across tiers. Use /memory show <tier> for tier-by-tier views."
                 .to_string(),
         );
         return lines.join("\n");
@@ -1865,6 +1867,8 @@ System prompt injection order (no live runtime — static documentation):
 
 The vault, private memory, and encrypted tiers are NEVER injected automatically.
 Nominations are SUGGESTED only -- they only enter the prompt after /memory promote.
+/memory why reads ONLY the working-memory snapshot (L1) -- it does NOT walk DailyStore (L2)
+or reconcile across tiers. Use /memory show <tier> for tier-by-tier views.
 "
     .to_string()
 }
