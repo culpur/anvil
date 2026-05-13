@@ -812,13 +812,15 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         None => {
             return "Usage: /memory show <tier> [sub-view]\n\
                 Tiers: working, episodic, semantic, procedural, identity, \
-                anvil-md, vault, private, nominations, daily, file-cache, \
-                cmd-cache, goals\n\
+                policy, anvil-md, vault, private, nominations, daily, \
+                file-cache, cmd-cache, goals\n\
                 Episodic sub-views: episodic (default), episodic daily\n\
                 Semantic sub-views: semantic (default), semantic --pending\n\
                 Procedural sub-views: procedural (default), procedural \
                 {goals|skills|cron|routines}\n\
-                Identity: labels-only when unlocked, counts-only when locked"
+                Identity: labels-only when unlocked, counts-only when locked\n\
+                Policy: PermissionMemory grants + auto-mode hard_deny + \
+                reviewer extras + egress allowlist"
                 .to_string()
         }
     };
@@ -926,6 +928,9 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         // L5 identity — Phase 2 / Bucket 2 / L5 §1-4: vault labels (when
         // unlocked) or counts only (when locked). NEVER renders secrets.
         "identity" => render_identity_show(),
+        // L6 policy — Phase 2 / Bucket 2 / L6 §2-5: permission grants +
+        // auto-mode hard-deny + reviewer extras + egress allowlist.
+        "policy" => render_policy_show(&cwd),
         "vault" => "Vault contents are not shown in plain text for security reasons.\n\
              Use /vault list to see stored credential names."
             .to_string(),
@@ -937,7 +942,7 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         other => format!(
             "Unknown tier: {other}\n\
              Known tiers: working, episodic, semantic, procedural, identity, \
-             anvil-md, vault, private, nominations, daily, file-cache, \
+             policy, anvil-md, vault, private, nominations, daily, file-cache, \
              cmd-cache, goals"
         ),
     }
@@ -1194,6 +1199,119 @@ fn render_procedural_cron() -> String {
         ));
         lines.push(format!("           name={}", entry.name));
     }
+    lines.join("\n")
+}
+
+/// Render `/memory show policy`.
+///
+/// Phase 2 / Bucket 2 / L6 §2-5: surface the four policy sources:
+/// 1. PermissionMemory persisted grants (`~/.anvil/projects/<hash>/permissions.json`
+///    + global `~/.anvil/permissions.json`)
+/// 2. `autoMode.hard_deny` rules from settings.json
+/// 3. Reviewer extras (`extra_destructive_patterns`, `extra_credential_patterns`)
+/// 4. Egress allowlist (EgressPolicy::default — module ships but not yet
+///    wired into central config; this view reports the runtime default so
+///    users can see the current ground truth).
+fn render_policy_show(cwd: &std::path::Path) -> String {
+    use runtime::{ConfigLoader, PermissionMemory};
+
+    let mut lines = vec!["=== L6 Policy memory ===".to_string()];
+
+    // 1. PermissionMemory entries (persisted grants).
+    let mem = PermissionMemory::load(cwd);
+    let entries: Vec<_> = mem.all_entries().collect();
+    lines.push(String::new());
+    if entries.is_empty() {
+        lines.push("permission grants: none".to_string());
+    } else {
+        lines.push(format!("permission grants ({}):", entries.len()));
+        for entry in entries.iter().take(20) {
+            let pat = entry
+                .input_pattern
+                .as_deref()
+                .unwrap_or("*");
+            lines.push(format!(
+                "  [{:?}] {}({pat})",
+                entry.scope, entry.tool_name
+            ));
+        }
+        if entries.len() > 20 {
+            lines.push(format!("  ... +{} more", entries.len() - 20));
+        }
+    }
+
+    // 2-3. AutoMode hard-deny + reviewer extras from merged settings.json.
+    let cfg = ConfigLoader::default_for(cwd).load();
+    lines.push(String::new());
+    match &cfg {
+        Ok(rt) => {
+            let auto = rt.feature_config().auto_mode();
+            if auto.hard_deny.is_empty() {
+                lines.push("auto-mode hard_deny: (none)".to_string());
+            } else {
+                lines.push(format!(
+                    "auto-mode hard_deny ({}):",
+                    auto.hard_deny.len()
+                ));
+                for pat in &auto.hard_deny {
+                    lines.push(format!("  deny  {pat}"));
+                }
+            }
+            let reviewer = rt.feature_config().reviewer();
+            lines.push(String::new());
+            lines.push(format!(
+                "reviewer: enabled={}  mode={:?}  block_action={:?}",
+                reviewer.enabled, reviewer.mode, reviewer.block_action
+            ));
+            if !reviewer.extra_destructive_patterns.is_empty() {
+                lines.push(format!(
+                    "  extra destructive patterns ({}):",
+                    reviewer.extra_destructive_patterns.len()
+                ));
+                for pat in &reviewer.extra_destructive_patterns {
+                    lines.push(format!("    {pat}"));
+                }
+            }
+            if !reviewer.extra_credential_patterns.is_empty() {
+                lines.push(format!(
+                    "  extra credential patterns ({}):",
+                    reviewer.extra_credential_patterns.len()
+                ));
+                for pat in &reviewer.extra_credential_patterns {
+                    lines.push(format!("    {pat}"));
+                }
+            }
+        }
+        Err(e) => {
+            lines.push(format!(
+                "auto-mode/reviewer: (could not load settings: {e})"
+            ));
+        }
+    }
+
+    // 4. Egress allowlist — the module ships with a default policy. It
+    // is not yet wired into the central RuntimeFeatureConfig, so we
+    // surface the runtime default with a clear note about that gap.
+    lines.push(String::new());
+    let policy = runtime::egress::EgressPolicy::default();
+    let mut domains: Vec<_> = policy.allowlist.iter().cloned().collect();
+    domains.sort();
+    lines.push(format!(
+        "egress allowlist (default policy, enabled={}, {} domain(s)):",
+        policy.enabled,
+        domains.len()
+    ));
+    for domain in domains.iter().take(20) {
+        lines.push(format!("  allow  {domain}"));
+    }
+    if domains.len() > 20 {
+        lines.push(format!("  ... +{} more", domains.len() - 20));
+    }
+    lines.push(
+        "(egress policy is not yet merged into settings.json — defaults shown)"
+            .to_string(),
+    );
+
     lines.join("\n")
 }
 
@@ -1839,6 +1957,36 @@ mod memory_tests {
             "should reject unknown; got: {result}"
         );
         assert!(result.contains("pending"));
+    }
+
+    #[test]
+    fn memory_show_policy_lists_all_four_sections() {
+        // L6 §2-5 acceptance: the policy view labels each of the four
+        // policy sources so the user can see what's in play.
+        let result = memory_show(Some("policy"), &MemoryContext::default());
+        assert!(
+            result.contains("L6 Policy memory"),
+            "header missing; got: {result}"
+        );
+        for label in ["permission grants", "auto-mode hard_deny", "reviewer", "egress allowlist"]
+        {
+            assert!(
+                result.contains(label),
+                "expected `{label}`; got: {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_show_policy_shows_default_egress_status_line() {
+        // L6 §5 acceptance: even when the egress block is not in
+        // settings.json, the view reads EgressPolicy::default and tells
+        // the user that the wiring gap exists.
+        let result = memory_show(Some("policy"), &MemoryContext::default());
+        assert!(
+            result.contains("not yet merged into settings.json"),
+            "should advertise the wiring gap; got: {result}"
+        );
     }
 
     #[test]
