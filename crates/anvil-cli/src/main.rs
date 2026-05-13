@@ -4724,11 +4724,33 @@ impl LiveCli {
             }
             SlashCommand::Model { model } if model.is_some() => {
                 let new_model = model.as_deref().unwrap();
-                let previous = self.model.clone();
-                self.model = new_model.to_string();
-                let msg_count = self.active_runtime().session().messages.len();
-                tui.set_model(self.model.clone());
-                tui.push_system(format_model_switch_report(&previous, &self.model, msg_count));
+                // Live `/model <name>` in the TUI: route through the
+                // shared apply_model_switch helper so API routing,
+                // system-prompt identity, and TUI chrome all flip
+                // together. Without this the chrome updated but
+                // inference kept hitting the previous provider.
+                match self.apply_model_switch(new_model, Some(tui)) {
+                    Ok((previous, msg_count)) => {
+                        if previous == self.model {
+                            // Same-model no-op — surface a tidy report
+                            // rather than the "switched" template.
+                            tui.push_system(format_model_report(
+                                &self.model,
+                                msg_count,
+                                self.active_runtime().usage().turns(),
+                            ));
+                        } else {
+                            tui.push_system(format_model_switch_report(
+                                &previous,
+                                &self.model,
+                                msg_count,
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        tui.push_system(format!("Model switch failed: {err}"));
+                    }
+                }
                 return Ok(false);
             }
             SlashCommand::GenerateImage { prompt, wp_post_id } => {
@@ -7660,6 +7682,79 @@ impl LiveCli {
         );
     }
 
+    /// Atomically swap the active model. Rebuilds the runtime so API
+    /// routing follows the new provider on the very next turn, regenerates
+    /// the Environment section of the system prompt so the model's
+    /// self-identity claim ("Currently loaded model: …") matches reality,
+    /// and updates the TUI chrome when a TUI is attached. The session
+    /// message history is preserved.
+    ///
+    /// `new_model` is resolved through [`resolve_model_alias`] before
+    /// comparison and storage; the caller does not need to pre-resolve.
+    ///
+    /// Returns `(previous_model, message_count)`. When the resolved model
+    /// equals the current model the call is a no-op: nothing is rebuilt
+    /// and `previous_model == self.model`.
+    fn apply_model_switch(
+        &mut self,
+        new_model: &str,
+        tui: Option<&mut AnvilTui>,
+    ) -> Result<(String, usize), Box<dyn std::error::Error>> {
+        use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt, SystemPromptBuilder};
+
+        let previous = self.model.clone();
+        let resolved = resolve_model_alias(new_model).to_string();
+        let message_count = self.active_runtime().session().messages.len();
+
+        // Same-model: no-op, preserve no-rebuild guarantee.
+        if resolved == self.model {
+            return Ok((previous, message_count));
+        }
+
+        // 1. Regenerate ONLY the Environment section. Keep every other
+        //    section (Goal, Skill, Memory, ProjectContext, …) byte-
+        //    identical so we don't accidentally drop /goal, /skill load,
+        //    or other in-session prompt state.
+        let provider_label = friendly_provider_label(&resolved);
+        let mut builder = SystemPromptBuilder::new().with_model_name(resolved.clone());
+        if let Some(provider) = provider_label.as_deref() {
+            builder = builder.with_provider_name(provider);
+        }
+        // OS detail matches startup (`build_system_prompt_with_identity`
+        // also passes `unknown` for the version). Don't shell out for a
+        // real OS version mid-session — it would be inconsistent with
+        // the initial prompt build.
+        builder = builder.with_os(env::consts::OS, "unknown");
+        let new_env_body = builder.render_environment_section();
+        self.system_prompt
+            .upsert_by_kind(PromptSection::new(PromptSectionKind::Environment, new_env_body));
+
+        // 2. Rebuild the runtime so the next turn talks to the new
+        //    provider through the right ApiClient. Without this, the
+        //    chrome swaps but inference still hits the previous backend.
+        let session = self.active_runtime().session().clone();
+        self.install_active_runtime(build_runtime_with_tui_slot(
+            session,
+            resolved.clone(),
+            self.system_prompt.clone(),
+            true,
+            true,
+            self.allowed_tools.clone(),
+            self.permission_mode,
+            None,
+            self.active_tui_slot(),
+            self.agent_manager.clone(),
+        )?);
+
+        // 3. Commit the model state and update TUI chrome (status bar,
+        //    Thinking header, tab title).
+        self.model = resolved;
+        if let Some(tui) = tui {
+            tui.set_model(self.model.clone());
+        }
+        Ok((previous, message_count))
+    }
+
     fn set_model(&mut self, model: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
         let Some(model) = model else {
             println!(
@@ -7673,9 +7768,9 @@ impl LiveCli {
             return Ok(false);
         };
 
-        let model = resolve_model_alias(&model).to_string();
+        let resolved = resolve_model_alias(&model).to_string();
 
-        if model == self.model {
+        if resolved == self.model {
             println!(
                 "{}",
                 format_model_report(
@@ -7687,25 +7782,10 @@ impl LiveCli {
             return Ok(false);
         }
 
-        let previous = self.model.clone();
-        let session = self.active_runtime().session().clone();
-        let message_count = session.messages.len();
-        self.install_active_runtime(build_runtime_with_tui_slot(
-            session,
-            model.clone(),
-            self.system_prompt.clone(),
-            true,
-            true,
-            self.allowed_tools.clone(),
-            self.permission_mode,
-            None,
-            self.active_tui_slot(),
-            self.agent_manager.clone(),
-        )?);
-        self.model.clone_from(&model);
+        let (previous, message_count) = self.apply_model_switch(&resolved, None)?;
         println!(
             "{}",
-            format_model_switch_report(&previous, &model, message_count)
+            format_model_switch_report(&previous, &self.model, message_count)
         );
         Ok(true)
     }

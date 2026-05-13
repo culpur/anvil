@@ -349,6 +349,15 @@ impl SystemPromptBuilder {
         self.build_strings().join("\n\n")
     }
 
+    /// Render only the Environment section body for the builder's current
+    /// identity / project / OS configuration. Useful for `/model` live
+    /// swaps where the rest of the prompt should stay byte-identical and
+    /// only the model/provider self-identity claim must update.
+    #[must_use]
+    pub fn render_environment_section(&self) -> String {
+        self.environment_section()
+    }
+
     fn environment_section(&self) -> String {
         let cwd = self.project_context.as_ref().map_or_else(
             || "unknown".to_string(),
@@ -1145,5 +1154,112 @@ mod tests {
             env_idx < retrieval_idx,
             "environment context (identity) must precede retrieval order (policy)"
         );
+    }
+
+    // The `/model` live-swap helper (`LiveCli::apply_model_switch`) uses
+    // `SystemPromptBuilder::render_environment_section` to regenerate just
+    // the Environment section body when the user changes models mid-session.
+    // These tests pin the contract: the rendered body must claim the new
+    // model and must NOT mention the previous one as currently loaded.
+
+    #[test]
+    #[ignore = "diagnostic — run with --ignored --nocapture to view body diff"]
+    fn print_environment_section_diff_demo() {
+        let before = SystemPromptBuilder::new()
+            .with_os("macos", "unknown")
+            .with_model_name("qwen3.5:latest")
+            .with_provider_name("Ollama (local)")
+            .render_environment_section();
+        let after = SystemPromptBuilder::new()
+            .with_os("macos", "unknown")
+            .with_model_name("claude-opus-4-6")
+            .with_provider_name("Anthropic (via Anvil API)")
+            .render_environment_section();
+        println!("--- BEFORE ---\n{before}\n--- AFTER ---\n{after}");
+    }
+
+    #[test]
+    fn render_environment_section_swaps_model_name_and_provider() {
+        let old = SystemPromptBuilder::new()
+            .with_os("macos", "unknown")
+            .with_model_name("qwen3.5:latest")
+            .with_provider_name("Ollama (local)")
+            .render_environment_section();
+        let new = SystemPromptBuilder::new()
+            .with_os("macos", "unknown")
+            .with_model_name("claude-opus-4-6")
+            .with_provider_name("Anthropic (via Anvil API)")
+            .render_environment_section();
+
+        assert!(
+            old.contains("qwen3.5:latest"),
+            "previous render must claim qwen3.5: {old}"
+        );
+        assert!(
+            new.contains("claude-opus-4-6"),
+            "new render must claim claude-opus-4-6: {new}"
+        );
+        assert!(
+            !new.contains("qwen3.5:latest"),
+            "new render must NOT carry the old model identity: {new}"
+        );
+        assert!(
+            new.contains("Anthropic"),
+            "new render must mention the new provider: {new}"
+        );
+        assert!(
+            !new.contains("Ollama (local)"),
+            "new render must NOT mention the previous provider: {new}"
+        );
+    }
+
+    #[test]
+    fn upsert_environment_section_preserves_other_sections() {
+        use crate::prompt_section::{PromptSection, PromptSectionKind, PromptSectionsExt};
+
+        let mut sections = SystemPromptBuilder::new()
+            .with_os("linux", "6.8")
+            .with_model_name("qwen3.5:latest")
+            .with_provider_name("Ollama (local)")
+            .build();
+        let before_len = sections.len();
+        // Snapshot non-Environment section bodies for a byte-for-byte
+        // comparison after the swap.
+        let before: Vec<(PromptSectionKind, String)> = sections
+            .iter()
+            .filter(|s| s.kind != PromptSectionKind::Environment)
+            .map(|s| (s.kind.clone(), s.body.clone()))
+            .collect();
+
+        let new_env_body = SystemPromptBuilder::new()
+            .with_os("linux", "6.8")
+            .with_model_name("claude-opus-4-6")
+            .with_provider_name("Anthropic (via Anvil API)")
+            .render_environment_section();
+        sections.upsert_by_kind(PromptSection::new(
+            PromptSectionKind::Environment,
+            new_env_body,
+        ));
+
+        assert_eq!(
+            sections.len(),
+            before_len,
+            "upsert by kind must replace in place, not append"
+        );
+        let after: Vec<(PromptSectionKind, String)> = sections
+            .iter()
+            .filter(|s| s.kind != PromptSectionKind::Environment)
+            .map(|s| (s.kind.clone(), s.body.clone()))
+            .collect();
+        assert_eq!(
+            after, before,
+            "/model switch must leave every non-Environment section byte-identical"
+        );
+
+        let env = sections
+            .find_by_kind(&PromptSectionKind::Environment, None)
+            .expect("Environment section still present");
+        assert!(env.body.contains("claude-opus-4-6"));
+        assert!(!env.body.contains("qwen3.5:latest"));
     }
 }
