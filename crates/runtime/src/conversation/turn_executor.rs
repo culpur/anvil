@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::prompt_section::PromptSection;
 use crate::session::{ContentBlock, ConversationMessage};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -27,7 +28,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     api_client: &mut C,
     tool_executor: &mut T,
     permission_policy: &PermissionPolicy,
-    system_prompt: &[String],
+    system_prompt: &[PromptSection],
     max_iterations: usize,
     usage_tracker: &mut UsageTracker,
     hook_runner: &HookRunner,

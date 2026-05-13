@@ -437,7 +437,7 @@ pub(crate) fn describe_tool_progress(name: &str, input: &str) -> String {
 pub(crate) fn build_runtime(
     session: Session,
     model: String,
-    system_prompt: Vec<String>,
+    system_prompt: Vec<runtime::PromptSection>,
     enable_tools: bool,
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
@@ -462,7 +462,7 @@ pub(crate) fn build_runtime(
 pub(crate) fn build_runtime_with_tui_slot(
     session: Session,
     model: String,
-    system_prompt: Vec<String>,
+    system_prompt: Vec<runtime::PromptSection>,
     enable_tools: bool,
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
@@ -763,7 +763,18 @@ impl ApiClient for DefaultRuntimeClient {
             model: self.model.clone(),
             max_tokens: max_tokens_for_model(&self.model),
             messages: convert_messages(&request.messages),
-            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
+            // Wire boundary: project the typed Vec<PromptSection> down to the
+            // legacy "single concatenated string" the upstream API expects.
+            // The in-memory representation stays typed; this is the only
+            // place we collapse to text for the wire.
+            system: (!request.system_prompt.is_empty()).then(|| {
+                request
+                    .system_prompt
+                    .iter()
+                    .map(|s| s.body.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            }),
             tools: self
                 .enable_tools
                 .then(|| filter_tool_specs(&self.tool_registry, self.allowed_tools.as_ref())),

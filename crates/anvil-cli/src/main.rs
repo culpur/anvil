@@ -3861,7 +3861,12 @@ struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
-    system_prompt: Vec<String>,
+    /// Typed working-memory layer (v2.2.14 Phase 1 Bucket 1.1): the in-memory
+    /// prompt is `Vec<PromptSection>` so commands like `/goal`,
+    /// `/output-style`, `/fast`, and `/skill load` can identify their sections
+    /// by kind. The wire format is projected to `Vec<String>` only at the
+    /// API boundary in `providers.rs`.
+    system_prompt: Vec<runtime::PromptSection>,
     /// Per-tab runtimes (bug 3). Index i corresponds to AnvilTui.tabs[i].
     /// Always non-empty; index 0 is the bootstrap tab's runtime.
     tab_runtimes: Vec<TabRuntimeState>,
@@ -4317,7 +4322,7 @@ impl LiveCli {
         sender_prototype: &TuiSender,
         session: Session,
         model: String,
-        system_prompt: Vec<String>,
+        system_prompt: Vec<runtime::PromptSection>,
         enable_tools: bool,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
@@ -5419,7 +5424,16 @@ impl LiveCli {
                             Ok(composed) => {
                                 let header = format!("Composing agent with traits: {}", composed.traits.join(", "));
                                 let original_system_prompt = self.system_prompt.clone();
-                                let mut composed_system_prompt = vec![composed.prompt.clone()];
+                                // The composed trait body is a single text fragment.
+                                // Tag it as Custom so it survives serialization but
+                                // sits at the top of the prompt, mirroring the old
+                                // "insert(0, composed.prompt)" behavior.
+                                let mut composed_system_prompt: Vec<runtime::PromptSection> = vec![
+                                    runtime::PromptSection::new(
+                                        runtime::PromptSectionKind::Custom,
+                                        composed.prompt.clone(),
+                                    ),
+                                ];
                                 composed_system_prompt.extend(original_system_prompt.iter().cloned());
 
                                 let rebuild = build_runtime_with_tui_slot(
@@ -5473,11 +5487,13 @@ impl LiveCli {
                         let cwd = env::current_dir().unwrap_or_default();
                         match load_skill_body(&name, &cwd) {
                             Ok(body) => {
-                                // Prepend skill body to system prompt and rebuild runtime
-                                // so it takes effect on the very next turn.
-                                let marker = format!("# skill:{name} —");
-                                self.system_prompt.retain(|s| !s.contains(&marker));
-                                self.system_prompt.insert(0, body);
+                                // Typed upsert: identify by `(Skill, name)` so reloading
+                                // the same skill replaces its body in place, while loading
+                                // a different skill stacks alongside.
+                                use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt};
+                                self.system_prompt.upsert_by_kind(
+                                    PromptSection::labeled(PromptSectionKind::Skill, body, name.clone()),
+                                );
                                 let session = self.active_runtime().session().clone();
                                 match build_runtime_with_tui_slot(
                                     session,
@@ -5630,9 +5646,13 @@ impl LiveCli {
     /// change, persists it to `~/.anvil/config.json`, and rebuilds the runtime
     /// so the new system prompt takes effect immediately.
     fn set_output_style(&mut self, style: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
+        // v2.2.14 Phase 1 Bucket 1.1: typed prompt sections eliminate the
+        // need for the old inline markers (TERSE_MARKER, CUSTOM_STYLE_MARKER).
+        // Sections are now identified by kind — OutputStyleCondensed for
+        // the built-in terse fragment and OutputStyleCustom for a
+        // user-supplied prompt fragment. The body content stays the same so
+        // the model sees identical text.
         const TERSE_SKILL_BODY: &str = include_str!("../../commands/bundled/skills/terse/SKILL.md");
-        const TERSE_MARKER: &str = "# terse — token-economical response style";
-        const CUSTOM_STYLE_MARKER: &str = "# __anvil_custom_output_style__";
 
         let Some(style_str) = style else {
             return Ok(format!("Output style: {}", self.output_style.as_str()));
@@ -5670,20 +5690,27 @@ impl LiveCli {
         }
 
         // ── Update system_prompt ──────────────────────────────────────────────
-        // Remove any existing terse block and custom style block.
-        self.system_prompt.retain(|s| !s.contains(TERSE_MARKER) && !s.contains(CUSTOM_STYLE_MARKER));
+        // Typed model: identify by kind, not substring. Remove any prior
+        // condensed or custom output-style section, then upsert the new one
+        // if the chosen style supplies one.
+        use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt};
+        self.system_prompt.remove_by_kind(&PromptSectionKind::OutputStyleCondensed, None);
+        self.system_prompt.remove_by_kind(&PromptSectionKind::OutputStyleCustom, None);
 
         let is_condensed = matches!(
             new_style,
             OutputStyle::BuiltIn(runtime::BuiltInStyle::Condensed)
         );
         if is_condensed {
-            self.system_prompt.insert(0, TERSE_SKILL_BODY.to_string());
+            self.system_prompt.upsert_by_kind(
+                PromptSection::new(PromptSectionKind::OutputStyleCondensed, TERSE_SKILL_BODY),
+            );
         } else if let Some(fragment) = new_style.prompt_fragment() {
-            // Custom style: prepend the user-defined fragment with a marker so
-            // we can reliably strip it when switching styles later.
-            let body = format!("{CUSTOM_STYLE_MARKER}\n{fragment}");
-            self.system_prompt.insert(0, body);
+            // Custom style: upsert the user-defined fragment under
+            // OutputStyleCustom. No marker required — kind disambiguates it.
+            self.system_prompt.upsert_by_kind(
+                PromptSection::new(PromptSectionKind::OutputStyleCustom, fragment),
+            );
         }
 
         // Rebuild the runtime so the new system prompt takes effect.
@@ -5794,17 +5821,19 @@ impl LiveCli {
     /// "Be concise and direct." instruction and the runtime is rebuilt with the
     /// modified system prompt.  Toggling again restores the original prompt.
     fn toggle_fast_mode(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        const FAST_PREFIX: &str = "Be concise and direct.";
+        /// The body text the model sees when fast mode is active.
+        const FAST_BODY: &str = "Be concise and direct.";
         self.fast_mode = !self.fast_mode;
 
-        // Rebuild system_prompt: prepend or remove the fast-mode prefix.
+        // Typed model: identify by kind (PromptSectionKind::FastMode).
+        // No more first()/contains() substring checks or retain() loops.
+        use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt};
         if self.fast_mode {
-            // Only prepend if not already present (idempotent).
-            if !self.system_prompt.first().map_or("", std::string::String::as_str).contains(FAST_PREFIX) {
-                self.system_prompt.insert(0, FAST_PREFIX.to_string());
-            }
+            self.system_prompt
+                .upsert_by_kind(PromptSection::new(PromptSectionKind::FastMode, FAST_BODY));
         } else {
-            self.system_prompt.retain(|s| s.as_str() != FAST_PREFIX);
+            self.system_prompt
+                .remove_by_kind(&PromptSectionKind::FastMode, None);
         }
 
         // Rebuild the runtime so the new system prompt takes effect.
@@ -6763,9 +6792,12 @@ impl LiveCli {
                     SkillSubcommand::Load { name } => {
                         match load_skill_body(&name, &cwd) {
                             Ok(body) => {
-                                let marker = format!("# skill:{name} —");
-                                self.system_prompt.retain(|s| !s.contains(&marker));
-                                self.system_prompt.insert(0, body);
+                                // Same typed upsert as the REPL path: identify by
+                                // `(Skill, name)` so a re-load replaces in place.
+                                use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt};
+                                self.system_prompt.upsert_by_kind(
+                                    PromptSection::labeled(PromptSectionKind::Skill, body, name.clone()),
+                                );
                                 let session = self.active_runtime().session().clone();
                                 match build_runtime_with_tui_slot(
                                     session,
@@ -7460,7 +7492,12 @@ impl LiveCli {
                         // Rebuild runtime with composed system prompt prepended,
                         // run one turn, then restore — same pattern as /fast mode.
                         let original_system_prompt = self.system_prompt.clone();
-                        let mut composed_system_prompt = vec![composed.prompt.clone()];
+                        let mut composed_system_prompt: Vec<runtime::PromptSection> = vec![
+                            runtime::PromptSection::new(
+                                runtime::PromptSectionKind::Custom,
+                                composed.prompt.clone(),
+                            ),
+                        ];
                         composed_system_prompt.extend(original_system_prompt.iter().cloned());
 
                         let current_session = self.active_runtime().session().clone();
@@ -7844,7 +7881,10 @@ impl LiveCli {
     }
 
     /// Return SkillSummary records for skills currently loaded in the system prompt.
-    /// Looks for `# skill:<name> —` markers inserted by `/skill load`.
+    ///
+    /// v2.2.14: identify Skill sections by their typed `(kind, label)` pair.
+    /// The label carries the canonical skill name set by `/skill load`, so we
+    /// no longer have to scan section bodies for a `# skill:<name> —` marker.
     fn loaded_skills_snapshot(&self) -> Vec<commands::agents::SkillSummary> {
         use commands::agents::{discover_skill_roots, load_skills_from_roots};
         let cwd = std::env::current_dir().unwrap_or_default();
@@ -7852,9 +7892,14 @@ impl LiveCli {
         let all_skills = load_skills_from_roots(&roots).unwrap_or_default();
         let mut loaded = Vec::new();
         for prompt_part in &self.system_prompt {
+            if prompt_part.kind != runtime::PromptSectionKind::Skill {
+                continue;
+            }
+            let Some(label) = prompt_part.label.as_deref() else {
+                continue;
+            };
             for skill in &all_skills {
-                let marker = format!("# skill:{} —", skill.name);
-                if prompt_part.contains(&marker) {
+                if skill.name == label {
                     loaded.push(skill.clone());
                     break;
                 }

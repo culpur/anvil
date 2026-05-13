@@ -1425,7 +1425,7 @@ pub(crate) fn resolve_export_path(
     Ok(cwd.join(final_name))
 }
 
-pub(crate) fn build_system_prompt() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub(crate) fn build_system_prompt() -> Result<Vec<runtime::PromptSection>, Box<dyn std::error::Error>> {
     build_system_prompt_with_identity(None, None, None)
 }
 
@@ -1452,13 +1452,20 @@ pub(crate) fn friendly_provider_label(model: &str) -> Option<String> {
 /// Like `build_system_prompt`, but threads the active model name, provider
 /// label, and tab id into the runtime's environment-context block so the agent
 /// can correctly answer "what version are you?" / "what model are you running?".
+///
+/// Returns the typed [`runtime::PromptSection`] vector. The wire format is
+/// projected at the API boundary in `crates/anvil-cli/src/providers.rs`; in
+/// memory we keep the typed representation so that fast-mode toggle, output-style
+/// switching, `/skill load`, and `/goal` can identify their sections by kind
+/// rather than scanning for inline markers.
 pub(crate) fn build_system_prompt_with_identity(
     model_name: Option<String>,
     provider_name: Option<String>,
     tab_id: Option<String>,
-) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+) -> Result<Vec<runtime::PromptSection>, Box<dyn std::error::Error>> {
+    use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt};
     let cwd = env::current_dir()?;
-    let mut sections = runtime::load_system_prompt_with_identity(
+    let mut sections = runtime::load_system_prompt_sections_with_identity(
         cwd.clone(),
         DEFAULT_DATE,
         env::consts::OS,
@@ -1469,10 +1476,13 @@ pub(crate) fn build_system_prompt_with_identity(
     )?;
 
     // Prepend the active-goal fragment when a goal is active for this project.
+    // upsert_by_kind() on `Goal` prepends to position 0 when no Goal exists
+    // yet (matching the legacy `insert(0, ...)` behavior); re-running with a
+    // changed goal body replaces in place rather than stacking duplicates.
     let mgr = runtime::GoalManager::new(cwd);
     if let Ok(Some(goal)) = mgr.active_goal() {
         let fragment = runtime::build_active_goal_prompt_fragment(&goal);
-        sections.insert(0, fragment);
+        sections.upsert_by_kind(PromptSection::new(PromptSectionKind::Goal, fragment));
     }
 
     Ok(sections)

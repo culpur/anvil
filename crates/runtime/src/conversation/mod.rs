@@ -17,6 +17,7 @@ use crate::hooks::{
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::auto_mode::AutoModeConfig;
 use crate::permissions::reviewer::Reviewer;
+use crate::prompt_section::PromptSection;
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -24,7 +25,12 @@ use turn_executor::run_turn_inner;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiRequest {
-    pub system_prompt: Vec<String>,
+    /// Typed system-prompt sections (v2.2.14: replaced `Vec<String>`).
+    ///
+    /// API clients render this to the wire format with `.iter().map(|s|
+    /// &s.body).cloned().collect::<Vec<_>>().join("\n\n")` (or equivalent).
+    /// The runtime never inspects bodies — only kinds and labels.
+    pub system_prompt: Vec<PromptSection>,
     pub messages: Vec<ConversationMessage>,
 }
 
@@ -130,7 +136,7 @@ pub struct ConversationRuntime<C, T> {
     api_client: C,
     tool_executor: T,
     permission_policy: PermissionPolicy,
-    system_prompt: Vec<String>,
+    system_prompt: Vec<PromptSection>,
     max_iterations: usize,
     usage_tracker: UsageTracker,
     hook_runner: HookRunner,
@@ -158,7 +164,7 @@ where
         api_client: C,
         tool_executor: T,
         permission_policy: PermissionPolicy,
-        system_prompt: Vec<String>,
+        system_prompt: Vec<PromptSection>,
     ) -> Self {
         Self::new_with_features(
             session,
@@ -176,7 +182,7 @@ where
         api_client: C,
         tool_executor: T,
         permission_policy: PermissionPolicy,
-        system_prompt: Vec<String>,
+        system_prompt: Vec<PromptSection>,
         feature_config: RuntimeFeatureConfig,
     ) -> Self {
         let usage_tracker = UsageTracker::from_session(&session);
@@ -309,7 +315,7 @@ where
 
     /// T4-O: replace the cached system prompt wholesale. Used by the CLI
     /// hot-reload path when `ANVIL.md` or `MEMORY.md` changes on disk.
-    pub fn replace_system_prompt(&mut self, prompt: Vec<String>) {
+    pub fn replace_system_prompt(&mut self, prompt: Vec<PromptSection>) {
         self.system_prompt = prompt;
     }
 
@@ -385,6 +391,7 @@ mod tests {
         PermissionRequest,
     };
     use crate::prompt::{ProjectContext, SystemPromptBuilder};
+    use crate::prompt_section::{PromptSection, PromptSectionKind, PromptSectionsExt};
     use crate::session::{ContentBlock, MessageRole, Session};
     use crate::usage::TokenUsage;
     use std::path::PathBuf;
@@ -469,7 +476,7 @@ mod tests {
                 instruction_files: Vec::new(),
             })
             .with_os("linux", "6.8")
-            .build_strings();
+            .build();
         let mut runtime = ConversationRuntime::new(
             Session::new(),
             api_client,
@@ -540,7 +547,7 @@ mod tests {
             SingleCallApiClient,
             StaticToolExecutor::new(),
             PermissionPolicy::new(PermissionMode::WorkspaceWrite),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
         );
 
         let summary = runtime
@@ -587,7 +594,7 @@ mod tests {
                 panic!("tool should not execute when hook denies")
             }),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
             RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
                 vec![HookSpec::Command(shell_snippet(
                     "printf 'blocked by hook'; exit 2",
@@ -655,7 +662,7 @@ mod tests {
             TwoCallApiClient { calls: 0 },
             StaticToolExecutor::new().register("add", |_input| Ok("4".to_string())),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
             RuntimeFeatureConfig::default().with_hooks(RuntimeHookConfig::new(
                 vec![HookSpec::Command(shell_snippet("printf 'pre hook ran'"))],
                 vec![HookSpec::Command(shell_snippet("printf 'post hook ran'"))],
@@ -726,7 +733,7 @@ mod tests {
             SimpleApi,
             StaticToolExecutor::new(),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
         );
 
         assert_eq!(runtime.usage().turns(), 1);
@@ -753,7 +760,7 @@ mod tests {
             SimpleApi,
             StaticToolExecutor::new(),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
         );
         runtime.run_turn("a", None).expect("turn a");
         runtime.run_turn("b", None).expect("turn b");

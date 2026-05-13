@@ -671,7 +671,7 @@ pub(crate) struct AgentOutput {
 pub(crate) struct AgentJob {
     pub(crate) manifest: AgentOutput,
     pub(crate) prompt: String,
-    pub(crate) system_prompt: Vec<String>,
+    pub(crate) system_prompt: Vec<PromptSection>,
     pub(crate) allowed_tools: BTreeSet<String>,
     /// Worktree path to clean up after the agent finishes (isolation="worktree").
     pub(crate) worktree_path: Option<std::path::PathBuf>,
@@ -757,9 +757,10 @@ use api::{
     ToolResultContentBlock,
 };
 use runtime::{
-    load_system_prompt, ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage,
-    ConversationRuntime, MessageRole, PermissionMode, PermissionPolicy, RuntimeError, Session,
-    TokenUsage, ToolError, ToolExecutor,
+    load_system_prompt_sections_with_identity, ApiClient, ApiRequest, AssistantEvent,
+    ContentBlock, ConversationMessage, ConversationRuntime, MessageRole, PermissionMode,
+    PermissionPolicy, PromptSection, PromptSectionKind, RuntimeError, Session, TokenUsage,
+    ToolError, ToolExecutor,
 };
 
 use crate::mvp_tool_specs;
@@ -1024,7 +1025,16 @@ where
     if let Some(ref def) = user_def
         && let Some(ref agent_system) = def.system_prompt
             && !agent_system.trim().is_empty() {
-                system_prompt.insert(0, agent_system.clone());
+                // User-defined agent body goes at the top, identified as Custom
+                // so it round-trips through serialization without losing its
+                // place. Upsert here is degenerate (Custom is repeatable so
+                // the first Custom doesn't dedupe), so we use insert(0, ...)
+                // directly to preserve the "prepend on top of everything"
+                // behavior the old `Vec<String>` had.
+                system_prompt.insert(
+                    0,
+                    PromptSection::new(PromptSectionKind::Custom, agent_system.clone()),
+                );
             }
 
     let allowed_tools = if let Some(ref def) = user_def {
@@ -1172,17 +1182,25 @@ fn build_agent_runtime(
     ))
 }
 
-fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<String>, String> {
+fn build_agent_system_prompt(subagent_type: &str) -> Result<Vec<PromptSection>, String> {
     let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let mut prompt = load_system_prompt(
+    let mut prompt = load_system_prompt_sections_with_identity(
         cwd,
         DEFAULT_AGENT_SYSTEM_DATE.to_string(),
         std::env::consts::OS,
         "unknown",
+        None,
+        None,
+        None,
     )
     .map_err(|error| error.to_string())?;
-    prompt.push(format!(
-        "You are a background sub-agent of type `{subagent_type}`. Work only on the delegated task, use only the tools available to you, do not ask the user questions, and finish with a concise result."
+    // Sub-agent suffix — appended as Custom (repeatable) so it sits below
+    // the assembled base prompt the agent inherits.
+    prompt.push(PromptSection::new(
+        PromptSectionKind::Custom,
+        format!(
+            "You are a background sub-agent of type `{subagent_type}`. Work only on the delegated task, use only the tools available to you, do not ask the user questions, and finish with a concise result."
+        ),
     ));
     Ok(prompt)
 }
@@ -1371,7 +1389,16 @@ impl ApiClient for ProviderRuntimeClient {
             model: self.model.clone(),
             max_tokens: max_tokens_for_model(&self.model),
             messages: convert_messages(&request.messages),
-            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
+            // Wire boundary: project Vec<PromptSection> down to the legacy
+            // `system: Option<String>` shape the API expects.
+            system: (!request.system_prompt.is_empty()).then(|| {
+                request
+                    .system_prompt
+                    .iter()
+                    .map(|s| s.body.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            }),
             tools: (!tools.is_empty()).then_some(tools),
             tool_choice: (!self.allowed_tools.is_empty()).then_some(ToolChoice::Auto),
             stream: true,
