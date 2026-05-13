@@ -811,12 +811,14 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         Some(t) => t,
         None => {
             return "Usage: /memory show <tier> [sub-view]\n\
-                Tiers: working, episodic, semantic, procedural, anvil-md, vault, \
-                private, nominations, daily, file-cache, cmd-cache, goals\n\
+                Tiers: working, episodic, semantic, procedural, identity, \
+                anvil-md, vault, private, nominations, daily, file-cache, \
+                cmd-cache, goals\n\
                 Episodic sub-views: episodic (default), episodic daily\n\
                 Semantic sub-views: semantic (default), semantic --pending\n\
                 Procedural sub-views: procedural (default), procedural \
-                {goals|skills|cron|routines}"
+                {goals|skills|cron|routines}\n\
+                Identity: labels-only when unlocked, counts-only when locked"
                 .to_string()
         }
     };
@@ -921,6 +923,9 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         // goals + skills + cron entries + routines stub. Each sub-view
         // surfaces a single source; the default view summarises all four.
         "procedural" => render_procedural_show(sub, ctx, &cwd),
+        // L5 identity — Phase 2 / Bucket 2 / L5 §1-4: vault labels (when
+        // unlocked) or counts only (when locked). NEVER renders secrets.
+        "identity" => render_identity_show(),
         "vault" => "Vault contents are not shown in plain text for security reasons.\n\
              Use /vault list to see stored credential names."
             .to_string(),
@@ -931,8 +936,9 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
         other => format!(
             "Unknown tier: {other}\n\
-             Known tiers: working, episodic, semantic, procedural, anvil-md, vault, \
-             private, nominations, daily, file-cache, cmd-cache, goals"
+             Known tiers: working, episodic, semantic, procedural, identity, \
+             anvil-md, vault, private, nominations, daily, file-cache, \
+             cmd-cache, goals"
         ),
     }
 }
@@ -1189,6 +1195,78 @@ fn render_procedural_cron() -> String {
         lines.push(format!("           name={}", entry.name));
     }
     lines.join("\n")
+}
+
+/// Render `/memory show identity`.
+///
+/// Phase 2 / Bucket 2 / L5 §1-4: identity memory is the credential vault.
+/// When unlocked we list credential labels (NEVER secrets); when locked
+/// we report the count only with an instruction on how to unlock.
+fn render_identity_show() -> String {
+    use runtime::{vault_is_initialized, vault_is_session_unlocked, VaultManager};
+
+    if !vault_is_initialized() {
+        return "=== L5 Identity memory ===\n\
+            Vault is not initialised. Run `/vault init <password>` to create it.\n\n\
+            No credentials, no TOTP entries, no on-disk identity state."
+            .to_string();
+    }
+
+    if vault_is_session_unlocked() {
+        // Unlocked: list labels via VaultManager::list_credentials and
+        // list_totp on the session-vault. Secrets are never read.
+        let labels = runtime::with_session_vault(|v| v.list_credentials()).unwrap_or_default();
+        let totp = runtime::with_session_vault(|v| v.list_totp()).unwrap_or_default();
+        let mut lines = vec![format!(
+            "=== L5 Identity memory (UNLOCKED) ===\n\
+            credentials={}  totp_entries={}",
+            labels.len(),
+            totp.len()
+        )];
+        if !labels.is_empty() {
+            lines.push(String::new());
+            lines.push("Credential labels (secrets are NEVER rendered):".to_string());
+            for label in &labels {
+                lines.push(format!("  cred  {label}"));
+            }
+        }
+        if !totp.is_empty() {
+            lines.push(String::new());
+            lines.push("TOTP labels:".to_string());
+            for label in &totp {
+                lines.push(format!("  totp  {label}"));
+            }
+        }
+        if labels.is_empty() && totp.is_empty() {
+            lines.push("(no entries — vault is initialised but empty)".to_string());
+        }
+        return lines.join("\n");
+    }
+
+    // Locked: count files directly without unlocking. The on-disk
+    // naming convention `cred_*.enc` / `totp_*.enc` lets us count
+    // without touching the KEK.
+    let dir = VaultManager::default_vault_dir();
+    let mut cred = 0usize;
+    let mut totp = 0usize;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with("cred_") && s.ends_with(".enc") {
+                cred += 1;
+            } else if s.starts_with("totp_") && s.ends_with(".enc") {
+                totp += 1;
+            }
+        }
+    }
+    format!(
+        "=== L5 Identity memory (LOCKED) ===\n\
+        (vault locked — {cred} credential label(s) and {totp} totp entr{} stored, \
+         unlock with `/vault unlock` to view labels)\n\n\
+        Secrets are NEVER readable without unlocking. Counts only.",
+        if totp == 1 { "y" } else { "ies" }
+    )
 }
 
 fn memory_inspect(key: &str) -> String {
@@ -1761,6 +1839,36 @@ mod memory_tests {
             "should reject unknown; got: {result}"
         );
         assert!(result.contains("pending"));
+    }
+
+    #[test]
+    fn memory_show_identity_never_renders_secrets() {
+        // L5 §1-4 acceptance: whichever state the vault is in
+        // (uninitialised / locked / unlocked), the rendered string must
+        // NEVER carry a literal "secret" or render anything resembling
+        // a credential value — we only emit labels, counts, or status.
+        let result = memory_show(Some("identity"), &MemoryContext::default());
+        assert!(
+            result.contains("L5 Identity memory"),
+            "header missing; got: {result}"
+        );
+        // No banned token may appear (the renderer is hardcoded to
+        // never print secret bytes).
+        assert!(
+            !result.to_ascii_lowercase().contains("secret:"),
+            "must not render literal secret value; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_identity_routes_via_initialised_state() {
+        // Each branch is selected by vault_is_initialized/unlocked.
+        // The shape of the message lets us assert which branch fired.
+        let result = memory_show(Some("identity"), &MemoryContext::default());
+        let one_of = result.contains("not initialised")
+            || result.contains("UNLOCKED")
+            || result.contains("LOCKED");
+        assert!(one_of, "should branch on vault state; got: {result}");
     }
 
     #[test]
