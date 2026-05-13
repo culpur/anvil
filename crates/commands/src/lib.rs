@@ -973,6 +973,38 @@ mod tests {
         },
         AgentSubcommand, CommitPushPrRequest, SkillSubcommand, SlashCommand,
     };
+
+    /// Phase 4.3 (L4 §11) audit: `/goal` is the unified slash command and
+    /// mixes read-only subcommands (`list`, `show`) with write subcommands
+    /// (`new`, `resume`, `pause`, `done`). Because `SlashCommandSpec` only
+    /// carries a single `web_available` boolean, we leave the whole
+    /// command gated to the TUI (false). This test locks that decision —
+    /// flip both halves of the assertion together if (and only if) the
+    /// spec model grows per-subcommand `web_available`.
+    #[test]
+    fn phase4_3_goal_web_available_audit() {
+        let specs = slash_command_specs();
+        let goal = specs
+            .iter()
+            .find(|s| s.name == "goal")
+            .expect("/goal spec exists");
+        // Decision: conservative path — keep web_available=false because
+        // the spec model can't distinguish per-subcommand.
+        assert!(
+            !goal.web_available,
+            "/goal must stay TUI-only until SlashCommandSpec supports \
+             per-subcommand web_available — see Phase 4.3 docs",
+        );
+        // Sanity: subcommand catalog still lists both read and write paths,
+        // so the audit is over real subcommands not a stub.
+        let names: Vec<&str> = goal.subcommands.iter().map(|s| s.name).collect();
+        for required in ["list", "show", "new", "resume", "pause", "done"] {
+            assert!(
+                names.contains(&required),
+                "/goal subcommand `{required}` missing from spec — audit is stale",
+            );
+        }
+    }
     use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary};
     use runtime::{CompactionConfig, ContentBlock, ConversationMessage, MessageRole, Session};
     use std::env;

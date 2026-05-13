@@ -1961,6 +1961,14 @@ One active goal at a time per project. Goals are scoped to the current
 project directory and persist across sessions in ~/.anvil/goals/.",
         subcommands: crate::subcommands::GOAL_SUBCOMMANDS,
         tui_available: true,
+        // Phase 4.3 (L4 §11): `/goal` is a single unified spec entry; the
+        // `SlashCommandSpec` model does NOT carry per-subcommand
+        // `web_available`. Of the 7 subcommands, `new`/`resume`/`pause`/
+        // `done` are write paths (mutate `~/.anvil/goals/<project>/*`) and
+        // `list`/`show` are read-only. Since a single boolean can't capture
+        // that split, we take the conservative path and leave the whole
+        // command gated to the TUI. Once the spec model gains per-
+        // subcommand `web_available`, flip `list` and `show` to `true`.
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
