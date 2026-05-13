@@ -2143,6 +2143,29 @@ mod memory_tests {
     }
 
     #[test]
+    fn memory_subcommand_picker_lists_seven_layer_tiers() {
+        // Phase 2.8 acceptance: the show-tier picker must enumerate
+        // every L1-L7 layer name. If a future edit drops one we want a
+        // hard failure, not a silent regression.
+        use crate::subcommands::{ArgSpec, MEMORY_SUBCOMMANDS};
+        let show = MEMORY_SUBCOMMANDS
+            .iter()
+            .find(|s| s.name == "show")
+            .expect("MEMORY_SUBCOMMANDS must contain a `show` entry");
+        let ArgSpec::OneOf(tiers) = show.args[0] else {
+            panic!("show's first arg must be ArgSpec::OneOf");
+        };
+        for layer in [
+            "working", "episodic", "semantic", "procedural", "identity", "policy", "cache",
+        ] {
+            assert!(
+                tiers.contains(&layer),
+                "show picker missing seven-layer tier `{layer}`; got: {tiers:?}"
+            );
+        }
+    }
+
+    #[test]
     fn memory_show_cache_default_lists_three_sources() {
         // L7 §3-5 acceptance: default `cache` view summarises file,
         // cmd, qmd in one place so the user can see the L7 vocabulary.

@@ -250,29 +250,42 @@ Examples:
 
 SUBCOMMANDS
   (none)              Print a one-line count for every active memory tier
-  show <tier>         Dump contents of a specific tier
-  inspect <key>       Search all tiers for an entry matching <key>
+  show <tier> [sub]   Dump contents of a specific tier, with optional sub-view
+  inspect <key>       Search every searchable tier (incl. L7 caches) for <key>
   promote <id>        Accept a pending nomination into ANVIL.md
   forget <key>        Remove an entry from ANVIL.md (or reject a nomination)
-  why                 Explain which blocks are injected into the system prompt
-  budget              Show per-tier byte and estimated token usage
+  why                 Walk the LIVE system_prompt and list every section in order
+  budget              Per-tier byte/~token table including the working row
   prune               Remove stale entries from daily/nominations tiers
 
-TIERS
-  anvil-md           ANVIL.md / MEMORY.md project instruction files
-  vault               Encrypted credentials managed by /vault
+TIERS  (seven-layer vocabulary, Phase 2 of the Memory Cohesion Arc)
+  working             L1 — live system_prompt sections + message-buffer stats
+  episodic            L2 — archived sessions + `episodic daily` sub-view
+  semantic            L3 — anvil-md (approved) + `semantic --pending` nominations
+  procedural          L4 — `procedural {goals|skills|cron|routines}`
+  identity            L5 — vault labels (unlocked) or counts only (locked)
+  policy              L6 — PermissionMemory grants + auto-mode + reviewer + egress
+  cache               L7 — `cache {file|cmd|qmd}` token-economy caches
+
+LEGACY TIER NAMES  (kept one cycle; Phase 4 will redirect them)
+  anvil-md            ANVIL.md / MEMORY.md (L3 approved half)
+  vault               see `identity`
   private             AES-encrypted per-project memory (vault-locked)
-  nominations         Pending knowledge nominations awaiting /memory promote
-  daily               Per-session daily summaries and task reconciliation
-  file-cache          File-fingerprint cache (W11 token economy)
-  cmd-cache           Command-output cache (W12 token economy)
-  goals               Long-running goal objects (/goal)
+  nominations         (deprecated alias for `semantic --pending`)
+  daily               (alias for `episodic daily`)
+  file-cache          (alias for `cache file`)
+  cmd-cache           (alias for `cache cmd`)
+  goals               (alias for `procedural goals`)
 
 EXAMPLES
-  /memory show anvil-md
+  /memory show working
+  /memory show episodic daily
+  /memory show semantic --pending
+  /memory show procedural skills
+  /memory show identity
+  /memory show policy
+  /memory show cache qmd
   /memory inspect deploy
-  /memory promote abc123
-  /memory forget OLLAMA_HOST
   /memory budget
   /memory prune
 ",

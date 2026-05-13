@@ -1513,7 +1513,19 @@ pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec {
         name: "show",
         summary: "Print contents of a memory tier",
+        // Phase 2.8 — seven-layer vocabulary first, legacy aliases
+        // after. The legacy names stay listed for one cycle so users
+        // discover them in the picker; Phase 4 will hard-error and
+        // remove them. Order matters: the seven-layer names are the
+        // canonical surface and the picker should suggest them first.
         args: &[ArgSpec::OneOf(&[
+            "working",
+            "episodic",
+            "semantic",
+            "procedural",
+            "identity",
+            "policy",
+            "cache",
             "anvil-md",
             "vault",
             "private",
