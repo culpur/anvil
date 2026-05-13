@@ -2086,10 +2086,31 @@ impl AnvilTui {
                 // active tab. Otherwise a background tab's stream end would
                 // either leak its pending_text into the wrong log or wipe
                 // the active tab's still-streaming buffer.
+                let pending_was_empty = self.tabs[idx].pending_text.trim().is_empty();
                 self.flush_pending_text_for(idx);
                 let tab = &mut self.tabs[idx];
                 tab.think_label.clear();
                 tab.think_start = None;
+
+                // v2.2.14 Phase 1: surface "no response" placeholder when the
+                // model finishes a turn (TurnDone, not just TextDone) after
+                // tool calls without producing any text. Without this, the
+                // user sees the tool-call cards followed by nothing and
+                // can't tell whether the turn is done or still working.
+                // Detect via the log's tail: if the last entry is a ToolCall
+                // (or absent), the turn ended without an Assistant entry.
+                if matches!(event, TuiEvent::TurnDone) && pending_was_empty {
+                    let needs_placeholder = match tab.log.last() {
+                        Some(crate::tui::state::LogEntry::Assistant(_)) => false,
+                        _ => true,
+                    };
+                    if needs_placeholder {
+                        tab.log.push(crate::tui::state::LogEntry::System(
+                            "(model finished without further response — turn complete)"
+                                .to_string(),
+                        ));
+                    }
+                }
             }
             TuiEvent::ToolCallStart { name } => {
                 self.flush_pending_text();

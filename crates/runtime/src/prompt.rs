@@ -250,6 +250,7 @@ impl SystemPromptBuilder {
         sections.push(get_actions_section());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
+        sections.push(get_retrieval_order_section());
         if let Some(project_context) = &self.project_context {
             sections.push(render_project_context(project_context));
             if !project_context.instruction_files.is_empty() {
@@ -658,6 +659,36 @@ fn get_actions_section() -> String {
     .join("\n")
 }
 
+/// Tells the model in what order to consult Anvil's local context before
+/// reaching for external tools. Without this block, the model defaults to
+/// web search even for questions whose answers are already in its system
+/// prompt (e.g. "what version of anvil are you?"). The block makes the
+/// retrieval priority explicit so local context wins.
+fn get_retrieval_order_section() -> String {
+    [
+        "# Retrieval order",
+        "",
+        "When answering questions, consult Anvil's local context **sequentially** in this order. Try one source, evaluate the result, and only escalate to the next source if the previous one cannot answer. Do **not** call multiple retrieval tools in parallel.",
+        "",
+        " 1. **This prompt's environment block** — your identity, version, model, working directory, date, active goal. Authoritative; no tool call needed.",
+        " 2. **Loaded instruction files** — ANVIL.md and project-specific instructions appear above. Consult before assuming project conventions.",
+        " 3. **Known files cache** — the `<known-files>` block lists every file Anvil has fingerprinted with summaries and key symbols. Check there before calling `read_file` on anything Anvil has already seen.",
+        " 4. **Project memory** — the `# Persistent memory` block above carries user-stated facts, preferences, and project conventions.",
+        " 5. **Project tree** — for source code, configuration, or release info about *this* project: `read_file`, `glob_search`, `grep_search` on the working directory. Try this BEFORE web search for anything that could plausibly be a local file.",
+        " 6. **Knowledge base (QMD)** — `mcp__qmd__query` for documented project history, infrastructure, or prior decisions.",
+        " 7. **Web search** — last resort. Only when the question is genuinely about external information (third-party libraries, recent public events, third-party documentation) that local sources cannot answer.",
+        "",
+        "**Hard rules:**",
+        " - Questions about Anvil itself (\"what version?\", \"what model?\", \"what can you do?\", \"where am I working?\") answer from sources 1–4 only. **Never web search.**",
+        " - Questions about *this project* (\"what's the most recent release?\", \"what does X module do?\", \"what was decided about Y?\") MUST try sources 2–6 in order before web search. Release notes, changelogs, source files all live locally first.",
+        " - If you find yourself about to fire `WebSearch` AND a local tool in the same turn, stop. Run the local tool alone first. Only escalate to web search if it returns nothing useful.",
+        " - Treat a `<known-files>` summary as authoritative for the file's existence and basic shape — read the file only when you need full content.",
+        " - **When local sources disagree about Anvil itself** (e.g., a RELEASE-NOTES file shows one version but the environment block shows another, or Cargo.toml differs from a release note), the environment block is authoritative. The Cargo.toml workspace version is the second-most authoritative. Release-notes files describe historical releases and the most recent file by version number is the latest shipped release — not necessarily the current build.",
+        " - **Never stay silent.** If you ran tools and reached a conclusion (even a partial or uncertain one), state it. Empty responses after tool calls are confusing to the user. If the data is genuinely conflicting, say so explicitly: \"The environment shows X but file Y shows Z; using the environment value.\"",
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -950,5 +981,56 @@ mod tests {
         assert!(rendered.contains("# Anvil instructions"));
         assert!(rendered.contains("scope: /tmp/project"));
         assert!(rendered.contains("Project rules"));
+    }
+
+    #[test]
+    fn retrieval_order_block_appears_in_assembled_prompt() {
+        let prompt = SystemPromptBuilder::new()
+            .with_os("linux", "6.8")
+            .render();
+        assert!(
+            prompt.contains("# Retrieval order"),
+            "system prompt must contain the # Retrieval order block"
+        );
+        assert!(
+            prompt.contains("Never web search"),
+            "block must explicitly forbid web search for self-identity questions"
+        );
+        // Sanity: the block lists local sources in priority order before web search.
+        assert!(
+            prompt.contains("environment block"),
+            "block must reference the environment block as the top source"
+        );
+        assert!(
+            prompt.contains("Web search"),
+            "block must reference web search as the last-resort source"
+        );
+        // Block must forbid the parallel-fire failure mode observed on smaller
+        // instruction-tuned models (qwen3.5-class).
+        assert!(
+            prompt.contains("sequentially") || prompt.contains("Sequentially"),
+            "block must direct the model to consult sources sequentially, not in parallel"
+        );
+        assert!(
+            prompt.contains("WebSearch") && prompt.contains("local tool"),
+            "block must have a hard rule about not firing WebSearch + local tool together"
+        );
+    }
+
+    #[test]
+    fn retrieval_order_block_lands_after_environment_section() {
+        let prompt = SystemPromptBuilder::new()
+            .with_os("linux", "6.8")
+            .render();
+        let env_idx = prompt
+            .find("# Environment context")
+            .expect("environment section must appear");
+        let retrieval_idx = prompt
+            .find("# Retrieval order")
+            .expect("retrieval order block must appear");
+        assert!(
+            env_idx < retrieval_idx,
+            "environment context (identity) must precede retrieval order (policy)"
+        );
     }
 }

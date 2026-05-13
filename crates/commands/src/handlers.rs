@@ -683,31 +683,60 @@ fn anvil_home() -> std::path::PathBuf {
 }
 
 fn memory_summary() -> String {
+    use runtime::{CommandCacheManager, FileCacheManager, MemoryManager};
+
     let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut lines = vec!["Memory tier summary:".to_string()];
-    let md_count = count_files_with_ext(&home.join("memory"), "md");
-    lines.push(format!("  anvil-md     {} file(s) in ~/.anvil/memory/", md_count));
+
+    // L3 — anvil-md tier lives under the per-project memory dir managed by
+    // `MemoryManager`, not at `~/.anvil/memory/`. The previous summary read
+    // the wrong directory and always reported 0 files (synthesis defect #6).
+    let memory_dir = MemoryManager::new(&cwd).memory_dir().to_path_buf();
+    let md_count = count_files_with_ext(&memory_dir, "md");
+    lines.push(format!(
+        "  anvil-md      {} file(s) in {}",
+        md_count,
+        memory_dir.display()
+    ));
+
     let nom_count = count_files_with_ext(&home.join("nominations"), "json");
     lines.push(format!("  nominations   {} pending nomination(s)", nom_count));
     let daily_count = count_files_with_ext(&home.join("daily"), "json");
     lines.push(format!("  daily         {} session file(s)", daily_count));
     let goals_count = count_files_with_ext(&home.join("goals"), "json");
     lines.push(format!("  goals         {} goal file(s)", goals_count));
-    if home.join("vault.bin").exists() {
+
+    // L5 — real vault-init marker is `vault.meta`, not `vault.bin`. Use the
+    // runtime helper so this stays in sync if the marker path ever changes
+    // (synthesis defect #7).
+    if runtime::vault_is_initialized() {
         lines.push("  vault         initialized (encrypted)".to_string());
     } else {
         lines.push("  vault         not initialized".to_string());
     }
+
     let private_count = count_files_with_ext(&home.join("private"), "enc");
     if private_count > 0 {
         lines.push(format!("  private       {} encrypted file(s)", private_count));
     } else {
         lines.push("  private       no files".to_string());
     }
-    let fc_count = count_files_with_ext(&home.join("file-cache"), "json");
+
+    // L7 — file/cmd caches live under `~/.anvil/projects/<hash>/{file,cmd}-cache/`,
+    // not flat at `~/.anvil/{file,cmd}-cache/`. The managers' `stats()` methods
+    // know the right layout (synthesis defect #11).
+    let fc_count = FileCacheManager::new(cwd.clone())
+        .and_then(|m| m.stats())
+        .map(|s| s.entry_count)
+        .unwrap_or(0);
     lines.push(format!("  file-cache    {} cache entries", fc_count));
-    let cc_count = count_files_with_ext(&home.join("cmd-cache"), "json");
+    let cc_count = CommandCacheManager::new(cwd.clone())
+        .and_then(|m| m.stats())
+        .map(|s| s.total_entries)
+        .unwrap_or(0);
     lines.push(format!("  cmd-cache     {} cache entries", cc_count));
+
     lines.push(String::new());
     lines.push("Use /memory show <tier> to inspect a specific tier.".to_string());
     lines.join("\n")
@@ -914,16 +943,31 @@ Nominations are SUGGESTED only -- they only enter the prompt after /memory promo
 }
 
 fn memory_budget() -> String {
+    use runtime::{CommandCacheManager, FileCacheManager, MemoryManager};
+
     let home = anvil_home();
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    let tiers: &[(&str, std::path::PathBuf)] = &[
-        ("anvil-md", cwd),
+    // L3 anvil-md, L7 file-cache, L7 cmd-cache all live under per-project
+    // directories, not flat at `~/.anvil/` (synthesis defect #11). Use the
+    // managers' own path discovery so the budget counts the real bytes.
+    let anvil_md_dir = MemoryManager::new(&cwd).memory_dir().to_path_buf();
+    let file_cache_bytes = FileCacheManager::new(cwd.clone())
+        .and_then(|m| m.stats())
+        .map(|s| s.total_bytes_cached)
+        .unwrap_or(0);
+    let cmd_cache_bytes = CommandCacheManager::new(cwd.clone())
+        .and_then(|m| m.stats())
+        .map(|s| s.total_size_bytes)
+        .unwrap_or(0);
+
+    // The dir-based tiers still use dir_total_bytes(); the cache tiers use
+    // their stats() directly so we never read from a wrong-path directory.
+    let dir_tiers: &[(&str, std::path::PathBuf)] = &[
+        ("anvil-md", anvil_md_dir),
         ("nominations", home.join("nominations")),
         ("daily", home.join("daily")),
         ("goals", home.join("goals")),
-        ("file-cache", home.join("file-cache")),
-        ("cmd-cache", home.join("cmd-cache")),
     ];
 
     let mut lines = vec!["Memory tier token budget (approximate):".to_string()];
@@ -931,11 +975,23 @@ fn memory_budget() -> String {
     lines.push(format!("  {}", "-".repeat(40)));
 
     let mut grand_bytes = 0u64;
-    for (name, dir) in tiers {
+    for (name, dir) in dir_tiers {
         let bytes = dir_total_bytes(dir);
         grand_bytes += bytes;
         let tokens = bytes / 4;
         lines.push(format!("  {name:<14}  {bytes:>10}  {tokens:>12}"));
+    }
+    {
+        let bytes = file_cache_bytes;
+        grand_bytes += bytes;
+        let tokens = bytes / 4;
+        lines.push(format!("  {:<14}  {:>10}  {:>12}", "file-cache", bytes, tokens));
+    }
+    {
+        let bytes = cmd_cache_bytes;
+        grand_bytes += bytes;
+        let tokens = bytes / 4;
+        lines.push(format!("  {:<14}  {:>10}  {:>12}", "cmd-cache", bytes, tokens));
     }
 
     lines.push(format!("  {}", "-".repeat(40)));
