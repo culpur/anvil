@@ -43,6 +43,30 @@ impl From<ConfigError> for PromptBuildError {
 
 pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__";
 
+/// Phase 4.5 (L1 §9): split a rendered system-prompt string at the
+/// [`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`] marker.
+///
+/// Returns `Some((head, tail))` when the marker is present, where:
+///   - `head` is the cache-stable prefix (intro, system, doing-tasks,
+///     actions), suitable for an Anthropic `cache_control` ephemeral
+///     block.
+///   - `tail` is the per-turn dynamic content (environment,
+///     retrieval-order, project context, memory, qmd, config, known-
+///     files, appended skills/goals).
+/// The boundary marker itself is removed; surrounding `\n` separators
+/// are trimmed so concatenating `head` + `"\n\n"` + `tail` reproduces
+/// the original body without the marker token.
+///
+/// Returns `None` when no boundary is found — callers MUST fall back
+/// to the legacy single-block path (every non-Anthropic provider).
+#[must_use]
+pub fn split_system_prompt_at_boundary(body: &str) -> Option<(String, String)> {
+    let idx = body.find(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)?;
+    let before = &body[..idx];
+    let after = &body[idx + SYSTEM_PROMPT_DYNAMIC_BOUNDARY.len()..];
+    Some((before.trim_end().to_string(), after.trim_start().to_string()))
+}
+
 /// Anvil's own version, embedded at compile time from Cargo.toml.
 pub const ANVIL_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -815,7 +839,8 @@ fn get_retrieval_order_section() -> String {
 mod tests {
     use super::{
         collapse_blank_lines, display_context_path, normalize_instruction_content,
-        render_instruction_content, render_instruction_files, truncate_instruction_content,
+        render_instruction_content, render_instruction_files, split_system_prompt_at_boundary,
+        truncate_instruction_content,
         ContextFile, ProjectContext, SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     };
     use crate::config::ConfigLoader;
@@ -1261,5 +1286,55 @@ mod tests {
             .expect("Environment section still present");
         assert!(env.body.contains("claude-opus-4-6"));
         assert!(!env.body.contains("qwen3.5:latest"));
+    }
+
+    // ── Phase 4.5 (L1 §9): split_system_prompt_at_boundary helper ─────────
+
+    #[test]
+    fn split_returns_none_when_no_boundary() {
+        assert!(split_system_prompt_at_boundary("no marker here").is_none());
+        assert!(split_system_prompt_at_boundary("").is_none());
+    }
+
+    #[test]
+    fn split_returns_head_and_tail_around_boundary() {
+        let body = format!(
+            "head body\n\n{}\n\ntail body",
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        );
+        let (head, tail) =
+            split_system_prompt_at_boundary(&body).expect("must split");
+        assert_eq!(head, "head body");
+        assert_eq!(tail, "tail body");
+    }
+
+    #[test]
+    fn split_drops_only_the_marker_round_trip() {
+        let body = format!(
+            "intro\n\n# System\nbody\n\n{}\n\n# Environment\nenv body",
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        );
+        let (head, tail) =
+            split_system_prompt_at_boundary(&body).expect("split");
+        let rejoined = format!("{head}\n\n{tail}");
+        // The rejoined string equals the original with just the marker
+        // (and the `\n\n` separators around it) replaced by `\n\n`.
+        let expected = body.replace(
+            &format!("\n\n{}\n\n", SYSTEM_PROMPT_DYNAMIC_BOUNDARY),
+            "\n\n",
+        );
+        assert_eq!(rejoined, expected);
+    }
+
+    #[test]
+    fn split_head_empty_when_boundary_at_start() {
+        let body = format!(
+            "{}\nonly tail body",
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        );
+        let (head, tail) =
+            split_system_prompt_at_boundary(&body).expect("must split");
+        assert!(head.is_empty(), "head must be empty when boundary is first");
+        assert_eq!(tail, "only tail body");
     }
 }

@@ -406,19 +406,53 @@ fn build_messages_request_body(request: &MessageRequest) -> Value {
     let cache_control_value =
         serde_json::to_value(&cache_control).unwrap_or_else(|_| json!({"type": "ephemeral"}));
 
-    // (1) Upgrade `system: "..."` → array of content blocks with cache_control
-    //     on the (single) text block.  The Anthropic API accepts both shapes;
-    //     the array form is the only one that supports per-block markers.
+    // (1) Upgrade `system: "..."` → array of content blocks with
+    //     `cache_control`. Phase 4.5 (L1 §9): when the prompt body
+    //     contains `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`, split into a
+    //     cache-stable HEAD (intro/system/doing-tasks/actions) and a
+    //     fresh TAIL (environment/retrieval-order/project/memory/qmd/
+    //     config/known-files + appended skills/goals). Only the head
+    //     carries `cache_control`, so per-turn changes to the tail
+    //     don't bust the cached prefix. The boundary marker itself is
+    //     stripped before sending — it's an internal anchor, never
+    //     model-facing tokens.
+    //
+    //     When the marker is absent (subagents, --print mode, legacy
+    //     prompts), fall back to the historical single-block path with
+    //     cache_control on the whole system prompt.
     if let Some(system_text) = payload
         .get("system")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     {
-        payload["system"] = json!([{
-            "type": "text",
-            "text": system_text,
-            "cache_control": cache_control_value.clone(),
-        }]);
+        match runtime::split_system_prompt_at_boundary(&system_text) {
+            Some((head, tail)) if !head.is_empty() => {
+                // Two-block layout: cached head, fresh tail.
+                let mut blocks: Vec<Value> = Vec::with_capacity(2);
+                blocks.push(json!({
+                    "type": "text",
+                    "text": head,
+                    "cache_control": cache_control_value.clone(),
+                }));
+                if !tail.is_empty() {
+                    blocks.push(json!({
+                        "type": "text",
+                        "text": tail,
+                    }));
+                }
+                payload["system"] = Value::Array(blocks);
+            }
+            // No boundary, OR head is empty (boundary at index 0): fall
+            // back to the historical single-block form with the entire
+            // body cached.
+            _ => {
+                payload["system"] = json!([{
+                    "type": "text",
+                    "text": system_text,
+                    "cache_control": cache_control_value.clone(),
+                }]);
+            }
+        }
     }
 
     // (2) Attach cache_control to the LAST tool definition.  Anthropic caches
@@ -1213,6 +1247,102 @@ mod tests {
         assert_eq!(
             block["cache_control"],
             serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    // ─── Phase 4.5 (L1 §9): SYSTEM_PROMPT_DYNAMIC_BOUNDARY split ──────────
+
+    /// When the prompt body contains `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`,
+    /// the Anthropic wire body must emit TWO `system` blocks: a cached
+    /// head and a fresh tail. `head + "\n\n" + tail` (joined naturally
+    /// by the model) must equal the unsplit body minus the marker.
+    #[test]
+    fn wire_body_splits_system_prompt_at_dynamic_boundary() {
+        use crate::types::ToolDefinition;
+        let head = "intro\n\n# System\nrules\n\n# Doing tasks\nwork";
+        let tail = "# Environment\ntoday is 2026-05-13\n\n# Memory\nMEMORY.md body";
+        let combined = format!(
+            "{head}\n\n{}\n\n{tail}",
+            runtime::SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        );
+
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some(combined.clone()),
+            tools: Some(vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: Some("Read a file".to_string()),
+                input_schema: serde_json::json!({"type": "object"}),
+            }]),
+            tool_choice: None,
+            stream: false,
+        };
+        let body = super::build_messages_request_body(&request);
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must be a content-block array");
+        assert_eq!(system_array.len(), 2, "must emit head + tail blocks");
+
+        let head_block = &system_array[0];
+        assert_eq!(head_block["type"], serde_json::json!("text"));
+        assert_eq!(head_block["text"], serde_json::json!(head));
+        assert_eq!(
+            head_block["cache_control"],
+            serde_json::json!({"type": "ephemeral", "ttl": "1h"}),
+            "only the head should carry cache_control",
+        );
+
+        let tail_block = &system_array[1];
+        assert_eq!(tail_block["type"], serde_json::json!("text"));
+        assert_eq!(tail_block["text"], serde_json::json!(tail));
+        assert!(
+            tail_block.get("cache_control").is_none(),
+            "tail must NOT carry cache_control",
+        );
+
+        // Concat round-trip: head + \n\n + tail == combined sans marker.
+        let head_str = head_block["text"].as_str().unwrap();
+        let tail_str = tail_block["text"].as_str().unwrap();
+        let rejoined = format!("{head_str}\n\n{tail_str}");
+        let expected = combined.replace(
+            &format!("\n\n{}\n\n", runtime::SYSTEM_PROMPT_DYNAMIC_BOUNDARY),
+            "\n\n",
+        );
+        assert_eq!(rejoined, expected, "round-trip drops marker only");
+    }
+
+    /// Prompt without the boundary marker (subagents, --print) keeps
+    /// the historical single-block layout with cache_control on the
+    /// whole body. No regression for non-boundary callers.
+    #[test]
+    fn wire_body_falls_back_to_single_block_without_boundary() {
+        use crate::types::ToolDefinition;
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            // No boundary marker.
+            system: Some("simple prompt".to_string()),
+            tools: Some(vec![ToolDefinition {
+                name: "read_file".to_string(),
+                description: Some("Read a file".to_string()),
+                input_schema: serde_json::json!({"type": "object"}),
+            }]),
+            tool_choice: None,
+            stream: false,
+        };
+        let body = super::build_messages_request_body(&request);
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must be array");
+        assert_eq!(system_array.len(), 1, "no marker => single block");
+        assert_eq!(
+            system_array[0]["cache_control"],
+            serde_json::json!({"type": "ephemeral", "ttl": "1h"}),
         );
     }
 
