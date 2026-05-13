@@ -541,7 +541,14 @@ pub(crate) fn build_runtime_with_tui_slot(
         Arc::new(Mutex::new(manager))
     };
 
-    Ok(ConversationRuntime::new_with_features(
+    // L6 PermissionMemory: pass the cwd as the project directory so the
+    // runtime constructor can load `~/.anvil/projects/<hash>/permissions.json`
+    // when the feature flag is on. When `current_dir()` fails (unlikely in a
+    // CLI context, but possible during tests in deleted directories), we pass
+    // `None` and the runtime treats memory as disabled for this session.
+    let project_dir = std::env::current_dir().ok();
+
+    Ok(ConversationRuntime::new_with_features_and_project_dir(
         session,
         DefaultRuntimeClient::new(
             model.clone(),
@@ -565,6 +572,7 @@ pub(crate) fn build_runtime_with_tui_slot(
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
         feature_config,
+        project_dir,
     ))
 }
 
