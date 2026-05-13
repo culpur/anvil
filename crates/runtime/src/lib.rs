@@ -33,6 +33,7 @@ pub mod vault;
 pub mod vault_session;
 pub mod file_cache;
 pub mod command_cache;
+pub mod release_notes;
 mod compact;
 mod config;
 mod content_filter;

@@ -1046,6 +1046,16 @@ impl LiveCli {
     }
 
     pub(crate) fn run_changelog_command(&self) -> String {
+        // Always lead with Anvil's own embedded release notes (baked into the
+        // binary at build time). End users have only the binary — they don't
+        // ship with RELEASE-NOTES-*.md, so this is the only way they can read
+        // what changed in the version they're running.
+        let anvil_section = format!(
+            "=== Anvil v{version} release notes ===\n\n{body}\n",
+            version = runtime::release_notes::VERSION,
+            body = runtime::release_notes::FULL_TEXT.trim_end(),
+        );
+
         // Determine the last tag for the commit range.
         let last_tag = Command::new("git")
             .args(["describe", "--tags", "--abbrev=0"])
@@ -1065,14 +1075,21 @@ impl LiveCli {
             None => ("HEAD".to_string(), "all commits (no tags found)".to_string()),
         };
 
-        let log = Command::new("git")
+        let log_output = Command::new("git")
             .args(["log", &range, "--oneline", "--no-merges"])
             .current_dir(env::current_dir().unwrap_or_default())
-            .output().map_or_else(|e| format!("<git log failed: {e}>"), |o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            .output();
+
+        // If git is unavailable or this isn't a repo, just return Anvil's
+        // release notes — `/changelog` is still meaningful for end users.
+        let log = match log_output {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => return anvil_section,
+        };
 
         if log.trim().is_empty() {
             return format!(
-                "Changelog\n  Range            {range_desc}\n  Result           No new commits since last tag."
+                "{anvil_section}\n=== Project changelog ===\n  Range            {range_desc}\n  Result           No new commits since last tag."
             );
         }
 
@@ -1094,9 +1111,9 @@ impl LiveCli {
 
         match self.run_internal_prompt_text(&prompt, false) {
             Ok(result) => format!(
-                "Changelog ({range_desc})\nCommits:\n{log}\n\n--- CHANGELOG.md entry ---\n{result}"
+                "{anvil_section}\n=== Project changelog ({range_desc}) ===\nCommits:\n{log}\n\n--- CHANGELOG.md entry ---\n{result}"
             ),
-            Err(e) => format!("changelog failed: {e}"),
+            Err(e) => format!("{anvil_section}\n=== Project changelog ===\nchangelog failed: {e}"),
         }
     }
 

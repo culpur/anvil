@@ -311,6 +311,19 @@ impl SystemPromptBuilder {
                 .to_string()
                 .replace("{ANVIL_VERSION}", ANVIL_VERSION),
         );
+        bullets.push(format!(
+            "This release: {}.",
+            crate::release_notes::headline()
+        ));
+        let lead = crate::release_notes::lead_paragraph();
+        if !lead.is_empty() {
+            bullets.push(format!(
+                "Summary of this release (use this directly for \"what's new\" / \"what changed\" / \
+                 \"most recent release\" questions — do NOT shell out to glob/find/read_file to look for \
+                 a `RELEASE-NOTES-*.md` on disk; end users do not have those files. For the full notes, \
+                 the user can run `/changelog`, or you can call the `read_release_notes` tool): {lead}"
+            ));
+        }
         if let Some(tab) = &self.tab_id {
             bullets.push(format!("Active tab/session: {tab}."));
         }
@@ -684,6 +697,7 @@ fn get_retrieval_order_section() -> String {
         " - If you find yourself about to fire `WebSearch` AND a local tool in the same turn, stop. Run the local tool alone first. Only escalate to web search if it returns nothing useful.",
         " - Treat a `<known-files>` summary as authoritative for the file's existence and basic shape — read the file only when you need full content.",
         " - **When local sources disagree about Anvil itself** (e.g., a RELEASE-NOTES file shows one version but the environment block shows another, or Cargo.toml differs from a release note), the environment block is authoritative. The Cargo.toml workspace version is the second-most authoritative. Release-notes files describe historical releases and the most recent file by version number is the latest shipped release — not necessarily the current build.",
+        " - **\"What's new?\" / \"what changed?\" / \"latest release?\" questions:** the environment block already contains the current version's headline and one-paragraph summary — answer from there directly. Do NOT shell out to `glob_search`, `find`, or `read_file` looking for `RELEASE-NOTES-*.md` files. End users do not have those files on disk; they only have the binary. For the FULL release notes call the `read_release_notes` tool (returns the notes embedded into this binary at build time), or tell the user to run `/changelog`.",
         " - **Never stay silent.** If you ran tools and reached a conclusion (even a partial or uncertain one), state it. Empty responses after tool calls are confusing to the user. If the data is genuinely conflicting, say so explicitly: \"The environment shows X but file Y shows Z; using the environment value.\"",
     ]
     .join("\n")

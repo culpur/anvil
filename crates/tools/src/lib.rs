@@ -1027,6 +1027,21 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        ToolSpec {
+            name: "read_release_notes",
+            description:
+                "Return Anvil's release notes for the current binary version, embedded at build \
+                 time. Use this when the user asks 'what's new?', 'what changed?', or 'show me \
+                 the changelog' — end users do NOT have RELEASE-NOTES-*.md files on disk; the \
+                 notes are baked into the binary. The env-block summary is shorter; this returns \
+                 the full text. Takes no arguments.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
     ]
 }
 
@@ -1105,6 +1120,11 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "SendMessage" => Err(
             "SendMessage must be routed through CliToolExecutor, not execute_tool".to_string(),
         ),
+        "read_release_notes" => Ok(format!(
+            "Anvil v{version} release notes (embedded in this binary at build time):\n\n{body}",
+            version = runtime::release_notes::VERSION,
+            body = runtime::release_notes::FULL_TEXT
+        )),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
