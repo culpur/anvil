@@ -3957,6 +3957,9 @@ impl LiveCli {
         let history_archiver = HistoryArchiver::new();
         // Best-effort: register and refresh the anvil-history QMD collection.
         qmd.ensure_history_indexed(history_archiver.history_dir());
+        // Phase 3.2: also register the anvil-semantic collection used by
+        // /memory promote. Idempotent + silent-on-failure (no qmd binary).
+        let _ = runtime::qmd::ensure_semantic_collection();
         let cli = Self {
             model,
             allowed_tools,

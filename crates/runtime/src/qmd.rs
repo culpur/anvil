@@ -1,3 +1,8 @@
+// Allow `unsafe` only in test code (env::set_var for ANVIL_CONFIG_HOME).
+// Rust 2024 gates env mutation behind `unsafe`; the crate-wide
+// `#![forbid(unsafe_code)]` lint would otherwise block it.
+#![cfg_attr(test, allow(unsafe_code))]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -204,6 +209,54 @@ impl QmdClient {
         results
     }
 
+    /// Ensure the `anvil-semantic` collection exists. Best-effort: silently
+    /// no-ops if QMD is not installed or the collection-add command fails.
+    ///
+    /// `semantic_dir` is the directory where promoted nomination markdown
+    /// files live (typically `~/.anvil/semantic/`). On first call this
+    /// directory is created so the QMD `collection add` glob has a target.
+    pub fn ensure_semantic_indexed(&self, semantic_dir: &Path) {
+        let Some(ref qmd_path) = self.qmd_path else {
+            return;
+        };
+
+        // Create the directory if needed so the glob has somewhere to
+        // resolve. Failing to create is fatal-silent — we cannot index a
+        // dir we can't write to, but we don't crash the runtime either.
+        if std::fs::create_dir_all(semantic_dir).is_err() {
+            return;
+        }
+
+        // Probe by searching for "anvil-semantic" with a sentinel that
+        // can't appear in real content. If the collection is missing the
+        // search fails; we then add it.
+        let probe = Command::new(qmd_path)
+            .args([
+                "search",
+                "__anvil_semantic_probe__",
+                "--collection",
+                "anvil-semantic",
+                "-n",
+                "1",
+                "--json",
+            ])
+            .output();
+
+        let needs_add = probe.map_or(true, |out| !out.status.success());
+
+        if needs_add {
+            let glob = format!("{}/**/*.md", semantic_dir.display());
+            let _ = Command::new(qmd_path)
+                .args(["collection", "add", "anvil-semantic", &glob])
+                .output();
+        }
+
+        // Make sure freshly written promoted-nomination files are embedded.
+        let _ = Command::new(qmd_path).args(["update"]).output();
+
+        self.invalidate_cache();
+    }
+
     /// Ensure the `anvil-history` collection is registered with QMD and up to
     /// date.  This is a best-effort operation: failures are silently ignored
     /// because QMD is an optional enhancement.
@@ -295,6 +348,94 @@ impl Default for QmdClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3.2: anvil-semantic collection (free-function helpers)
+// ---------------------------------------------------------------------------
+
+/// Return the on-disk directory for the `anvil-semantic` QMD collection.
+///
+/// Lives under `~/.anvil/semantic/`. Files are individual promoted-nomination
+/// markdown documents with YAML frontmatter pointing back at the source ID.
+#[must_use]
+pub fn semantic_dir() -> PathBuf {
+    crate::config::default_config_home().join("semantic")
+}
+
+/// Rename auto-generated `MEMORY.md` (if present) inside the semantic dir to
+/// `_index.md` so it does not collide with project-level ANVIL.md/MEMORY.md.
+/// If neither exists, create `_index.md` blank.
+///
+/// Returns the path of the index file on success. Best-effort: surfaces I/O
+/// errors so the caller can ignore them.
+pub fn normalize_semantic_index() -> std::io::Result<PathBuf> {
+    let dir = semantic_dir();
+    std::fs::create_dir_all(&dir)?;
+    let memory_md = dir.join("MEMORY.md");
+    let index_md = dir.join("_index.md");
+    if memory_md.exists() && !index_md.exists() {
+        std::fs::rename(&memory_md, &index_md)?;
+    } else if !index_md.exists() {
+        // Blank stub so the QMD glob has something to embed; the next
+        // promote will overwrite or augment as needed.
+        std::fs::write(&index_md, "# anvil-semantic\n\nPromoted nominations live here.\n")?;
+    }
+    Ok(index_md)
+}
+
+/// Best-effort: ensure the anvil-semantic collection is registered with QMD.
+///
+/// Returns `true` when QMD is enabled and the call ran (success is implicit
+/// — collection-add is idempotent). Returns `false` when QMD is not on PATH.
+pub fn ensure_semantic_collection() -> bool {
+    let client = QmdClient::new();
+    if !client.is_enabled() {
+        return false;
+    }
+    // Normalize the index file before we add the collection so the first
+    // `qmd update` has a non-empty glob target.
+    let _ = normalize_semantic_index();
+    client.ensure_semantic_indexed(&semantic_dir());
+    true
+}
+
+/// Phase 3.2: index a promoted nomination into the anvil-semantic collection.
+///
+/// Writes a markdown file at `<semantic_dir>/<nomination-id>.md` with
+/// frontmatter `nominated_from: <id>` and the body text. Then triggers a
+/// `qmd update` so the embedding is fresh.
+///
+/// Returns `Ok(true)` when the file was written AND QMD was invoked.
+/// Returns `Ok(false)` when QMD is not installed (the file is still written
+/// so a later `qmd` install picks it up).
+///
+/// # Errors
+/// Returns the I/O error if the file or directory cannot be created.
+pub fn index_promoted_nomination(nomination_id: &str, body: &str) -> std::io::Result<bool> {
+    let dir = semantic_dir();
+    std::fs::create_dir_all(&dir)?;
+    // Make sure the auto-generated MEMORY.md doesn't collide with our index.
+    let _ = normalize_semantic_index();
+
+    let target = dir.join(format!("{nomination_id}.md"));
+    let frontmatter = format!(
+        "---\nnominated_from: {nomination_id}\n---\n\n{}\n",
+        body.trim_end()
+    );
+    // Atomic write: tmp + rename.
+    let tmp = dir.join(format!("{nomination_id}.md.tmp"));
+    std::fs::write(&tmp, frontmatter.as_bytes())?;
+    std::fs::rename(&tmp, &target)?;
+
+    let client = QmdClient::new();
+    if !client.is_enabled() {
+        return Ok(false);
+    }
+    // Re-run the collection-add + update path so the new file ends up
+    // embedded. Best-effort — failures don't surface.
+    client.ensure_semantic_indexed(&dir);
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +659,79 @@ mod tests {
         let status = parse_status_plain(text).expect("should parse");
         assert_eq!(status.total_docs, 2489);
         assert!(status.size_mb > 100.0);
+    }
+
+    // ── Phase 3.2: anvil-semantic collection helpers ────────────────────
+
+    #[test]
+    fn index_promoted_nomination_writes_frontmatter_file() {
+        let _lock = crate::test_env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev_home = std::env::var_os("ANVIL_CONFIG_HOME");
+        // SAFETY: env mutation serialised on the crate-wide test lock.
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", tmp.path()); }
+
+        let id = "nom-test-abc123";
+        let body = "Always run cargo test before commit";
+        // Returns true with qmd installed, false without; either way the
+        // on-disk markdown file must be written.
+        let _ = super::index_promoted_nomination(id, body).expect("index call");
+
+        let semantic = tmp.path().join("semantic");
+        let target = semantic.join(format!("{id}.md"));
+        assert!(target.exists(), "promoted nomination md file must exist at {target:?}");
+
+        let written = std::fs::read_to_string(&target).expect("read");
+        assert!(written.contains("nominated_from: nom-test-abc123"),
+                "frontmatter must record source id; got: {written}");
+        assert!(written.contains("Always run cargo test before commit"),
+                "body must be preserved; got: {written}");
+
+        // _index.md should be created as part of normalize_semantic_index.
+        assert!(semantic.join("_index.md").exists(),
+                "_index.md stub must be created");
+
+        if let Some(prev) = prev_home {
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", prev); }
+        } else {
+            unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
+        }
+    }
+
+    #[test]
+    fn normalize_semantic_index_renames_memory_md() {
+        let _lock = crate::test_env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let prev_home = std::env::var_os("ANVIL_CONFIG_HOME");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", tmp.path()); }
+
+        // Seed an auto-generated MEMORY.md.
+        let semantic_dir = tmp.path().join("semantic");
+        std::fs::create_dir_all(&semantic_dir).unwrap();
+        std::fs::write(semantic_dir.join("MEMORY.md"), "stale auto-index").unwrap();
+
+        let result = super::normalize_semantic_index().expect("normalize");
+        assert_eq!(result, semantic_dir.join("_index.md"));
+        assert!(!semantic_dir.join("MEMORY.md").exists(),
+                "MEMORY.md must be renamed away");
+        assert!(semantic_dir.join("_index.md").exists(),
+                "_index.md must exist after rename");
+        // Content is preserved by rename (not dropped).
+        let body = std::fs::read_to_string(semantic_dir.join("_index.md")).unwrap();
+        assert_eq!(body, "stale auto-index");
+
+        if let Some(prev) = prev_home {
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", prev); }
+        } else {
+            unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
+        }
+    }
+
+    #[test]
+    fn ensure_semantic_collection_does_not_panic() {
+        // Whether or not the qmd binary is on PATH, the call must not panic.
+        // Returns false when qmd is absent, true when present — both are valid.
+        let _result = super::ensure_semantic_collection();
     }
 
     // ── Cross-platform binary detection ──────────────────────────────────

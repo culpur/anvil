@@ -1722,12 +1722,17 @@ fn memory_promote(id_arg: &str) -> String {
         );
     }
 
-    // Phase 3.2 wires the anvil-semantic QMD indexer onto this success path.
-    // For now we report the on-disk write only.
+    // Phase 3.2: index in the anvil-semantic QMD collection (best-effort).
+    let qmd_msg = match runtime::qmd::index_promoted_nomination(id, &body_text) {
+        Ok(true) => "  qmd:       indexed into anvil-semantic\n".to_string(),
+        Ok(false) => "  qmd:       (skipped — qmd binary not on PATH)\n".to_string(),
+        Err(e) => format!("  qmd:       not indexed ({e})\n"),
+    };
 
     format!(
-        "Nomination '{id}' promoted.\n  target:    {}\n  status:    Accepted",
-        anvil_md_path.display()
+        "Nomination '{id}' promoted.\n  target:    {}\n{}  status:    Accepted",
+        anvil_md_path.display(),
+        qmd_msg
     )
 }
 
