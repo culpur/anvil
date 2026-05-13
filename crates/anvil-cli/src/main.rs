@@ -4,6 +4,7 @@
 mod agents;
 mod auth;
 mod cmd_ai;
+mod cmd_cache;
 mod cmd_static;
 mod commands_extra;
 mod commands_util;
@@ -5569,11 +5570,11 @@ impl LiveCli {
             SlashCommand::Goal { action } => {
                 (self.run_goal_command(action.as_deref()), false)
             }
-            SlashCommand::FileCache { .. } => {
-                ("Use /file-cache list, stats, or forget <path>".to_string(), false)
+            SlashCommand::FileCache { action } => {
+                (self.run_file_cache_command(action.as_deref()), false)
             }
-            SlashCommand::CmdCache { .. } => {
-                ("Use /cmd-cache list, stats, prune, or forget <cmd>".to_string(), false)
+            SlashCommand::CmdCache { action } => {
+                (self.run_cmd_cache_command(action.as_deref()), false)
             }
             SlashCommand::ScrollSpeed { lines } => {
                 (run_scroll_speed_command(lines.as_deref()), false)
@@ -7298,12 +7299,12 @@ impl LiveCli {
                 println!("{}", self.run_goal_command(action.as_deref()));
                 false
             }
-            SlashCommand::FileCache { .. } => {
-                println!("Use /file-cache list, stats, or forget <path>");
+            SlashCommand::FileCache { action } => {
+                println!("{}", self.run_file_cache_command(action.as_deref()));
                 false
             }
-            SlashCommand::CmdCache { .. } => {
-                println!("Use /cmd-cache list, stats, prune, or forget <cmd>");
+            SlashCommand::CmdCache { action } => {
+                println!("{}", self.run_cmd_cache_command(action.as_deref()));
                 false
             }
             SlashCommand::ScrollSpeed { lines } => {
