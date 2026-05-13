@@ -1046,20 +1046,27 @@ impl LiveCli {
     }
 
     pub(crate) fn run_changelog_command(&self) -> String {
-        // Always lead with Anvil's own embedded release notes (baked into the
-        // binary at build time). End users have only the binary — they don't
-        // ship with RELEASE-NOTES-*.md, so this is the only way they can read
-        // what changed in the version they're running.
+        // `/changelog` must return instantly — it runs on the TUI input thread,
+        // so any synchronous LLM call here freezes the UI for the duration of
+        // the inference (previously several seconds to a minute on local
+        // models). Return only what we can compute deterministically:
+        //   1. Anvil's embedded release notes (baked in at build time)
+        //   2. Raw `git log --oneline` for commits since the last tag, if a
+        //      repo is present in cwd
+        // AI-summarized "CHANGELOG.md entry" generation moved to a future
+        // `/changelog --summarize` opt-in flag (filed as a follow-up).
+
         let anvil_section = format!(
             "=== Anvil v{version} release notes ===\n\n{body}\n",
             version = runtime::release_notes::VERSION,
             body = runtime::release_notes::FULL_TEXT.trim_end(),
         );
 
-        // Determine the last tag for the commit range.
+        let cwd = env::current_dir().unwrap_or_default();
+
         let last_tag = Command::new("git")
             .args(["describe", "--tags", "--abbrev=0"])
-            .current_dir(env::current_dir().unwrap_or_default())
+            .current_dir(&cwd)
             .output()
             .ok()
             .and_then(|o| {
@@ -1076,45 +1083,27 @@ impl LiveCli {
         };
 
         let log_output = Command::new("git")
-            .args(["log", &range, "--oneline", "--no-merges"])
-            .current_dir(env::current_dir().unwrap_or_default())
+            .args(["log", &range, "--oneline", "--no-merges", "-n", "50"])
+            .current_dir(&cwd)
             .output();
 
-        // If git is unavailable or this isn't a repo, just return Anvil's
-        // release notes — `/changelog` is still meaningful for end users.
         let log = match log_output {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            }
+            // Not a git repo or git unavailable → embedded notes are the whole answer.
             _ => return anvil_section,
         };
 
         if log.trim().is_empty() {
             return format!(
-                "{anvil_section}\n=== Project changelog ===\n  Range            {range_desc}\n  Result           No new commits since last tag."
+                "{anvil_section}\n=== Project commits ({range_desc}) ===\nNo new commits since last tag."
             );
         }
 
-        let prompt = format!(
-            "You are /changelog. Generate a CHANGELOG.md entry from these git commits ({range_desc}).\n\
-             \n\
-             Rules:\n\
-             1. Group commits by conventional commit type:\n\
-                feat: -> New Features | fix: -> Bug Fixes | docs: -> Documentation\n\
-                style: -> Style | refactor: -> Refactoring | perf: -> Performance\n\
-                test: -> Tests | chore:/build:/ci: -> Maintenance\n\
-                Commits without a prefix -> Other Changes\n\
-             2. Format each item as: - Short human-readable description (#sha)\n\
-             3. Add a header: ## [Unreleased] - YYYY-MM-DD\n\
-             4. Keep descriptions concise but informative.\n\
-             \n\
-             Commits:\n{log}"
-        );
-
-        match self.run_internal_prompt_text(&prompt, false) {
-            Ok(result) => format!(
-                "{anvil_section}\n=== Project changelog ({range_desc}) ===\nCommits:\n{log}\n\n--- CHANGELOG.md entry ---\n{result}"
-            ),
-            Err(e) => format!("{anvil_section}\n=== Project changelog ===\nchangelog failed: {e}"),
-        }
+        format!(
+            "{anvil_section}\n=== Project commits ({range_desc}, capped at 50) ===\n{log}"
+        )
     }
 
     pub(crate) fn run_env_command(&self, args: Option<&str>) -> String {
