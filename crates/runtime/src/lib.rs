@@ -163,7 +163,12 @@ pub use goals::{
     GOAL_DESCRIPTION_MAX, GOAL_LIST_DESCRIPTION_TRUNCATE, GOAL_STATUS_LINE_TRUNCATE,
 };
 pub use private_memory::{private_memory_project_hash, PrivateProjectMemory};
-pub use history::{ArchiveEntry, HistoryArchiver, MIN_ARCHIVE_MESSAGES};
+pub use history::{
+    ArchiveEntry, HistoryArchiver, MIN_ARCHIVE_MESSAGES,
+    PruneSummary, PrunedAction, PrunedEntry,
+    HISTORY_RETENTION_DAYS_ENV, DEFAULT_HISTORY_RETENTION_DAYS,
+    MAX_AUTO_PRUNE_MOVES,
+};
 pub use qmd::{render_history_context, render_qmd_context, QmdClient, QmdResult, QmdStatus};
 pub use search::{
     format_provider_list, ProviderConfig as SearchProviderConfig, SearchConfig, SearchEngine,

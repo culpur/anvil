@@ -3955,6 +3955,16 @@ impl LiveCli {
         )?;
         let qmd = QmdClient::new();
         let history_archiver = HistoryArchiver::new();
+        // Phase 4.1 (L2 §4): auto-prune retention on session start.
+        // Best-effort: move history files older than
+        // ANVIL_HISTORY_RETENTION_DAYS (default 90) into ~/.anvil/.trash/
+        // and permanently delete trash items past their secondary 30-day
+        // window. Capped at MAX_AUTO_PRUNE_MOVES (100) per session so a
+        // fleet of old archives can't stall startup.
+        let prune_summary = history_archiver.auto_prune_on_session_start();
+        if let Some(line) = prune_summary.format_one_line() {
+            eprintln!("{line}");
+        }
         // Best-effort: register and refresh the anvil-history QMD collection.
         qmd.ensure_history_indexed(history_archiver.history_dir());
         // Phase 3.2: also register the anvil-semantic collection used by
