@@ -122,6 +122,9 @@ pub fn invalidate_ollama_model_cache() {
         Err(poisoned) => poisoned.into_inner(),
     };
     *slot = None;
+    // Drop the live `/model` cache too — a pull/rm changes what Ollama can
+    // serve, so the next TAB needs to re-fetch.
+    super::completion::invalidate_model_choices_cache();
 }
 
 pub(super) fn cached_ollama_models() -> Vec<(String, String)> {

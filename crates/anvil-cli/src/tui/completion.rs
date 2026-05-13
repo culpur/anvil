@@ -11,16 +11,94 @@
 /// - Installed agents / skills: TODO — no registry yet; returns empty.
 /// - MCP servers: read from the merged config (lazy, from disk).
 /// - Sessions: from the session store directory.
-/// - Models: static fallback list (Ollama cache + hard-coded cloud models).
+/// - Models: live provider `/models` queries on first TAB, cached per-session
+///   with a 10-minute TTL.  See `feedback-model-list-is-live-not-registry.md`.
 /// - Providers: hard-coded constant list.
 /// - Languages: hard-coded i18n codes.
 ///
 /// Construction is cheap — all disk reads are deferred to the first call to
 /// `resolve()` for each source, so typing `/` does not trigger any I/O.
 
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use api::{ProviderCredentials, ProviderKind, ProviderModelsError};
 use commands::{CompletionContext, DynamicEnumSource};
 
 // ─── TuiCompletionContext ─────────────────────────────────────────────────────
+
+/// Per-session cache for the live model list returned by
+/// [`CompletionContext::model_choices`].
+///
+/// Populated on the first TAB-trigger and reused for the rest of the cache
+/// window (10 min default).  Held behind an `Arc<Mutex>` so the same cache
+/// survives every cheap `TuiCompletionContext::new()` rebuild while still
+/// being safe to mutate from any thread that handles a completion request.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModelChoicesCache {
+    pub fetched_at: Option<Instant>,
+    pub models: Vec<(String, String)>,
+}
+
+/// Cache TTL for the live model list. 10 minutes matches the contract in
+/// `feedback-model-list-is-live-not-registry.md` (rule 1, "default 5–10 min").
+pub(crate) const MODEL_CHOICES_CACHE_TTL: Duration = Duration::from_secs(600);
+
+/// Shared cache slot. Static so every cheap `TuiCompletionContext::new()`
+/// rebuilt by `suggest_completions()` hits the same memory.
+fn model_choices_cache() -> &'static Arc<Mutex<ModelChoicesCache>> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Arc<Mutex<ModelChoicesCache>>> = OnceLock::new();
+    CACHE.get_or_init(|| Arc::new(Mutex::new(ModelChoicesCache::default())))
+}
+
+/// Drop the cached live model list so the next `/model <TAB>` re-fetches.
+///
+/// Intended for use after credential changes (`/provider login`, `/vault unlock`,
+/// etc.) so the picker reflects the post-login state without forcing the user
+/// to restart Anvil.  Currently called when the Ollama cache is invalidated;
+/// future work can hook in additional callsites.
+pub fn invalidate_model_choices_cache() {
+    if let Ok(mut cache) = model_choices_cache().lock() {
+        *cache = ModelChoicesCache::default();
+    }
+}
+
+/// Hook used by tests to control the live-fetch path. When set, the live
+/// fetch routine returns these models instead of hitting the network.
+#[cfg(test)]
+pub(crate) static MODEL_FETCH_OVERRIDE: std::sync::OnceLock<
+    Mutex<Option<Box<dyn Fn() -> ModelFetchOutcome + Send + Sync>>>,
+> = std::sync::OnceLock::new();
+
+/// Pair of `(configured providers, per-provider fetch results)` returned by
+/// the mocked fetcher hook. Mirrors what
+/// [`live_provider_models`] would assemble from the real network.
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ModelFetchOutcome {
+    pub configured: Vec<ProviderCredentials>,
+    pub fetched: Vec<(ProviderKind, Result<Vec<(String, String)>, ProviderModelsError>)>,
+    pub fetcher_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+pub(crate) fn install_model_fetch_override<F>(f: F)
+where
+    F: Fn() -> ModelFetchOutcome + Send + Sync + 'static,
+{
+    let slot = MODEL_FETCH_OVERRIDE.get_or_init(|| Mutex::new(None));
+    let mut guard = slot.lock().expect("override mutex");
+    *guard = Some(Box::new(f));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_model_fetch_override() {
+    if let Some(slot) = MODEL_FETCH_OVERRIDE.get() {
+        let mut guard = slot.lock().expect("override mutex");
+        *guard = None;
+    }
+}
 
 /// A [`CompletionContext`] that resolves dynamic completion values from the
 /// live TUI environment (installed plugins, MCP servers, sessions, models …).
@@ -44,6 +122,251 @@ impl Default for TuiCompletionContext {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ─── live model-list helpers ──────────────────────────────────────────────────
+
+/// Fan out the per-provider fetchers in parallel against every credential the
+/// user actually has.  Hard-bounded by the per-provider 4 s timeout inside
+/// the api crate, so worst-case wall time is one TLS round trip.
+///
+/// Returns a list of `(kind, result)` pairs in stable [`ProviderKind`] order.
+/// The caller merges these with the static [`api::known_models`] fallback as
+/// described in `feedback-model-list-is-live-not-registry.md`.
+async fn fetch_models_for_credentials(
+    creds: &[ProviderCredentials],
+) -> Vec<(ProviderKind, Result<Vec<api::ProviderModel>, ProviderModelsError>)> {
+    // Build the set of fetch futures matching each configured credential.
+    let mut futures: Vec<
+        std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = (ProviderKind, Result<Vec<api::ProviderModel>, ProviderModelsError>),
+                    > + Send,
+            >,
+        >,
+    > = Vec::with_capacity(creds.len());
+    let mut emitted_ollama = false;
+    for cred in creds {
+        match cred {
+            ProviderCredentials::Anthropic => {
+                futures.push(Box::pin(async {
+                    (ProviderKind::AnvilApi, api::fetch_anthropic_models().await)
+                }));
+            }
+            ProviderCredentials::OpenAi => {
+                futures.push(Box::pin(async {
+                    (ProviderKind::OpenAi, api::fetch_openai_models().await)
+                }));
+            }
+            ProviderCredentials::Xai => {
+                futures.push(Box::pin(async {
+                    (ProviderKind::Xai, api::fetch_xai_models().await)
+                }));
+            }
+            ProviderCredentials::Gemini => {
+                futures.push(Box::pin(async {
+                    (ProviderKind::Gemini, api::fetch_gemini_models().await)
+                }));
+            }
+            ProviderCredentials::OllamaLocal | ProviderCredentials::OllamaCloud => {
+                // Both flavors share a single tags endpoint on the local daemon,
+                // so de-dupe.
+                if !emitted_ollama {
+                    emitted_ollama = true;
+                    futures.push(Box::pin(async {
+                        (ProviderKind::Ollama, api::fetch_ollama_local_models().await)
+                    }));
+                }
+            }
+        }
+    }
+
+    // Concurrent-but-without-a-new-dep: drive each future to completion on
+    // its own tokio task and harvest results in original order.
+    let mut handles: Vec<
+        tokio::task::JoinHandle<(ProviderKind, Result<Vec<api::ProviderModel>, ProviderModelsError>)>,
+    > = Vec::with_capacity(futures.len());
+    for fut in futures {
+        handles.push(tokio::spawn(fut));
+    }
+    let mut out = Vec::with_capacity(handles.len());
+    for handle in handles {
+        match handle.await {
+            Ok(pair) => out.push(pair),
+            Err(error) => out.push((
+                ProviderKind::Ollama,
+                Err(ProviderModelsError::Other(error.to_string())),
+            )),
+        }
+    }
+    out
+}
+
+/// Map a successful per-provider fetch + the static [`api::known_models`]
+/// fallback for transient failures into the final `(name, provider-label)`
+/// list rendered by the picker.
+///
+/// Rules from `feedback-model-list-is-live-not-registry.md`:
+/// - `Unauthorized` (401/403) → omit provider, log warning
+/// - `Transient` → fall back to registry entries for that provider
+/// - `InvalidResponse` / `Other` → treat as transient (registry fallback)
+fn build_label_list(
+    configured: &[ProviderCredentials],
+    fetched: &[(ProviderKind, Result<Vec<api::ProviderModel>, ProviderModelsError>)],
+    ollama_cache: &[(String, String)],
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut warnings: Vec<String> = Vec::new();
+    let mut models: Vec<(String, String)> = Vec::new();
+
+    let configured_kinds: std::collections::HashSet<ProviderKind> =
+        configured.iter().map(|c| c.kind()).collect();
+    let configured_includes_cloud = configured
+        .iter()
+        .any(|c| matches!(c, ProviderCredentials::OllamaCloud));
+
+    for (kind, outcome) in fetched {
+        match outcome {
+            Ok(entries) => {
+                for entry in entries {
+                    let label = match (kind, api::is_ollama_cloud_model(&entry.id)) {
+                        (ProviderKind::Ollama, true) => "Ollama Cloud",
+                        (ProviderKind::Ollama, false) => "Ollama (local)",
+                        (other, _) => api::provider_display_name(*other),
+                    };
+                    // When the daemon offered cloud-suffixed tags but cloud
+                    // auth was determined unavailable, skip them — they would
+                    // 401 at runtime.
+                    if *kind == ProviderKind::Ollama
+                        && api::is_ollama_cloud_model(&entry.id)
+                        && !configured_includes_cloud
+                    {
+                        continue;
+                    }
+                    models.push((entry.id.clone(), label.to_string()));
+                }
+            }
+            Err(ProviderModelsError::Unauthorized) => {
+                warnings.push(format!(
+                    "[warn] {} reported 401/403; hiding provider until credentials are refreshed.",
+                    api::provider_display_name(*kind)
+                ));
+            }
+            Err(error) => {
+                warnings.push(format!(
+                    "[warn] {} live model list unavailable ({error}); falling back to known-good entries.",
+                    api::provider_display_name(*kind)
+                ));
+                // Fallback: registry entries matching this kind
+                for (name, k) in api::known_models() {
+                    if k == *kind {
+                        models.push((name.to_string(), api::provider_display_name(k).to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    // Always include any locally-cached Ollama tags from the startup probe
+    // (even if the live /api/tags call hadn't finished by the time the cache
+    // was last populated).  De-dupes happen at the end so we never show
+    // duplicate model names.
+    if configured_kinds.contains(&ProviderKind::Ollama) {
+        for (name, _size) in ollama_cache {
+            let label = if api::is_ollama_cloud_model(name) {
+                "Ollama Cloud"
+            } else {
+                "Ollama (local)"
+            };
+            models.push((name.clone(), label.to_string()));
+        }
+    }
+
+    // Degraded mode: if NO provider returned anything (all failed or no
+    // providers configured), fall back to the static registry so the picker
+    // isn't empty.
+    if models.is_empty() {
+        warnings.push("[warn] No reachable providers — using offline model list".to_string());
+        for (name, kind) in api::known_models() {
+            models.push((name.to_string(), api::provider_display_name(kind).to_string()));
+        }
+    }
+
+    // De-dupe on model id, last write wins (so a live Ollama tag overrides
+    // a registry stub of the same name).
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped: Vec<(String, String)> = Vec::with_capacity(models.len());
+    for entry in models.into_iter().rev() {
+        if seen.insert(entry.0.clone()) {
+            deduped.push(entry);
+        }
+    }
+    deduped.reverse();
+
+    (deduped, warnings)
+}
+
+/// Run [`fetch_models_for_credentials`] on the api-crate runtime, blocking the
+/// caller until every provider responds (or the per-provider 4 s timeout
+/// fires).  Honors the test-only `MODEL_FETCH_OVERRIDE` hook for unit tests.
+fn live_provider_models(
+    ollama_cache: &[(String, String)],
+) -> (Vec<(String, String)>, Vec<String>) {
+    #[cfg(test)]
+    {
+        if let Some(slot) = MODEL_FETCH_OVERRIDE.get() {
+            if let Ok(guard) = slot.lock() {
+                if let Some(hook) = guard.as_ref() {
+                    let outcome = hook();
+                    outcome
+                        .fetcher_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let fetched: Vec<(
+                        ProviderKind,
+                        Result<Vec<api::ProviderModel>, ProviderModelsError>,
+                    )> = outcome
+                        .fetched
+                        .into_iter()
+                        .map(|(kind, result)| {
+                            let mapped = result.map(|pairs| {
+                                pairs
+                                    .into_iter()
+                                    .map(|(id, _label)| api::ProviderModel {
+                                        id,
+                                        provider: kind,
+                                        display_name: None,
+                                        context_window: None,
+                                        deprecated: false,
+                                    })
+                                    .collect()
+                            });
+                            (kind, mapped)
+                        })
+                        .collect();
+                    return build_label_list(&outcome.configured, &fetched, ollama_cache);
+                }
+            }
+        }
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => {
+            return (
+                api::known_models()
+                    .into_iter()
+                    .map(|(name, kind)| (name.to_string(), api::provider_display_name(kind).to_string()))
+                    .collect(),
+                vec!["[warn] Unable to build async runtime — using offline model list".to_string()],
+            );
+        }
+    };
+    let configured = runtime.block_on(api::enumerate_configured_providers());
+    let fetched = runtime.block_on(fetch_models_for_credentials(&configured));
+    build_label_list(&configured, &fetched, ollama_cache)
 }
 
 impl CompletionContext for TuiCompletionContext {
@@ -142,36 +465,47 @@ impl CompletionContext for TuiCompletionContext {
 
     /// Live `/model <TAB>` choices.
     ///
-    /// Aggregates:
-    /// - Every alias from the static `api::known_models()` registry
-    ///   (Anthropic, OpenAI, xAI, Google Gemini), labelled with the
-    ///   provider display name.
-    /// - Every locally-discovered Ollama model from the startup cache,
-    ///   distinguishing Ollama Cloud (`:cloud` / `-cloud` suffix) from
-    ///   the local daemon.
+    /// On first TAB per cache window, fans out parallel `/models` calls
+    /// against every configured provider (Anthropic, OpenAI, xAI, Gemini,
+    /// local Ollama) and caches the merged list for [`MODEL_CHOICES_CACHE_TTL`]
+    /// (10 min). Subsequent TABs hit the cache, never the network.
     ///
-    /// Dedupes by model name (Ollama-side names like `llama3.2` take the
-    /// real local size from the cache rather than the registry stub).
+    /// Unconfigured providers are hidden entirely. Providers that 401/403 are
+    /// hidden with a warning logged to scrollback. Transient failures
+    /// (5xx, network, timeout) fall back to the static
+    /// [`api::known_models`] entries for that provider so the picker is
+    /// never blank.
+    ///
+    /// See `feedback-model-list-is-live-not-registry.md` for the user contract.
     fn model_choices(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = api::known_models()
-            .into_iter()
-            .map(|(name, kind)| (name.to_string(), api::provider_display_name(kind).to_string()))
-            .collect();
-
-        for (name, _size) in &self.ollama_models {
-            // Drop any registry entry the user actually has installed locally
-            // so the live entry (with provider label distinguishing local vs
-            // cloud) wins.
-            out.retain(|(existing, _)| existing != name);
-            let label = if api::is_ollama_cloud_model(name) {
-                "Ollama Cloud"
-            } else {
-                "Ollama (local)"
-            };
-            out.push((name.clone(), label.to_string()));
+        let cache_slot = model_choices_cache();
+        if let Ok(cache) = cache_slot.lock() {
+            if let Some(fetched_at) = cache.fetched_at {
+                if fetched_at.elapsed() < MODEL_CHOICES_CACHE_TTL && !cache.models.is_empty() {
+                    return cache.models.clone();
+                }
+            }
         }
 
-        out
+        let (models, warnings) = live_provider_models(&self.ollama_models);
+
+        // Surface warnings to TUI scrollback so the user knows a provider
+        // dropped out. We can't reach the TUI sender from here (this runs on
+        // the keystroke thread), so we write to stderr — the TuiTracingLayer
+        // will pick it up if active; otherwise the message lands in the
+        // terminal scrollback above the popup.
+        for warning in &warnings {
+            eprintln!("{warning}");
+        }
+
+        if let Ok(mut cache) = cache_slot.lock() {
+            *cache = ModelChoicesCache {
+                fetched_at: Some(Instant::now()),
+                models: models.clone(),
+            };
+        }
+
+        models
     }
 }
 
@@ -707,5 +1041,277 @@ mod tests {
         assert_eq!(langs.len(), 7, "expected 7 language codes, got {}", langs.len());
         assert!(langs.contains(&"en".to_string()));
         assert!(langs.contains(&"zh-CN".to_string()));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Live model-list integration: cache + fallback + warnings
+    // ─────────────────────────────────────────────────────────────────────────
+
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex as StdMutex;
+
+    /// Coarse serial guard for the live-model-list tests because they all
+    /// share the singleton `model_choices_cache` and `MODEL_FETCH_OVERRIDE`
+    /// hook. Running them in parallel would interleave cache state.
+    fn live_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::OnceLock;
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn reset_cache_and_override() {
+        invalidate_model_choices_cache();
+        clear_model_fetch_override();
+    }
+
+    #[test]
+    fn live_list_merges_anthropic_openai_and_ollama() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![
+                ProviderCredentials::Anthropic,
+                ProviderCredentials::OpenAi,
+                ProviderCredentials::OllamaLocal,
+            ],
+            fetched: vec![
+                (
+                    ProviderKind::AnvilApi,
+                    Ok(vec![("claude-sonnet-4-7".into(), "Anthropic".into())]),
+                ),
+                (
+                    ProviderKind::OpenAi,
+                    Ok(vec![("gpt-5.5".into(), "OpenAI".into())]),
+                ),
+                (
+                    ProviderKind::Ollama,
+                    Ok(vec![("llama4:8b".into(), "Ollama (local)".into())]),
+                ),
+            ],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(ids.contains(&"claude-sonnet-4-7"), "anthropic entry missing: {ids:?}");
+        assert!(ids.contains(&"gpt-5.5"), "openai entry missing: {ids:?}");
+        assert!(ids.contains(&"llama4:8b"), "ollama entry missing: {ids:?}");
+        let llama_label = models
+            .iter()
+            .find(|(n, _)| n == "llama4:8b")
+            .map(|(_, l)| l.as_str())
+            .unwrap_or("");
+        assert_eq!(llama_label, "Ollama (local)");
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn anthropic_401_hides_provider_but_keeps_others() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![
+                ProviderCredentials::Anthropic,
+                ProviderCredentials::OpenAi,
+                ProviderCredentials::OllamaLocal,
+            ],
+            fetched: vec![
+                (ProviderKind::AnvilApi, Err(ProviderModelsError::Unauthorized)),
+                (
+                    ProviderKind::OpenAi,
+                    Ok(vec![("gpt-5.5".into(), "OpenAI".into())]),
+                ),
+                (
+                    ProviderKind::Ollama,
+                    Ok(vec![("llama4:8b".into(), "Ollama (local)".into())]),
+                ),
+            ],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !ids.iter().any(|name| name.starts_with("claude")),
+            "no Anthropic models should appear after 401: {ids:?}"
+        );
+        assert!(ids.contains(&"gpt-5.5"));
+        assert!(ids.contains(&"llama4:8b"));
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn anthropic_transient_falls_back_to_registry_entries() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![ProviderCredentials::Anthropic],
+            fetched: vec![(
+                ProviderKind::AnvilApi,
+                Err(ProviderModelsError::Transient("boom".into())),
+            )],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            ids.iter().any(|name| name.starts_with("claude")),
+            "transient failure should fall back to registry entries: {ids:?}"
+        );
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn no_providers_configured_falls_back_to_offline_registry() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![],
+            fetched: vec![],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        // Offline fallback: every registry entry shows up.
+        assert!(
+            !models.is_empty(),
+            "empty configured list should still produce offline registry"
+        );
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(ids.iter().any(|n| n.starts_with("claude")));
+        assert!(ids.iter().any(|n| n.starts_with("gpt-")));
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn cache_hits_within_ttl_skip_fetcher() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![ProviderCredentials::OpenAi],
+            fetched: vec![(
+                ProviderKind::OpenAi,
+                Ok(vec![("gpt-5.5".into(), "OpenAI".into())]),
+            )],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let _first = ctx.model_choices();
+        let after_first = calls.load(Ordering::SeqCst);
+        let _second = ctx.model_choices();
+        let after_second = calls.load(Ordering::SeqCst);
+        assert_eq!(
+            after_first, after_second,
+            "second TAB within TTL should hit cache (calls: {after_first} → {after_second})"
+        );
+        assert!(after_first >= 1, "first call should have hit the fetcher");
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn cache_invalidation_refires_fetcher() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![ProviderCredentials::OpenAi],
+            fetched: vec![(
+                ProviderKind::OpenAi,
+                Ok(vec![("gpt-5.5".into(), "OpenAI".into())]),
+            )],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let _first = ctx.model_choices();
+        let before_invalidate = calls.load(Ordering::SeqCst);
+        invalidate_model_choices_cache();
+        let _second = ctx.model_choices();
+        let after_invalidate = calls.load(Ordering::SeqCst);
+        assert!(
+            after_invalidate > before_invalidate,
+            "post-invalidation fetch should re-hit the fetcher (calls: {before_invalidate} → {after_invalidate})"
+        );
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn ollama_cloud_filtered_when_only_local_configured() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![ProviderCredentials::OllamaLocal],
+            fetched: vec![(
+                ProviderKind::Ollama,
+                Ok(vec![
+                    ("llama4:8b".into(), "Ollama (local)".into()),
+                    ("kimi-k2.6:cloud".into(), "Ollama Cloud".into()),
+                ]),
+            )],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(ids.contains(&"llama4:8b"), "local model must be present: {ids:?}");
+        assert!(
+            !ids.contains(&"kimi-k2.6:cloud"),
+            "cloud-suffixed model must be filtered when only local creds: {ids:?}"
+        );
+        reset_cache_and_override();
+    }
+
+    #[test]
+    fn ollama_cloud_kept_when_cloud_configured() {
+        let _g = live_test_lock();
+        reset_cache_and_override();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_for_hook = Arc::clone(&calls);
+        install_model_fetch_override(move || ModelFetchOutcome {
+            configured: vec![ProviderCredentials::OllamaCloud],
+            fetched: vec![(
+                ProviderKind::Ollama,
+                Ok(vec![
+                    ("llama4:8b".into(), "Ollama (local)".into()),
+                    ("kimi-k2.6:cloud".into(), "Ollama Cloud".into()),
+                ]),
+            )],
+            fetcher_calls: Arc::clone(&calls_for_hook),
+        });
+
+        let ctx = TuiCompletionContext::new();
+        let models = ctx.model_choices();
+        let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(ids.contains(&"llama4:8b"));
+        assert!(ids.contains(&"kimi-k2.6:cloud"));
+        let cloud_label = models
+            .iter()
+            .find(|(n, _)| n == "kimi-k2.6:cloud")
+            .map(|(_, l)| l.as_str())
+            .unwrap_or("");
+        assert_eq!(cloud_label, "Ollama Cloud");
+        reset_cache_and_override();
     }
 }

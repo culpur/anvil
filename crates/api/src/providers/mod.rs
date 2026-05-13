@@ -6,6 +6,7 @@ use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anvil_provider;
 pub mod common;
+pub mod model_list;
 pub mod ollama;
 pub mod ollama_manage;
 pub mod ollama_registry;
@@ -29,7 +30,7 @@ pub trait Provider {
     ) -> ProviderFuture<'a, Self::Stream>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderKind {
     AnvilApi,
     Xai,
