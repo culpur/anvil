@@ -124,7 +124,9 @@ pub use permissions::{
     PermissionPrompter, PermissionRequest, ReviewResult, ReviewerConfig, ReviewerMode,
 };
 pub use permissions::reviewer::{Recommendation, Reviewer};
-pub use permission_memory::{PermissionMemory, PermissionMemoryEntry, PermissionScope};
+pub use permission_memory::{
+    PermissionEffect, PermissionMemory, PermissionMemoryEntry, PermissionScope,
+};
 pub use keybindings::KeybindingsConfig;
 pub use content_filter::{ContentFilter, ContentFilterConfig, FilterResult, FilterSeverity};
 pub use prompt::{

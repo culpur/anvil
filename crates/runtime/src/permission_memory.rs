@@ -26,6 +26,31 @@ pub enum PermissionScope {
     Global,
 }
 
+/// Phase 3.4: the effect a stored grant has when it matches.
+///
+/// Existing on-disk entries (written before 3.4) deserialise with
+/// `effect: Allow` because of the `#[serde(default)]` attribute, so the
+/// schema change is forward-compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionEffect {
+    /// Allow the matching tool invocation without prompting (legacy default).
+    Allow,
+    /// Deny the matching tool invocation. Outranks reviewer and prompter.
+    /// MUST NOT bypass auto-mode hard-deny — that remains the unbypassable
+    /// safety override.
+    Deny,
+    /// Force the matching tool invocation to the normal prompter path,
+    /// even when a less-specific Allow would otherwise short-circuit.
+    Prompt,
+}
+
+impl Default for PermissionEffect {
+    fn default() -> Self {
+        Self::Allow
+    }
+}
+
 /// A single persisted permission grant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionMemoryEntry {
@@ -36,6 +61,11 @@ pub struct PermissionMemoryEntry {
     pub scope: PermissionScope,
     /// Unix timestamp (seconds) when the grant was created.
     pub granted_at: u64,
+    /// Phase 3.4: what should happen when this entry matches a call.
+    /// `#[serde(default)]` means entries written before 3.4 deserialise
+    /// with `Allow`, preserving legacy semantics for stored grants.
+    #[serde(default)]
+    pub effect: PermissionEffect,
 }
 
 /// Persistent store that remembers tool permission grants across sessions.
@@ -103,7 +133,13 @@ impl PermissionMemory {
         }
     }
 
-    /// Return `true` if `tool_name` + `input` are covered by a stored grant.
+    /// Return `true` if `tool_name` + `input` are covered by a stored
+    /// `Allow`-effect grant.
+    ///
+    /// Phase 3.4: this is the legacy bool-return entry point. Callers that
+    /// need to know about `Deny` or `Prompt` effects MUST use
+    /// [`Self::effect_for`] instead — `is_allowed` returns `false` for
+    /// `Deny` and `Prompt` matches, which loses information.
     ///
     /// A grant matches when:
     /// - its `tool_name` equals the requested tool, AND
@@ -111,16 +147,49 @@ impl PermissionMemory {
     ///   pattern as a substring.
     #[must_use]
     pub fn is_allowed(&self, tool_name: &str, input: &str) -> bool {
-        let Some(grants) = self.entries.get(tool_name) else {
-            return false;
-        };
-        grants.iter().any(|grant| match &grant.input_pattern {
-            None => true,
-            Some(pattern) => input.contains(pattern.as_str()),
-        })
+        matches!(self.effect_for(tool_name, input), Some(PermissionEffect::Allow))
     }
 
-    /// Record a new permission grant.
+    /// Phase 3.4: return the effect of the most-specific matching grant.
+    ///
+    /// Selection order when multiple grants match:
+    ///   1. `Deny`   — outranks everything else (it's a user veto).
+    ///   2. `Prompt` — forces the prompter path.
+    ///   3. `Allow`  — shortcircuit.
+    ///
+    /// Returns `None` if no grant matches.
+    #[must_use]
+    pub fn effect_for(&self, tool_name: &str, input: &str) -> Option<PermissionEffect> {
+        let grants = self.entries.get(tool_name)?;
+        let mut best: Option<PermissionEffect> = None;
+        for grant in grants {
+            let matches = match &grant.input_pattern {
+                None => true,
+                Some(pattern) => input.contains(pattern.as_str()),
+            };
+            if !matches {
+                continue;
+            }
+            // Deny is sticky. Once we see a Deny match, nothing else
+            // changes the answer.
+            match grant.effect {
+                PermissionEffect::Deny => return Some(PermissionEffect::Deny),
+                PermissionEffect::Prompt => {
+                    if best != Some(PermissionEffect::Deny) {
+                        best = Some(PermissionEffect::Prompt);
+                    }
+                }
+                PermissionEffect::Allow => {
+                    if best.is_none() {
+                        best = Some(PermissionEffect::Allow);
+                    }
+                }
+            }
+        }
+        best
+    }
+
+    /// Record a new permission grant with the default Allow effect.
     ///
     /// Session-scoped grants are kept only in memory.  Project- and
     /// Global-scoped grants are written to disk via [`Self::save`]; callers
@@ -130,6 +199,18 @@ impl PermissionMemory {
         tool_name: &str,
         pattern: Option<&str>,
         scope: PermissionScope,
+    ) {
+        self.grant_with_effect(tool_name, pattern, scope, PermissionEffect::Allow);
+    }
+
+    /// Phase 3.4: record a permission grant with an explicit effect
+    /// (Allow / Deny / Prompt).
+    pub fn grant_with_effect(
+        &mut self,
+        tool_name: &str,
+        pattern: Option<&str>,
+        scope: PermissionScope,
+        effect: PermissionEffect,
     ) {
         let granted_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -141,6 +222,7 @@ impl PermissionMemory {
             input_pattern: pattern.map(std::string::ToString::to_string),
             scope,
             granted_at,
+            effect,
         };
 
         self.entries
@@ -286,5 +368,135 @@ mod tests {
         }
         let mem2 = PermissionMemory::load(dir.path());
         assert!(!mem2.is_allowed("bash", "echo hi"));
+    }
+
+    // ── Phase 3.4: PermissionEffect tests ───────────────────────────
+
+    #[test]
+    fn effect_for_returns_allow_for_legacy_grant() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant("bash", None, PermissionScope::Session);
+        assert_eq!(
+            mem.effect_for("bash", "ls"),
+            Some(PermissionEffect::Allow),
+            "default grant() should record Allow effect"
+        );
+    }
+
+    #[test]
+    fn effect_for_returns_deny_when_grant_is_deny() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect("bash", Some("rm"), PermissionScope::Session, PermissionEffect::Deny);
+        assert_eq!(
+            mem.effect_for("bash", "rm -rf /tmp"),
+            Some(PermissionEffect::Deny)
+        );
+    }
+
+    #[test]
+    fn effect_for_returns_prompt_when_grant_is_prompt() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect("bash", None, PermissionScope::Session, PermissionEffect::Prompt);
+        assert_eq!(
+            mem.effect_for("bash", "anything"),
+            Some(PermissionEffect::Prompt)
+        );
+    }
+
+    #[test]
+    fn deny_outranks_allow_when_both_match() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        let mut mem = PermissionMemory::load(dir.path());
+        // Wildcard Allow + specific Deny → Deny wins.
+        mem.grant_with_effect("bash", None, PermissionScope::Session, PermissionEffect::Allow);
+        mem.grant_with_effect("bash", Some("rm"), PermissionScope::Session, PermissionEffect::Deny);
+        assert_eq!(
+            mem.effect_for("bash", "rm -rf /"),
+            Some(PermissionEffect::Deny),
+            "Deny must outrank Allow when both match"
+        );
+        // Calls that don't match the Deny pattern still get Allow.
+        assert_eq!(
+            mem.effect_for("bash", "ls"),
+            Some(PermissionEffect::Allow)
+        );
+    }
+
+    #[test]
+    fn deny_persists_through_save_and_reload() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        {
+            let mut mem = PermissionMemory::load(dir.path());
+            mem.grant_with_effect(
+                "bash",
+                Some("dangerous"),
+                PermissionScope::Project,
+                PermissionEffect::Deny,
+            );
+            mem.save().unwrap();
+        }
+        let mem2 = PermissionMemory::load(dir.path());
+        assert_eq!(
+            mem2.effect_for("bash", "dangerous command"),
+            Some(PermissionEffect::Deny),
+            "Deny must round-trip through save/load"
+        );
+    }
+
+    #[test]
+    fn legacy_entries_without_effect_field_deserialise_as_allow() {
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        // Write a pre-3.4 entry by hand (no effect field).
+        let hash = crate::memory::project_path_hash(
+            &dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf()),
+        );
+        let store_path = default_config_home()
+            .join("projects")
+            .join(&hash)
+            .join("permissions.json");
+        std::fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        let legacy_json = r#"{
+            "entries": [
+                {
+                    "tool_name": "bash",
+                    "input_pattern": null,
+                    "scope": "Project",
+                    "granted_at": 1700000000
+                }
+            ]
+        }"#;
+        std::fs::write(&store_path, legacy_json).unwrap();
+
+        let mem = PermissionMemory::load(dir.path());
+        // Legacy entry must come back with Allow effect.
+        assert_eq!(
+            mem.effect_for("bash", "any input"),
+            Some(PermissionEffect::Allow),
+            "legacy entries without effect must default to Allow"
+        );
+    }
+
+    #[test]
+    fn is_allowed_is_false_for_deny_grant() {
+        // is_allowed is the legacy bool API. After 3.4 it returns true ONLY
+        // for Allow matches — Deny and Prompt return false so the gate
+        // continues to its policy/prompter path.
+        let _guard = ConfigHomeGuard::new();
+        let dir = temp_project();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect("bash", None, PermissionScope::Session, PermissionEffect::Deny);
+        assert!(
+            !mem.is_allowed("bash", "anything"),
+            "is_allowed must be false for Deny effect"
+        );
     }
 }

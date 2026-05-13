@@ -7,7 +7,7 @@ use crate::hooks::{
     FileChangeAction, FileChangedPayload, HookPermissionDecision, HookRunResult, HookRunner,
     PermissionDeniedPayload, PermissionDeniedSource, PermissionRequestPayload,
 };
-use crate::permission_memory::{PermissionMemory, PermissionScope};
+use crate::permission_memory::{PermissionEffect, PermissionMemory, PermissionScope};
 use crate::permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,
@@ -68,25 +68,26 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
         return ConversationMessage::tool_result(tool_use_id, tool_name, reason, true);
     }
 
-    // L6 PermissionMemory short-circuit.
+    // L6 PermissionMemory effect resolution.
     //
-    // If a stored grant matches, skip the reviewer + prompter and treat
-    // the call as Allow. The PreToolUse hook chain (in the Allow branch
-    // below) still runs — memory bypasses the *prompt*, not the hook
-    // safety net.
+    // Phase 3.4: a stored grant can carry one of three effects:
+    //   Allow  → shortcircuit + run_allow_branch (legacy behavior).
+    //   Deny   → user-set veto. Ranks after auto-mode hard-deny + hook
+    //            deny, BEFORE reviewer / Allow / prompter.
+    //   Prompt → force the prompter path even when a less-specific Allow
+    //            would otherwise shortcircuit.
     //
-    // PermissionRequest hooks fire here too so that hook-based denials can
-    // still veto memory-allowed calls. The hook is the system administrator
-    // surface; memory is a user-grant cache. If a hook denies, it wins.
-    let memory_allowed = match permission_memory {
+    // The PreToolUse hook chain (in the Allow branch below) still runs —
+    // memory bypasses the *prompt*, not the hook safety net.
+    let memory_effect = match permission_memory {
         Some(mem) => match mem.lock() {
-            Ok(guard) => guard.is_allowed(&tool_name, input),
+            Ok(guard) => guard.effect_for(&tool_name, input),
             // Poisoned mutex → fall back to the normal policy path rather
             // than crashing the runtime. The bug will surface on the next
             // path through the gate that doesn't touch memory.
-            Err(_) => false,
+            Err(_) => None,
         },
-        None => false,
+        None => None,
     };
 
     // v2.2.11: fire PermissionRequest hooks before the policy gate.
@@ -97,7 +98,32 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
         requested_mode: policy.active_mode().as_str().to_string(),
     });
 
-    // If memory says allow but the hook explicitly denies, the hook wins.
+    // Phase 3.4 ordering:
+    //   (1) auto-mode hard-deny  — already handled above
+    //   (2) hook deny            — handled in the match below
+    //   (3) memory Deny          — handled here, BEFORE reviewer/allow
+    //   (4) reviewer             — below
+    //   (5) memory Allow         — handled below
+    //   (6) policy / prompter    — below
+    if memory_effect == Some(PermissionEffect::Deny)
+        && hook_permission.decision != Some(HookPermissionDecision::Allow)
+    {
+        let reason = format!(
+            "tool `{tool_name}` denied by stored permission grant (memory veto)"
+        );
+        otel::permission_decision(&tool_name, "deny", "memory");
+        let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
+            tool: tool_name.clone(),
+            input: input.to_string(),
+            reason: reason.clone(),
+            source: PermissionDeniedSource::User,
+        });
+        return ConversationMessage::tool_result(tool_use_id, tool_name, reason, true);
+    }
+
+    // Memory Allow shortcircuit — unchanged from prior version, just
+    // rewritten in terms of the new effect_for helper.
+    let memory_allowed = memory_effect == Some(PermissionEffect::Allow);
     if memory_allowed && hook_permission.decision != Some(HookPermissionDecision::Deny) {
         otel::permission_decision(&tool_name, "allow", "memory");
         return run_allow_branch(
@@ -108,6 +134,11 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             executor,
         );
     }
+
+    // Memory Prompt: fall through to the normal prompter path. We
+    // intentionally do NOT short-circuit here — the gate continues into
+    // the reviewer + policy stages so the user gets the standard prompt
+    // for this call.
 
     // W8: Run the reviewer before the approval prompt (or before any
     // policy decision that doesn't involve a human prompter).
@@ -758,6 +789,148 @@ mod tests {
         assert!(
             !guard.is_allowed("write_file", "anything"),
             "single-shot Allow must NOT persist a grant"
+        );
+    }
+
+    #[test]
+    fn memory_deny_effect_outranks_reviewer_and_prompter() {
+        // Phase 3.4: a stored Deny grant must block the call even when
+        // there's no hook decision, no reviewer match, and no auto-mode
+        // hard-deny. The prompter must NOT be reached.
+        let dir = temp_project_dir();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect(
+            "Bash",
+            Some("rm -rf"),
+            PermissionScope::Session,
+            PermissionEffect::Deny,
+        );
+        let mem = Arc::new(Mutex::new(mem));
+
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("Bash", PermissionMode::WorkspaceWrite);
+        // Panicking prompter — proves the Deny shortcircuits before reaching it.
+        let mut panicking = PanickingPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> = Some(&mut panicking);
+
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-deny-1".into(),
+            "Bash".into(),
+            "rm -rf /tmp/x",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(is_err, "memory Deny must produce an error tool_result");
+        assert!(
+            text.contains("memory veto") || text.contains("denied by stored"),
+            "deny message should reference the memory veto; got: {text}"
+        );
+    }
+
+    #[test]
+    fn memory_deny_does_not_block_non_matching_calls() {
+        // The Deny pattern is "rm -rf"; an "echo" call must NOT be blocked.
+        let dir = temp_project_dir();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect(
+            "Bash",
+            Some("rm -rf"),
+            PermissionScope::Session,
+            PermissionEffect::Deny,
+        );
+        let mem = Arc::new(Mutex::new(mem));
+
+        // Plain mode that authorizes Bash via prompter only.
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("Bash", PermissionMode::WorkspaceWrite);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-deny-2".into(),
+            "Bash".into(),
+            "echo hi",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (_text, is_err) = result_text(&msg);
+        // policy path may still deny without a prompter, but the deny must
+        // NOT be the memory-veto path — that's what we're asserting here.
+        // The text check is in the previous test; this one just checks
+        // that "echo hi" is not flagged by the memory deny rule.
+        let (text, _) = result_text(&msg);
+        assert!(
+            !text.contains("memory veto"),
+            "non-matching input must not trigger memory Deny; got: {text}"
+        );
+        // The non-deny path could still be allowed by the executor + policy.
+        // We only enforce that the gate did NOT take the memory-Deny branch.
+        let _ = is_err;
+    }
+
+    #[test]
+    fn auto_mode_hard_deny_outranks_memory_deny() {
+        // Both apply. Auto-mode hard-deny must take precedence so its
+        // message wins; this preserves the unbypassable-safety contract.
+        let dir = temp_project_dir();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant_with_effect(
+            "edit_file",
+            None,
+            PermissionScope::Session,
+            PermissionEffect::Deny,
+        );
+        let mem = Arc::new(Mutex::new(mem));
+
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("edit_file", PermissionMode::WorkspaceWrite);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig {
+            hard_deny: vec!["edit_file".into()],
+        };
+
+        let msg = evaluate_and_execute(
+            "mem-deny-3".into(),
+            "edit_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(is_err);
+        assert!(
+            text.contains("hard-denied in auto-mode"),
+            "auto-mode hard-deny must outrank memory Deny in message text; got: {text}"
         );
     }
 
