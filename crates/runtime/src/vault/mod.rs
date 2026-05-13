@@ -244,6 +244,21 @@ impl VaultManager {
         self.kek.is_some()
     }
 
+    /// Phase 3.3: expose the unlocked master key for callers that need to
+    /// hand it to a sibling encrypted store (e.g. `PrivateProjectMemory`).
+    ///
+    /// Returns `None` when the vault is locked. The borrow is gated by the
+    /// same `&self` lifetime as any other vault read, so the key cannot
+    /// outlive the lock guard the caller already holds in
+    /// `vault_session::with_session_vault`.
+    ///
+    /// SECURITY: never log or echo this value. The only legitimate callers
+    /// are encryption sites (`vault_session::vault_session_upsert_private_memory`).
+    #[must_use]
+    pub fn master_key_for_session(&self) -> Option<&[u8; 32]> {
+        self.kek.as_ref()
+    }
+
     /// Initialise the vault with a master password.  Fails if already initialised.
     pub fn setup(&mut self, master_password: &str) -> Result<(), VaultError> {
         if self.is_initialized() {

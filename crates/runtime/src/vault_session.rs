@@ -125,9 +125,32 @@ pub fn vault_session_upsert(label: &str, secret: &str) -> Result<(), VaultError>
 
 /// Convenience: retrieve a credential secret from the session vault.
 /// Returns `None` if vault is locked or the label does not exist.
-#[must_use] 
+#[must_use]
 pub fn vault_session_get(label: &str) -> Option<String> {
     with_session_vault(|vm| vm.get_credential(label))
         .ok()
         .map(|c| c.secret)
+}
+
+/// Phase 3.3: write a value to encrypted private project memory using the
+/// session vault's master key, scoped to the given project root.
+///
+/// Returns `Err(VaultError::Locked)` if the vault is not unlocked this
+/// session. On success the entry is persisted via
+/// `PrivateProjectMemory::add_entry`, which uses an atomic tmp + rename.
+///
+/// This is the single entry point the nomination-emit pipeline uses to
+/// route Infrastructure-classified content out of plaintext and into the
+/// AES-256-GCM encrypted per-project blob — never echoes the value
+/// anywhere on the way through.
+pub fn vault_session_upsert_private_memory(
+    project_root: &std::path::Path,
+    key: &str,
+    value: &str,
+) -> Result<(), VaultError> {
+    let private_mem = crate::private_memory::PrivateProjectMemory::for_project(project_root);
+    with_session_vault(|vm| {
+        let kek = vm.master_key_for_session().ok_or(VaultError::Locked)?;
+        private_mem.add_entry(kek, key, value)
+    })
 }

@@ -10,6 +10,15 @@
 //!   - The engine is designed to be installed by `main.rs` via a callback;
 //!     `file_ops.rs` and `bash.rs` are not hard-wired to it (avoids W11/W12
 //!     conflicts).
+//!   - Phase 3.3 (SECURITY): when `ANVIL_L5_AUTOROUTE=1`, the body of every
+//!     nomination is classified by `vault::scan::classify_learning` before
+//!     being persisted. Credentials are REJECTED; infrastructure routes to
+//!     `PrivateProjectMemory` when the vault is unlocked; only Knowledge
+//!     proceeds down the plaintext nomination path. Without the env var,
+//!     behavior is unchanged from prior releases.
+
+// Allow `unsafe` only in test code (env::set_var for ANVIL_L5_AUTOROUTE).
+#![cfg_attr(test, allow(unsafe_code))]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -74,12 +83,23 @@ pub struct AutoPromoterStats {
 pub enum AutoPromoteError {
     /// A nomination could not be persisted to disk.
     NominationStore(std::io::Error),
+    /// Phase 3.3: content was classified as a credential and was refused.
+    /// The body was NEVER written to disk and is NEVER echoed to stderr
+    /// or this error variant — the variant carries no payload.
+    CredentialRejected,
+    /// Phase 3.3: content was classified as infrastructure but the vault
+    /// is locked, so it could not be encrypted. Suppressed silently.
+    VaultLocked,
 }
 
 impl std::fmt::Display for AutoPromoteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NominationStore(e) => write!(f, "nomination store error: {e}"),
+            Self::CredentialRejected => {
+                write!(f, "nomination rejected: credential pattern detected")
+            }
+            Self::VaultLocked => write!(f, "infrastructure detail suppressed: vault locked"),
         }
     }
 }
@@ -88,6 +108,7 @@ impl std::error::Error for AutoPromoteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::NominationStore(e) => Some(e),
+            Self::CredentialRejected | Self::VaultLocked => None,
         }
     }
 }
@@ -218,6 +239,38 @@ impl AutoPromoter {
         category: NominationCategory,
         content: &str,
     ) -> Result<String, AutoPromoteError> {
+        // Phase 3.3 (SECURITY): classify the body before persisting. Without
+        // this gate, an API key the model echoed during the session could
+        // end up plaintext in ~/.anvil/nominations/*.json. Routing:
+        //
+        //   Credential     -> REJECT (never write nomination, suppress echo)
+        //   Infrastructure -> route to PrivateProjectMemory if vault unlocked;
+        //                     suppress otherwise
+        //   Knowledge      -> normal nomination path
+        //
+        // The classify_learning routing is gated behind ANVIL_L5_AUTOROUTE=1
+        // for the first release cycle. Default OFF keeps behavior unchanged
+        // while the user audits the routing in a real session.
+        if std::env::var("ANVIL_L5_AUTOROUTE").map(|v| v == "1").unwrap_or(false) {
+            match crate::vault::scan::classify_learning(content) {
+                crate::vault::scan::SensitivityLevel::Credential => {
+                    // Log the rejection WITHOUT echoing the content. Even
+                    // truncated previews can leak secrets.
+                    eprintln!(
+                        "[warn] Nomination rejected: detected credential pattern. \
+                         Use /vault store to record secrets explicitly."
+                    );
+                    return Err(AutoPromoteError::CredentialRejected);
+                }
+                crate::vault::scan::SensitivityLevel::Infrastructure => {
+                    return route_infrastructure_to_private_memory(content);
+                }
+                crate::vault::scan::SensitivityLevel::Knowledge => {
+                    // Fall through to the normal nomination path.
+                }
+            }
+        }
+
         let store = NominationStore::with_dir(self.nominations_dir.clone());
         store
             .ensure_dir()
@@ -226,6 +279,43 @@ impl AutoPromoter {
             .create("auto-promote", category, content, 0.7)
             .map_err(AutoPromoteError::NominationStore)?;
         Ok(nom.id)
+    }
+}
+
+/// Route infrastructure content to encrypted private project memory when the
+/// vault is unlocked. When the vault is locked, suppress the nomination and
+/// emit a one-line banner so the user knows to unlock and capture explicitly.
+///
+/// Never echoes the content to stderr or stdout — the body is treated as
+/// sensitive and visible only through `/memory show identity` after unlock.
+fn route_infrastructure_to_private_memory(
+    content: &str,
+) -> Result<String, AutoPromoteError> {
+    use crate::vault_session::{vault_is_session_unlocked, vault_session_upsert_private_memory};
+
+    if !vault_is_session_unlocked() {
+        eprintln!(
+            "[info] Infrastructure detail not recorded — vault is locked. \
+             Unlock with /vault unlock to capture."
+        );
+        return Err(AutoPromoteError::VaultLocked);
+    }
+
+    // Use a stable timestamp-derived key so successive infra facts don't
+    // overwrite each other. The full text is the value; the key is just
+    // a coarse handle for /memory show identity listings.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let key = format!("auto-promote-infra-{now}");
+
+    let cwd =
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    match vault_session_upsert_private_memory(&cwd, &key, content) {
+        Ok(()) => Ok(format!("private:{key}")),
+        Err(_) => Err(AutoPromoteError::VaultLocked),
     }
 }
 
@@ -478,5 +568,127 @@ mod tests {
         // stats may be Some or None depending on test ordering; just
         // ensure no panic.
         let _ = super::stats();
+    }
+
+    // ── Phase 3.3 SECURITY: classify_learning routing ─────────────────────────
+
+    /// Process-local lock for L5_AUTOROUTE env-mutating tests.
+    fn autoroute_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    struct AutorouteGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl AutorouteGuard {
+        fn enabled() -> Self {
+            let lock = autoroute_lock();
+            let prev = std::env::var_os("ANVIL_L5_AUTOROUTE");
+            unsafe { std::env::set_var("ANVIL_L5_AUTOROUTE", "1"); }
+            Self { _lock: lock, prev }
+        }
+        fn disabled() -> Self {
+            let lock = autoroute_lock();
+            let prev = std::env::var_os("ANVIL_L5_AUTOROUTE");
+            unsafe { std::env::remove_var("ANVIL_L5_AUTOROUTE"); }
+            Self { _lock: lock, prev }
+        }
+    }
+
+    impl Drop for AutorouteGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var("ANVIL_L5_AUTOROUTE", v); },
+                None => unsafe { std::env::remove_var("ANVIL_L5_AUTOROUTE"); },
+            }
+        }
+    }
+
+    #[test]
+    fn emit_credential_is_rejected_when_autoroute_enabled() {
+        let _g = AutorouteGuard::enabled();
+        let dir = tmp_nominations_dir();
+        let ap = AutoPromoter::new(dir.clone());
+
+        // Use a string that matches `sk-ant-` prefix in classify_learning.
+        let result = ap.emit_nomination(
+            NominationCategory::Pattern,
+            "key is sk-ant-api03-thiswouldbearealkey",
+        );
+        assert!(
+            matches!(result, Err(AutoPromoteError::CredentialRejected)),
+            "credential bodies must be rejected; got: {result:?}"
+        );
+
+        // No JSON files must exist in the nominations dir.
+        let count = std::fs::read_dir(&dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0);
+        assert_eq!(count, 0, "no nomination file should have been written");
+    }
+
+    #[test]
+    fn emit_knowledge_proceeds_normally_when_autoroute_enabled() {
+        let _g = AutorouteGuard::enabled();
+        let dir = tmp_nominations_dir();
+        let ap = AutoPromoter::new(dir.clone());
+
+        let result = ap.emit_nomination(
+            NominationCategory::Convention,
+            "Tests live in __tests__/",
+        );
+        assert!(result.is_ok(), "knowledge content must pass through; got: {result:?}");
+        let id = result.unwrap();
+        let path = dir.join(format!("{id}.json"));
+        assert!(path.exists(), "nomination file must be on disk at {path:?}");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("__tests__"));
+    }
+
+    #[test]
+    fn emit_credential_proceeds_when_autoroute_disabled_default() {
+        let _g = AutorouteGuard::disabled();
+        let dir = tmp_nominations_dir();
+        let ap = AutoPromoter::new(dir.clone());
+
+        // SECURITY ROLLOUT NOTE: with the env var OFF (default), the legacy
+        // plaintext path is preserved. The test asserts the OLD behavior
+        // still works so the rollout is safe — users who haven't opted in
+        // see no change. Phase 4 will flip the default and remove this test.
+        let result = ap.emit_nomination(
+            NominationCategory::Pattern,
+            "key is sk-ant-api03-thiswouldbearealkey",
+        );
+        assert!(result.is_ok(), "default-off must preserve legacy path");
+    }
+
+    #[test]
+    fn emit_infrastructure_with_locked_vault_suppresses_when_autoroute_enabled() {
+        let _g = AutorouteGuard::enabled();
+        let dir = tmp_nominations_dir();
+        let ap = AutoPromoter::new(dir.clone());
+
+        // 10.0.70.80 hits the IPv4 infrastructure detector. The vault is
+        // not initialised in this test process, so we expect VaultLocked.
+        let result = ap.emit_nomination(
+            NominationCategory::Pattern,
+            "Deploy to 10.0.70.80 via ssh",
+        );
+        // VaultLocked is the safe-failure: nothing on disk, nothing in private mem.
+        assert!(
+            matches!(result, Err(AutoPromoteError::VaultLocked)),
+            "infra + locked vault must suppress; got: {result:?}"
+        );
+
+        let count = std::fs::read_dir(&dir)
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or(0);
+        assert_eq!(count, 0, "no nomination file should have been written");
     }
 }
