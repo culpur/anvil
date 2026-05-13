@@ -836,10 +836,52 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
             }
         }
         "nominations" => {
+            // Deprecated alias retained for one cycle (Phase 4 will
+            // hard-error this path). Add a header explaining the rename
+            // so users discover the new canonical form.
             let store =
                 runtime::nominations::NominationStore::with_dir(home.join("nominations"));
-            store.format_pending()
+            format!(
+                "(deprecated alias — prefer `/memory show semantic --pending`)\n\n{}",
+                store.format_pending()
+            )
         }
+        // L3 semantic memory — Phase 2 / Bucket 2 / L3 §1: anvil-md is
+        // already the L3 "approved" surface; nominations become the
+        // "pending" sub-view. Default semantic view defers to anvil-md
+        // so users keep getting the rendered ANVIL.md tree they expect.
+        "semantic" => match sub {
+            Some("pending") | Some("nominations") => {
+                let store = runtime::nominations::NominationStore::with_dir(
+                    home.join("nominations"),
+                );
+                format!("=== L3 Semantic — pending nominations ===\n{}", store.format_pending())
+            }
+            Some(other) => format!(
+                "Unknown semantic sub-view: {other}\n\
+                 Known sub-views: pending (alias: nominations)"
+            ),
+            None => {
+                let mgr = MemoryManager::new(&cwd);
+                let rendered = mgr.render_for_prompt();
+                let approved = if rendered.trim().is_empty() {
+                    "  (no approved entries — see /memory show anvil-md to inspect raw files)"
+                        .to_string()
+                } else {
+                    rendered
+                };
+                let pending_count = runtime::nominations::NominationStore::with_dir(
+                    home.join("nominations"),
+                )
+                .list(None)
+                .len();
+                format!(
+                    "=== L3 Semantic memory ===\n\
+                    approved (anvil-md):\n{approved}\n\n\
+                    pending: {pending_count} nomination(s) — see /memory show semantic --pending"
+                )
+            }
+        },
         "daily" => {
             let store = DailyStore::with_dir(home.join("daily"));
             let summary = store.today();
@@ -1514,6 +1556,65 @@ mod memory_tests {
         let result = memory_budget(&ctx);
         assert!(result.contains("working"), "should include working row");
         assert!(result.contains("TOTAL"), "should still show total row");
+    }
+
+    #[test]
+    fn memory_show_semantic_default_combines_approved_and_pending_count() {
+        // L3 §1 acceptance: default `semantic` view combines anvil-md
+        // (approved) with the pending-nomination count, framing the
+        // tier in the user's mental model rather than as two separate
+        // tiers.
+        let result = memory_show(Some("semantic"), &MemoryContext::default());
+        assert!(
+            result.contains("L3 Semantic memory"),
+            "header should be present; got: {result}"
+        );
+        assert!(result.contains("approved (anvil-md):"));
+        assert!(result.contains("pending:"));
+    }
+
+    #[test]
+    fn memory_show_semantic_pending_routes_to_nominations_store() {
+        // L3 §1 acceptance: `semantic --pending` (and `pending` short
+        // form, and the legacy `nominations` sub-view) all hit the
+        // NominationStore::format_pending path.
+        let pending = memory_show(Some("semantic --pending"), &MemoryContext::default());
+        let short = memory_show(Some("semantic pending"), &MemoryContext::default());
+        let legacy = memory_show(Some("semantic nominations"), &MemoryContext::default());
+        for variant in [&pending, &short, &legacy] {
+            assert!(
+                variant.contains("L3 Semantic — pending nominations"),
+                "should route to pending view; got: {variant}"
+            );
+        }
+        assert_eq!(pending, short, "--pending and pending must alias");
+        assert_eq!(pending, legacy, "nominations sub-view must alias");
+    }
+
+    #[test]
+    fn memory_show_nominations_alias_carries_deprecation_banner() {
+        // L3 §1 acceptance: the legacy top-level `nominations` tier is
+        // kept for one cycle, but the output explains the rename so
+        // users discover the new canonical form.
+        let result = memory_show(Some("nominations"), &MemoryContext::default());
+        assert!(
+            result.contains("deprecated alias"),
+            "should warn about the rename; got: {result}"
+        );
+        assert!(
+            result.contains("semantic --pending"),
+            "should advertise the new path; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_semantic_unknown_sub_view_lists_known() {
+        let result = memory_show(Some("semantic explode"), &MemoryContext::default());
+        assert!(
+            result.contains("Unknown semantic sub-view"),
+            "should reject unknown; got: {result}"
+        );
+        assert!(result.contains("pending"));
     }
 
     #[test]
