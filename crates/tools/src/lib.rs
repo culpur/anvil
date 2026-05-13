@@ -1173,7 +1173,10 @@ mod tests {
         AgentJob, SubagentToolExecutor,
     };
     use api::OutputContentBlock;
-    use runtime::{ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError, Session};
+    use runtime::{
+        ApiRequest, AssistantEvent, ConversationRuntime, PromptSection, PromptSectionKind,
+        RuntimeError, Session,
+    };
     use serde_json::json;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -1884,7 +1887,7 @@ mod tests {
             },
             SubagentToolExecutor::new(BTreeSet::from([String::from("read_file")])),
             agent_permission_policy(),
-            vec![String::from("system prompt")],
+            vec![PromptSection::new(PromptSectionKind::System, "system prompt")],
         );
 
         let summary = runtime

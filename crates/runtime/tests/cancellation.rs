@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, PermissionMode,
-    PermissionPolicy, RuntimeError, Session, StaticToolExecutor, TokenUsage,
+    PermissionPolicy, PromptSection, PromptSectionKind, RuntimeError, Session,
+    StaticToolExecutor, TokenUsage,
 };
 
 struct CancelMidStreamClient {
@@ -50,7 +51,7 @@ fn cancel_between_frames_returns_cancelled_error() {
         CancelMidStreamClient { token: None },
         StaticToolExecutor::new(),
         PermissionPolicy::new(PermissionMode::DangerFullAccess),
-        vec!["system".to_string()],
+        vec![PromptSection::new(PromptSectionKind::System, "system")],
     );
 
     let err = runtime
@@ -84,7 +85,7 @@ fn stale_cancel_flag_does_not_poison_next_turn() {
         SingleOkClient { called: false },
         StaticToolExecutor::new(),
         PermissionPolicy::new(PermissionMode::DangerFullAccess),
-        vec!["system".to_string()],
+        vec![PromptSection::new(PromptSectionKind::System, "system")],
     );
     let handle = runtime.cancel_handle();
     handle.store(true, Ordering::SeqCst);

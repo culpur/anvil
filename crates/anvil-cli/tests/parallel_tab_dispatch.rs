@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, PermissionMode,
-    PermissionPolicy, RuntimeError, Session, StaticToolExecutor, TokenUsage,
+    PermissionPolicy, PromptSection, PromptSectionKind, RuntimeError, Session,
+    StaticToolExecutor, TokenUsage,
 };
 
 // ─── Shadow tagged-event channel ────────────────────────────────────────────
@@ -129,7 +130,7 @@ fn spawn_runtime_thread<C: ApiClient + Send + 'static>(
             client,
             StaticToolExecutor::new(),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
         );
         let result = runtime.run_turn("hi", None).map(|_| ()).map_err(|e| e.to_string());
         // The real per-tab worker emits `TurnDone` after the turn returns;
@@ -199,7 +200,7 @@ fn parallel_tabs_fast_finishes_before_slow_releases() {
             slow,
             StaticToolExecutor::new(),
             PermissionPolicy::new(PermissionMode::DangerFullAccess),
-            vec!["system".to_string()],
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
         );
         b1.wait();
         // Tab 1 starts streaming and blocks inside the fake client.
