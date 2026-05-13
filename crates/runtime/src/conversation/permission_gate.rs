@@ -1,10 +1,13 @@
 //! Permission checking and prompt-driven authorization for tool use.
 
+use std::sync::{Arc, Mutex};
+
 use crate::auto_mode::AutoModeConfig;
 use crate::hooks::{
     FileChangeAction, FileChangedPayload, HookPermissionDecision, HookRunResult, HookRunner,
     PermissionDeniedPayload, PermissionDeniedSource, PermissionRequestPayload,
 };
+use crate::permission_memory::{PermissionMemory, PermissionScope};
 use crate::permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,
@@ -22,6 +25,7 @@ const FILE_WRITE_TOOLS: &[&str] = &["write_file", "edit_file", "multi_edit_file"
 ///
 /// Returns the `ConversationMessage` (`tool_result`) that should be appended to
 /// the session, regardless of whether the tool was allowed or denied.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     tool_use_id: String,
     tool_name: String,
@@ -32,6 +36,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     executor: &mut T,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
 ) -> ConversationMessage {
     // CC-136-F2: auto-mode hard-deny short-circuit.
     //
@@ -44,6 +49,9 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     // ReadOnly is already more restrictive than the deny list, and
     // DangerFullAccess is an explicit "no guardrails" mode — neither
     // consults this list.
+    //
+    // L6 PermissionMemory cannot bypass hard-deny — the deny list is the
+    // user's explicit veto and must outrank any stored grant.
     if policy.active_mode() == PermissionMode::WorkspaceWrite
         && auto_mode.matches_hard_deny(&tool_name, input)
     {
@@ -60,6 +68,27 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
         return ConversationMessage::tool_result(tool_use_id, tool_name, reason, true);
     }
 
+    // L6 PermissionMemory short-circuit.
+    //
+    // If a stored grant matches, skip the reviewer + prompter and treat
+    // the call as Allow. The PreToolUse hook chain (in the Allow branch
+    // below) still runs — memory bypasses the *prompt*, not the hook
+    // safety net.
+    //
+    // PermissionRequest hooks fire here too so that hook-based denials can
+    // still veto memory-allowed calls. The hook is the system administrator
+    // surface; memory is a user-grant cache. If a hook denies, it wins.
+    let memory_allowed = match permission_memory {
+        Some(mem) => match mem.lock() {
+            Ok(guard) => guard.is_allowed(&tool_name, input),
+            // Poisoned mutex → fall back to the normal policy path rather
+            // than crashing the runtime. The bug will surface on the next
+            // path through the gate that doesn't touch memory.
+            Err(_) => false,
+        },
+        None => false,
+    };
+
     // v2.2.11: fire PermissionRequest hooks before the policy gate.
     // A hook may inject a decision to short-circuit the normal prompt.
     let hook_permission = hook_runner.run_permission_request(&PermissionRequestPayload {
@@ -67,6 +96,18 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
         input: input.to_string(),
         requested_mode: policy.active_mode().as_str().to_string(),
     });
+
+    // If memory says allow but the hook explicitly denies, the hook wins.
+    if memory_allowed && hook_permission.decision != Some(HookPermissionDecision::Deny) {
+        otel::permission_decision(&tool_name, "allow", "memory");
+        return run_allow_branch(
+            tool_use_id,
+            tool_name,
+            input,
+            hook_runner,
+            executor,
+        );
+    }
 
     // W8: Run the reviewer before the approval prompt (or before any
     // policy decision that doesn't involve a human prompter).
@@ -107,7 +148,9 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
                     }
                 }
                 Recommendation::Warn { warning } => {
-                    // Annotate the prompt by wrapping the prompter.
+                    // Annotate the prompt by wrapping the prompter, and layer
+                    // the L6 persistence wrapper on top so AllowAlways
+                    // decisions are recorded.
                     let annotated_input = format!("[{warning}]\n\n{input}");
                     let has_prompter = prompter.is_some();
                     let outcome = if let Some(p) = prompter.as_mut() {
@@ -115,7 +158,12 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
                             inner: *p,
                             annotated_input: &annotated_input,
                         };
-                        policy.authorize(&tool_name, input, Some(&mut annotating))
+                        let mut persisting = PersistingPrompter {
+                            inner: &mut annotating,
+                            tool_name: &tool_name,
+                            memory: permission_memory,
+                        };
+                        policy.authorize(&tool_name, input, Some(&mut persisting))
                     } else {
                         policy.authorize(&tool_name, input, None)
                     };
@@ -131,10 +179,16 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
                     outcome
                 }
                 Recommendation::Allow => {
-                    // No reviewer match — normal policy path.
+                    // No reviewer match — normal policy path, with the L6
+                    // persistence wrapper so AllowAlways is recorded.
                     let has_prompter = prompter.is_some();
                     let outcome = if let Some(p) = prompter.as_mut() {
-                        policy.authorize(&tool_name, input, Some(*p))
+                        let mut persisting = PersistingPrompter {
+                            inner: *p,
+                            tool_name: &tool_name,
+                            memory: permission_memory,
+                        };
+                        policy.authorize(&tool_name, input, Some(&mut persisting))
                     } else {
                         policy.authorize(&tool_name, input, None)
                     };
@@ -154,58 +208,13 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     };
 
     match permission_outcome {
-        PermissionOutcome::Allow => {
-            let pre_hook_result = hook_runner.run_pre_tool_use(&tool_name, input);
-            if pre_hook_result.is_denied() {
-                // v2.2.11: PreToolUse denial also fires PermissionDenied.
-                let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
-                otel::permission_decision(&tool_name, "deny", "hook");
-                let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
-                    tool: tool_name.clone(),
-                    input: input.to_string(),
-                    reason: deny_message.clone(),
-                    source: PermissionDeniedSource::Hook,
-                });
-                ConversationMessage::tool_result(
-                    tool_use_id,
-                    tool_name,
-                    format_hook_message(&pre_hook_result, &deny_message),
-                    true,
-                )
-            } else {
-                let (mut output, mut is_error) =
-                    match executor.execute(&tool_name, input) {
-                        Ok(output) => (output, false),
-                        Err(error) => (error.to_string(), true),
-                    };
-                output = merge_hook_feedback(pre_hook_result.messages(), output, false);
-
-                // v2.2.11: fire FileChanged after a successful write/edit tool.
-                if !is_error && FILE_WRITE_TOOLS.contains(&tool_name.as_str()) {
-                    if let Some(path) = extract_path_from_input(input) {
-                        let action = if tool_name == "write_file" {
-                            FileChangeAction::Write
-                        } else {
-                            FileChangeAction::Edit
-                        };
-                        let _ = hook_runner.run_file_changed(&FileChangedPayload { path, action });
-                    }
-                }
-
-                let post_hook_result =
-                    hook_runner.run_post_tool_use(&tool_name, input, &output, is_error);
-                if post_hook_result.is_denied() {
-                    is_error = true;
-                }
-                output = merge_hook_feedback(
-                    post_hook_result.messages(),
-                    output,
-                    post_hook_result.is_denied(),
-                );
-
-                ConversationMessage::tool_result(tool_use_id, tool_name, output, is_error)
-            }
-        }
+        PermissionOutcome::Allow => run_allow_branch(
+            tool_use_id,
+            tool_name,
+            input,
+            hook_runner,
+            executor,
+        ),
         PermissionOutcome::Deny { reason } => {
             // v2.2.11: fire PermissionDenied after policy/user denial.
             let source = if hook_permission.decision == Some(HookPermissionDecision::Deny) {
@@ -225,6 +234,68 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
             ConversationMessage::tool_result(tool_use_id, tool_name, reason, true)
         }
     }
+}
+
+/// Execute a tool that has been authorised by policy, prompter, hook, or
+/// L6 memory. Fires PreToolUse → executor → FileChanged → PostToolUse and
+/// folds hook feedback into the output. Shared by the normal Allow arm
+/// and the memory short-circuit so the hook chain runs identically.
+fn run_allow_branch<T: ToolExecutor>(
+    tool_use_id: String,
+    tool_name: String,
+    input: &str,
+    hook_runner: &HookRunner,
+    executor: &mut T,
+) -> ConversationMessage {
+    let pre_hook_result = hook_runner.run_pre_tool_use(&tool_name, input);
+    if pre_hook_result.is_denied() {
+        // v2.2.11: PreToolUse denial also fires PermissionDenied.
+        let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
+        otel::permission_decision(&tool_name, "deny", "hook");
+        let _ = hook_runner.run_permission_denied(&PermissionDeniedPayload {
+            tool: tool_name.clone(),
+            input: input.to_string(),
+            reason: deny_message.clone(),
+            source: PermissionDeniedSource::Hook,
+        });
+        return ConversationMessage::tool_result(
+            tool_use_id,
+            tool_name,
+            format_hook_message(&pre_hook_result, &deny_message),
+            true,
+        );
+    }
+
+    let (mut output, mut is_error) = match executor.execute(&tool_name, input) {
+        Ok(output) => (output, false),
+        Err(error) => (error.to_string(), true),
+    };
+    output = merge_hook_feedback(pre_hook_result.messages(), output, false);
+
+    // v2.2.11: fire FileChanged after a successful write/edit tool.
+    if !is_error && FILE_WRITE_TOOLS.contains(&tool_name.as_str()) {
+        if let Some(path) = extract_path_from_input(input) {
+            let action = if tool_name == "write_file" {
+                FileChangeAction::Write
+            } else {
+                FileChangeAction::Edit
+            };
+            let _ = hook_runner.run_file_changed(&FileChangedPayload { path, action });
+        }
+    }
+
+    let post_hook_result =
+        hook_runner.run_post_tool_use(&tool_name, input, &output, is_error);
+    if post_hook_result.is_denied() {
+        is_error = true;
+    }
+    output = merge_hook_feedback(
+        post_hook_result.messages(),
+        output,
+        post_hook_result.is_denied(),
+    );
+
+    ConversationMessage::tool_result(tool_use_id, tool_name, output, is_error)
 }
 
 /// A `PermissionPrompter` wrapper that replaces the `input` field presented
@@ -247,6 +318,44 @@ impl PermissionPrompter for AnnotatingPrompter<'_> {
             required_mode: request.required_mode,
         };
         self.inner.decide(&annotated)
+    }
+}
+
+/// L6 PermissionMemory persistence shim.
+///
+/// Wraps an inner prompter. When the inner returns `AllowAlways`, the
+/// wrapper records a Session-scoped grant for the tool in the shared
+/// `PermissionMemory` store. The decision is then passed through to the
+/// caller unchanged.
+///
+/// The recorded grant has `pattern = None` (wildcard for this tool). A
+/// future UX pass can extend this to user-chosen patterns; today the
+/// only contract is "approving 'always' for this tool stops asking again
+/// for the rest of the session."
+///
+/// Session scope only — the store's `save()` is never called from this
+/// wrapper. Project/Global persistence is an opt-in UX flow that lives
+/// outside the wrapper.
+struct PersistingPrompter<'a> {
+    inner: &'a mut dyn PermissionPrompter,
+    tool_name: &'a str,
+    memory: Option<&'a Arc<Mutex<PermissionMemory>>>,
+}
+
+impl PermissionPrompter for PersistingPrompter<'_> {
+    fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        let decision = self.inner.decide(request);
+        if matches!(decision, PermissionPromptDecision::AllowAlways) {
+            if let Some(mem) = self.memory {
+                if let Ok(mut guard) = mem.lock() {
+                    guard.grant(self.tool_name, None, PermissionScope::Session);
+                }
+                // Poisoned mutex: silently skip the grant. The user gets
+                // the immediate allow anyway, and the memory will fall
+                // back to its on-disk state on the next session.
+            }
+        }
+        decision
     }
 }
 
@@ -338,6 +447,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            None,
         );
 
         let (text, is_err) = result_text(&msg);
@@ -374,6 +484,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            None,
         );
 
         let (text, is_err) = result_text(&msg);
@@ -407,6 +518,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            None,
         );
 
         let (text, is_err) = result_text(&msg);
@@ -440,6 +552,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            None,
         );
         let (text, is_err) = result_text(&msg);
         assert!(is_err && text.contains("hard-denied"));
@@ -455,9 +568,233 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            None,
         );
         let (text2, is_err2) = result_text(&msg2);
         assert!(!is_err2, "Bash echo should not be denied");
         assert_eq!(text2, "<ran>");
+    }
+
+    // ─── L6 PermissionMemory wiring tests ─────────────────────────────────
+
+    fn temp_project_dir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("create temp project dir")
+    }
+
+    /// Prompter that panics if consulted. Wired into the memory tests to
+    /// prove the gate short-circuits before reaching the prompter.
+    struct PanickingPrompter;
+
+    impl PermissionPrompter for PanickingPrompter {
+        fn decide(&mut self, _req: &PermissionRequest) -> PermissionPromptDecision {
+            panic!("prompter must not be reached when memory grants the call");
+        }
+    }
+
+    /// Prompter that always returns AllowAlways. Used to verify the
+    /// PersistingPrompter wrapper records the grant.
+    struct AlwaysAlwaysPrompter;
+
+    impl PermissionPrompter for AlwaysAlwaysPrompter {
+        fn decide(&mut self, _req: &PermissionRequest) -> PermissionPromptDecision {
+            PermissionPromptDecision::AllowAlways
+        }
+    }
+
+    /// Prompter that always returns Allow (single-shot, not AllowAlways).
+    /// Used to prove single Allow does NOT persist.
+    struct PlainAllowPrompter;
+
+    impl PermissionPrompter for PlainAllowPrompter {
+        fn decide(&mut self, _req: &PermissionRequest) -> PermissionPromptDecision {
+            PermissionPromptDecision::Allow
+        }
+    }
+
+    #[test]
+    fn permission_memory_short_circuits_when_allowed() {
+        // Memory pre-loaded with a wildcard grant for "Bash". The active
+        // mode (ReadOnly) would normally deny Bash without prompting, so
+        // a pass here proves memory is consulted before policy.
+        let dir = temp_project_dir();
+        let mut mem = PermissionMemory::load(dir.path());
+        mem.grant("Bash", None, PermissionScope::Session);
+        let mem = Arc::new(Mutex::new(mem));
+
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("Bash", PermissionMode::DangerFullAccess);
+
+        // The prompter would panic if consulted — proves short-circuit.
+        let mut panicking = PanickingPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut panicking);
+
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-1".into(),
+            "Bash".into(),
+            "echo hello",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(!is_err, "memory-allowed call should execute: {text}");
+        assert_eq!(text, "<ran>", "Bash should have actually executed");
+    }
+
+    #[test]
+    fn permission_memory_does_nothing_when_disabled() {
+        // No memory → ReadOnly + Bash should deny via normal policy.
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("Bash", PermissionMode::DangerFullAccess);
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-2".into(),
+            "Bash".into(),
+            "echo hi",
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            None,
+        );
+
+        let (_text, is_err) = result_text(&msg);
+        assert!(is_err, "no memory + ReadOnly Bash must deny");
+    }
+
+    #[test]
+    fn allow_always_persists_to_memory_as_session_grant() {
+        // Empty memory, AllowAlways prompter, escalation required. After
+        // the call, the memory should grant subsequent calls for the
+        // same tool without prompting.
+        let dir = temp_project_dir();
+        let mem = Arc::new(Mutex::new(PermissionMemory::load(dir.path())));
+
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::DangerFullAccess);
+        let mut allow_always = AlwaysAlwaysPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut allow_always);
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-3".into(),
+            "write_file".into(),
+            r#"{"path":"/tmp/x","contents":"hi"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(!is_err, "AllowAlways should allow: {text}");
+
+        let guard = mem.lock().expect("mutex");
+        assert!(
+            guard.is_allowed("write_file", "any other input"),
+            "AllowAlways must persist a wildcard grant for the tool"
+        );
+    }
+
+    #[test]
+    fn allow_decision_does_not_persist() {
+        // Same as above but with single-shot Allow. The grant must NOT
+        // be recorded.
+        let dir = temp_project_dir();
+        let mem = Arc::new(Mutex::new(PermissionMemory::load(dir.path())));
+
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::DangerFullAccess);
+        let mut plain_allow = PlainAllowPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut plain_allow);
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-4".into(),
+            "write_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            Some(&mem),
+        );
+
+        let (_, is_err) = result_text(&msg);
+        assert!(!is_err, "Allow should execute");
+
+        let guard = mem.lock().expect("mutex");
+        assert!(
+            !guard.is_allowed("write_file", "anything"),
+            "single-shot Allow must NOT persist a grant"
+        );
+    }
+
+    #[test]
+    fn memory_disabled_means_allow_always_doesnt_persist() {
+        // With memory=None, even AllowAlways cannot persist (nowhere to
+        // store the grant). The call still allows.
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::DangerFullAccess);
+        let mut allow_always = AlwaysAlwaysPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut allow_always);
+        let runner = empty_hook_runner();
+        let mut exec = make_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+
+        let msg = evaluate_and_execute(
+            "mem-5".into(),
+            "write_file".into(),
+            r#"{"path":"/tmp/x"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            None,
+        );
+
+        let (_, is_err) = result_text(&msg);
+        assert!(
+            !is_err,
+            "AllowAlways without memory should still allow this call"
+        );
+        // Nothing to assert about persistence — there's no memory store.
+        // The point of this test is that the gate doesn't panic when
+        // memory is None and the prompter returns AllowAlways.
     }
 }

@@ -4,7 +4,8 @@ pub mod usage_tracking;
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compact::{
@@ -14,6 +15,7 @@ use crate::config::RuntimeFeatureConfig;
 use crate::hooks::{
     CwdChangedPayload, HookRunResult, HookRunner, NotificationPayload,
 };
+use crate::permission_memory::PermissionMemory;
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::auto_mode::AutoModeConfig;
 use crate::permissions::reviewer::Reviewer;
@@ -145,6 +147,12 @@ pub struct ConversationRuntime<C, T> {
     /// Auto-mode hard-deny list (CC-136-F2). Evaluated before hooks when
     /// the active permission mode is `WorkspaceWrite`.
     auto_mode: AutoModeConfig,
+    /// L6 PermissionMemory store. Populated when
+    /// `permissions.use_permission_memory` is true in settings.json AND a
+    /// `project_dir` was passed to `new_with_features`. When `None`, the
+    /// permission gate behaves exactly as it did before — every escalation
+    /// reaches the prompter.
+    permission_memory: Option<Arc<Mutex<PermissionMemory>>>,
     /// v2.2.14 TUI-1: shared cancel flag wired into the streaming loop.
     /// Cloned and installed on the `ApiClient` before every `stream()` call
     /// so the SSE loop can bail between frames. The turn loop also polls it
@@ -176,6 +184,13 @@ where
         )
     }
 
+    /// Construct a runtime with a typed feature configuration.
+    ///
+    /// L6 PermissionMemory is **not** wired here — without a project
+    /// directory we can't compute the per-project storage path. Callers
+    /// that want PermissionMemory (e.g. the CLI bootstrap) should use
+    /// [`Self::new_with_features_and_project_dir`] instead and pass the
+    /// project root.
     #[must_use]
     pub fn new_with_features(
         session: Session,
@@ -185,9 +200,46 @@ where
         system_prompt: Vec<PromptSection>,
         feature_config: RuntimeFeatureConfig,
     ) -> Self {
+        Self::new_with_features_and_project_dir(
+            session,
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+            feature_config,
+            None,
+        )
+    }
+
+    /// Construct a runtime with a typed feature configuration and an
+    /// optional project directory used to locate per-project state
+    /// (currently L6 PermissionMemory).
+    ///
+    /// When `feature_config.permissions().use_permission_memory()` is true
+    /// AND `project_dir` is `Some`, load `PermissionMemory` from disk and
+    /// thread it into the permission gate. Otherwise leave it `None` —
+    /// the gate falls back to the policy-only path.
+    #[must_use]
+    pub fn new_with_features_and_project_dir(
+        session: Session,
+        api_client: C,
+        tool_executor: T,
+        permission_policy: PermissionPolicy,
+        system_prompt: Vec<PromptSection>,
+        feature_config: RuntimeFeatureConfig,
+        project_dir: Option<PathBuf>,
+    ) -> Self {
         let usage_tracker = UsageTracker::from_session(&session);
         let reviewer = Reviewer::new(feature_config.reviewer());
         let auto_mode = feature_config.auto_mode().clone();
+        let permission_memory = if feature_config.permissions().use_permission_memory() {
+            project_dir.map(|dir| {
+                let mem = PermissionMemory::load(&dir);
+                Arc::new(Mutex::new(mem))
+            })
+        } else {
+            None
+        };
         Self {
             session,
             api_client,
@@ -199,8 +251,22 @@ where
             hook_runner: HookRunner::from_feature_config(&feature_config),
             reviewer,
             auto_mode,
+            permission_memory,
             cancel_token: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Test/CLI helper: install an already-constructed PermissionMemory.
+    /// Useful when the memory has been preloaded with synthetic grants or
+    /// when the caller wants to share one store across multiple runtimes.
+    pub fn set_permission_memory(&mut self, memory: Arc<Mutex<PermissionMemory>>) {
+        self.permission_memory = Some(memory);
+    }
+
+    /// Inspector for tests / debugging.
+    #[must_use]
+    pub fn permission_memory(&self) -> Option<&Arc<Mutex<PermissionMemory>>> {
+        self.permission_memory.as_ref()
     }
 
     /// Clone of the per-runtime cancel flag. External code (TUI Ctrl+C
@@ -266,6 +332,7 @@ where
             prompter,
             &self.reviewer,
             &self.auto_mode,
+            self.permission_memory.as_ref(),
             &self.cancel_token,
         )
     }

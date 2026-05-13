@@ -1,6 +1,6 @@
 //! Turn execution logic: drives the API request/tool-use loop for a single turn.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::prompt_section::PromptSection;
@@ -14,6 +14,7 @@ use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
 use crate::auto_mode::AutoModeConfig;
 use crate::hooks::{HookRunner, PostToolBatchPayload};
+use crate::permission_memory::PermissionMemory;
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::permissions::reviewer::Reviewer;
 use crate::session::Session;
@@ -35,6 +36,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
     cancel_token: &Arc<AtomicBool>,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
@@ -109,6 +111,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
                 tool_executor,
                 reviewer,
                 auto_mode,
+                permission_memory,
             );
             let elapsed_ms = start.elapsed().as_millis() as u64;
             durations_ms.push(elapsed_ms);

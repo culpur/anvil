@@ -303,8 +303,23 @@ fn build_root_schema() -> RootSchema {
 
     let mut perm_props = PropMap::new();
     perm_props.insert("defaultMode".to_string(), permission_mode_enum.clone());
+    // L6 PermissionMemory opt-in. Default false. When true, the runtime
+    // remembers `AllowAlways` decisions across the session and short-circuits
+    // the permission prompter when a stored grant matches.
+    perm_props.insert(
+        "use_permission_memory".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "L6 memory: when true, persist tool permission grants across \
+                 sessions. AllowAlways prompts are recorded as Session-scoped \
+                 grants by default. Default: false.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Boolean))),
+            ..Default::default()
+        }),
+    );
     let permissions_schema = object_schema(
-        desc("Legacy permissions block."),
+        desc("Permissions block — legacy `defaultMode` plus L6 `use_permission_memory` toggle."),
         perm_props,
         vec![],
         true,

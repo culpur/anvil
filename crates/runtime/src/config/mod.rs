@@ -103,6 +103,38 @@ impl WorktreeConfig {
     }
 }
 
+/// L6 memory: settings for the permission-memory store.
+///
+/// Off by default. When `use_permission_memory` is true, the runtime loads
+/// [`crate::permission_memory::PermissionMemory`] for the active project
+/// directory and threads it into the permission gate.  The gate then:
+///   - short-circuits the prompter when a stored grant matches, and
+///   - persists `AllowAlways` decisions as Session-scoped grants in memory.
+///
+/// Project/Global persistence is not auto-enabled — it requires an explicit
+/// scope choice at the prompter, which is reserved for a later UX pass.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PermissionsConfig {
+    /// When true, the permission gate consults `PermissionMemory` before
+    /// prompting the user, and persists `AllowAlways` decisions as
+    /// Session-scoped grants. Project/Global persistence happens only when
+    /// the prompter returns those specific scopes.
+    use_permission_memory: bool,
+}
+
+impl PermissionsConfig {
+    #[must_use]
+    pub const fn use_permission_memory(&self) -> bool {
+        self.use_permission_memory
+    }
+
+    #[must_use]
+    pub fn with_use_permission_memory(mut self, enabled: bool) -> Self {
+        self.use_permission_memory = enabled;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeFeatureConfig {
     hooks: RuntimeHookConfig,
@@ -124,6 +156,9 @@ pub struct RuntimeFeatureConfig {
     worktree: WorktreeConfig,
     /// Auto-mode hard-deny list (CC-136-F2: `autoMode.hard_deny`).
     auto_mode: AutoModeConfig,
+    /// L6 memory: persist permission grants across sessions when enabled
+    /// (`permissions.use_permission_memory` in settings.json). Default false.
+    permissions: PermissionsConfig,
 }
 
 #[derive(Debug)]
@@ -256,6 +291,10 @@ impl ConfigLoader {
             ),
             worktree: parse_optional_worktree_config(&merged_value),
             auto_mode: parse_optional_auto_mode_config(&merged_value),
+            permissions: tolerate_section(
+                "permissions",
+                parse_optional_permissions_config(&merged_value),
+            ),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -527,6 +566,12 @@ impl RuntimeConfig {
     pub const fn auto_mode(&self) -> &AutoModeConfig {
         &self.feature_config.auto_mode
     }
+
+    /// L6 permission-memory settings (`permissions.use_permission_memory`).
+    #[must_use]
+    pub const fn permissions(&self) -> &PermissionsConfig {
+        &self.feature_config.permissions
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -610,6 +655,19 @@ impl RuntimeFeatureConfig {
     #[must_use]
     pub const fn auto_mode(&self) -> &AutoModeConfig {
         &self.auto_mode
+    }
+
+    /// L6 permission-memory settings (off by default).
+    #[must_use]
+    pub const fn permissions(&self) -> &PermissionsConfig {
+        &self.permissions
+    }
+
+    /// Set the permissions block. Used by tests and CLI bootstrap.
+    #[must_use]
+    pub fn with_permissions(mut self, permissions: PermissionsConfig) -> Self {
+        self.permissions = permissions;
+        self
     }
 }
 
@@ -776,6 +834,47 @@ fn parse_optional_reviewer_config(
         block_action,
         extra_destructive_patterns,
         extra_credential_patterns,
+    })
+}
+
+/// Parse the `permissions` block (L6 permission-memory toggle).
+///
+/// Recognised shape:
+///   `{ "permissions": { "use_permission_memory": true } }`
+///
+/// Returns `Ok(PermissionsConfig::default())` (i.e. `use_permission_memory =
+/// false`) when the key is absent. Returns `Err` only when
+/// `use_permission_memory` is present but not a boolean — that signals a
+/// user typo and we want `tolerate_section` to warn and default-off.
+///
+/// Sharing the `permissions.*` namespace with the reviewer parser is fine:
+/// each parser cherry-picks its own sub-keys and ignores the rest, so a
+/// `permissions.reviewer.{...}` block coexists with
+/// `permissions.use_permission_memory`.
+fn parse_optional_permissions_config(
+    root: &JsonValue,
+) -> Result<PermissionsConfig, ConfigError> {
+    let Some(perm_obj) = root
+        .as_object()
+        .and_then(|o| o.get("permissions"))
+        .and_then(JsonValue::as_object)
+    else {
+        return Ok(PermissionsConfig::default());
+    };
+
+    let Some(value) = perm_obj.get("use_permission_memory") else {
+        // Key absent → stay at default (off). Reviewer-only configs land here.
+        return Ok(PermissionsConfig::default());
+    };
+
+    let Some(enabled) = value.as_bool() else {
+        return Err(ConfigError::Parse(format!(
+            "permissions.use_permission_memory: expected boolean, got {value:?}"
+        )));
+    };
+
+    Ok(PermissionsConfig {
+        use_permission_memory: enabled,
     })
 }
 
@@ -1397,6 +1496,95 @@ mod tests {
 
         let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
         assert!(loaded.worktree().base_ref().is_none());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    // ─── L6 permissions.use_permission_memory parse tests ─────────────────
+
+    #[test]
+    fn permissions_use_permission_memory_defaults_off() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(home.join("settings.json"), "{}").expect("write");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(!loaded.permissions().use_permission_memory());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn permissions_use_permission_memory_parses_true() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"permissions": {"use_permission_memory": true}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.permissions().use_permission_memory());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn permissions_use_permission_memory_coexists_with_reviewer() {
+        // Both reviewer and use_permission_memory live under `permissions`.
+        // Make sure the loader picks up both, not just one.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "permissions": {
+                "use_permission_memory": true,
+                "reviewer": {"enabled": true, "mode": "manual"}
+              }
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.permissions().use_permission_memory());
+        assert!(loaded.reviewer().enabled);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn permissions_use_permission_memory_malformed_falls_back_to_default() {
+        // Wrong type (string instead of bool) → tolerate_section warns and
+        // returns default-off. The load itself must still succeed.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"permissions": {"use_permission_memory": "yes"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("malformed permissions block must not abort load");
+        assert!(
+            !loaded.permissions().use_permission_memory(),
+            "malformed value should fall back to default (off)"
+        );
 
         fs::remove_dir_all(root).expect("cleanup");
     }
