@@ -812,12 +812,13 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         None => {
             return "Usage: /memory show <tier> [sub-view]\n\
                 Tiers: working, episodic, semantic, procedural, identity, \
-                policy, anvil-md, vault, private, nominations, daily, \
+                policy, cache, anvil-md, vault, private, nominations, daily, \
                 file-cache, cmd-cache, goals\n\
                 Episodic sub-views: episodic (default), episodic daily\n\
                 Semantic sub-views: semantic (default), semantic --pending\n\
                 Procedural sub-views: procedural (default), procedural \
                 {goals|skills|cron|routines}\n\
+                Cache sub-views: cache (default), cache {file|cmd|qmd}\n\
                 Identity: labels-only when unlocked, counts-only when locked\n\
                 Policy: PermissionMemory grants + auto-mode hard_deny + \
                 reviewer extras + egress allowlist"
@@ -931,6 +932,12 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         // L6 policy — Phase 2 / Bucket 2 / L6 §2-5: permission grants +
         // auto-mode hard-deny + reviewer extras + egress allowlist.
         "policy" => render_policy_show(&cwd),
+        // L7 cache — Phase 2 / Bucket 2 / L7 §3-5: unified view over
+        // file-cache + cmd-cache + QMD. Sub-views drill into one. The
+        // legacy `file-cache` / `cmd-cache` top-level tiers remain
+        // pointers to `/file-cache list` and `/cmd-cache list` until
+        // Phase 4 redirects them.
+        "cache" => render_cache_show(sub, &cwd),
         "vault" => "Vault contents are not shown in plain text for security reasons.\n\
              Use /vault list to see stored credential names."
             .to_string(),
@@ -942,8 +949,8 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         other => format!(
             "Unknown tier: {other}\n\
              Known tiers: working, episodic, semantic, procedural, identity, \
-             policy, anvil-md, vault, private, nominations, daily, file-cache, \
-             cmd-cache, goals"
+             policy, cache, anvil-md, vault, private, nominations, daily, \
+             file-cache, cmd-cache, goals"
         ),
     }
 }
@@ -1202,6 +1209,143 @@ fn render_procedural_cron() -> String {
     lines.join("\n")
 }
 
+/// Render `/memory show cache [file|cmd|qmd]`.
+///
+/// Phase 2 / Bucket 2 / L7 §3-5: unified L7 cache view. Default
+/// emits a summary row for each sub-source so the user can see all
+/// three caches at once; each sub-view drills in.
+fn render_cache_show(sub: Option<&str>, cwd: &std::path::Path) -> String {
+    use runtime::{CommandCacheManager, FileCacheManager, QmdClient};
+
+    match sub {
+        Some("file") => {
+            let mgr = match FileCacheManager::new(cwd.to_path_buf()) {
+                Ok(m) => m,
+                Err(e) => return format!("File-cache: failed to open ({e:?})"),
+            };
+            let entries = mgr.list().unwrap_or_default();
+            let stats = mgr.stats().unwrap_or(runtime::file_cache::FileCacheStats {
+                entry_count: 0,
+                total_bytes_cached: 0,
+            });
+            let mut lines = vec![format!(
+                "=== L7 Cache — file ===\nentries={}  total_bytes={}",
+                stats.entry_count, stats.total_bytes_cached
+            )];
+            if entries.is_empty() {
+                lines.push("(no cached file fingerprints)".to_string());
+            } else {
+                lines.push(String::new());
+                for entry in entries.iter().take(20) {
+                    lines.push(format!(
+                        "  {}  bytes={}  symbols={}  hits={}",
+                        entry.path.display(),
+                        entry.size_bytes,
+                        entry.key_symbols.len(),
+                        entry.access_count
+                    ));
+                }
+                if entries.len() > 20 {
+                    lines.push(format!("  ... +{} more", entries.len() - 20));
+                }
+            }
+            lines.join("\n")
+        }
+        Some("cmd") => {
+            let mgr = match CommandCacheManager::new(cwd.to_path_buf()) {
+                Ok(m) => m,
+                Err(e) => return format!("Cmd-cache: failed to open ({e:?})"),
+            };
+            let entries = mgr.list().unwrap_or_default();
+            let stats = mgr.stats().unwrap_or_default();
+            let mut lines = vec![format!(
+                "=== L7 Cache — cmd ===\nentries={}  stale={}  hits={}  total_bytes={}",
+                stats.total_entries,
+                stats.stale_entries,
+                stats.total_hits,
+                stats.total_size_bytes
+            )];
+            if entries.is_empty() {
+                lines.push("(no cached command outputs)".to_string());
+            } else {
+                lines.push(String::new());
+                for entry in entries.iter().take(20) {
+                    let cmd = entry.command.chars().take(60).collect::<String>();
+                    lines.push(format!("  hits={}  {cmd}", entry.hits));
+                }
+                if entries.len() > 20 {
+                    lines.push(format!("  ... +{} more", entries.len() - 20));
+                }
+            }
+            lines.join("\n")
+        }
+        Some("qmd") => {
+            // QMD is a separate process (the `qmd` CLI). Status comes
+            // from `qmd status --json` via QmdClient. When the binary
+            // is missing we report that cleanly rather than erroring.
+            let client = QmdClient::new();
+            if !client.is_enabled() {
+                return "=== L7 Cache — qmd ===\n\
+                    QMD CLI binary not found on PATH. \n\
+                    Install `qmd` to enable workspace knowledge search."
+                    .to_string();
+            }
+            match client.status() {
+                Some(s) => format!(
+                    "=== L7 Cache — qmd ===\ntotal_docs={}  total_vectors={}  size_mb={:.2}",
+                    s.total_docs, s.total_vectors, s.size_mb
+                ),
+                None => "=== L7 Cache — qmd ===\nQMD binary present but status query failed."
+                    .to_string(),
+            }
+        }
+        Some(other) => format!(
+            "Unknown cache sub-view: {other}\n\
+             Known sub-views: file, cmd, qmd"
+        ),
+        None => {
+            // Default: summary row for each sub-source.
+            let fc = FileCacheManager::new(cwd.to_path_buf())
+                .ok()
+                .and_then(|m| m.stats().ok())
+                .map(|s| (s.entry_count, s.total_bytes_cached))
+                .unwrap_or((0, 0));
+            let cc = CommandCacheManager::new(cwd.to_path_buf())
+                .ok()
+                .and_then(|m| m.stats().ok())
+                .map(|s| (s.total_entries, s.total_size_bytes))
+                .unwrap_or((0, 0));
+            let qmd = QmdClient::new();
+            let qmd_line = if qmd.is_enabled() {
+                match qmd.status() {
+                    Some(s) => format!(
+                        "{} docs / {} vectors / {:.2} MB",
+                        s.total_docs, s.total_vectors, s.size_mb
+                    ),
+                    None => "binary present, status query failed".to_string(),
+                }
+            } else {
+                "(binary not on PATH)".to_string()
+            };
+            format!(
+                "=== L7 Cache memory ===\n\n  \
+                file   {} entr{}  total_bytes={}   \
+                (see /memory show cache file)\n  \
+                cmd    {} entr{}  total_bytes={}   \
+                (see /memory show cache cmd)\n  \
+                qmd    {qmd_line}   \
+                (see /memory show cache qmd)",
+                fc.0,
+                if fc.0 == 1 { "y " } else { "ies" },
+                fc.1,
+                cc.0,
+                if cc.0 == 1 { "y " } else { "ies" },
+                cc.1
+            )
+        }
+    }
+}
+
 /// Render `/memory show policy`.
 ///
 /// Phase 2 / Bucket 2 / L6 §2-5: surface the four policy sources:
@@ -1426,6 +1570,45 @@ fn memory_inspect(key: &str) -> String {
                 nom.id, nom.status, nom.content
             ));
             found = true;
+        }
+    }
+
+    // Phase 2 / Bucket 2 / L7 §3: `/memory inspect` also walks L7
+    // caches so the user can find which file paths / commands the
+    // agent has memoised. We scan filenames + symbols and the
+    // verbatim command text.
+    if let Ok(fc) = runtime::FileCacheManager::new(cwd.clone()) {
+        if let Ok(entries) = fc.list() {
+            for entry in entries {
+                let path_str = entry.path.to_string_lossy().to_ascii_lowercase();
+                let symbol_hit = entry
+                    .key_symbols
+                    .iter()
+                    .any(|s| s.to_ascii_lowercase().contains(&key_lower));
+                if path_str.contains(&key_lower) || symbol_hit {
+                    results.push(format!(
+                        "[file-cache] {}  symbols={}  bytes={}",
+                        entry.path.display(),
+                        entry.key_symbols.len(),
+                        entry.size_bytes
+                    ));
+                    found = true;
+                }
+            }
+        }
+    }
+    if let Ok(cc) = runtime::CommandCacheManager::new(cwd.clone()) {
+        if let Ok(entries) = cc.list() {
+            for entry in entries {
+                if entry.command.to_ascii_lowercase().contains(&key_lower) {
+                    let cmd = entry.command.chars().take(60).collect::<String>();
+                    results.push(format!(
+                        "[cmd-cache] hits={} {cmd}",
+                        entry.hits
+                    ));
+                    found = true;
+                }
+            }
         }
     }
 
@@ -1957,6 +2140,52 @@ mod memory_tests {
             "should reject unknown; got: {result}"
         );
         assert!(result.contains("pending"));
+    }
+
+    #[test]
+    fn memory_show_cache_default_lists_three_sources() {
+        // L7 §3-5 acceptance: default `cache` view summarises file,
+        // cmd, qmd in one place so the user can see the L7 vocabulary.
+        let result = memory_show(Some("cache"), &MemoryContext::default());
+        assert!(
+            result.contains("L7 Cache memory"),
+            "header missing; got: {result}"
+        );
+        for label in ["file", "cmd", "qmd"] {
+            assert!(result.contains(label), "expected `{label}`; got: {result}");
+        }
+    }
+
+    #[test]
+    fn memory_show_cache_file_routes_to_file_cache_manager() {
+        let result = memory_show(Some("cache file"), &MemoryContext::default());
+        assert!(
+            result.contains("L7 Cache — file") || result.contains("not initialised"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_cache_cmd_routes_to_cmd_cache_manager() {
+        let result = memory_show(Some("cache cmd"), &MemoryContext::default());
+        assert!(
+            result.contains("L7 Cache — cmd") || result.contains("not initialised"),
+            "got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_cache_qmd_routes_to_qmd_client() {
+        // QMD binary may or may not be on PATH in CI. Either way, the
+        // header should appear.
+        let result = memory_show(Some("cache qmd"), &MemoryContext::default());
+        assert!(result.contains("L7 Cache — qmd"), "got: {result}");
+    }
+
+    #[test]
+    fn memory_show_cache_unknown_sub_view_lists_known() {
+        let result = memory_show(Some("cache explode"), &MemoryContext::default());
+        assert!(result.contains("Unknown cache sub-view"), "got: {result}");
     }
 
     #[test]
