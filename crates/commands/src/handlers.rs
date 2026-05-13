@@ -1625,18 +1625,135 @@ fn memory_inspect(key: &str) -> String {
     results.join("\n")
 }
 
-fn memory_promote(id: &str) -> String {
-    if id.is_empty() {
-        return "Usage: /memory promote <nomination-id>".to_string();
+/// Promote a nomination into the project's ANVIL.md and (if QMD is registered)
+/// the `anvil-semantic` collection. Atomic via tmp + rename.
+///
+/// Phase 3.1 + 3.2: this is the real implementation that closes the loop
+/// between nomination discovery and durable, retrievable knowledge.
+///
+/// Usage:
+///   /memory promote <nomination-id>
+///   /memory promote --dry-run <nomination-id>
+///   /memory promote <nomination-id> --dry-run     (either order)
+fn memory_promote(id_arg: &str) -> String {
+    let arg = id_arg.trim();
+    if arg.is_empty() {
+        return "Usage: /memory promote [--dry-run] <nomination-id>".to_string();
     }
-    let store =
-        runtime::nominations::NominationStore::with_dir(anvil_home().join("nominations"));
-    match store.accept(id, "ANVIL.md") {
-        Ok(()) => format!(
-            "Nomination '{id}' accepted and marked for promotion into ANVIL.md."
-        ),
-        Err(e) => format!("Error promoting nomination '{id}': {e}"),
+
+    // Parse --dry-run (either before or after the id).
+    let mut dry_run = false;
+    let mut id_opt: Option<&str> = None;
+    for token in arg.split_whitespace() {
+        if token == "--dry-run" || token == "-n" {
+            dry_run = true;
+        } else if id_opt.is_none() {
+            id_opt = Some(token);
+        }
     }
+    let Some(id) = id_opt else {
+        return "Usage: /memory promote [--dry-run] <nomination-id>".to_string();
+    };
+
+    let home = anvil_home();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let store = runtime::nominations::NominationStore::with_dir(home.join("nominations"));
+
+    let nom = match store.get(id) {
+        Some(n) => n,
+        None => {
+            return format!(
+                "Error: nomination '{id}' not found in {}.\n(Tip: /memory show semantic --pending lists IDs)",
+                home.join("nominations").display()
+            );
+        }
+    };
+
+    if matches!(nom.status, runtime::nominations::NominationStatus::Accepted) {
+        return format!(
+            "Nomination '{id}' is already promoted (previously written to {}).",
+            nom.promoted_to.as_deref().unwrap_or("ANVIL.md")
+        );
+    }
+
+    let anvil_md_path = cwd.join("ANVIL.md");
+    let category_label = format!("{:?}", nom.category);
+    let confidence_pct = (nom.confidence * 100.0).round() as i64;
+    let timestamp = nom.created_at.clone();
+    let body_text = nom.content.trim().to_string();
+
+    // The promotion stanza we append to ANVIL.md. Keep it compact and
+    // attributable so future readers can diff-trace where the line came from.
+    let stanza = format!(
+        "\n<!-- promoted from {id} ({category_label}, confidence {confidence_pct}%, {timestamp}) -->\n- {body_text}\n"
+    );
+
+    if dry_run {
+        let mut lines = vec![
+            format!("[dry-run] Would promote nomination '{id}'"),
+            format!("  category: {category_label}"),
+            format!("  confidence: {confidence_pct}%"),
+            format!("  target:    {}", anvil_md_path.display()),
+            format!("  status:    {:?} -> Accepted", nom.status),
+            "  content:".to_string(),
+        ];
+        for line in body_text.lines() {
+            lines.push(format!("    {line}"));
+        }
+        lines.push("[dry-run] No files written. Re-run without --dry-run to commit.".to_string());
+        return lines.join("\n");
+    }
+
+    // Atomic append-or-create on ANVIL.md.
+    if let Err(e) = atomic_append_anvil_md(&anvil_md_path, &stanza) {
+        return format!(
+            "Error promoting nomination '{id}': could not write {}: {e}",
+            anvil_md_path.display()
+        );
+    }
+
+    // Mark the nomination as accepted with the absolute target path so the
+    // pipeline closes back on the JSON.
+    let target_str = anvil_md_path.to_string_lossy();
+    if let Err(e) = store.accept(id, &target_str) {
+        return format!(
+            "Wrote to {} but failed to mark nomination accepted: {e}\nFix the JSON manually or re-run /memory promote.",
+            anvil_md_path.display()
+        );
+    }
+
+    // Phase 3.2 wires the anvil-semantic QMD indexer onto this success path.
+    // For now we report the on-disk write only.
+
+    format!(
+        "Nomination '{id}' promoted.\n  target:    {}\n  status:    Accepted",
+        anvil_md_path.display()
+    )
+}
+
+/// Atomic append-or-create of `stanza` onto `path`.
+///
+/// Writes the full new file contents to `<path>.tmp` and renames over the
+/// target. Never produces a partial-write on disk.
+fn atomic_append_anvil_md(path: &std::path::Path, stanza: &str) -> std::io::Result<()> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut new_contents = existing;
+    // Ensure a clean newline boundary between existing body and our stanza.
+    if !new_contents.is_empty() && !new_contents.ends_with('\n') {
+        new_contents.push('\n');
+    }
+    new_contents.push_str(stanza);
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let tmp = path.with_extension("md.promote.tmp");
+    std::fs::write(&tmp, new_contents.as_bytes())?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 fn memory_forget(key: &str) -> String {
@@ -2024,6 +2141,122 @@ mod memory_tests {
     fn memory_promote_empty_id_returns_usage() {
         let result = memory_promote("");
         assert!(result.contains("Usage"), "should show usage for empty id");
+    }
+
+    #[test]
+    fn memory_promote_unknown_id_reports_not_found() {
+        let result = memory_promote("nom-xxx-not-real");
+        assert!(
+            result.contains("not found") || result.contains("Error"),
+            "unknown id should report error; got: {result}"
+        );
+    }
+
+    #[test]
+    fn atomic_append_creates_file_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ANVIL.md");
+        atomic_append_anvil_md(&path, "- hello world\n").expect("append");
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert!(contents.contains("- hello world"));
+    }
+
+    #[test]
+    fn atomic_append_appends_to_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ANVIL.md");
+        std::fs::write(&path, "# Project notes\n").expect("seed");
+        atomic_append_anvil_md(&path, "\n- promoted line\n").expect("append");
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert!(contents.contains("# Project notes"), "must preserve existing");
+        assert!(contents.contains("- promoted line"), "must append new");
+        // No partial-write .tmp file should linger.
+        let tmp = path.with_extension("md.promote.tmp");
+        assert!(!tmp.exists(), ".tmp file must not be left behind");
+    }
+
+    #[test]
+    fn atomic_append_handles_missing_trailing_newline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("ANVIL.md");
+        std::fs::write(&path, "no trailing newline").expect("seed");
+        atomic_append_anvil_md(&path, "appended").expect("append");
+        let contents = std::fs::read_to_string(&path).expect("read");
+        assert!(contents.contains("no trailing newline\nappended"),
+                "must insert newline between blocks; got: {contents:?}");
+    }
+
+    /// Process-local lock so HOME-mutating tests in this module serialise.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let m = LOCK.get_or_init(|| Mutex::new(()));
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Round-trip test: create a nomination, dry-run promote, real promote,
+    /// verify ANVIL.md has the content and the nomination JSON is Accepted.
+    #[test]
+    fn memory_promote_roundtrip_writes_anvil_md_and_marks_accepted() {
+        let _lock = env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let prev_home = std::env::var_os("HOME");
+        let prev_cwd = std::env::current_dir().ok();
+        // SAFETY: tests serialise on env_lock(); restored on the way out.
+        unsafe { std::env::set_var("HOME", home.path()); }
+        let _ = std::env::set_current_dir(project.path());
+
+        // Seed a nomination.
+        let store = runtime::nominations::NominationStore::with_dir(
+            home.path().join(".anvil").join("nominations"),
+        );
+        store.ensure_dir().unwrap();
+        let nom = store
+            .create(
+                "test-session",
+                runtime::nominations::NominationCategory::Pattern,
+                "Always run cargo test before commit",
+                0.9,
+            )
+            .expect("create nomination");
+
+        // Dry-run first: ANVIL.md must remain absent.
+        let dry = memory_promote(&format!("--dry-run {}", nom.id));
+        assert!(dry.contains("[dry-run]"), "must announce dry-run; got: {dry}");
+        assert!(dry.contains(&nom.id), "must mention id");
+        assert!(!project.path().join("ANVIL.md").exists(),
+                "ANVIL.md must NOT be created by dry-run");
+
+        // Real promote: ANVIL.md should appear, nomination should flip status.
+        let real = memory_promote(&nom.id);
+        assert!(real.contains("promoted"), "must announce success; got: {real}");
+        let anvil_md = project.path().join("ANVIL.md");
+        assert!(anvil_md.exists(), "ANVIL.md must be created");
+        let body = std::fs::read_to_string(&anvil_md).unwrap();
+        assert!(body.contains("Always run cargo test before commit"),
+                "content missing from ANVIL.md; got: {body}");
+        assert!(body.contains(&nom.id),
+                "attribution comment missing; got: {body}");
+
+        let updated = store.get(&nom.id).expect("nom still on disk");
+        assert_eq!(updated.status, runtime::nominations::NominationStatus::Accepted);
+        assert!(updated.promoted_to.is_some(), "promoted_to must be set");
+
+        // Second promote should be idempotent and report already-promoted.
+        let second = memory_promote(&nom.id);
+        assert!(second.contains("already promoted"),
+                "double-promote should be idempotent; got: {second}");
+
+        // Restore env.
+        if let Some(prev) = prev_home {
+            unsafe { std::env::set_var("HOME", prev); }
+        } else {
+            unsafe { std::env::remove_var("HOME"); }
+        }
+        if let Some(prev) = prev_cwd {
+            let _ = std::env::set_current_dir(prev);
+        }
     }
 
     #[test]
