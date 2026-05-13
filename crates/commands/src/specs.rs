@@ -2006,16 +2006,78 @@ or the session ends. Set a persistent default in settings.json with:
         requires_restart: RestartRequirement::None,
     },
     SlashCommandSpec {
+        name: "ollama",
+        aliases: &[],
+        summary: "Read + manage local Ollama models (list, show, ps, tune, ...)",
+        argument_hint: Some(
+            "[list|show <model>|ps|tune <model>|option <model> <k> <v>|policy <model> <k> <v>|pull <model>|rm <model>|cp <src> <dst>|create <model>|bench [<model>]|requantize <model>]",
+        ),
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/ollama \u{2014} local Ollama model inspection and management
+
+USAGE
+  /ollama list                          List installed models
+  /ollama show <model>                  Show /api/show details for a model
+  /ollama ps                            Show currently loaded models (/api/ps)
+  /ollama tune <model>                  Compute recommended OllamaOptions for
+                                        this hardware + policy
+  /ollama option <model> <key> <value>  Override a runtime option
+                                        (num_ctx, num_predict, temperature, \u{2026})
+  /ollama policy <model> <key> <value>  Update tuner policy fields
+                                        (vram_target, quant_floor, \u{2026})
+  /ollama pull <model>                  Download a model (confirmation prompt)
+  /ollama rm <model>                    Remove an installed model (prompt)
+  /ollama cp <src> <dst>                Copy a model to a new tag
+  /ollama create <model>                Create a model from a Modelfile
+  /ollama bench [<model>]               Run the benchmark harness against a model
+                                        (defaults to the active model)
+  /ollama requantize <model>            Helper to suggest/execute a re-quantization
+
+EXAMPLES
+  /ollama list
+  /ollama show qwen3:8b
+  /ollama tune qwen3:8b
+  /ollama option qwen3:8b num_ctx 8192
+  /ollama policy qwen3:8b vram_target 0.85
+  /ollama bench qwen3:8b
+",
+        subcommands: crate::subcommands::OLLAMA_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+    },
+    SlashCommandSpec {
         name: "file-cache",
         aliases: &["fc"],
         summary: "Inspect and manage the file-fingerprint cache (W11 token economy)",
-        argument_hint: Some("[list|stats|prune|forget <path>|summarize <path> <text>|known-files]"),
+        argument_hint: Some("[stats|list|forget <path>|prune|clear [--yes]|help]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
-        detailed_help: "/file-cache — File-fingerprint cache (W11 token economy)\n\nUsage:\n  /file-cache           List cached files\n  /file-cache list      Same as above\n  /file-cache stats     Show aggregate stats (entries, bytes)\n  /file-cache prune     Remove stale entries (deleted or changed files)\n  /file-cache forget <path>\n                        Drop the cache entry for a specific file\n  /file-cache summarize <path> <text>\n                        Attach a summary to a cached file entry\n  /file-cache known-files\n                        Show what would be injected into the system prompt",
-        subcommands: &[],
+        detailed_help: "\
+/file-cache \u{2014} file-fingerprint cache (W11 token economy)
+
+USAGE
+  /file-cache               Show help (default)
+  /file-cache help          Show help
+  /file-cache stats         Aggregate stats (entries, bytes, hit rate)
+  /file-cache list          List cached files with hit counts
+  /file-cache forget <path> Drop the cache entry for a specific file
+  /file-cache prune         Remove stale entries (deleted or changed files)
+  /file-cache clear         Wipe the entire cache (confirmation prompt)
+  /file-cache clear --yes   Wipe without confirmation
+
+EXAMPLES
+  /file-cache stats
+  /file-cache forget crates/runtime/src/lib.rs
+  /file-cache prune
+  /file-cache clear --yes
+",
+        subcommands: crate::subcommands::FILE_CACHE_SUBCOMMANDS,
         tui_available: true,
-        web_available: false,
+        web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },
@@ -2023,13 +2085,31 @@ or the session ends. Set a persistent default in settings.json with:
         name: "cmd-cache",
         aliases: &["cc"],
         summary: "Inspect and manage the command-output cache (W12 token economy)",
-        argument_hint: Some("[list|stats|prune|forget <command>]"),
+        argument_hint: Some("[stats|list|forget <command>|prune-stale|clear [--yes]|help]"),
         resume_supported: false,
         category: SlashCommandCategory::Workspace,
-        detailed_help: "/cmd-cache — Command-output cache (W12 token economy)\n\nUsage:\n  /cmd-cache           List cached commands\n  /cmd-cache list      List with hit counts\n  /cmd-cache stats     Show aggregate stats\n  /cmd-cache prune     Remove stale entries\n  /cmd-cache forget <command>\n                       Drop cached output for a command",
-        subcommands: &[],
+        detailed_help: "\
+/cmd-cache \u{2014} command-output cache (W12 token economy)
+
+USAGE
+  /cmd-cache                   Show help (default)
+  /cmd-cache help              Show help
+  /cmd-cache stats             Aggregate stats (entries, bytes, hit rate)
+  /cmd-cache list              List cached commands with hit counts
+  /cmd-cache forget <command>  Drop cached output for a specific command
+  /cmd-cache prune-stale       Remove stale or expired entries
+  /cmd-cache clear             Wipe the entire cache (confirmation prompt)
+  /cmd-cache clear --yes       Wipe without confirmation
+
+EXAMPLES
+  /cmd-cache stats
+  /cmd-cache forget \"cargo test\"
+  /cmd-cache prune-stale
+  /cmd-cache clear --yes
+",
+        subcommands: crate::subcommands::CMD_CACHE_SUBCOMMANDS,
         tui_available: true,
-        web_available: false,
+        web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
     },

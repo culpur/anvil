@@ -1536,3 +1536,184 @@ pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
         subcommands: &[],
     },
 ];
+
+// ─── /ollama subcommands (v2.2.14 — drift-prevention) ────────────────────────
+
+/// /ollama — local Ollama model inspection and management.
+///
+/// These match the dispatch arms in `crates/anvil-cli/src/ollama_cmds.rs`.
+pub const OLLAMA_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "list",
+        summary: "List locally installed Ollama models",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "show",
+        summary: "Show /api/show details for a model (architecture, quant, context)",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "ps",
+        summary: "Show currently loaded models (/api/ps)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "tune",
+        summary: "Compute recommended OllamaOptions for a model on this hardware",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "option",
+        summary: "Override a runtime option for a model (num_ctx, num_predict, ...)",
+        args: &[
+            ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels),
+            ArgSpec::FreeText { hint: "<key>" },
+            ArgSpec::FreeText { hint: "<value>" },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "policy",
+        summary: "Update tuner policy fields for a model (vram_target, quant_floor, ...)",
+        args: &[
+            ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels),
+            ArgSpec::FreeText { hint: "<key>" },
+            ArgSpec::FreeText { hint: "<value>" },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "pull",
+        summary: "Download a model from the registry (confirmation prompt)",
+        args: &[ArgSpec::FreeText { hint: "<model>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "rm",
+        summary: "Remove an installed model (confirmation prompt)",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "cp",
+        summary: "Copy a model to a new tag",
+        args: &[
+            ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels),
+            ArgSpec::FreeText { hint: "<dst>" },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "create",
+        summary: "Create a model from a Modelfile (confirmation prompt)",
+        args: &[ArgSpec::FreeText { hint: "<model>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "bench",
+        summary: "Run the benchmark harness against a model (defaults to active)",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "requantize",
+        summary: "Helper to suggest/execute a re-quantization for a model",
+        args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
+        subcommands: &[],
+    },
+];
+
+// ─── /file-cache subcommands (v2.2.14 — drift-prevention) ────────────────────
+
+/// /file-cache — file-fingerprint cache management.
+///
+/// These match the dispatch arms in `crates/anvil-cli/src/cmd_cache.rs`
+/// (`run_file_cache_command`).
+pub const FILE_CACHE_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "stats",
+        summary: "Show aggregate stats (entries, bytes, hit rate)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "list",
+        summary: "List cached files with hit counts",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "forget",
+        summary: "Drop the cache entry for a specific file",
+        args: &[ArgSpec::FreeText { hint: "<path>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "prune",
+        summary: "Remove stale entries (deleted or changed files)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "clear",
+        summary: "Wipe the entire file-fingerprint cache (--yes to skip confirm)",
+        args: &[ArgSpec::OptionalFlag { name: "--yes", value: None }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "help",
+        summary: "Show /file-cache help",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
+// ─── /cmd-cache subcommands (v2.2.14 — drift-prevention) ─────────────────────
+
+/// /cmd-cache — command-output cache management.
+///
+/// These match the dispatch arms in `crates/anvil-cli/src/cmd_cache.rs`
+/// (`run_cmd_cache_command`).
+pub const CMD_CACHE_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "stats",
+        summary: "Show aggregate stats (entries, bytes, hit rate)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "list",
+        summary: "List cached commands with hit counts",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "forget",
+        summary: "Drop cached output for a specific command",
+        args: &[ArgSpec::FreeText { hint: "<command>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "prune-stale",
+        summary: "Remove stale or expired entries",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "clear",
+        summary: "Wipe the entire command-output cache (--yes to skip confirm)",
+        args: &[ArgSpec::OptionalFlag { name: "--yes", value: None }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "help",
+        summary: "Show /cmd-cache help",
+        args: &[],
+        subcommands: &[],
+    },
+];
