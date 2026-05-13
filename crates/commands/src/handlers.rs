@@ -16,20 +16,35 @@ pub struct MemoryContext<'a> {
     pub message_estimated_tokens: usize,
     /// Number of messages in the live session buffer.
     pub message_count: usize,
+    /// Names of skills currently loaded into the system prompt — read off
+    /// the system_prompt's `PromptSectionKind::Skill` labels. Carried
+    /// separately so the L4 procedural view can render them without
+    /// re-querying the prompt.
+    pub loaded_skill_names: Vec<String>,
 }
 
 impl<'a> MemoryContext<'a> {
     /// Construct a context referring to a live snapshot + session-buffer stats.
+    ///
+    /// `loaded_skill_names` is filled from `snapshot.sections` by walking
+    /// the `Skill`-kind entries and collecting their labels.
     #[must_use]
     pub fn with_working(
         snapshot: &'a WorkingMemorySnapshot,
         message_count: usize,
         message_estimated_tokens: usize,
     ) -> Self {
+        let loaded_skill_names = snapshot
+            .sections
+            .iter()
+            .filter(|s| s.kind == runtime::PromptSectionKind::Skill)
+            .filter_map(|s| s.label.clone())
+            .collect();
         Self {
             working: Some(snapshot),
             message_estimated_tokens,
             message_count,
+            loaded_skill_names,
         }
     }
 }
@@ -796,9 +811,12 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         Some(t) => t,
         None => {
             return "Usage: /memory show <tier> [sub-view]\n\
-                Tiers: working, episodic, anvil-md, vault, private, nominations, \
-                daily, file-cache, cmd-cache, goals\n\
-                Episodic sub-views: episodic (default = archive list), episodic daily"
+                Tiers: working, episodic, semantic, procedural, anvil-md, vault, \
+                private, nominations, daily, file-cache, cmd-cache, goals\n\
+                Episodic sub-views: episodic (default), episodic daily\n\
+                Semantic sub-views: semantic (default), semantic --pending\n\
+                Procedural sub-views: procedural (default), procedural \
+                {goals|skills|cron|routines}"
                 .to_string()
         }
     };
@@ -899,6 +917,10 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
                 Err(e) => format!("Error reading goals: {e}"),
             }
         }
+        // L4 procedural memory — Phase 2 / Bucket 2 / L4 §1-5: composes
+        // goals + skills + cron entries + routines stub. Each sub-view
+        // surfaces a single source; the default view summarises all four.
+        "procedural" => render_procedural_show(sub, ctx, &cwd),
         "vault" => "Vault contents are not shown in plain text for security reasons.\n\
              Use /vault list to see stored credential names."
             .to_string(),
@@ -909,8 +931,8 @@ fn memory_show(tier: Option<&str>, ctx: &MemoryContext<'_>) -> String {
         "cmd-cache" => "Command-cache details are managed via /cmd-cache list.".to_string(),
         other => format!(
             "Unknown tier: {other}\n\
-             Known tiers: working, episodic, anvil-md, vault, private, nominations, \
-             daily, file-cache, cmd-cache, goals"
+             Known tiers: working, episodic, semantic, procedural, anvil-md, vault, \
+             private, nominations, daily, file-cache, cmd-cache, goals"
         ),
     }
 }
@@ -1042,6 +1064,130 @@ fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
         "Session message buffer: {} message(s), ~{} tokens",
         ctx.message_count, ctx.message_estimated_tokens
     ));
+    lines.join("\n")
+}
+
+/// Render `/memory show procedural [goals|skills|cron|routines]`.
+///
+/// Phase 2 / Bucket 2 / L4 §1-5: procedural memory composes the "how
+/// the assistant *does things*" stores — goals (what we're working
+/// toward), skills (loaded tactical knowledge), cron entries
+/// (scheduled prompts), and the routines archive (future v2.2.14
+/// daemon output, currently stubbed).
+fn render_procedural_show(
+    sub: Option<&str>,
+    ctx: &MemoryContext<'_>,
+    cwd: &std::path::Path,
+) -> String {
+    use runtime::{cron::CronManager, GoalManager};
+
+    match sub {
+        Some("goals") => {
+            let mgr = GoalManager::new(cwd.to_path_buf());
+            let body = match mgr.list() {
+                Ok(goals) if goals.is_empty() => "No active goals.".to_string(),
+                Ok(goals) => runtime::format_goal_list(&goals),
+                Err(e) => format!("Error reading goals: {e}"),
+            };
+            format!("=== L4 Procedural — goals ===\n{body}")
+        }
+        Some("skills") => render_procedural_skills(ctx),
+        Some("cron") => render_procedural_cron(),
+        Some("routines") => "=== L4 Procedural — routines ===\n\
+            // TODO: routines archive will land with ROADMAP Tier 2 item 4\n\n\
+            The on-disk routines foundation shipped in v2.2.13 \
+            (crates/runtime/src/routines/), but the daemon that writes the\n\
+            output archive arrives in v2.2.14. Until then this sub-view is a\n\
+            placeholder so the L4 vocabulary stays stable."
+            .to_string(),
+        Some(other) => format!(
+            "Unknown procedural sub-view: {other}\n\
+             Known sub-views: goals, skills, cron, routines"
+        ),
+        None => {
+            // Default view: one summary line per sub-source so the user
+            // can see all four at once before drilling in.
+            let goal_count = GoalManager::new(cwd.to_path_buf())
+                .list()
+                .map(|gs| gs.len())
+                .unwrap_or(0);
+            let skill_count = ctx.loaded_skill_names.len();
+            let cron_count = CronManager::global()
+                .lock()
+                .map(|m| m.list().len())
+                .unwrap_or(0);
+            let mut lines = vec![
+                "=== L4 Procedural memory ===".to_string(),
+                String::new(),
+                format!(
+                    "  goals       {} active goal(s)        \
+                    (see /memory show procedural goals)",
+                    goal_count
+                ),
+                format!(
+                    "  skills      {} loaded skill(s)       \
+                    (see /memory show procedural skills)",
+                    skill_count
+                ),
+                format!(
+                    "  cron        {} entr{}              \
+                    (see /memory show procedural cron)",
+                    cron_count,
+                    if cron_count == 1 { "y" } else { "ies" }
+                ),
+                "  routines    (stub — v2.2.14 daemon)    \
+                 (see /memory show procedural routines)"
+                    .to_string(),
+            ];
+            if !ctx.loaded_skill_names.is_empty() {
+                lines.push(String::new());
+                lines.push(format!(
+                    "Currently loaded: {}",
+                    ctx.loaded_skill_names.join(", ")
+                ));
+            }
+            lines.join("\n")
+        }
+    }
+}
+
+fn render_procedural_skills(ctx: &MemoryContext<'_>) -> String {
+    if ctx.working.is_none() {
+        return "No live working-memory snapshot available; \
+            skill list is empty in this context."
+            .to_string();
+    }
+    let mut lines = vec!["=== L4 Procedural — skills ===".to_string()];
+    if ctx.loaded_skill_names.is_empty() {
+        lines.push("No skills loaded — use /skill load <name> to add one.".to_string());
+    } else {
+        for name in &ctx.loaded_skill_names {
+            lines.push(format!("  loaded: {name}"));
+        }
+    }
+    lines.join("\n")
+}
+
+fn render_procedural_cron() -> String {
+    use runtime::cron::CronManager;
+    let entries = match CronManager::global().lock() {
+        Ok(m) => m.list(),
+        Err(_) => return "Error: cron manager mutex poisoned.".to_string(),
+    };
+    if entries.is_empty() {
+        return "=== L4 Procedural — cron ===\nNo cron entries.\n\
+            (use /cron add to schedule a recurring prompt)"
+            .to_string();
+    }
+    let mut lines = vec!["=== L4 Procedural — cron ===".to_string()];
+    for entry in entries {
+        let state = if entry.enabled { "enabled " } else { "disabled" };
+        lines.push(format!(
+            "  [{state}] {}  {}  next={}",
+            entry.id, entry.cron_expression, entry.next_run
+        ));
+        lines.push(format!("           name={}", entry.name));
+    }
     lines.join("\n")
 }
 
@@ -1615,6 +1761,77 @@ mod memory_tests {
             "should reject unknown; got: {result}"
         );
         assert!(result.contains("pending"));
+    }
+
+    #[test]
+    fn memory_show_procedural_default_summarises_four_sources() {
+        // L4 §1-5 acceptance: the default view summarises goals + skills
+        // + cron + routines so the user sees the L4 vocabulary in one
+        // place.
+        let result = memory_show(Some("procedural"), &MemoryContext::default());
+        assert!(
+            result.contains("L4 Procedural memory"),
+            "header missing; got: {result}"
+        );
+        for label in ["goals", "skills", "cron", "routines"] {
+            assert!(result.contains(label), "expected {label}; got: {result}");
+        }
+    }
+
+    #[test]
+    fn memory_show_procedural_routines_is_stubbed_with_roadmap_pointer() {
+        // L4 §5 acceptance: routines sub-view advertises the deferred
+        // arrival rather than emitting fake data.
+        let result = memory_show(Some("procedural routines"), &MemoryContext::default());
+        assert!(
+            result.contains("TODO")
+                && result.contains("ROADMAP")
+                && result.contains("routines archive"),
+            "expected ROADMAP stub; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_procedural_skills_lists_loaded_skill_names_from_snapshot() {
+        // L4 §2 acceptance: skill sub-view enumerates each loaded skill
+        // from the live PromptSection::Skill labels.
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![
+            PromptSection::labeled(PromptSectionKind::Skill, "body-a", "alpha"),
+            PromptSection::new(PromptSectionKind::Intro, "intro"),
+            PromptSection::labeled(PromptSectionKind::Skill, "body-b", "beta"),
+        ]);
+        let ctx = MemoryContext::with_working(&snap, 0, 0);
+        let result = memory_show(Some("procedural skills"), &ctx);
+        assert!(result.contains("loaded: alpha"), "got: {result}");
+        assert!(result.contains("loaded: beta"), "got: {result}");
+    }
+
+    #[test]
+    fn memory_show_procedural_goals_routes_to_goal_manager() {
+        let result = memory_show(Some("procedural goals"), &MemoryContext::default());
+        assert!(
+            result.contains("L4 Procedural — goals"),
+            "header missing; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_procedural_cron_routes_to_cron_manager() {
+        // L4 §3 acceptance: cron sub-view goes through CronManager::global.
+        let result = memory_show(Some("procedural cron"), &MemoryContext::default());
+        assert!(
+            result.contains("L4 Procedural — cron"),
+            "header missing; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_show_procedural_unknown_sub_view_lists_known() {
+        let result = memory_show(Some("procedural explode"), &MemoryContext::default());
+        assert!(result.contains("Unknown procedural sub-view"), "got: {result}");
+        assert!(result.contains("goals"));
+        assert!(result.contains("routines"));
     }
 
     #[test]
