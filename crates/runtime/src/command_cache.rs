@@ -1,3 +1,6 @@
+// Phase 4.2: env::set_var in tests requires unsafe under Rust 2024.
+#![cfg_attr(test, allow(unsafe_code))]
+
 /// Command-output cache for Anvil (v2.3 W12 — token economy).
 ///
 /// Caches the stdout/stderr of read-only shell commands so that repeated
@@ -90,6 +93,15 @@ impl From<serde_json::Error> for CommandCacheError {
         Self::Json(e)
     }
 }
+
+// ─── Phase 4.2 (L7 §9) size-cap config ───────────────────────────────────────
+
+/// Phase 4.2: env var that overrides the command-cache size cap (in MB).
+/// Default 50. Set to 0 to disable size-cap eviction.
+pub const CMD_CACHE_MAX_MB_ENV: &str = "ANVIL_CMD_CACHE_MAX_MB";
+
+/// Phase 4.2: default size cap, in MB.
+pub const DEFAULT_CMD_CACHE_MAX_MB: u64 = 50;
 
 // ─── Per-session hot-path tracker ─────────────────────────────────────────────
 
@@ -719,6 +731,16 @@ impl CommandCacheManager {
         let serialized = serde_json::to_string_pretty(&entry)?;
         atomic_write(&path, serialized.as_bytes())?;
 
+        // Phase 4.2 (L7 §9): enforce size cap after every store. Failures
+        // are non-fatal — the cache is advisory.
+        if let Some(cap) = Self::size_cap_bytes() {
+            if let Ok(count) = self.enforce_size_cap(cap) {
+                if count > 0 {
+                    eprintln!("[command-cache] LRU eviction: removed {count} entry/entries to fit {cap}-byte cap");
+                }
+            }
+        }
+
         Ok(entry)
     }
 
@@ -772,6 +794,93 @@ impl CommandCacheManager {
             }
         }
         Ok(stats)
+    }
+
+    /// Phase 4.2 (L7 §9): resolve the size cap (in bytes) from
+    /// `ANVIL_CMD_CACHE_MAX_MB` (default 50 MB). A value of `0` returns
+    /// `None`, meaning size-cap eviction is disabled.
+    #[must_use]
+    pub fn size_cap_bytes() -> Option<u64> {
+        let mb = std::env::var(CMD_CACHE_MAX_MB_ENV)
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_CMD_CACHE_MAX_MB);
+        if mb == 0 {
+            None
+        } else {
+            Some(mb.saturating_mul(1024 * 1024))
+        }
+    }
+
+    /// Phase 4.2 (L7 §9): enforce a size cap on the on-disk cache,
+    /// evicting oldest-by-`captured_at` entries until the total file
+    /// size fits below `max_bytes`. Returns the number of entries
+    /// evicted.
+    ///
+    /// SECURITY: defense-in-depth assert against Phase 3.5 L5/L7
+    /// invariant — vault `cwd` should already be silent-skipped by
+    /// `store`, but if any entry's `cwd` ever lands here we want a
+    /// debug-build panic for fast detection.
+    pub fn enforce_size_cap(&self, max_bytes: u64) -> Result<usize, CommandCacheError> {
+        if !self.cache_dir.exists() {
+            return Ok(0);
+        }
+        // Collect (path, entry, file_size).
+        let mut rows: Vec<(PathBuf, CommandCacheEntry, u64)> = Vec::new();
+        let mut total: u64 = 0;
+        for de in std::fs::read_dir(&self.cache_dir)? {
+            let de = de?;
+            let path = de.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let meta = match de.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = meta.len();
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let entry: CommandCacheEntry = match serde_json::from_str(&raw) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            total = total.saturating_add(size);
+            rows.push((path, entry, size));
+        }
+        if total <= max_bytes {
+            return Ok(0);
+        }
+        // Sort oldest-first by captured_at (ascending).
+        rows.sort_by_key(|(_, e, _)| e.captured_at);
+        let mut running = total;
+        let mut evicted = 0_usize;
+        for (path, entry, size) in rows {
+            if running <= max_bytes {
+                break;
+            }
+            debug_assert!(
+                !crate::file_cache::is_l5_path(&entry.cwd),
+                "L7 cache contains entry with L5 cwd {:?} — Phase 3.5 gate bypassed",
+                entry.cwd,
+            );
+            let _ = std::fs::remove_file(&path);
+            running = running.saturating_sub(size);
+            evicted += 1;
+        }
+        Ok(evicted)
+    }
+
+    /// Phase 4.2: convenience wrapper that reads
+    /// `ANVIL_CMD_CACHE_MAX_MB` and applies the cap. Returns 0 when the
+    /// cap is disabled.
+    pub fn enforce_size_cap_from_env(&self) -> Result<usize, CommandCacheError> {
+        match Self::size_cap_bytes() {
+            Some(cap) => self.enforce_size_cap(cap),
+            None => Ok(0),
+        }
     }
 
     /// Remove all entries whose TTL has expired.  Returns the number removed.
@@ -1270,5 +1379,91 @@ mod tests {
         let map = session_counter().lock().unwrap();
         let key = format!("{}|{}", unique_cmd, cwd.display());
         assert_eq!(*map.get(&key).unwrap(), 3);
+    }
+
+    // ── Phase 4.2 (L7 §9) size-cap + LRU tests ────────────────────────────
+
+    fn write_raw_cmd_entry(mgr: &CommandCacheManager, name: &str, captured_at: u64, body_size: usize) {
+        std::fs::create_dir_all(&mgr.cache_dir).unwrap();
+        let entry = CommandCacheEntry {
+            command: format!("echo {name}"),
+            cwd: mgr.project_root.clone(),
+            stdout: "x".repeat(body_size),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms: 1,
+            captured_at,
+            touched_files: vec![],
+            stale_after_secs: 3600,
+            hits: 0,
+        };
+        let path = mgr.cache_dir.join(format!("{name}.json"));
+        let json = serde_json::to_string(&entry).unwrap();
+        std::fs::write(path, json).unwrap();
+    }
+
+    fn cmd_dir_size(mgr: &CommandCacheManager) -> u64 {
+        let mut total = 0u64;
+        if let Ok(rd) = std::fs::read_dir(&mgr.cache_dir) {
+            for de in rd.flatten() {
+                if let Ok(m) = de.metadata() {
+                    total += m.len();
+                }
+            }
+        }
+        total
+    }
+
+    #[test]
+    fn cmd_enforce_size_cap_evicts_oldest_first() {
+        let dir = TempDir::new().unwrap();
+        let mgr = make_manager(&dir);
+        // Three entries with 64 KB bodies, distinct captured_at order.
+        write_raw_cmd_entry(&mgr, "old",   100, 64 * 1024); // oldest
+        write_raw_cmd_entry(&mgr, "mid",   200, 64 * 1024);
+        write_raw_cmd_entry(&mgr, "fresh", 300, 64 * 1024);
+        let total_before = cmd_dir_size(&mgr);
+        assert!(total_before > 128 * 1024);
+
+        // Cap at ~ 96 KB → at least one entry must go (the oldest).
+        let cap = 96 * 1024;
+        let evicted = mgr.enforce_size_cap(cap).unwrap();
+        assert!(evicted >= 1, "must evict at least one entry; got {evicted}");
+        assert!(cmd_dir_size(&mgr) <= cap);
+        // The newest (captured_at=300) must survive.
+        let survivors = std::fs::read_dir(&mgr.cache_dir)
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .map(|de| de.file_name())
+            .collect::<Vec<_>>();
+        assert!(
+            survivors.iter().any(|n| n.to_string_lossy() == "fresh.json"),
+            "newest entry must survive eviction: {survivors:?}",
+        );
+    }
+
+    #[test]
+    fn cmd_enforce_size_cap_noop_when_dir_missing() {
+        let dir = TempDir::new().unwrap();
+        let mgr = make_manager(&dir);
+        // Don't create cache_dir.
+        let evicted = mgr.enforce_size_cap(0).unwrap();
+        assert_eq!(evicted, 0);
+    }
+
+    #[test]
+    fn cmd_size_cap_env_disables_with_zero() {
+        unsafe { std::env::set_var(CMD_CACHE_MAX_MB_ENV, "0"); }
+        assert!(CommandCacheManager::size_cap_bytes().is_none());
+        unsafe { std::env::set_var(CMD_CACHE_MAX_MB_ENV, "20"); }
+        assert_eq!(
+            CommandCacheManager::size_cap_bytes(),
+            Some(20 * 1024 * 1024),
+        );
+        unsafe { std::env::remove_var(CMD_CACHE_MAX_MB_ENV); }
+        assert_eq!(
+            CommandCacheManager::size_cap_bytes(),
+            Some(DEFAULT_CMD_CACHE_MAX_MB * 1024 * 1024),
+        );
     }
 }

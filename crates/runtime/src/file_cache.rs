@@ -84,6 +84,13 @@ pub const MAX_PROMPT_ENTRIES: usize = 50;
 /// Approximate byte budget for the `<known-files>` block in the system prompt.
 pub const MAX_PROMPT_BYTES: usize = 4 * 1024; // 4 KB
 
+/// Phase 4.2 (L7 §9): env override for the file-cache size cap (in MB).
+/// Default 50. Set to 0 to disable size-cap eviction.
+pub const FILE_CACHE_MAX_MB_ENV: &str = "ANVIL_FILE_CACHE_MAX_MB";
+
+/// Phase 4.2: default size cap for the file-cache, in MB.
+pub const DEFAULT_FILE_CACHE_MAX_MB: u64 = 50;
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -323,6 +330,19 @@ impl FileCacheManager {
         };
 
         self.write_entry_atomic(&entry)?;
+
+        // Phase 4.2 (L7 §9): enforce the size cap after every store.
+        // Eviction is by oldest `last_seen` (LRU). Failures here are
+        // non-fatal — the cache is advisory, and we'd rather over-shoot
+        // the cap than reject the store.
+        if let Some(cap) = Self::size_cap_bytes() {
+            if let Ok(count) = self.enforce_size_cap(cap) {
+                if count > 0 {
+                    eprintln!("[file-cache] LRU eviction: removed {count} entry/entries to fit {cap}-byte cap");
+                }
+            }
+        }
+
         Ok(entry)
     }
 
@@ -389,6 +409,69 @@ impl FileCacheManager {
             entry_count: entries.len(),
             total_bytes_cached,
         })
+    }
+
+    /// Phase 4.2 (L7 §9): resolve the size cap (in bytes) from
+    /// `ANVIL_FILE_CACHE_MAX_MB` (default 50 MB). A value of `0` returns
+    /// `None`, meaning size-cap eviction is disabled.
+    #[must_use]
+    pub fn size_cap_bytes() -> Option<u64> {
+        let mb = std::env::var(FILE_CACHE_MAX_MB_ENV)
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_FILE_CACHE_MAX_MB);
+        if mb == 0 {
+            None
+        } else {
+            Some(mb.saturating_mul(1024 * 1024))
+        }
+    }
+
+    /// Phase 4.2 (L7 §9): enforce a size cap on the on-disk cache,
+    /// evicting oldest-by-`last_seen` entries until total `size_bytes`
+    /// fits below `max_bytes`. Returns the number of entries evicted.
+    ///
+    /// SECURITY: the L5/L7 invariant from Phase 3.5 says vault paths
+    /// shouldn't be in the cache at all. As defense-in-depth a
+    /// `debug_assert!` fires before evicting if any entry's `path` is
+    /// inside the vault — that would indicate a bypass of the
+    /// store/lookup gates and the test suite must catch it. In release
+    /// builds the entry is evicted normally; the asserts only fail in
+    /// debug builds.
+    pub fn enforce_size_cap(&self, max_bytes: u64) -> Result<usize, FileCacheError> {
+        let mut entries = self.list()?;
+        let total: u64 = entries.iter().map(|e| e.size_bytes).sum();
+        if total <= max_bytes {
+            return Ok(0);
+        }
+        // Sort oldest-first by last_seen (ascending).
+        entries.sort_by_key(|e| e.last_seen);
+        let mut running = total;
+        let mut evicted = 0_usize;
+        for entry in entries {
+            if running <= max_bytes {
+                break;
+            }
+            debug_assert!(
+                !is_l5_path(&entry.path),
+                "L7 cache contains L5 path {:?} — Phase 3.5 gate bypassed",
+                entry.path,
+            );
+            let _ = self.delete_entry(&entry.path);
+            running = running.saturating_sub(entry.size_bytes);
+            evicted += 1;
+        }
+        Ok(evicted)
+    }
+
+    /// Phase 4.2: convenience wrapper that reads
+    /// `ANVIL_FILE_CACHE_MAX_MB` and applies the cap. Returns the count
+    /// evicted (zero when the cap is disabled).
+    pub fn enforce_size_cap_from_env(&self) -> Result<usize, FileCacheError> {
+        match Self::size_cap_bytes() {
+            Some(cap) => self.enforce_size_cap(cap),
+            None => Ok(0),
+        }
     }
 
     /// Remove entries for files that no longer exist or whose sha256 doesn't
@@ -691,6 +774,7 @@ mod tests {
     use super::{
         build_known_files_block, detect_language, forget_entry_best_effort,
         refresh_entry_best_effort, truncate_to, FileCacheEntry, FileCacheManager,
+        DEFAULT_FILE_CACHE_MAX_MB, FILE_CACHE_MAX_MB_ENV,
         LARGE_FILE_THRESHOLD_BYTES, MAX_KEY_SYMBOLS, MAX_SUMMARY_LEN,
     };
 
@@ -1321,5 +1405,84 @@ mod tests {
         assert!(!block_str.contains("no-summary.rs"));
         assert!(block_str.contains("<known-files>"));
         assert!(block_str.contains("</known-files>"));
+    }
+
+    // ── Phase 4.2 (L7 §9) size-cap + LRU tests ────────────────────────────
+
+    /// Write a stub entry directly to the cache dir under canonical name
+    /// `<entry-sha>.json`, bypassing the `store` size-cap so we can
+    /// construct controlled cache states for the tests.
+    fn write_raw_entry(mgr: &FileCacheManager, entry: &FileCacheEntry) {
+        let dest = mgr.entry_path(&entry.path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let json = serde_json::to_string(entry).unwrap();
+        fs::write(dest, json).unwrap();
+    }
+
+    fn mk_entry(name: &str, size: u64, last_seen: u64) -> FileCacheEntry {
+        FileCacheEntry {
+            path: PathBuf::from(format!("/tmp/lru-{name}")),
+            sha256: format!("sha-{name}"),
+            size_bytes: size,
+            mtime: 0,
+            last_seen,
+            line_count: 1,
+            language: Some("rust".into()),
+            summary: None,
+            key_symbols: vec![],
+            access_count: 0,
+        }
+    }
+
+    #[test]
+    fn enforce_size_cap_evicts_oldest_first() {
+        let proj = tmp_project();
+        let mgr = make_manager(&proj);
+        // Three entries — 4 MB, 3 MB, 2 MB — totalling 9 MB.
+        write_raw_entry(&mgr, &mk_entry("old",   4 * 1024 * 1024, 100)); // oldest
+        write_raw_entry(&mgr, &mk_entry("mid",   3 * 1024 * 1024, 200));
+        write_raw_entry(&mgr, &mk_entry("fresh", 2 * 1024 * 1024, 300)); // newest
+
+        // Cap = 5 MB → must evict at least the 4 MB oldest (running 5 MB),
+        // potentially also the 3 MB mid (running 2 MB).
+        let evicted = mgr.enforce_size_cap(5 * 1024 * 1024).unwrap();
+        assert!(evicted >= 1, "must evict at least one entry");
+        let surviving = mgr.list().unwrap();
+        let total: u64 = surviving.iter().map(|e| e.size_bytes).sum();
+        assert!(total <= 5 * 1024 * 1024, "post-cap total {total} > 5MB");
+        // The newest (last_seen=300) must survive.
+        assert!(
+            surviving.iter().any(|e| e.last_seen == 300),
+            "the most-recent entry must NEVER be evicted",
+        );
+    }
+
+    #[test]
+    fn enforce_size_cap_noop_when_under_cap() {
+        let proj = tmp_project();
+        let mgr = make_manager(&proj);
+        write_raw_entry(&mgr, &mk_entry("a", 1024, 100));
+        write_raw_entry(&mgr, &mk_entry("b", 1024, 200));
+        let evicted = mgr.enforce_size_cap(10 * 1024 * 1024).unwrap();
+        assert_eq!(evicted, 0);
+        assert_eq!(mgr.list().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn size_cap_env_disables_with_zero() {
+        unsafe { std::env::set_var(FILE_CACHE_MAX_MB_ENV, "0"); }
+        assert!(FileCacheManager::size_cap_bytes().is_none());
+        unsafe { std::env::set_var(FILE_CACHE_MAX_MB_ENV, "100"); }
+        assert_eq!(
+            FileCacheManager::size_cap_bytes(),
+            Some(100 * 1024 * 1024),
+        );
+        unsafe { std::env::remove_var(FILE_CACHE_MAX_MB_ENV); }
+        assert_eq!(
+            FileCacheManager::size_cap_bytes(),
+            Some(DEFAULT_FILE_CACHE_MAX_MB * 1024 * 1024),
+        );
     }
 }
