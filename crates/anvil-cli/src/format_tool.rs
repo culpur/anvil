@@ -3,6 +3,18 @@
 //!
 //! Also contains `response_to_events` which translates a completed
 //! `MessageResponse` into the `AssistantEvent` sequence that the runtime uses.
+//!
+//! # ResultBlock schema
+//!
+//! Tools produce structured output via [`ResultBlock`].  Three variants cover
+//! all tool output shapes:
+//!
+//! - [`ResultBlock::Text`]    — free-form prose or command output
+//! - [`ResultBlock::Code`]    — syntax-highlighted content with a language tag
+//! - [`ResultBlock::KvTable`] — key-value pairs rendered as a summary table
+//!
+//! Each surface (TUI scrollback, viewer.html, pretty-card) renders
+//! `Vec<ResultBlock>` consistently via [`render_result_blocks_tui`].
 
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
@@ -13,11 +25,76 @@ use api::{
 use crate::render::TerminalRenderer;
 use runtime::{AssistantEvent, RuntimeError, TokenUsage};
 
+// ─── ResultBlock schema ───────────────────────────────────────────────────────
+
+/// A single presentable unit of tool output.
+///
+/// Three variants are sufficient for every tool in the current registry:
+/// prose text, syntax-highlighted code, and key-value summary rows.
+/// Consumers assemble a `Vec<ResultBlock>` and pass it to
+/// [`render_result_blocks_tui`] (or their surface equivalent) to get a
+/// consistent display string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResultBlock {
+    /// Free-form prose, plain command output, or multi-line status text.
+    Text { content: String },
+    /// Syntax-highlighted content (code, JSON, TOML, shell script, …).
+    Code { language: String, content: String },
+    /// A list of key-value pairs rendered as a compact summary table.
+    KvTable { rows: Vec<(String, String)> },
+}
+
+/// Render a sequence of [`ResultBlock`]s to a TUI-compatible ANSI string.
+///
+/// - `Text` blocks are emitted as-is (no colour).
+/// - `Code` blocks are wrapped with a faint language label header.
+/// - `KvTable` blocks render each row as `  key : value` with right-padding
+///   on the key column.
+pub(crate) fn render_result_blocks_tui(blocks: &[ResultBlock]) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        match block {
+            ResultBlock::Text { content } => {
+                if !content.is_empty() {
+                    parts.push(content.clone());
+                }
+            }
+            ResultBlock::Code { language, content } => {
+                if content.is_empty() {
+                    continue;
+                }
+                if language.is_empty() {
+                    parts.push(content.clone());
+                } else {
+                    parts.push(format!(
+                        "\x1b[2m[{language}]\x1b[0m\n{content}"
+                    ));
+                }
+            }
+            ResultBlock::KvTable { rows } => {
+                if rows.is_empty() {
+                    continue;
+                }
+                let max_key = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+                let rendered: Vec<String> = rows
+                    .iter()
+                    .map(|(k, v)| format!("  {k:<max_key$} : {v}"))
+                    .collect();
+                parts.push(rendered.join("\n"));
+            }
+        }
+    }
+    parts.join("\n")
+}
+
 /// One-line summary of a tool's result, suitable for the TUI's compact
 /// post-call line `{name} [{status}]: {summary}`. Without this, the summary
 /// was the first line of the raw JSON output — for tools that return
 /// `{"key": "value"}` the first line is just `{`, telling the user
 /// absolutely nothing.
+///
+/// Explicit arms exist for every tool in `mvp_tool_specs()`.  The generic
+/// fallback at the bottom covers plugin and MCP tools with unknown schemas.
 pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> String {
     if is_error {
         return truncate_for_summary(output.trim(), 200);
@@ -28,6 +105,7 @@ pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> S
     };
 
     match name {
+        // ── Core file/shell tools ─────────────────────────────────────────────
         "bash" | "Bash" => {
             // Bash result: {"stdout": "...", "stderr": "...", "interrupted": bool, ...}
             let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
@@ -98,17 +176,321 @@ pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> S
             }
         }
         "glob_search" | "Glob" => {
-            let count = parsed.get("matches").and_then(|v| v.as_array()).map_or(0, |a| a.len());
-            format!("{count} match{}", if count == 1 { "" } else { "es" })
+            let count = parsed.get("numFiles")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(|| {
+                    parsed.get("filenames").and_then(|v| v.as_array()).map_or(0, |a| a.len() as u64)
+                });
+            format!("{count} file{}", if count == 1 { "" } else { "s" })
         }
         "grep_search" | "Grep" => {
-            let count = parsed.get("matches").and_then(|v| v.as_array()).map_or(0, |a| a.len());
-            format!("{count} match{}", if count == 1 { "" } else { "es" })
+            let matches = parsed.get("numMatches")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(|| {
+                    parsed.get("matches").and_then(|v| v.as_array()).map_or(0, |a| a.len() as u64)
+                });
+            let files = parsed.get("numFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+            if files > 0 {
+                format!("{matches} match{} in {files} file{}", if matches == 1 { "" } else { "es" }, if files == 1 { "" } else { "s" })
+            } else {
+                format!("{matches} match{}", if matches == 1 { "" } else { "es" })
+            }
         }
-        // For team/task/MCP tools where the result is typically a free-form
-        // string OR a small JSON object, try plain-string first, then known
-        // top-level keys ("message", "summary", "id", "name"), else fall back
-        // to a compact key-summary so the user sees SOMETHING meaningful.
+        // ── Web tools ─────────────────────────────────────────────────────────
+        "WebFetch" => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(first_visible_line(s), 200);
+            }
+            let snippet = parsed.get("content")
+                .or_else(|| parsed.get("text"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if snippet.is_empty() {
+                "fetched page".to_string()
+            } else {
+                truncate_for_summary(first_visible_line(snippet), 200)
+            }
+        }
+        "WebSearch" => {
+            // {"results": [{...}], "query": "..."}
+            let count = parsed.get("results")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            let query = parsed.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            if query.is_empty() {
+                format!("{count} result{}", if count == 1 { "" } else { "s" })
+            } else {
+                format!("{count} result{} for \"{query}\"", if count == 1 { "" } else { "s" })
+            }
+        }
+        // ── Task management tools ─────────────────────────────────────────────
+        "TodoWrite" => {
+            let count = parsed.get("todos")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{count} task{} saved", if count == 1 { "" } else { "s" })
+        }
+        "TaskCreate" => {
+            let id = parsed.get("taskId")
+                .or_else(|| parsed.get("task_id"))
+                .or_else(|| parsed.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("task created (id={id})")
+        }
+        "TaskGet" => {
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let id = parsed.get("taskId")
+                .or_else(|| parsed.get("task_id"))
+                .or_else(|| parsed.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("task {id}: {status}")
+        }
+        "TaskList" => {
+            let count = parsed.get("tasks")
+                .and_then(|v| v.as_array())
+                .map_or_else(|| parsed.as_array().map_or(0, |a| a.len()), |a| a.len());
+            format!("{count} task{}", if count == 1 { "" } else { "s" })
+        }
+        "TaskUpdate" => {
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("updated");
+            format!("task {status}")
+        }
+        "TaskOutput" => {
+            let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let body = if stdout.trim().is_empty() {
+                parsed.get("output").and_then(|v| v.as_str()).unwrap_or("")
+            } else {
+                stdout
+            };
+            let lines = body.lines().filter(|l| !l.trim().is_empty()).count();
+            let first = first_visible_line(body);
+            if first.is_empty() {
+                "(no output)".to_string()
+            } else if lines > 1 {
+                format!("{} (+{} more line{})", truncate_for_summary(first, 120), lines - 1, if lines - 1 == 1 { "" } else { "s" })
+            } else {
+                truncate_for_summary(first, 200)
+            }
+        }
+        "TaskStop" => {
+            parsed.get("message")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_summary(s, 200))
+                .unwrap_or_else(|| "task stopped".to_string())
+        }
+        // ── Agent / Skill tools ───────────────────────────────────────────────
+        "Agent" => {
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("spawned");
+            if name == "?" {
+                format!("agent {status}")
+            } else {
+                format!("agent {name}: {status}")
+            }
+        }
+        "Skill" => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(first_visible_line(s), 200);
+            }
+            let skill = parsed.get("skill").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("skill loaded: {skill}")
+        }
+        // ── Configuration / system tools ──────────────────────────────────────
+        "Config" => {
+            let setting = parsed.get("setting").and_then(|v| v.as_str()).unwrap_or("?");
+            let value = parsed.get("value")
+                .map(|v| truncate_for_summary(&v.to_string(), 80))
+                .unwrap_or_default();
+            if value.is_empty() {
+                format!("{setting}")
+            } else {
+                format!("{setting} = {value}")
+            }
+        }
+        "StructuredOutput" => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(s.trim(), 200);
+            }
+            if let Some(obj) = parsed.as_object() {
+                let keys: Vec<_> = obj.keys().take(4).map(String::as_str).collect();
+                return truncate_for_summary(&format!("{{ {} }}", keys.join(", ")), 200);
+            }
+            "structured output".to_string()
+        }
+        "ToolSearch" => {
+            let count = parsed.get("tools")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{count} tool{}", if count == 1 { "" } else { "s" })
+        }
+        // ── Execution tools ───────────────────────────────────────────────────
+        "NotebookEdit" => {
+            let path = parsed.get("notebook_path").and_then(|v| v.as_str()).unwrap_or("?");
+            let mode = parsed.get("edit_mode").and_then(|v| v.as_str()).unwrap_or("edited");
+            format!("{mode} cell in {path}")
+        }
+        "Sleep" => "done".to_string(),
+        "SendUserMessage" | "Brief" => {
+            let msg = parsed.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            if msg.is_empty() {
+                "message sent".to_string()
+            } else {
+                truncate_for_summary(first_visible_line(msg), 200)
+            }
+        }
+        "REPL" => {
+            let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let output_field = parsed.get("output").and_then(|v| v.as_str()).unwrap_or("");
+            let body = if !stdout.trim().is_empty() { stdout } else { output_field };
+            let lines = body.lines().filter(|l| !l.trim().is_empty()).count();
+            let first = first_visible_line(body);
+            if first.is_empty() {
+                "(no output)".to_string()
+            } else if lines > 1 {
+                format!("{} (+{} more line{})", truncate_for_summary(first, 120), lines - 1, if lines - 1 == 1 { "" } else { "s" })
+            } else {
+                truncate_for_summary(first, 200)
+            }
+        }
+        "PowerShell" => {
+            let stdout = parsed.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = parsed.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let body = if !stdout.trim().is_empty() { stdout } else { stderr };
+            let lines = body.lines().filter(|l| !l.trim().is_empty()).count();
+            let first = first_visible_line(body);
+            if first.is_empty() {
+                "(no output)".to_string()
+            } else if lines > 1 {
+                format!("{} (+{} more line{})", truncate_for_summary(first, 120), lines - 1, if lines - 1 == 1 { "" } else { "s" })
+            } else {
+                truncate_for_summary(first, 200)
+            }
+        }
+        "AskUserQuestion" => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(s.trim(), 200);
+            }
+            parsed.get("answer").or_else(|| parsed.get("response"))
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_summary(s, 200))
+                .unwrap_or_else(|| "answered".to_string())
+        }
+        // ── MCP resource tools ────────────────────────────────────────────────
+        "ListMcpResourcesTool" => {
+            mcp_list_summary(&parsed, "resource")
+        }
+        "ReadMcpResourceTool" => {
+            let uri = parsed.get("uri").and_then(|v| v.as_str()).unwrap_or("?");
+            if let Some(content) = parsed.get("content").and_then(|v| v.as_str()) {
+                let lines = content.lines().count();
+                format!("{uri} ({lines} line{})", if lines == 1 { "" } else { "s" })
+            } else {
+                format!("read {uri}")
+            }
+        }
+        // ── LSP tool ──────────────────────────────────────────────────────────
+        "LSPTool" => {
+            lsp_tool_summary(&parsed)
+        }
+        // ── Cron tools ────────────────────────────────────────────────────────
+        "CronCreate" => {
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("cron job");
+            let expr = parsed.get("cron_expression").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("scheduled \"{name}\" ({expr})")
+        }
+        "CronList" => {
+            let count = parsed.get("entries")
+                .and_then(|v| v.as_array())
+                .map_or_else(|| parsed.as_array().map_or(0, |a| a.len()), |a| a.len());
+            format!("{count} cron entr{}", if count == 1 { "y" } else { "ies" })
+        }
+        "CronDelete" => {
+            parsed.get("message")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_summary(s, 200))
+                .unwrap_or_else(|| "cron entry deleted".to_string())
+        }
+        // ── Team tools ────────────────────────────────────────────────────────
+        "TeamCreate" => {
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let id = parsed.get("id")
+                .or_else(|| parsed.get("team_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("team \"{name}\" created (id={id})")
+        }
+        "TeamAddMember" => {
+            let member = parsed.get("name")
+                .or_else(|| parsed.get("member_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("member {member} added")
+        }
+        "TeamRemoveMember" => {
+            let member = parsed.get("member_name")
+                .or_else(|| parsed.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("member {member} removed")
+        }
+        "TeamList" => {
+            let count = parsed.get("teams")
+                .and_then(|v| v.as_array())
+                .map_or_else(|| parsed.as_array().map_or(0, |a| a.len()), |a| a.len());
+            format!("{count} team{}", if count == 1 { "" } else { "s" })
+        }
+        "TeamDelegate" => {
+            let member = parsed.get("member_name")
+                .or_else(|| parsed.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("delegated");
+            format!("delegated to {member}: {status}")
+        }
+        "TeamStatus" => {
+            let members = parsed.get("members")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{members} member{}", if members == 1 { "" } else { "s" })
+        }
+        // ── Worktree tools ────────────────────────────────────────────────────
+        "EnterWorktree" => {
+            let path = parsed.get("path")
+                .or_else(|| parsed.get("worktree_path"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("entered worktree {path}")
+        }
+        "ExitWorktree" => {
+            parsed.get("message")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_summary(s, 200))
+                .unwrap_or_else(|| "exited worktree".to_string())
+        }
+        // ── Plan mode tools ───────────────────────────────────────────────────
+        "EnterPlanMode" => "plan mode active".to_string(),
+        "ExitPlanMode" => "plan mode exited".to_string(),
+        // ── Remote / automation tools ─────────────────────────────────────────
+        "RemoteTrigger" => {
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let url = parsed.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{url}: {status}")
+        }
+        "SendMessage" => {
+            parsed.get("message")
+                .and_then(|v| v.as_str())
+                .map(|s| truncate_for_summary(s, 200))
+                .unwrap_or_else(|| "message sent".to_string())
+        }
+        "read_release_notes" => {
+            if let Some(s) = parsed.as_str() {
+                return truncate_for_summary(first_visible_line(s), 200);
+            }
+            "release notes".to_string()
+        }
+        // ── Fallback: plugin / MCP / unknown tools ────────────────────────────
         _ => {
             if let Some(s) = parsed.as_str() {
                 return truncate_for_summary(s.trim(), 200);
@@ -130,6 +512,40 @@ pub(crate) fn tool_result_summary(name: &str, output: &str, is_error: bool) -> S
                 return truncate_for_summary(&format!("keys: {}", keys.join(", ")), 200);
             }
             truncate_for_summary(output.trim(), 200)
+        }
+    }
+}
+
+/// Summarise a ListMcpResourcesTool result as "{N} resources".
+fn mcp_list_summary(parsed: &serde_json::Value, kind: &str) -> String {
+    let count = parsed.get("resources")
+        .and_then(|v| v.as_array())
+        .map_or_else(|| parsed.as_array().map_or(0, |a| a.len()), |a| a.len());
+    format!("{count} {kind}{}", if count == 1 { "" } else { "s" })
+}
+
+/// Summarise an LSPTool result as a compact kv-style line.
+fn lsp_tool_summary(parsed: &serde_json::Value) -> String {
+    let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("?");
+    match action {
+        "diagnostics" => {
+            let count = parsed.get("diagnostics")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{count} diagnostic{}", if count == 1 { "" } else { "s" })
+        }
+        "definition" | "references" => {
+            let count = parsed.get("locations")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{count} location{}", if count == 1 { "" } else { "s" })
+        }
+        other => {
+            if let Some(s) = parsed.get("result").and_then(|v| v.as_str()) {
+                truncate_for_summary(first_visible_line(s), 200)
+            } else {
+                format!("lsp {other}")
+            }
         }
     }
 }
@@ -174,22 +590,151 @@ pub(crate) fn tool_call_detail(name: &str, input: &str) -> String {
             }
             out
         }
-        "glob_search" | "Glob" | "grep_search" | "Grep" => {
-            let pattern = parsed
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let scope = parsed
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+        "glob_search" | "Glob" => {
+            let pattern = parsed.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let scope = parsed.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             format!("{pattern}\nin {scope}")
         }
-        "web_search" | "WebSearch" => parsed
+        "grep_search" | "Grep" => {
+            let pattern = parsed.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+            let scope = parsed.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+            let glob = parsed.get("glob").and_then(|v| v.as_str()).unwrap_or("");
+            if glob.is_empty() {
+                format!("{pattern}\nin {scope}")
+            } else {
+                format!("{pattern}\nin {scope} ({glob})")
+            }
+        }
+        "WebSearch" | "web_search" => parsed
             .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string(),
+        "WebFetch" => {
+            let url = parsed.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let prompt = parsed.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            if prompt.is_empty() {
+                url.to_string()
+            } else {
+                format!("{url}\n{}", truncate_for_summary(prompt, 80))
+            }
+        }
+        "TodoWrite" => {
+            let count = parsed.get("todos")
+                .and_then(|v| v.as_array())
+                .map_or(0, |a| a.len());
+            format!("{count} task{}", if count == 1 { "" } else { "s" })
+        }
+        "Agent" => {
+            let desc = parsed.get("description")
+                .or_else(|| parsed.get("prompt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            truncate_for_summary(desc, 200)
+        }
+        "Skill" => {
+            let skill = parsed.get("skill").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("loading skill: {skill}")
+        }
+        "Config" => {
+            let setting = parsed.get("setting").and_then(|v| v.as_str()).unwrap_or("?");
+            let value = parsed.get("value")
+                .map(|v| truncate_for_summary(&v.to_string(), 60))
+                .unwrap_or_default();
+            if value.is_empty() {
+                format!("get {setting}")
+            } else {
+                format!("set {setting} = {value}")
+            }
+        }
+        "TaskCreate" => {
+            let desc = parsed.get("description").and_then(|v| v.as_str()).unwrap_or("?");
+            let cmd = parsed.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            if cmd.is_empty() {
+                truncate_for_summary(desc, 200)
+            } else {
+                format!("{}\n$ {}", truncate_for_summary(desc, 80), truncate_for_summary(cmd, 120))
+            }
+        }
+        "TaskGet" | "TaskOutput" | "TaskStop" | "TaskUpdate" => {
+            let id = parsed.get("task_id")
+                .or_else(|| parsed.get("taskId"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            format!("task {id}")
+        }
+        "ListMcpResourcesTool" => {
+            let server = parsed.get("server_name").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("list resources on {server}")
+        }
+        "ReadMcpResourceTool" => {
+            let server = parsed.get("server_name").and_then(|v| v.as_str()).unwrap_or("?");
+            let uri = parsed.get("uri").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{server}: {uri}")
+        }
+        "LSPTool" => {
+            let action = parsed.get("action").and_then(|v| v.as_str()).unwrap_or("?");
+            let path = parsed.get("file_path").and_then(|v| v.as_str()).unwrap_or("?");
+            let loc = match (parsed.get("line").and_then(|v| v.as_u64()), parsed.get("character").and_then(|v| v.as_u64())) {
+                (Some(l), Some(c)) => format!(":{l}:{c}"),
+                (Some(l), None) => format!(":{l}"),
+                _ => String::new(),
+            };
+            format!("{action} {path}{loc}")
+        }
+        "REPL" => {
+            let lang = parsed.get("language").and_then(|v| v.as_str()).unwrap_or("?");
+            let code = parsed.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let lines = code.lines().count();
+            format!("[{lang}] {lines} line{}", if lines == 1 { "" } else { "s" })
+        }
+        "PowerShell" => parsed
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|cmd| truncate_for_summary(cmd, 200))
+            .unwrap_or_default(),
+        "NotebookEdit" => {
+            let path = parsed.get("notebook_path").and_then(|v| v.as_str()).unwrap_or("?");
+            let mode = parsed.get("edit_mode").and_then(|v| v.as_str()).unwrap_or("edit");
+            format!("{mode} cell in {path}")
+        }
+        "RemoteTrigger" => {
+            let url = parsed.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            let prompt = parsed.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{url}\n{}", truncate_for_summary(prompt, 120))
+        }
+        "CronCreate" => {
+            let expr = parsed.get("cron_expression").and_then(|v| v.as_str()).unwrap_or("?");
+            let prompt = parsed.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{expr}: {}", truncate_for_summary(prompt, 120))
+        }
+        "TeamCreate" => {
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("create team \"{name}\"")
+        }
+        "TeamAddMember" => {
+            let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let role = parsed.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("add {name} as {role}")
+        }
+        "TeamDelegate" => {
+            let member = parsed.get("member_name").and_then(|v| v.as_str()).unwrap_or("?");
+            let prompt = parsed.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+            format!("{member}: {}", truncate_for_summary(prompt, 120))
+        }
+        "EnterWorktree" => {
+            let branch = parsed.get("branch").and_then(|v| v.as_str()).unwrap_or("auto");
+            format!("branch: {branch}")
+        }
+        "SendMessage" => {
+            let id = parsed.get("agent_id").map(|v| v.to_string()).unwrap_or_else(|| "?".to_string());
+            let msg = parsed.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            format!("→ agent {id}: {}", truncate_for_summary(msg, 120))
+        }
+        "AskUserQuestion" => {
+            let q = parsed.get("question").and_then(|v| v.as_str()).unwrap_or("?");
+            truncate_for_summary(q, 200)
+        }
         _ => summarize_tool_payload(input),
     }
 }

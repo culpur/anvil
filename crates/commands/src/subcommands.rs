@@ -1908,3 +1908,50 @@ pub const SEARCH_SUBCOMMANDS: &[SubcommandSpec] = &[
         subcommands: &[],
     },
 ];
+
+// ─── Canonical subcommand name arrays (#10 vocabulary consolidation) ──────────
+//
+// These `&[&str]` slices are the SINGLE SOURCE OF TRUTH for each command's
+// subcommand vocabulary.  Three surfaces must stay in sync:
+//
+//   1. The `SubcommandSpec` tree above (completion picker).
+//   2. The hint string in `specs.rs` (`argument_hint: Some("...")`).
+//   3. The handler dispatch in `handlers.rs` (match arm guards).
+//
+// The drift-prevention test `every_subcommand_in_hint_is_in_const` in
+// `lib.rs` enforces that every token found in a `|`-separated spec hint
+// is listed in the corresponding const below.  Add new tokens here AND in
+// the `SubcommandSpec` tree above AND in the handler.
+
+/// Canonical subcommand names for `/memory`.
+///
+/// Derived from `MEMORY_SUBCOMMANDS` (`SubcommandSpec` tree).
+/// Parser arms in `lib.rs` and handler arms in `handlers.rs` must accept
+/// exactly these tokens (plus legacy aliases kept for one cycle).
+pub const MEMORY_SUBCOMMAND_NAMES: &[&str] = &[
+    "show",
+    "inspect",
+    "promote",
+    "forget",
+    "why",
+    "budget",
+    "prune",
+];
+
+/// Canonical subcommand names for `/skills`.
+///
+/// Derived from `SKILLS_SUBCOMMANDS` (`SubcommandSpec` tree).
+pub const SKILLS_SUBCOMMAND_NAMES: &[&str] = &[
+    "list",
+    "info",
+];
+
+/// Canonical subcommand names for `/config`.
+///
+/// Derived from `CONFIG_SUBCOMMANDS` (`SubcommandSpec` tree).
+pub const CONFIG_SUBCOMMAND_NAMES: &[&str] = &[
+    "env",
+    "hooks",
+    "model",
+    "plugins",
+];
