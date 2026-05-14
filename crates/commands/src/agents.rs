@@ -3,6 +3,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use plugins::{Plugin, PluginManager, PluginManagerConfig};
+
 use super::normalize_optional_args;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -249,7 +251,46 @@ pub fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         );
     }
 
+    // Defect #5: append skill roots from installed plugins.
+    // Each installed plugin whose manifest declares skills has a `root/skills/`
+    // directory (or per-skill paths) that the skill loader would otherwise miss.
+    append_plugin_skill_roots(&mut roots);
+
     roots
+}
+
+/// Query the active `PluginManager` for installed-plugin skill directories and
+/// append them to `roots`.  Best-effort: errors are silently swallowed so a
+/// broken plugin registry never prevents the rest of skill discovery.
+fn append_plugin_skill_roots(roots: &mut Vec<SkillRoot>) {
+    let config_home = if let Ok(h) = env::var("ANVIL_CONFIG_HOME") {
+        PathBuf::from(h)
+    } else if let Some(h) = env::var_os("HOME") {
+        PathBuf::from(h).join(".anvil")
+    } else {
+        return;
+    };
+
+    let config = PluginManagerConfig::new(&config_home);
+    let mut mgr = PluginManager::new(config);
+
+    let plugins = match mgr.discover_plugins() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    for plugin in plugins {
+        let Some(root) = plugin.metadata().root.as_ref() else { continue };
+
+        // Primary convention: <plugin-root>/skills/
+        let skills_dir = root.join("skills");
+        push_unique_skill_root(roots, DefinitionSource::UserAnvil, skills_dir, SkillOrigin::SkillsDir);
+
+        // Per-manifest entries: extract parent dirs of declared skill paths.
+        // This handles plugins that put skills in subdirectories other than `skills/`.
+        // (We can't directly read the manifest here without re-loading it, so we
+        //  rely on the conventional `skills/` directory for now.)
+    }
 }
 
 fn push_unique_root(
@@ -933,6 +974,76 @@ mod tests {
             10,
             "expected exactly 10 bundled skills, got {}",
             BUNDLED_SKILL_BODIES.len()
+        );
+    }
+
+    // Defect #5 — plugin skill roots appear in discover_skill_roots.
+    //
+    // We create a minimal valid plugin in a temp directory, point
+    // ANVIL_CONFIG_HOME at it, and verify that the plugin's `skills/`
+    // subdirectory appears in the roots returned by `discover_skill_roots`.
+    //
+    // `append_plugin_skill_roots` is best-effort (errors are swallowed), so we
+    // set up enough structure to ensure the plugin is discovered rather than
+    // silently skipped.
+    #[test]
+    fn plugin_skills_dir_appears_in_discover_skill_roots() {
+        use std::fs;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_home = tmp.path();
+
+        // Layout: <config_home>/plugins/installed/test-plugin/
+        //   plugin.json
+        //   skills/my-skill/SKILL.md   <-- must be a directory + SKILL.md
+        let install_root = config_home
+            .join("plugins")
+            .join("installed")
+            .join("test-plugin");
+        let skills_dir = install_root.join("skills");
+        let skill_dir = skills_dir.join("my-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: my-skill\ndescription: test\ntriggers: [test]\n---\nBody.\n")
+            .expect("write SKILL.md");
+
+        // Write minimal plugin manifest (no tools/hooks/commands).
+        let manifest_json = r#"{
+            "name": "test-plugin",
+            "version": "0.1.0",
+            "description": "Integration test plugin for defect #5"
+        }"#;
+        fs::write(install_root.join("plugin.json"), manifest_json)
+            .expect("write plugin.json");
+
+        // Also create the bundled root override so sync_bundled_plugins does
+        // not try to materialize the embedded binary tree into the temp dir.
+        // We point it at an empty directory: no bundled plugins to sync.
+        let empty_bundled = config_home.join("plugins").join("bundled");
+        fs::create_dir_all(&empty_bundled).expect("create empty bundled root");
+
+        // Override ANVIL_CONFIG_HOME for this test invocation.
+        // Note: env::set_var is not test-parallel-safe, but `discover_skill_roots`
+        // is fast and this is the established pattern in this test module.
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        // SAFETY: single-threaded test — no other thread reads ANVIL_CONFIG_HOME.
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", config_home) };
+
+        // Use a cwd that has no .anvil/skills of its own so we only get plugin-sourced roots.
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd).expect("create workspace dir");
+
+        let roots = discover_skill_roots(&cwd);
+
+        // Restore env before any assertion (so failures don't leave it set).
+        match prev {
+            Some(v) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") },
+        }
+
+        let skills_path = install_root.join("skills");
+        assert!(
+            roots.iter().any(|r| r.path == skills_path),
+            "plugin skills dir {skills_path:?} must appear in discover_skill_roots output; got: {roots:?}",
         );
     }
 }

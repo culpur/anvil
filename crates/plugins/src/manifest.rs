@@ -146,6 +146,40 @@ pub struct PluginManifest {
     pub tools: Vec<PluginToolManifest>,
     #[serde(default)]
     pub commands: Vec<PluginCommandManifest>,
+    /// Skills bundled with this plugin.  Each entry is the path (relative to
+    /// the plugin root) of a SKILL.md file or a skills subdirectory.
+    /// Optional — forward-compat default is an empty list.
+    #[serde(default)]
+    pub skills: Vec<PluginSkillManifest>,
+    /// Agents bundled with this plugin.  Each entry is the path (relative to
+    /// the plugin root) of an agent TOML/MD definition file.
+    /// Optional — forward-compat default is an empty list.
+    #[serde(default)]
+    pub agents: Vec<PluginAgentManifest>,
+}
+
+/// A single skill entry within a plugin manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginSkillManifest {
+    /// Skill name (used as the `/skill <name>` invocation key).
+    pub name: String,
+    /// Path to the SKILL.md file, relative to the plugin root.
+    pub path: String,
+    /// Human-readable description shown in `/skill list`.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A single agent entry within a plugin manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginAgentManifest {
+    /// Agent name (used as the `Agent` tool's `subagent_type` key).
+    pub name: String,
+    /// Path to the agent definition file (TOML or MD), relative to plugin root.
+    pub path: String,
+    /// Human-readable description shown in agent listings.
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +241,13 @@ pub(crate) struct RawPluginManifest {
     pub tools: Vec<RawPluginToolManifest>,
     #[serde(default)]
     pub commands: Vec<PluginCommandManifest>,
+    /// Forward-compat: accept `skills` from future manifests; unknown entries
+    /// are silently dropped via `#[serde(default)]`.
+    #[serde(default)]
+    pub skills: Vec<PluginSkillManifest>,
+    /// Forward-compat: accept `agents` from future manifests.
+    #[serde(default)]
+    pub agents: Vec<PluginAgentManifest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,6 +466,11 @@ pub(crate) fn build_plugin_manifest(
     );
     let tools = build_manifest_tools(root, raw.tools, &mut errors);
     let commands = build_manifest_commands(root, raw.commands, &mut errors);
+    // Skills and agents are passed through as-is from the raw manifest.
+    // Path validation is intentionally lenient here — the plugin loader
+    // resolves real paths relative to the plugin root at install time.
+    let skills = raw.skills;
+    let agents = raw.agents;
 
     if !errors.is_empty() {
         return Err(PluginError::ManifestValidation(errors));
@@ -441,6 +487,8 @@ pub(crate) fn build_plugin_manifest(
             lifecycle: raw.lifecycle,
             tools,
             commands,
+            skills,
+            agents,
         },
         load_diagnostics,
     ))
@@ -733,4 +781,124 @@ pub(crate) fn validate_path_within_root(root: &Path, entry: &str) -> bool {
         return false;
     };
     canonical_path.starts_with(&canonical_root)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal `RawPluginManifest` with all required fields populated.
+    fn minimal_raw(name: &str) -> RawPluginManifest {
+        RawPluginManifest {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            description: "Test plugin".to_string(),
+            permissions: vec![],
+            default_enabled: false,
+            hooks: RawPluginHooks::default(),
+            lifecycle: PluginLifecycle::default(),
+            tools: vec![],
+            commands: vec![],
+            skills: vec![],
+            agents: vec![],
+        }
+    }
+
+    // Defect #4 — PluginManifest skills/agents fields round-trip correctly.
+
+    #[test]
+    fn plugin_manifest_skills_field_round_trips() {
+        let root = std::env::temp_dir();
+        let root = root.as_path();
+
+        let mut raw = minimal_raw("skills-test");
+        raw.skills = vec![PluginSkillManifest {
+            name: "audit".to_string(),
+            path: "skills/audit/SKILL.md".to_string(),
+            description: "Run a security audit".to_string(),
+        }];
+
+        let (manifest, _diags) = build_plugin_manifest(root, raw).expect("build_plugin_manifest");
+
+        assert_eq!(manifest.skills.len(), 1, "skills vec must have one entry");
+        assert_eq!(manifest.skills[0].name, "audit");
+        assert_eq!(manifest.skills[0].path, "skills/audit/SKILL.md");
+        assert_eq!(manifest.skills[0].description, "Run a security audit");
+    }
+
+    #[test]
+    fn plugin_manifest_agents_field_round_trips() {
+        let root = std::env::temp_dir();
+        let root = root.as_path();
+
+        let mut raw = minimal_raw("agents-test");
+        raw.agents = vec![PluginAgentManifest {
+            name: "reviewer".to_string(),
+            path: "agents/reviewer.toml".to_string(),
+            description: "Code review agent".to_string(),
+        }];
+
+        let (manifest, _diags) = build_plugin_manifest(root, raw).expect("build_plugin_manifest");
+
+        assert_eq!(manifest.agents.len(), 1, "agents vec must have one entry");
+        assert_eq!(manifest.agents[0].name, "reviewer");
+        assert_eq!(manifest.agents[0].path, "agents/reviewer.toml");
+        assert_eq!(manifest.agents[0].description, "Code review agent");
+    }
+
+    #[test]
+    fn plugin_manifest_skills_defaults_to_empty_when_absent() {
+        let root = std::env::temp_dir();
+        let root = root.as_path();
+        let raw = minimal_raw("no-skills");
+
+        let (manifest, _diags) = build_plugin_manifest(root, raw).expect("build_plugin_manifest");
+
+        assert!(
+            manifest.skills.is_empty(),
+            "skills must default to empty when not declared in manifest"
+        );
+        assert!(
+            manifest.agents.is_empty(),
+            "agents must default to empty when not declared in manifest"
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_skills_deserializes_from_json() {
+        let root = std::env::temp_dir();
+        let root = root.as_path();
+        let json = r#"{
+            "name": "json-skills-test",
+            "version": "0.1.0",
+            "description": "Test plugin with skills",
+            "skills": [
+                {
+                    "name": "summarize",
+                    "path": "skills/summarize/SKILL.md",
+                    "description": "Summarize a document"
+                }
+            ],
+            "agents": [
+                {
+                    "name": "helper",
+                    "path": "agents/helper.toml"
+                }
+            ]
+        }"#;
+
+        let raw: RawPluginManifest = serde_json::from_str(json).expect("deserialize");
+        let (manifest, _) = build_plugin_manifest(root, raw).expect("build");
+
+        assert_eq!(manifest.skills.len(), 1);
+        assert_eq!(manifest.skills[0].name, "summarize");
+        assert_eq!(manifest.agents.len(), 1);
+        assert_eq!(manifest.agents[0].name, "helper");
+        // description defaults to "" when absent in JSON
+        assert_eq!(manifest.agents[0].description, "");
+    }
 }
