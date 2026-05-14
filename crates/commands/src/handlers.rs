@@ -102,72 +102,84 @@ pub fn handle_slash_command(
             },
             session: session.clone(),
         }),
+        // ── Interactive-mode commands ─────────────────────────────────────────
+        // These commands are handled by the interactive CLI (run_command_for_tui /
+        // handle_repl_command). handle_slash_command is the non-interactive
+        // fallback registry; for commands that require a live session these arms
+        // return an accurate "start anvil interactively" message instead of the
+        // former misleading "not yet implemented" text.
         SlashCommand::Status => Some(SlashCommandResult {
-            message: "/status is not yet implemented. To check project status, ask the assistant directly or run `git status` and `git log --oneline` from your terminal.".to_string(),
+            message: "/status requires an active session. Run `anvil` to start an interactive session, then use /status to see token usage and session state.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Branch { .. } => Some(SlashCommandResult {
-            message: "/branch is not yet implemented. Use `git branch` or `git checkout -b <name>` from your terminal to manage branches.".to_string(),
+            message: "/branch requires an active git session. Run `anvil` to start interactively — /branch [list|new|switch|delete] is available in REPL and TUI modes.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Bughunter { .. } => Some(SlashCommandResult {
-            message: "/bughunter is not yet implemented. Describe the bug to the assistant and ask it to investigate — it can read files, run tests, and trace execution.".to_string(),
+            message: "/bughunter requires an active session (it drives an AI-powered debugging turn). Run `anvil` and use /bughunter [scope] to start an investigation.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Worktree { .. } => Some(SlashCommandResult {
-            message: "/worktree is not yet implemented. Use `git worktree add <path> <branch>` from your terminal to manage Git worktrees.".to_string(),
+            message: "/worktree requires an active session. Run `anvil` and use /worktree [add|list|remove] to manage git worktrees from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Commit => Some(SlashCommandResult {
-            message: "/commit is not yet implemented. Stage your changes and run `git commit` from your terminal, or ask the assistant to help write a commit message.".to_string(),
+            message: "/commit requires an active session. Run `anvil` and use /commit to have the assistant stage and commit changes with an AI-written message.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::CommitPushPr { .. } => Some(SlashCommandResult {
-            message: "/commit-push-pr is not yet implemented. To commit, push, and open a pull request, ask the assistant to help or run `git commit`, `git push`, and `gh pr create` from your terminal.".to_string(),
+            message: "/commit-push-pr requires an active session. Run `anvil` and use /commit-push-pr to commit, push, and open a pull request in one step.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Pr { .. } => Some(SlashCommandResult {
-            message: "/pr is not yet implemented. Use `gh pr create` or `gh pr list` from your terminal to manage pull requests.".to_string(),
+            message: "/pr requires an active session. Run `anvil` and use /pr [create|list|review] to manage pull requests from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Issue { .. } => Some(SlashCommandResult {
-            message: "/issue is not yet implemented. Use `gh issue create` or `gh issue list` from your terminal to manage GitHub issues.".to_string(),
+            message: "/issue requires an active session. Run `anvil` and use /issue [create|list|close] to manage GitHub issues from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Ultraplan { .. } => Some(SlashCommandResult {
-            message: "/ultraplan is not yet implemented. Ask the assistant to create a detailed implementation plan for your task instead.".to_string(),
+            message: "/ultraplan requires an active session. Run `anvil` and use /ultraplan [task] to generate a detailed multi-step implementation plan.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Teleport { .. } => Some(SlashCommandResult {
-            message: "/teleport is not yet implemented. This command would navigate to a specific file or symbol. Use your editor's go-to-definition or ask the assistant to locate the code for you.".to_string(),
+            message: "/teleport requires an active session. Run `anvil` and use /teleport [target] to navigate the AI's context to a specific file or symbol.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::DebugToolCall => Some(SlashCommandResult {
-            message: "/debug-tool-call is not yet implemented. To inspect tool call behavior, ask the assistant to explain what it is doing or enable verbose logging in your configuration.".to_string(),
+            message: "/debug-tool-call requires an active session. Run `anvil` and use /debug-tool-call after a tool invocation to inspect the last tool request and response.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Model { .. } => Some(SlashCommandResult {
-            message: "/model is not yet implemented. Change the active model via the configuration file or the --model flag when starting Anvil.".to_string(),
+        SlashCommand::Model { model } => Some(SlashCommandResult {
+            message: match model.as_deref() {
+                None => "Current model: run `anvil` interactively to switch models with /model [name]. Use `anvil --model <name>` to start on a specific model.".to_string(),
+                Some(m) => format!("/model {m}: model switching requires an active session. Use `anvil --model {m}` to start on that model."),
+            },
             session: session.clone(),
         }),
-        SlashCommand::Permissions { .. } => Some(SlashCommandResult {
-            message: "/permissions is not yet implemented. Edit your settings.json to adjust tool permissions and allowed commands.".to_string(),
+        SlashCommand::Permissions { mode } => Some(SlashCommandResult {
+            message: match mode.as_deref() {
+                None => "Current permissions: run `anvil` interactively to inspect and change permission mode with /permissions. Use `anvil --permission-mode <mode>` to start with a specific mode.".to_string(),
+                Some(m) => format!("/permissions {m}: permission changes require an active session. Use `anvil --permission-mode {m}` at startup instead."),
+            },
             session: session.clone(),
         }),
         SlashCommand::Clear { .. } => Some(SlashCommandResult {
-            message: "/clear is not yet implemented. Start a new session to clear the conversation history.".to_string(),
+            message: "/clear requires an active session. Run `anvil` and use /clear --confirm to wipe the current conversation. For `--resume` sessions, /clear --confirm also zeroes the saved file.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Cost => Some(SlashCommandResult {
-            message: "/cost is not yet implemented. Token usage and estimated cost are not yet tracked in this session.".to_string(),
+            message: "/cost requires an active session. Run `anvil` and use /cost to see cumulative token usage and estimated spend for the session.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Resume { .. } => Some(SlashCommandResult {
-            message: "/resume is not yet implemented. Session resumption from a saved file is not yet supported.".to_string(),
+            message: "/resume requires an active session to switch into. Run `anvil --resume <session.json> /help` to replay commands against a saved session, or run `anvil` and use /resume interactively.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Config { .. } => Some(SlashCommandResult {
-            message: "/config is not yet implemented. Edit your settings.json file directly to change configuration values.".to_string(),
+            message: "/config requires an active session. Run `anvil` and use /config [section] to view the current configuration values with live context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Memory { action } => Some(SlashCommandResult {
@@ -179,349 +191,373 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Init => Some(SlashCommandResult {
-            message: "/init is not yet implemented. To initialize Anvil in a new project, create an ANVIL.md file in your project root with instructions for the assistant.".to_string(),
+            message: "/init requires an active session. Run `anvil` and use /init to create ANVIL.md and initialize project configuration for the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Diff => Some(SlashCommandResult {
-            message: "/diff is not yet implemented. Run `git diff` or `git diff --staged` from your terminal to review pending changes.".to_string(),
+            message: "/diff requires an active session. Run `anvil` and use /diff to see a `git diff --stat` summary inside the assistant context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Version => Some(SlashCommandResult {
-            message: "/version is not yet implemented. Run `anvil --version` from your terminal to see the installed version.".to_string(),
+            message: "/version requires an active session. Run `anvil --version` from your terminal to see the installed version without starting a session.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Export { .. } => Some(SlashCommandResult {
-            message: "/export is not yet implemented. To save the conversation, copy the output from your terminal or redirect stdout to a file when starting Anvil.".to_string(),
+            message: "/export requires an active session. Run `anvil` and use /export [md|text] [path] to save the conversation transcript.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Session { .. } => Some(SlashCommandResult {
-            message: "/session is not yet implemented. Session management (listing, switching, saving) is not yet available.".to_string(),
+            message: "/session requires an active session. Run `anvil` and use /session [list|save|load|delete] to manage named sessions.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Plugins { .. } => Some(SlashCommandResult {
-            message: "/plugins is not yet implemented here. Plugin management is handled at startup via the plugin configuration in settings.json.".to_string(),
+            message: "/plugins requires an active session. Run `anvil` and use /plugins [list|install|enable|disable] to manage plugins.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Agents { .. } => Some(SlashCommandResult {
-            message: "/agents is not yet implemented here. Agent definitions are loaded from your configured agent roots at session start.".to_string(),
+            message: "/agents requires an active session. Run `anvil` and use /agents [list|view|stop|clear] to manage sub-agents.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Skills { .. } => Some(SlashCommandResult {
-            message: "/skills is not yet implemented here. Skill definitions are loaded from your configured skill roots at session start.".to_string(),
+            message: "/skills requires an active session. Run `anvil` and use /skills [list|info] to browse installed skills.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Qmd { .. } => Some(SlashCommandResult {
-            message: "/qmd is not yet implemented. The QMD knowledge base search is available as a tool — ask the assistant to search your documents instead.".to_string(),
+        SlashCommand::Qmd { query } => Some(SlashCommandResult {
+            message: match query.as_deref().filter(|q| !q.trim().is_empty()) {
+                None => "/qmd requires a query. Usage: /qmd <query>. Run `anvil` to use /qmd interactively with live QMD index search.".to_string(),
+                Some(_) => "/qmd requires an active session with a QMD index. Run `anvil` and use /qmd <query> to search your knowledge base.".to_string(),
+            },
             session: session.clone(),
         }),
         SlashCommand::Undo => Some(SlashCommandResult {
-            message: "/undo is not yet implemented. To revert the last change, use `git checkout -- <file>` or ask the assistant to reverse the edit it just made.".to_string(),
+            message: "/undo requires an active session. Run `anvil` and use /undo to revert the last file edit made by the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::History { .. } => Some(SlashCommandResult {
-            message: "/history is not yet implemented. Scroll up in your terminal to review the conversation, or run `git log --oneline` for commit history.".to_string(),
+            message: "/history requires an active session. Run `anvil` and use /history [all] to display the current conversation turn history.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Context { .. } => Some(SlashCommandResult {
-            message: "/context is not yet implemented. The assistant's active context is the current session — use /compact to reduce token usage if the session is getting long.".to_string(),
+            message: "/context requires an active session. Run `anvil` and use /context [path] to add a file or directory to the assistant's active context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Pin { .. } => Some(SlashCommandResult {
-            message: "/pin is not yet implemented. To keep important context available, add it to your ANVIL.md file so it is loaded at every session start.".to_string(),
+            message: "/pin requires an active session. Run `anvil` and use /pin [path] to pin a file so it is always included in the assistant's context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Unpin { .. } => Some(SlashCommandResult {
-            message: "/unpin is not yet implemented. Remove entries from your ANVIL.md file to stop including them in future sessions.".to_string(),
+            message: "/unpin requires an active session. Run `anvil` and use /unpin <path> to remove a previously pinned file from the context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Chat => Some(SlashCommandResult {
-            message: "/chat is not yet implemented. You are already in chat mode — type your message and press Enter to continue the conversation.".to_string(),
+            message: "/chat requires an active session. Run `anvil` and use /chat to toggle between chat mode and task mode.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Vim => Some(SlashCommandResult {
-            message: "/vim is not yet implemented. Vim keybinding mode is not yet supported. Use your terminal's readline bindings or configure your shell for vi mode.".to_string(),
+            message: "/vim requires an active session. Run `anvil` and use /vim to toggle vim keybindings in the REPL input.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Web { .. } => Some(SlashCommandResult {
-            message: "/web is not yet implemented. Ask the assistant to fetch a URL using the WebFetch tool, or use `curl` from your terminal.".to_string(),
+            message: "/web requires an active session. Run `anvil` and use /web <query> to perform a web search from inside the assistant.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Doctor { .. } => Some(SlashCommandResult {
-            message: "/doctor is not yet implemented. To diagnose configuration issues, check that your API key is set, your settings.json is valid JSON, and all required tools are installed.".to_string(),
+        SlashCommand::Doctor { mode } => Some(SlashCommandResult {
+            message: match mode.as_deref() {
+                Some("release") => "/doctor release: release-pipeline pre-flight checks require an active session. Run `anvil` and use /doctor release.".to_string(),
+                _ => "/doctor requires an active session. Run `anvil` and use /doctor to run configuration and connectivity diagnostics.".to_string(),
+            },
             session: session.clone(),
         }),
         SlashCommand::Tokens => Some(SlashCommandResult {
-            message: "/tokens is not yet implemented. Token counting for the current session is not yet exposed. Use /compact to reduce session size if needed.".to_string(),
+            message: "/tokens requires an active session. Run `anvil` and use /tokens to display current session token count and context window usage.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Provider { .. } => Some(SlashCommandResult {
-            message: "/provider is not yet implemented. Switch providers by updating the provider setting in your settings.json or by using the --provider flag at startup.".to_string(),
+            message: "/provider requires an active session. Run `anvil` and use /provider [list|status|switch] to inspect and change the active AI provider.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Login { .. } => Some(SlashCommandResult {
-            message: "/login is not yet implemented. Set your API key via the ANTHROPIC_API_KEY environment variable or the anvil login command from your terminal.".to_string(),
+        SlashCommand::Login { provider } => Some(SlashCommandResult {
+            message: match provider.as_deref() {
+                None => "/login requires an active session. Run `anvil` and use /login [provider] to authenticate with an AI provider.".to_string(),
+                Some(p) => format!("/login {p}: authentication requires an active session. Run `anvil` and use /login {p}."),
+            },
             session: session.clone(),
         }),
         SlashCommand::Search { .. } => Some(SlashCommandResult {
-            message: "/search is not yet implemented. Ask the assistant to search your codebase using the Grep or Glob tools, or run `grep -r` from your terminal.".to_string(),
+            message: "/search requires an active session. Run `anvil` and use /search <query> to search the codebase using ripgrep or the assistant's file tools.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Failover { .. } => Some(SlashCommandResult {
-            message: "/failover is not yet implemented. Provider failover configuration is managed in settings.json under the providers section.".to_string(),
+            message: "/failover requires an active session. Run `anvil` and use /failover [status|test|switch] to manage provider failover.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::GenerateImage { .. } => Some(SlashCommandResult {
-            message: "/generate-image is not yet implemented. Image generation is not currently available in this session.".to_string(),
+            message: "/generate-image requires an active session. Run `anvil` and use /generate-image <prompt> to create an image via the configured image-generation provider.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::HistoryArchive { .. } => Some(SlashCommandResult {
             // Phase 4.4: deprecation banner — `/history-archive` is a soft
-            // alias for the L2 (episodic) view exposed by `/memory show
-            // episodic`. Keep the original payload so existing scripts
-            // don't change behavior; surface a one-line deprecation
-            // warning on top.
+            // alias for the L2 (episodic) view exposed by `/memory show episodic`.
             message: format!(
                 "{}{}",
                 phase4_4_deprecation_banner("/history-archive", "/memory show episodic"),
-                "/history-archive is not yet implemented. Conversation archiving is not yet available. Export your terminal output manually to preserve a session.",
+                "/history-archive requires an active session for search and view sub-commands. \
+                 Use /memory show episodic (the canonical replacement) or run `anvil` for the full \
+                 history-archive interface.",
             ),
             session: session.clone(),
         }),
         SlashCommand::Configure { .. } => Some(SlashCommandResult {
-            message: "/configure is not yet implemented. Edit your settings.json file directly to adjust Anvil's configuration.".to_string(),
+            message: "/configure requires an active TUI session. Run `anvil` and use /configure to open the interactive settings menu. For non-interactive changes, edit ~/.anvil/config.json directly.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Theme { .. } => Some(SlashCommandResult {
-            message: "/theme is not yet implemented. Terminal color theming is not yet supported. Adjust your terminal emulator's color scheme instead.".to_string(),
+        SlashCommand::Theme { action } => Some(SlashCommandResult {
+            message: match action.as_deref() {
+                None => "/theme requires an active session. Run `anvil` and use /theme [list|set <name>|reset] to apply a color theme.".to_string(),
+                Some("list") => "/theme list: themes are configured per-session. Run `anvil` and use /theme list to browse installed themes.".to_string(),
+                Some(a) => format!("/theme {a}: theme changes require an active session. Run `anvil` and use /theme {a}."),
+            },
             session: session.clone(),
         }),
         SlashCommand::SemanticSearch { .. } => Some(SlashCommandResult {
-            message: "/semantic-search is not yet implemented. Ask the assistant to search your documents semantically using the QMD tool or describe what you are looking for.".to_string(),
+            message: "/semantic-search requires an active session with a QMD index. Run `anvil` and use /semantic-search <query> to search your knowledge base semantically.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Docker { .. } => Some(SlashCommandResult {
-            message: "/docker is not yet implemented. Run Docker commands directly from your terminal (e.g. `docker ps`, `docker compose up`), or ask the assistant to help compose a command.".to_string(),
+            message: "/docker requires an active session. Run `anvil` and use /docker [ps|logs|compose|build] to run Docker operations from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Test { .. } => Some(SlashCommandResult {
-            message: "/test is not yet implemented. Run your test suite directly from the terminal (e.g. `cargo test`, `npm test`), or ask the assistant to help write or debug tests.".to_string(),
+            message: "/test requires an active session. Run `anvil` and use /test [run|generate|coverage] to run or generate tests from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Git { .. } => Some(SlashCommandResult {
-            message: "/git is not yet implemented. Use git directly from your terminal. You can also ask the assistant to help with specific git operations like rebasing, cherry-picking, or resolving conflicts.".to_string(),
+            message: "/git requires an active session. Run `anvil` and use /git [rebase|conflicts|cherry-pick|stash] to perform git operations from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Refactor { .. } => Some(SlashCommandResult {
-            message: "/refactor is not yet implemented. Describe the refactoring you want to the assistant — it can read your code, propose changes, and apply edits across multiple files.".to_string(),
+            message: "/refactor requires an active session. Run `anvil` and use /refactor [rename|extract|move] to perform AI-assisted code refactoring.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Screenshot => Some(SlashCommandResult {
-            message: "/screenshot is not yet implemented. Screenshot capture is not currently available in this terminal session.".to_string(),
+            message: "/screenshot requires an active TUI session. Run `anvil` (TUI mode) and use /screenshot to capture the screen and send it to the assistant as a vision input.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Db { .. } => Some(SlashCommandResult {
-            message: "/db is not yet implemented. Run database queries using your database client directly (e.g. `psql`, `mysql`), or ask the assistant to help write or explain SQL.".to_string(),
+            message: "/db requires an active session. Run `anvil` and use /db [connect|schema|query|migrate] to interact with databases from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Security { .. } => Some(SlashCommandResult {
-            message: "/security is not yet implemented. Ask the assistant to review your code for security issues, or run a dedicated scanner such as `cargo audit`, `npm audit`, or `bandit`.".to_string(),
+            message: "/security requires an active session. Run `anvil` and use /security [scan|secrets|deps|report] to run security analysis from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Api { .. } => Some(SlashCommandResult {
-            message: "/api is not yet implemented. Ask the assistant to help design, document, or test your API endpoints, or use a tool like `curl` or Postman to interact with them directly.".to_string(),
+            message: "/api requires an active session. Run `anvil` and use /api [spec|mock|test|docs] to work with API definitions and testing.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Docs { .. } => Some(SlashCommandResult {
-            message: "/docs is not yet implemented. Ask the assistant to generate or update documentation for your code, or run your project's doc generation tool (e.g. `cargo doc`, `typedoc`).".to_string(),
+            message: "/docs requires an active session. Run `anvil` and use /docs [generate|readme|architecture|changelog] to generate documentation.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Scaffold { .. } => Some(SlashCommandResult {
-            message: "/scaffold is not yet implemented. Ask the assistant to generate boilerplate code for a new module, component, or service — describe what you need and it will create the files.".to_string(),
+            message: "/scaffold requires an active session. Run `anvil` and use /scaffold [new <template>|list] to generate project boilerplate.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Perf { .. } => Some(SlashCommandResult {
-            message: "/perf is not yet implemented. Ask the assistant to analyze performance bottlenecks in your code, or use a profiler appropriate for your language (e.g. `perf`, `flamegraph`, `py-spy`).".to_string(),
+            message: "/perf requires an active session. Run `anvil` and use /perf [profile|benchmark|flamegraph|analyze] to run performance analysis.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Debug { .. } => Some(SlashCommandResult {
-            message: "/debug is not yet implemented. Describe the problem to the assistant and share relevant error output — it can trace through code, add logging, and suggest fixes.".to_string(),
+            message: "/debug requires an active session. Run `anvil` and use /debug [start|breakpoint|watch|explain] to start an AI-assisted debugging session.".to_string(),
             session: session.clone(),
         }),
+        // [deferred:Phase5.1] /voice — requires audio capture API; no current
+        // implementation. Deferred pending microphone permission + streaming design.
         SlashCommand::Voice { .. } => Some(SlashCommandResult {
-            message: "/voice is not yet implemented. Voice input is not available in this terminal session.".to_string(),
+            message: "/voice: voice input is deferred (Phase 5.1). It requires microphone access and streaming audio-to-text. Use typed input for now.".to_string(),
             session: session.clone(),
         }),
+        // [deferred:Phase5.1] /collab — requires a shared relay session; currently
+        // the relay only supports read-only viewing, not bidirectional collab editing.
         SlashCommand::Collab { .. } => Some(SlashCommandResult {
-            message: "/collab is not yet implemented. Real-time collaboration features are not yet available. Share your session output or use a shared terminal multiplexer (e.g. tmux) instead.".to_string(),
+            message: "/collab: real-time collaboration is deferred (Phase 5.1). The relay currently supports read-only sharing (/share). Bidirectional editing requires additional relay protocol work.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Changelog => Some(SlashCommandResult {
-            message: "/changelog is not yet implemented. Run `git log --oneline` to see recent commits, or check the project's CHANGELOG.md file if one exists.".to_string(),
+            message: "/changelog requires an active session. Run `anvil` and use /changelog to generate a CHANGELOG entry from git history since the last tag.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Env { .. } => Some(SlashCommandResult {
-            message: "/env is not yet implemented. View or set environment variables directly in your shell (e.g. `env`, `export KEY=value`), or manage them via your project's .env file.".to_string(),
+            message: "/env requires an active session. Run `anvil` and use /env [show|set|load|diff] to manage environment variables from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Hub { .. } => Some(SlashCommandResult {
-            message: "/hub is not yet implemented. Use the `gh` CLI to interact with GitHub (e.g. `gh repo view`, `gh issue list`, `gh pr status`).".to_string(),
+            message: "/hub requires an active session. Run `anvil` and use /hub [search|skills|plugins|install|info] to browse and install content from AnvilHub.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Language { .. } => Some(SlashCommandResult {
-            message: "/language is not yet implemented. Language-specific tooling runs through your existing build tools and linters — ask the assistant for help with a specific language task.".to_string(),
+        SlashCommand::Language { lang } => Some(SlashCommandResult {
+            message: match lang.as_deref() {
+                None => "/language requires an active session. Run `anvil` and use /language [en|de|es|fr|ja|zh-CN|ru] to switch the assistant's response language.".to_string(),
+                Some(l) => format!("/language {l}: language switching requires an active session. Run `anvil` and use /language {l}."),
+            },
             session: session.clone(),
         }),
+        // [deferred:Phase5.1] /lsp — requires a background language-server
+        // process; the LSP integration is not wired in the current release.
         SlashCommand::Lsp { .. } => Some(SlashCommandResult {
-            message: "/lsp is not yet implemented. Language server integration is not yet available in Anvil. Use your editor's LSP support for diagnostics and completions.".to_string(),
+            message: "/lsp: language-server integration is deferred (Phase 5.1). The protocol scaffolding exists but per-language server spawning and capability negotiation are not complete.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Notebook { .. } => Some(SlashCommandResult {
-            message: "/notebook is not yet implemented. Jupyter notebook editing is available via the NotebookEdit tool — ask the assistant to modify a notebook cell directly.".to_string(),
+            message: "/notebook requires an active session. Run `anvil` and use /notebook [run|cell|export] to work with Jupyter notebooks from inside the assistant.".to_string(),
             session: session.clone(),
         }),
+        // [deferred:Phase5.1] /k8s — requires kubectl and a live kubeconfig;
+        // the cluster connectivity and error model need more design work.
         SlashCommand::K8s { .. } => Some(SlashCommandResult {
-            message: "/k8s is not yet implemented. Use `kubectl` from your terminal to interact with Kubernetes clusters, or ask the assistant to help write manifests or debug deployments.".to_string(),
+            message: "/k8s: Kubernetes integration is deferred (Phase 5.1). Run `anvil` and use /k8s [pods|logs|apply|describe] once the integration is complete, or use `kubectl` directly.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Iac { .. } => Some(SlashCommandResult {
-            message: "/iac is not yet implemented. Run your infrastructure-as-code tools directly (e.g. `terraform plan`, `pulumi up`, `ansible-playbook`), or ask the assistant to help write or review IaC files.".to_string(),
+            message: "/iac requires an active session. Run `anvil` and use /iac [plan|apply|validate|drift] to run infrastructure-as-code operations from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Pipeline { .. } => Some(SlashCommandResult {
-            message: "/pipeline is not yet implemented. Ask the assistant to help write or debug CI/CD pipeline configuration (GitHub Actions, GitLab CI, Jenkins, etc.).".to_string(),
+            message: "/pipeline requires an active session. Run `anvil` and use /pipeline [generate|lint|run] to manage CI/CD pipeline configurations.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Review { .. } => Some(SlashCommandResult {
-            message: "/review is not yet implemented. Ask the assistant to review your code — paste the relevant snippet or point it to a file, and it will provide feedback on correctness, style, and potential issues.".to_string(),
+            message: "/review requires an active session. Run `anvil` and use /review [<file>|staged|pr] to start an AI code review.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Deps { .. } => Some(SlashCommandResult {
-            message: "/deps is not yet implemented. Check your dependencies using your package manager (e.g. `cargo tree`, `npm ls`, `pip list`), or ask the assistant to help audit or update them.".to_string(),
+            message: "/deps requires an active session. Run `anvil` and use /deps [tree|outdated|audit|why] to inspect project dependencies.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Mono { .. } => Some(SlashCommandResult {
-            message: "/mono is not yet implemented. Monorepo management features are not yet available. Ask the assistant to help navigate or run cross-workspace commands in your monorepo.".to_string(),
+            message: "/mono requires an active session. Run `anvil` and use /mono [list|graph|changed|run] to work with monorepo workspaces.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Browser { .. } => Some(SlashCommandResult {
-            message: "/browser is not yet implemented. Browser automation is not currently available. Ask the assistant to help write Playwright or Puppeteer scripts, or use the WebFetch tool for HTTP requests.".to_string(),
+            message: "/browser requires an active session. Run `anvil` and use /browser [open|screenshot|test] to drive browser automation from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Notify { .. } => Some(SlashCommandResult {
-            message: "/notify is not yet implemented. Notification delivery is not yet available in this session. Use external alerting tools or scripts to send messages to Slack, email, or other channels.".to_string(),
+            message: "/notify requires an active session. Run `anvil` and use /notify [send|webhook|matrix] to send notifications from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Vault { .. } => Some(SlashCommandResult {
-            message: "/vault is not yet implemented. Manage secrets using your configured credential vault (e.g. HashiCorp Vault, AWS Secrets Manager, or the Anvil CVS service) directly from your terminal.".to_string(),
+            message: "/vault requires an active session. Run `anvil` and use /vault [setup|unlock|lock|store|get|list|delete|totp] to manage the Anvil credential vault.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Migrate { .. } => Some(SlashCommandResult {
-            message: "/migrate is not yet implemented. Run database migrations using your ORM's CLI (e.g. `prisma migrate dev`, `alembic upgrade head`, `rails db:migrate`), or ask the assistant to help write a migration.".to_string(),
+            message: "/migrate requires an active session. Run `anvil` and use /migrate [framework|language|deps] to perform AI-assisted codebase migrations.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Regex { .. } => Some(SlashCommandResult {
-            message: "/regex is not yet implemented. Ask the assistant to write or explain a regular expression — describe the pattern you need to match and it will construct and test a regex for you.".to_string(),
+            message: "/regex requires an active session. Run `anvil` and use /regex [build|test|explain] to work with regular expressions from inside the assistant.".to_string(),
             session: session.clone(),
         }),
+        // SSH has two modes: TUI (embedded client) and REPL (message-only).
+        // The REPL message is accurate — SSH modal UI requires TUI.
         SlashCommand::Ssh { .. } => Some(SlashCommandResult {
-            message: "/ssh is not yet implemented. Connect to remote hosts using `ssh` from your terminal. Ask the assistant to help configure SSH keys, jump hosts, or port forwarding.".to_string(),
+            message: "/ssh: the embedded SSH client requires the Anvil TUI. Run `anvil` (without --print) and use /ssh [alias] to connect, or /ssh save <alias> to store a connection.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Logs { .. } => Some(SlashCommandResult {
-            message: "/logs is not yet implemented. View service logs using `journalctl`, `docker logs <container>`, `pm2 logs`, or your platform's log viewer. Ask the assistant to help parse or filter log output.".to_string(),
+            message: "/logs requires an active session. Run `anvil` and use /logs [tail|search|analyze|stats] to analyze log files from inside the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Markdown { .. } => Some(SlashCommandResult {
-            message: "/markdown is not yet implemented. Ask the assistant to render, write, or convert Markdown content. For preview, use a Markdown viewer or your editor's preview mode.".to_string(),
+            message: "/markdown requires an active session. Run `anvil` and use /markdown [preview|toc|lint] to work with Markdown documents.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Snippets { .. } => Some(SlashCommandResult {
-            message: "/snippets is not yet implemented. Ask the assistant to generate reusable code snippets for a specific pattern or task. Save them to your editor's snippet library for future use.".to_string(),
+            message: "/snippets requires an active session. Run `anvil` and use /snippets [save|list|get|search] to manage the code snippet library.".to_string(),
             session: session.clone(),
         }),
+        // [deferred:Phase5.1] /finetune — requires model fine-tuning API access
+        // and a training data pipeline; not planned for current release cycle.
         SlashCommand::Finetune { .. } => Some(SlashCommandResult {
-            message: "/finetune is not yet implemented. Model fine-tuning is not available in this session. Use the Anthropic or OpenAI fine-tuning APIs directly if you need a custom model.".to_string(),
+            message: "/finetune: model fine-tuning is deferred (Phase 5.1). It requires provider-side fine-tuning API access and a training data workflow that has no current implementation.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Webhook { .. } => Some(SlashCommandResult {
-            message: "/webhook is not yet implemented. Configure webhooks through your platform's settings (GitHub, GitLab, etc.) or ask the assistant to help write a webhook handler.".to_string(),
+            message: "/webhook requires an active session. Run `anvil` and use /webhook [list|add|test|remove] to manage webhook endpoints.".to_string(),
             session: session.clone(),
         }),
-        SlashCommand::Ssh { .. } => Some(SlashCommandResult {
-            message: "/ssh: embedded SSH client. Run `anvil` interactively to use the SSH form, or `/ssh <alias>` to retrieve from the vault.".to_string(),
-            session: session.clone(),
-        }),
+        // [deferred:Phase5.1] /plugin-sdk — requires plugin build toolchain integration.
         SlashCommand::PluginSdk { .. } => Some(SlashCommandResult {
-            message: "/plugin-sdk is not yet implemented. Plugin development tooling is not yet available. Refer to the Anvil plugin documentation for the plugin manifest format and API.".to_string(),
+            message: "/plugin-sdk: the plugin development SDK is deferred (Phase 5.1). Plugin authoring tooling (init, build, test, publish) is not yet wired. Refer to the plugin manifest spec in the documentation.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Sleep => Some(SlashCommandResult {
-            message: "/sleep is not yet implemented. This command would pause execution for a period of time. Use `sleep <seconds>` from your terminal if you need a delay in a script.".to_string(),
+            message: "/sleep: the screensaver activates automatically on inactivity. Run `anvil` (TUI mode) and use /sleep to trigger it immediately.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Think => Some(SlashCommandResult {
-            message: "/think is not yet implemented. To prompt extended reasoning, ask the assistant to \"think step by step\" or \"reason through this carefully\" in your message.".to_string(),
+            message: "/think requires an active session. Run `anvil` and use /think to toggle extended reasoning mode for models that support it (e.g. claude-sonnet-4-5-think).".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Fast => Some(SlashCommandResult {
-            message: "/fast is not yet implemented. Speed/quality tradeoff switching is not yet available. Select a faster model variant in your configuration if lower latency is needed.".to_string(),
+            message: "/fast requires an active session. Run `anvil` and use /fast to toggle fast mode (lower max_tokens + concise system prompt) for reduced latency.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::ReviewPr { .. } => Some(SlashCommandResult {
-            message: "/review-pr is not yet implemented. Ask the assistant to review a pull request — provide the PR number or diff and it will analyze the changes for correctness, style, and potential issues.".to_string(),
+            message: "/review-pr requires an active session. Run `anvil` and use /review-pr [<number>] to fetch a GitHub PR diff and review it with the assistant.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::RemoteControl { .. } => Some(SlashCommandResult {
-            message: "/remote-control is not yet implemented. Remote control features are managed through the Anvil web viewer. Start the web interface to access remote pairing and control.".to_string(),
+            message: "/remote-control requires an active TUI session. Run `anvil` and use /remote-control to start a relay session for remote viewing and co-piloting.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Loop { .. } => Some(SlashCommandResult {
-            message: "/loop is not yet implemented here. Use the loop skill (/loop) or ask the assistant to repeat a task with specific stopping criteria.".to_string(),
+            message: "/loop requires an active session. Run `anvil` and use /loop [prompt] to enter autonomous loop mode, repeating a task until a stopping condition is met.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Focus => Some(SlashCommandResult {
-            message: "/focus is not yet implemented. To narrow the assistant's attention to a specific file or task, mention it explicitly in your message or use /context (when available).".to_string(),
+            message: "/focus requires an active TUI session. Run `anvil` and use /focus to toggle focus view (shows prompts, tool summaries, and final responses only).".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Mcp { .. } => Some(SlashCommandResult {
-            message: "/mcp is not yet implemented. MCP server management is configured at startup via settings.json. Restart Anvil after modifying MCP server entries.".to_string(),
+            message: "/mcp requires an active session. Run `anvil` and use /mcp [list|status|tools] to inspect connected MCP servers and their available tools.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Productivity => Some(SlashCommandResult {
-            message: "/productivity is not yet implemented. Productivity metrics and session summaries are not yet available.".to_string(),
+            message: "/productivity requires an active session. Run `anvil` and use /productivity to view session statistics: turns, tool calls, tokens, and task completion rate.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Knowledge { .. } => Some(SlashCommandResult {
-            message: "/knowledge is handled by the runtime. Use /knowledge review, /knowledge accept <N>, or /knowledge reject <N>.".to_string(),
+            message: "/knowledge requires an active session. Run `anvil` and use /knowledge [review|accept <N>|reject <N>|list] to manage AI-generated knowledge nominations.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Daily { .. } => Some(SlashCommandResult {
-            message: "/daily is handled by the runtime. Use /daily to view today's summary or /daily <date> for a specific day.".to_string(),
+            message: "/daily requires an active session. Run `anvil` and use /daily [date] to view the daily session summary and task reconciliation.".to_string(),
             session: session.clone(),
         }),
-        // ── Ghost commands promoted in v2.2.6 ─────────────────────────────
+        // ── TUI-only commands (v2.2.6+) ───────────────────────────────────────
         SlashCommand::Tab { .. } => Some(SlashCommandResult {
-            message: "/tab is not yet implemented here. Tab management is available in TUI mode — use Ctrl+T (new), Ctrl+W (close), and Ctrl+] / Ctrl+[ (switch).".to_string(),
+            message: "/tab is a TUI-only command. Run `anvil` (TUI mode) and use /tab [new|close|switch|list] or the keyboard shortcuts Ctrl+T (new), Ctrl+W (close), Ctrl+]/[ (switch).".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Fork => Some(SlashCommandResult {
-            message: "/fork is not yet implemented here. Tab forking is available in TUI mode — it duplicates the current tab with the same conversation context.".to_string(),
+            message: "/fork is a TUI-only command. Run `anvil` (TUI mode) and use /fork to duplicate the current tab with the same conversation context.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Share { .. } => Some(SlashCommandResult {
-            message: "/share is not yet implemented. Tab sharing generates a read-only URL via the passage-culpur relay. This feature is available in TUI and web modes.".to_string(),
+            message: "/share is a TUI-only command. Run `anvil` (TUI mode) and use /share to generate a read-only relay link for the current tab. Requires /vault unlock.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Audit => Some(SlashCommandResult {
-            message: "/audit is not yet implemented. The composite audit runs /security scan + /deps audit + /vault verify in sequence. Run each individually in the meantime.".to_string(),
+            message: "/audit requires an active session. Run `anvil` and use /audit to run a composite check: /security scan + /deps audit + /vault verify.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Restart { .. } => Some(SlashCommandResult {
-            message: "/restart is not yet implemented here. In TUI mode, /restart will respawn the Anvil process (available in Phase 5).".to_string(),
+            message: "/restart requires an active session. Run `anvil` and use /restart to respawn the process (full restart) or /restart --soft to reload configuration in-place.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::Agent { .. } => Some(SlashCommandResult {
-            message: "/agent is not yet implemented here. Use /agent in the TUI to compose a temporary agent with traits.".to_string(),
+            message: "/agent requires an active session. Run `anvil` and use /agent traits to list trait definitions, or /agent compose <traits> \"<task>\" to run a composed agent turn.".to_string(),
             session: session.clone(),
         }),
         SlashCommand::OutputStyle { style } => Some(SlashCommandResult {
@@ -589,14 +625,14 @@ pub fn handle_slash_command(
         SlashCommand::Goal { action } => {
             let msg = match action.as_deref() {
                 None | Some("list") => {
-                    "/goal list — goal tracking is handled in the TUI. \
-                     Use /goal new \"<description>\" to create a goal."
+                    "/goal list — goal tracking is fully available in interactive mode. \
+                     Use /goal new \"<description>\" to create a goal, or run `anvil` and use /goal."
                         .to_string()
                 }
                 Some(other) => {
                     format!(
-                        "/goal {other} — goal management is not yet implemented in non-TUI mode. \
-                         Use /goal in an interactive session."
+                        "/goal {other} — goal management requires an active session. \
+                         Run `anvil` and use /goal in the interactive REPL or TUI."
                     )
                 }
             };

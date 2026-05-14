@@ -2,6 +2,7 @@
 #![allow(unsafe_code)]
 
 pub mod agents;
+pub mod dispatch;
 pub mod git;
 pub mod handlers;
 pub mod plugins;
@@ -25,6 +26,7 @@ pub use git::{
     detect_default_branch, handle_branch_slash_command, handle_commit_push_pr_slash_command,
     handle_commit_slash_command, handle_worktree_slash_command, CommitPushPrRequest,
 };
+pub use dispatch::{dispatch_slash_command, DispatchContext, DispatchError, DispatchOutcome};
 pub use handlers::{handle_memory_command, handle_slash_command, MemoryContext, SlashCommandResult};
 pub use plugins::{handle_plugins_slash_command, render_plugins_report, PluginsCommandResult};
 pub use specs::{
@@ -3104,6 +3106,81 @@ mod tests {
              call here will freeze the UI for the duration of inference.\n\
              See Phase 5.0 Gate 3 comment above for the correct dispatch pattern.",
             violations.join("\n  ")
+        );
+    }
+
+    // ── Phase 5.0.5 Gate — no stub messages in resolved dispatch ─────────────
+    //
+    // Background:
+    //   Phase 5.0.5 replaces all 99 "not yet implemented" stubs in
+    //   handle_slash_command with accurate, context-aware messages.  This gate
+    //   enforces the post-5.0.5 invariant: no response from handle_slash_command
+    //   may contain the string "not yet implemented".
+    //
+    //   Every variant in slash_command_specs() is exercised with an empty
+    //   argument list.  For commands that require an active session, the handler
+    //   MUST return a message that explains how to reach the command (e.g. "run
+    //   `anvil`…"), NOT a "not yet implemented" placeholder.
+    //
+    //   Commands with `requires_arguments: true` are still exempt from the
+    //   "(stub)" check in Gate 2, but they are NOT exempt from this gate —
+    //   "not yet implemented" is banned regardless of argument requirements.
+    //
+    // How to fix a failure:
+    //   Replace the "not yet implemented" text with an accurate description of
+    //   when and how the command is available.  Use "[deferred:<reason>]" as the
+    //   prefix for commands that are genuinely unimplemented with a specific
+    //   technical reason (see Phase 5.0.5 stub triage in handlers.rs).
+    //
+    // Failure message format:
+    //   "FAILED: <command> — response contains forbidden phrase: 'not yet implemented'"
+    #[test]
+    fn no_stub_messages_in_resolved_dispatch() {
+        use super::handlers::handle_slash_command;
+        use super::specs::slash_command_specs;
+
+        let session = runtime::Session::default();
+        let config = runtime::CompactionConfig::default();
+        let mut failures: Vec<String> = Vec::new();
+
+        const FORBIDDEN: &[&str] = &[
+            "not yet implemented",
+            "is not yet implemented",
+        ];
+
+        for spec in slash_command_specs() {
+            let input = format!("/{}", spec.name);
+            match handle_slash_command(&input, &session, config.clone()) {
+                None => {
+                    // Gate 2 (every_spec_has_a_callable_handler) already catches this.
+                    // Skip here to avoid duplicate failures.
+                }
+                Some(result) => {
+                    let msg = &result.message;
+                    for phrase in FORBIDDEN {
+                        if msg.contains(phrase) {
+                            failures.push(format!(
+                                "FAILED: {} — response contains forbidden phrase: '{phrase}'\n  \
+                                 Message: {}",
+                                spec.name,
+                                // Truncate long messages for readability.
+                                if msg.len() > 120 { &msg[..120] } else { msg.as_str() }
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Phase 5.0.5 gate: handle_slash_command responses contain banned 'not yet implemented' text:\n\n  {}\n\n\
+             Fix: replace the stub message with an accurate description of when/how the command is\n\
+             available.  Commands that require an active session should say so.  Genuinely\n\
+             deferred commands should use the [deferred:<reason>] prefix.\n\
+             See Phase 5.0.5 stub triage rules in crates/commands/src/handlers.rs.",
+            failures.join("\n  ")
         );
     }
 }
