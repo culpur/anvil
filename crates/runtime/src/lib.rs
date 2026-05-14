@@ -90,6 +90,10 @@ pub use file_ops::{
     write_file, EditFileOutput, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
     ReadFileOutput, SandboxMode, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
 };
+pub use sandbox::{
+    clear_parent_sandbox_config, current_parent_sandbox_config, set_parent_sandbox_config,
+    FilesystemIsolationMode, SandboxConfig,
+};
 pub use hooks::{
     CwdChangedPayload, FileChangeAction, FileChangedPayload, HookEvent, HookPermissionDecision,
     HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker, NotificationKind,

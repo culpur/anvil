@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -81,6 +82,42 @@ pub struct LinuxSandboxCommand {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+}
+
+/// Process-global parent sandbox config.  When set by the host session before
+/// spawning a subagent, subagents will inherit this config rather than
+/// re-reading from disk.  `None` means no parent override → fall back to the
+/// disk config (the normal single-process case where both parent and subagent
+/// read the same `settings.json`).
+///
+/// This mirrors the `PARENT_PERMISSION_MODE` pattern in
+/// `crates/tools/src/config_ops.rs` (CC-BUG-3/4).  Call
+/// `set_parent_sandbox_config` before spawning the subagent and
+/// `clear_parent_sandbox_config` after it returns.
+pub static PARENT_SANDBOX_CONFIG: Mutex<Option<SandboxConfig>> = Mutex::new(None);
+
+/// Set the parent session's sandbox config so subagents will inherit it.
+pub fn set_parent_sandbox_config(config: SandboxConfig) {
+    if let Ok(mut guard) = PARENT_SANDBOX_CONFIG.lock() {
+        *guard = Some(config);
+    }
+}
+
+/// Clear the parent sandbox config (call after the Agent/TeamDelegate tool returns).
+pub fn clear_parent_sandbox_config() {
+    if let Ok(mut guard) = PARENT_SANDBOX_CONFIG.lock() {
+        *guard = None;
+    }
+}
+
+/// Return the current parent sandbox config override, if any.
+/// Returns `None` when no parent context is set (disk config is the authority).
+#[must_use]
+pub fn current_parent_sandbox_config() -> Option<SandboxConfig> {
+    PARENT_SANDBOX_CONFIG
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
 }
 
 impl SandboxConfig {
@@ -286,9 +323,11 @@ fn command_exists(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_linux_sandbox_command, detect_container_environment_from, FilesystemIsolationMode,
+        build_linux_sandbox_command, clear_parent_sandbox_config, current_parent_sandbox_config,
+        detect_container_environment_from, set_parent_sandbox_config, FilesystemIsolationMode,
         SandboxConfig, SandboxDetectionInputs,
     };
+    use serial_test::serial;
     use std::path::Path;
 
     #[test]
@@ -361,5 +400,89 @@ mod tests {
             assert!(launcher.args.iter().any(|arg| arg == "--mount"));
             assert!(launcher.args.iter().any(|arg| arg == "--net") == status.network_active);
         }
+    }
+
+    // ── CC-BUG: SandboxConfig subagent inheritance ────────────────────────────
+    //
+    // Proves the PARENT_SANDBOX_CONFIG process-global round-trips correctly:
+    // set → current returns it → clear → current returns None.
+    //
+    // In production, bash.rs::sandbox_status_for_input prefers
+    // current_parent_sandbox_config() over the disk config when set, so any
+    // caller that sets the parent config before spawning a subagent thread
+    // ensures that subagent's Bash tool invocations see the same SandboxConfig.
+
+    #[test]
+    #[serial(parent_sandbox_config)]
+    fn parent_sandbox_config_set_and_retrieved() {
+        // Start clean — don't assume global state from other tests.
+        clear_parent_sandbox_config();
+        assert!(
+            current_parent_sandbox_config().is_none(),
+            "should be None before set"
+        );
+
+        let config = SandboxConfig {
+            enabled: Some(true),
+            namespace_restrictions: Some(false),
+            network_isolation: Some(true),
+            filesystem_mode: Some(FilesystemIsolationMode::AllowList),
+            allowed_mounts: vec!["/workspace".to_string()],
+        };
+        set_parent_sandbox_config(config.clone());
+
+        let retrieved = current_parent_sandbox_config()
+            .expect("should be Some after set");
+        assert_eq!(retrieved.network_isolation, Some(true));
+        assert_eq!(retrieved.filesystem_mode, Some(FilesystemIsolationMode::AllowList));
+        assert_eq!(retrieved.allowed_mounts, vec!["/workspace"]);
+
+        clear_parent_sandbox_config();
+        assert!(
+            current_parent_sandbox_config().is_none(),
+            "should be None after clear"
+        );
+    }
+
+    /// A subagent thread spawned AFTER set_parent_sandbox_config sees the same
+    /// config through the process-global, regardless of thread scheduling.
+    #[test]
+    #[serial(parent_sandbox_config)]
+    fn subagent_thread_inherits_parent_sandbox_config() {
+        use std::sync::{Arc, Mutex};
+
+        clear_parent_sandbox_config();
+
+        let config = SandboxConfig {
+            enabled: Some(true),
+            namespace_restrictions: Some(false),
+            network_isolation: Some(true),
+            filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
+            allowed_mounts: vec![],
+        };
+        set_parent_sandbox_config(config);
+
+        let observed: Arc<Mutex<Option<SandboxConfig>>> = Arc::new(Mutex::new(None));
+        let observed_clone = Arc::clone(&observed);
+
+        let handle = std::thread::spawn(move || {
+            // The subagent thread reads the global just as bash.rs would.
+            let seen = current_parent_sandbox_config();
+            *observed_clone.lock().unwrap() = seen;
+        });
+        handle.join().expect("subagent thread panicked");
+
+        let seen = observed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("subagent thread should have observed the parent sandbox config");
+        assert_eq!(
+            seen.network_isolation,
+            Some(true),
+            "subagent must inherit network_isolation=true from parent"
+        );
+
+        clear_parent_sandbox_config();
     }
 }

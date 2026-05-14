@@ -12,8 +12,8 @@ use tokio::time::timeout;
 
 use crate::command_cache::{is_cacheable as command_is_cacheable, CommandCacheManager};
 use crate::sandbox::{
-    build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
-    SandboxConfig, SandboxStatus,
+    build_linux_sandbox_command, current_parent_sandbox_config,
+    resolve_sandbox_status_for_request, FilesystemIsolationMode, SandboxConfig, SandboxStatus,
 };
 use crate::ConfigLoader;
 
@@ -282,10 +282,20 @@ async fn execute_bash_async(
 }
 
 fn sandbox_status_for_input(input: &BashCommandInput, cwd: &std::path::Path) -> SandboxStatus {
-    let config = ConfigLoader::default_for(cwd).load().map_or_else(
-        |_| SandboxConfig::default(),
-        |runtime_config| runtime_config.sandbox().clone(),
-    );
+    // CC-BUG: SandboxConfig subagent inheritance.
+    // Prefer the process-global parent override (set by the host session before
+    // spawning a subagent) over the disk config.  When no parent override is
+    // set, fall back to loading from disk — both parent and subagent read the
+    // same `settings.json`, so single-process subagents already inherit it
+    // naturally.  The override path is needed when a caller programmatically
+    // sets a SandboxConfig that is not persisted to disk (e.g. in tests or
+    // future runtime-flag support).
+    let config = current_parent_sandbox_config().unwrap_or_else(|| {
+        ConfigLoader::default_for(cwd).load().map_or_else(
+            |_| SandboxConfig::default(),
+            |runtime_config| runtime_config.sandbox().clone(),
+        )
+    });
     let request = config.resolve_request(
         input.dangerously_disable_sandbox.map(|disabled| !disabled),
         input.namespace_restrictions,

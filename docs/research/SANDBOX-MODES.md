@@ -99,22 +99,36 @@ Phase 5.1 commit `7c406e5` wired `parent_permission_mode` into the subagent spaw
 path. A parent running `DangerFullAccess` spawns subagents that also run
 `DangerFullAccess`.
 
-**SandboxConfig** is not explicitly threaded through the subagent spawn path in the
-current codebase. Subagents launched via `TaskManager::create` inherit the
-process-level sandbox state because they are subprocesses of the same Anvil
-process, but `SandboxConfig` is not serialized into the delegation record and
-is not explicitly re-applied to the subagent's tool subprocess chain. This means:
+**SandboxConfig** is inherited by subagents through two complementary mechanisms:
 
-- A parent with `SandboxConfig::network_isolation = true` will propagate that
-  constraint to its own tool calls.
-- A delegated subagent (running as a new process invocation via the task runner)
-  will use whatever `SandboxConfig` is set in its own session config, not the
-  parent's runtime config.
+### Mechanism 1: Disk config (automatic)
 
-This is a **known gap** rather than a bug — team delegation spawns a new
-`anvil` process with its own config, not a shared-memory subagent. The
-`parent_permission_mode` threading is a special-case injection; sandbox config
-does not have an equivalent injection point. Filed as a Phase 5.5 follow-up item.
+Subagents spawned via `spawn_agent_job` run in the **same OS process** as the
+parent. `bash.rs::sandbox_status_for_input` (line 284) calls
+`ConfigLoader::default_for(cwd).load()` on every Bash invocation. Since parent
+and subagent share the same CWD and `settings.json`, they read the same
+`SandboxConfig` from disk automatically. No explicit threading is required for
+the common case.
+
+### Mechanism 2: Process-global override (Phase 5.4f)
+
+A `PARENT_SANDBOX_CONFIG: Mutex<Option<SandboxConfig>>` process-global was added
+to `crates/runtime/src/sandbox.rs` (mirroring `PARENT_PERMISSION_MODE` from
+CC-BUG-3/4). Three accessor functions are exported from `runtime::sandbox`:
+
+- `set_parent_sandbox_config(config)` — override before spawning the subagent
+- `clear_parent_sandbox_config()` — clear after the subagent returns
+- `current_parent_sandbox_config() -> Option<SandboxConfig>` — read by subagent
+
+`bash.rs::sandbox_status_for_input` now prefers `current_parent_sandbox_config()`
+over the disk config when set. This covers the case where a caller supplies a
+`SandboxConfig` that is not persisted to disk (e.g. programmatic callers, future
+CLI flags, or tests).
+
+The accessor test at `sandbox.rs::tests::subagent_thread_inherits_parent_sandbox_config`
+(added in Phase 5.4f) proves the inheritance: a thread spawned after
+`set_parent_sandbox_config` observes the same config via `current_parent_sandbox_config()`,
+exactly as `bash.rs` does.
 
 ---
 
@@ -160,16 +174,21 @@ supply at least one mount when using `AllowList` mode.
 
 ## Testing
 
-Sandbox interaction tests live in `crates/runtime/src/sandbox.rs::tests` (line 286)
+Sandbox interaction tests live in `crates/runtime/src/sandbox.rs::tests` (line 324)
 and `crates/runtime/src/file_ops.rs` (inline below `enforce_write_boundary`).
+
+Phase 5.4f added two tests to `sandbox.rs::tests`:
+- `parent_sandbox_config_set_and_retrieved` — round-trips the process-global
+- `subagent_thread_inherits_parent_sandbox_config` — proves a spawned thread sees
+  the config set by the parent before spawning
 
 The matrix cells for DangerFullAccess + sandbox-enabled are not tested at the
 integration level (no test spins up a Linux namespace and verifies that a
 DangerFullAccess parent's tool subprocess is still namespace-constrained). This
-is marked as a Phase 5.5 test coverage gap.
+requires a Linux host with `unshare` and is out of scope for CI on macOS.
 
 ---
 
-*Last updated: Phase 5.4, 2026-05-14*
+*Last updated: Phase 5.4f, 2026-05-14*
 *Canonical sources: `crates/runtime/src/file_ops.rs`, `crates/runtime/src/sandbox.rs`,
 `crates/runtime/src/permissions/mod.rs`*
