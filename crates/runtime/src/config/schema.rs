@@ -325,6 +325,48 @@ fn build_root_schema() -> RootSchema {
         true,
     );
 
+    // --- egress ----------------------------------------------------------
+    let mut egress_props = PropMap::new();
+    egress_props.insert(
+        "enabled".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "Whether egress filtering is enforced. When false (default), all outbound \
+                 URLs are permitted. When true, only the combined default + user allowlist \
+                 is allowed.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Boolean))),
+            ..Default::default()
+        }),
+    );
+    egress_props.insert(
+        "allowlist".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "User-supplied domains added on top of the runtime default allowlist \
+                 (api.anthropic.com, api.openai.com, localhost, etc.). Entries are \
+                 hostnames only, no scheme or path.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Array))),
+            array: Some(Box::new(ArrayValidation {
+                items: Some(SingleOrVec::Single(Box::new(string_schema()))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }),
+    );
+    let egress_schema = object_schema(
+        desc(
+            "Egress allowlist — controls which domains tools may contact. Disabled by \
+             default; enable with `\"enabled\": true` and optionally extend with \
+             `\"allowlist\"`. Admin-floor forbidden_domains and allowlist_locked in \
+             requirements.toml take precedence over user-supplied entries.",
+        ),
+        egress_props,
+        vec![],
+        true,
+    );
+
     // --- sandbox ---------------------------------------------------------
     let sandbox_value = serde_json::to_value(&sandbox_schema).expect("sandbox schema to value");
     let sandbox_resolved = serde_json::from_value::<Schema>(
@@ -477,6 +519,7 @@ fn build_root_schema() -> RootSchema {
     top_props.insert("enabledPlugins".to_string(), bool_map_schema());
     top_props.insert("permissionMode".to_string(), permission_mode_enum);
     top_props.insert("permissions".to_string(), permissions_schema);
+    top_props.insert("egress".to_string(), egress_schema);
     top_props.insert("sandbox".to_string(), sandbox_resolved);
     top_props.insert("output_style".to_string(), output_style_resolved);
     top_props.insert("profiles".to_string(), profiles_schema);

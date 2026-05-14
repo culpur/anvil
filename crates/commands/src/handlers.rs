@@ -1395,9 +1395,9 @@ fn render_cache_show(sub: Option<&str>, cwd: &std::path::Path) -> String {
 ///    + global `~/.anvil/permissions.json`)
 /// 2. `autoMode.hard_deny` rules from settings.json
 /// 3. Reviewer extras (`extra_destructive_patterns`, `extra_credential_patterns`)
-/// 4. Egress allowlist (EgressPolicy::default — module ships but not yet
-///    wired into central config; this view reports the runtime default so
-///    users can see the current ground truth).
+/// 4. Egress allowlist — loaded from `egress` block in settings.json and merged
+///    with the runtime default allowlist; admin-floor `forbidden_domains` and
+///    `allowlist_locked` from requirements.toml are applied before display.
 fn render_policy_show(cwd: &std::path::Path) -> String {
     use runtime::{ConfigLoader, PermissionMemory};
 
@@ -1475,15 +1475,14 @@ fn render_policy_show(cwd: &std::path::Path) -> String {
         }
     }
 
-    // 4. Egress allowlist — the module ships with a default policy. It
-    // is not yet wired into the central RuntimeFeatureConfig, so we
-    // surface the runtime default with a clear note about that gap.
+    // 4. Egress allowlist — built from settings.json `egress` block,
+    // intersected with the admin-floor requirements policy.
     lines.push(String::new());
-    let policy = runtime::egress::EgressPolicy::default();
+    let policy = build_egress_policy_for_view(cwd, &cfg);
     let mut domains: Vec<_> = policy.allowlist.iter().cloned().collect();
     domains.sort();
     lines.push(format!(
-        "egress allowlist (default policy, enabled={}, {} domain(s)):",
+        "egress allowlist (enabled={}, {} domain(s)):",
         policy.enabled,
         domains.len()
     ));
@@ -1493,12 +1492,52 @@ fn render_policy_show(cwd: &std::path::Path) -> String {
     if domains.len() > 20 {
         lines.push(format!("  ... +{} more", domains.len() - 20));
     }
-    lines.push(
-        "(egress policy is not yet merged into settings.json — defaults shown)"
-            .to_string(),
-    );
 
     lines.join("\n")
+}
+
+/// Build the effective [`runtime::egress::EgressPolicy`] for the policy view.
+///
+/// Reads user config from `cfg` (already loaded) and the admin-floor
+/// `requirements::EgressPolicy` from the standard requirements.toml search
+/// path.  The admin-floor rules are applied as follows:
+///
+/// - If `allowlist_locked = true`, user-supplied extras are silently dropped
+///   (the view shows only the runtime default domains).
+/// - Each domain in `forbidden_domains` is excluded from the effective list.
+fn build_egress_policy_for_view(
+    _cwd: &std::path::Path,
+    cfg: &Result<runtime::RuntimeConfig, runtime::ConfigError>,
+) -> runtime::egress::EgressPolicy {
+    // Read user egress settings (fallback to default when config failed to load).
+    let (user_enabled, user_extras): (bool, Vec<String>) = match cfg {
+        Ok(rt) => {
+            let ec = rt.feature_config().egress();
+            (ec.enabled(), ec.extra_allowlist().to_vec())
+        }
+        Err(_) => (false, Vec::new()),
+    };
+
+    // Read admin-floor egress policy.
+    let (admin_policy, _policy_source) = runtime::requirements::load_from_paths();
+    let admin_egress = &admin_policy.egress;
+
+    // Apply allowlist_locked: ignore user extras when admin has locked.
+    let effective_extras: Vec<String> = if admin_egress.allowlist_locked {
+        Vec::new()
+    } else {
+        user_extras
+    };
+
+    // Build the policy (merges DEFAULT_ALLOWLIST + effective_extras internally).
+    let mut policy = runtime::egress::EgressPolicy::from_config(&effective_extras, user_enabled);
+
+    // Subtract admin-forbidden domains.
+    for forbidden in &admin_egress.forbidden_domains {
+        policy.remove_domain(forbidden);
+    }
+
+    policy
 }
 
 /// Render `/memory show identity`.
@@ -2560,14 +2599,75 @@ mod memory_tests {
 
     #[test]
     #[serial(anvil_config_home)]
-    fn memory_show_policy_shows_default_egress_status_line() {
-        // L6 §5 acceptance: even when the egress block is not in
-        // settings.json, the view reads EgressPolicy::default and tells
-        // the user that the wiring gap exists.
+    fn memory_show_policy_egress_section_renders_domain_count() {
+        // Rewritten from the old "wiring gap" test. The banner is gone.
+        // The egress allowlist section must render with a domain count ≥ 1
+        // (the runtime-default domains are always included), and must NOT
+        // contain the old wiring-gap banner string.
         let result = memory_show(Some("policy"), &MemoryContext::default());
         assert!(
-            result.contains("not yet merged into settings.json"),
-            "should advertise the wiring gap; got: {result}"
+            result.contains("egress allowlist"),
+            "egress section missing; got: {result}"
+        );
+        // Wiring-gap banner must be gone.
+        assert!(
+            !result.contains("not yet merged into settings.json"),
+            "stale wiring-gap banner still present; got: {result}"
+        );
+        // Default list always has at least one domain.
+        assert!(
+            result.contains("domain(s)"),
+            "egress domain count line missing; got: {result}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_show_policy_reflects_configured_egress_block() {
+        // Write a fake settings.json with egress.enabled=true and a custom
+        // domain, point ANVIL_CONFIG_HOME at it, confirm the view surfaces
+        // the correct enabled= value and the custom domain appears.
+        use std::fs;
+
+        let root = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static CTR: AtomicU64 = AtomicU64::new(0);
+            let n = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos();
+            let i = CTR.fetch_add(1, Ordering::Relaxed);
+            std::env::temp_dir().join(format!("handlers-egress-{n}-{i}"))
+        };
+        let home = root.join(".anvil");
+        fs::create_dir_all(&home).expect("create test home");
+
+        fs::write(
+            home.join("settings.json"),
+            r#"{"egress": {"enabled": true, "allowlist": ["custom.test"]}}"#,
+        )
+        .expect("write settings");
+
+        // SAFETY: test-only env mutation, serialised by serial(anvil_config_home).
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &home) };
+
+        let result = memory_show(Some("policy"), &MemoryContext::default());
+
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
+        fs::remove_dir_all(root).expect("cleanup");
+
+        assert!(
+            result.contains("custom.test"),
+            "custom domain should appear in egress section; got: {result}"
+        );
+        assert!(
+            result.contains("enabled=true"),
+            "enabled=true should appear; got: {result}"
+        );
+        assert!(
+            !result.contains("not yet merged into settings.json"),
+            "wiring-gap banner must be absent; got: {result}"
         );
     }
 

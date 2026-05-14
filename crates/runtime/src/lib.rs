@@ -67,8 +67,8 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, LspConfig,
-    LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
+    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, EgressConfig,
+    LspConfig, LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
     McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
     McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
     BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,

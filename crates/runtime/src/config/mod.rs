@@ -103,6 +103,52 @@ impl WorktreeConfig {
     }
 }
 
+/// Egress allowlist settings loaded from settings.json.
+///
+/// Controls which domains tools may contact over the network.  Disabled by
+/// default — when `enabled` is false every outbound URL is permitted,
+/// matching the historical open behaviour.  When `enabled` is true only URLs
+/// whose hostname is in the combined default + user allowlist are allowed.
+///
+/// The `extra_allowlist` entries are added on top of the runtime-default
+/// allowlist defined in `runtime::egress::DEFAULT_ALLOWLIST`
+/// (api.anthropic.com, api.openai.com, etc.).
+///
+/// Admin-floor coexistence: before building the [`runtime::egress::EgressPolicy`]
+/// the caller must subtract any domains in `requirements::EgressPolicy::forbidden_domains`
+/// and, when `allowlist_locked = true`, ignore the user-supplied extras entirely.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EgressConfig {
+    /// Whether egress filtering is enforced.  When false, all domains pass.
+    enabled: bool,
+    /// User-supplied domains added on top of the runtime default allowlist.
+    extra_allowlist: Vec<String>,
+}
+
+impl EgressConfig {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn extra_allowlist(&self) -> &[String] {
+        &self.extra_allowlist
+    }
+
+    #[must_use]
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub fn with_extra_allowlist(mut self, domains: Vec<String>) -> Self {
+        self.extra_allowlist = domains;
+        self
+    }
+}
+
 /// L6 memory: settings for the permission-memory store.
 ///
 /// Off by default. When `use_permission_memory` is true, the runtime loads
@@ -159,6 +205,10 @@ pub struct RuntimeFeatureConfig {
     /// L6 memory: persist permission grants across sessions when enabled
     /// (`permissions.use_permission_memory` in settings.json). Default false.
     permissions: PermissionsConfig,
+    /// Egress allowlist settings (`egress.enabled` + `egress.allowlist` in settings.json).
+    /// Default: disabled (all outbound URLs pass). When enabled, only the combined
+    /// default + user-supplied allowlist is permitted.
+    egress: EgressConfig,
 }
 
 #[derive(Debug)]
@@ -295,6 +345,7 @@ impl ConfigLoader {
                 "permissions",
                 parse_optional_permissions_config(&merged_value),
             ),
+            egress: tolerate_section("egress", parse_optional_egress_config(&merged_value)),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -572,6 +623,12 @@ impl RuntimeConfig {
     pub const fn permissions(&self) -> &PermissionsConfig {
         &self.feature_config.permissions
     }
+
+    /// Egress allowlist settings (`egress` block in settings.json).
+    #[must_use]
+    pub const fn egress(&self) -> &EgressConfig {
+        &self.feature_config.egress
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -668,6 +725,12 @@ impl RuntimeFeatureConfig {
     pub fn with_permissions(mut self, permissions: PermissionsConfig) -> Self {
         self.permissions = permissions;
         self
+    }
+
+    /// Egress allowlist settings (`egress` block in settings.json).
+    #[must_use]
+    pub const fn egress(&self) -> &EgressConfig {
+        &self.egress
     }
 }
 
@@ -876,6 +939,64 @@ fn parse_optional_permissions_config(
     Ok(PermissionsConfig {
         use_permission_memory: enabled,
     })
+}
+
+/// Parse the `egress` block from the merged config JSON.
+///
+/// Recognised shape:
+/// ```json
+/// {
+///   "egress": {
+///     "enabled": true,
+///     "allowlist": ["custom.example.com", "internal.corp"]
+///   }
+/// }
+/// ```
+///
+/// - Absent block → `Ok(EgressConfig::default())` (disabled, no extras).
+/// - `enabled` absent → default false.
+/// - `enabled` present but not a boolean → `Err` (triggers `tolerate_section` warning).
+/// - `allowlist` absent → default empty.
+/// - `allowlist` present but not an array → `Err`.
+/// - Non-string entries inside the array are silently skipped (forward compat).
+/// - Unknown sibling keys are ignored (no `deny_unknown_fields`).
+fn parse_optional_egress_config(root: &JsonValue) -> Result<EgressConfig, ConfigError> {
+    let Some(egress_obj) = root
+        .as_object()
+        .and_then(|o| o.get("egress"))
+        .and_then(JsonValue::as_object)
+    else {
+        return Ok(EgressConfig::default());
+    };
+
+    let enabled = match egress_obj.get("enabled") {
+        None => false,
+        Some(v) => {
+            let Some(b) = v.as_bool() else {
+                return Err(ConfigError::Parse(format!(
+                    "egress.enabled: expected boolean, got {v:?}"
+                )));
+            };
+            b
+        }
+    };
+
+    let extra_allowlist = match egress_obj.get("allowlist") {
+        None => Vec::new(),
+        Some(v) => {
+            let Some(arr) = v.as_array() else {
+                return Err(ConfigError::Parse(format!(
+                    "egress.allowlist: expected array of strings, got {v:?}"
+                )));
+            };
+            arr.iter()
+                .filter_map(JsonValue::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        }
+    };
+
+    Ok(EgressConfig { enabled, extra_allowlist })
 }
 
 fn parse_optional_permission_mode(
@@ -1585,6 +1706,145 @@ mod tests {
             !loaded.permissions().use_permission_memory(),
             "malformed value should fall back to default (off)"
         );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    // ─── Egress config parse tests ─────────────────────────────────────────
+
+    #[test]
+    fn egress_defaults_off_when_block_absent() {
+        // Empty settings → EgressConfig::default(): enabled=false, extras=[].
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(home.join("settings.json"), "{}").expect("write");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(!loaded.egress().enabled());
+        assert!(loaded.egress().extra_allowlist().is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn egress_parses_enabled_and_allowlist() {
+        // Full block with enabled=true and a two-entry allowlist parses correctly.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"egress": {"enabled": true, "allowlist": ["custom.example.com", "internal.corp"]}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.egress().enabled());
+        let extras = loaded.egress().extra_allowlist();
+        assert_eq!(extras.len(), 2);
+        assert!(extras.contains(&"custom.example.com".to_string()));
+        assert!(extras.contains(&"internal.corp".to_string()));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn egress_partial_block_keeps_defaults() {
+        // Block with only `enabled`, no `allowlist` → extras stay empty.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"egress": {"enabled": true}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.egress().enabled());
+        assert!(loaded.egress().extra_allowlist().is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn egress_malformed_enabled_falls_back_to_default() {
+        // Non-bool `enabled` → tolerate_section warns and returns EgressConfig::default().
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"egress": {"enabled": "yes"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("malformed egress block must not abort load");
+        assert!(
+            !loaded.egress().enabled(),
+            "malformed enabled should fall back to default (off)"
+        );
+        assert!(loaded.egress().extra_allowlist().is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn egress_malformed_allowlist_falls_back_to_default() {
+        // Non-array `allowlist` → tolerate_section warns and returns EgressConfig::default().
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"egress": {"enabled": true, "allowlist": "not-an-array"}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home)
+            .load()
+            .expect("malformed allowlist must not abort load");
+        // The whole egress block falls back because allowlist is invalid.
+        assert!(!loaded.egress().enabled());
+        assert!(loaded.egress().extra_allowlist().is_empty());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn egress_coexists_with_permissions_block() {
+        // Both `egress` and `permissions` blocks parse correctly from the same file.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{
+              "egress": {"enabled": true, "allowlist": ["corp.internal"]},
+              "permissions": {"use_permission_memory": true}
+            }"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.egress().enabled());
+        assert_eq!(loaded.egress().extra_allowlist(), &["corp.internal".to_string()]);
+        assert!(loaded.permissions().use_permission_memory());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
