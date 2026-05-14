@@ -473,6 +473,144 @@ pub fn edit_file(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Search result caching (#8)
+// ---------------------------------------------------------------------------
+//
+// Both glob_search and grep_search are pure functions of their inputs plus
+// filesystem state.  We cache results in the CommandCacheManager:
+//
+//   Glob  — cache key: `Glob:<pattern>:<base_dir>`
+//            touched_files: [base_dir]  (dir mtime changes on child create/delete)
+//            TTL: 60 s
+//
+//   Grep  — cache key: deterministic encoding of all search parameters
+//            touched_files: every file scanned by collect_search_files
+//            TTL: 300 s
+//            Invalidation fires in CommandCacheManager.lookup_raw when any
+//            touched file has mtime > captured_at — exactly the file-watch
+//            mechanism built for Bash (Phase 3.5).
+//
+// L5/L7 invariant: base_dir / cwd is never a vault path (searches are
+// project-scoped). is_l5_path(base_dir) is checked before any store/lookup.
+
+/// Default TTL (seconds) for glob result cache entries.
+const GLOB_CACHE_TTL_SECS: u64 = 60;
+
+/// Default TTL (seconds) for grep result cache entries.
+const GREP_CACHE_TTL_SECS: u64 = 300;
+
+/// Build a `CommandCacheManager` scoped to `base_dir`.
+/// Returns `None` silently if construction fails (cache is advisory).
+fn search_cache_manager(base_dir: &Path) -> Option<crate::command_cache::CommandCacheManager> {
+    // L5 guard: never cache search results whose root is inside the vault.
+    if crate::file_cache::is_l5_path(base_dir) {
+        return None;
+    }
+    crate::command_cache::CommandCacheManager::new(base_dir.to_path_buf()).ok()
+}
+
+/// Build the cache key for a glob search.
+fn glob_cache_key(pattern: &str, base_dir: &Path) -> String {
+    format!("Glob:{}:{}", pattern, base_dir.display())
+}
+
+/// Build the cache key for a grep search — encodes all parameters that affect
+/// the result so different invocations produce distinct keys.
+fn grep_cache_key(input: &GrepSearchInput, base_dir: &Path) -> String {
+    format!(
+        "Grep:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        input.pattern,
+        base_dir.display(),
+        input.glob.as_deref().unwrap_or(""),
+        input.output_mode.as_deref().unwrap_or("files_with_matches"),
+        input.case_insensitive.unwrap_or(false),
+        input.multiline.unwrap_or(false),
+        input.file_type.as_deref().unwrap_or(""),
+        input.head_limit.map(|n| n.to_string()).as_deref().unwrap_or(""),
+        input.offset.map(|n| n.to_string()).as_deref().unwrap_or(""),
+        // context fields affect content output
+        input.context.or(input.context_short).unwrap_or(0),
+    )
+}
+
+/// Look up a cached `GlobSearchOutput`.  Returns `None` on any miss/error.
+fn glob_cache_lookup(key: &str, base_dir: &Path) -> Option<GlobSearchOutput> {
+    let mgr = search_cache_manager(base_dir)?;
+    let hit = mgr.lookup_raw(key, base_dir).ok().flatten()?;
+    serde_json::from_str::<GlobSearchOutput>(&hit.stdout).ok()
+}
+
+/// Store a `GlobSearchOutput` in the cache with base_dir as the touched file.
+fn glob_cache_store(key: &str, base_dir: &Path, output: &GlobSearchOutput) {
+    let Some(mgr) = search_cache_manager(base_dir) else { return };
+    let Ok(json) = serde_json::to_string(output) else { return };
+    let entry = crate::command_cache::CommandCacheEntry {
+        command: key.to_string(),
+        cwd: base_dir.to_path_buf(),
+        stdout: json,
+        stderr: String::new(),
+        exit_code: 0,
+        duration_ms: 0,
+        captured_at: unix_now_secs_for_cache(),
+        // touched_files: the base directory itself.  Its mtime changes when a
+        // direct child is created, renamed, or deleted — sufficient to
+        // invalidate glob results for the common case.  Recursive patterns
+        // also rely on the 60-second TTL for subdirectory changes.
+        touched_files: vec![base_dir.to_path_buf()],
+        stale_after_secs: GLOB_CACHE_TTL_SECS,
+        hits: 0,
+    };
+    let _ = mgr.store_raw_entry(&entry);
+}
+
+/// Look up a cached `GrepSearchOutput`.  Returns `None` on any miss/error.
+fn grep_cache_lookup(key: &str, base_dir: &Path) -> Option<GrepSearchOutput> {
+    let mgr = search_cache_manager(base_dir)?;
+    let hit = mgr.lookup_raw(key, base_dir).ok().flatten()?;
+    serde_json::from_str::<GrepSearchOutput>(&hit.stdout).ok()
+}
+
+/// Store a `GrepSearchOutput` in the cache.
+/// `scanned_files` is the complete list of files that were read during the
+/// search — these become the touched_files watched for mtime changes.
+fn grep_cache_store(
+    key: &str,
+    base_dir: &Path,
+    output: &GrepSearchOutput,
+    scanned_files: &[PathBuf],
+) {
+    let Some(mgr) = search_cache_manager(base_dir) else { return };
+    let Ok(json) = serde_json::to_string(output) else { return };
+    // Filter out any L5 paths from touched_files (defense-in-depth).
+    let touched: Vec<PathBuf> = scanned_files
+        .iter()
+        .filter(|p| !crate::file_cache::is_l5_path(p))
+        .cloned()
+        .collect();
+    let entry = crate::command_cache::CommandCacheEntry {
+        command: key.to_string(),
+        cwd: base_dir.to_path_buf(),
+        stdout: json,
+        stderr: String::new(),
+        exit_code: 0,
+        duration_ms: 0,
+        captured_at: unix_now_secs_for_cache(),
+        touched_files: touched,
+        stale_after_secs: GREP_CACHE_TTL_SECS,
+        hits: 0,
+    };
+    let _ = mgr.store_raw_entry(&entry);
+}
+
+fn unix_now_secs_for_cache() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOutput> {
     let started = Instant::now();
     // When no explicit path is provided, default to the project root rather
@@ -486,6 +624,15 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
     } else {
         base_dir.join(pattern).to_string_lossy().into_owned()
     };
+
+    // #8 cache lookup: check for a live entry before hitting the filesystem.
+    let cache_key = glob_cache_key(pattern, &base_dir);
+    if let Some(mut cached) = glob_cache_lookup(&cache_key, &base_dir) {
+        // Patch duration_ms to reflect this call's elapsed, not the original.
+        cached.duration_ms = started.elapsed().as_millis();
+        eprintln!("[search-cache] glob hit: {pattern}");
+        return Ok(cached);
+    }
 
     let mut matches = Vec::new();
     let entries = glob::glob(&search_pattern)
@@ -510,12 +657,17 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         .map(|path| path.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
-    Ok(GlobSearchOutput {
+    let output = GlobSearchOutput {
         duration_ms: started.elapsed().as_millis(),
         num_files: filenames.len(),
         filenames,
         truncated,
-    })
+    };
+
+    // #8 cache store.
+    glob_cache_store(&cache_key, &base_dir, &output);
+
+    Ok(output)
 }
 
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
@@ -528,11 +680,19 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         .transpose()?
         .unwrap_or_else(find_project_root);
 
+    // #8 cache lookup: validate the regex first (cheap), then probe the cache.
+    // If we get a hit we skip the entire file scan.
     let regex = RegexBuilder::new(&input.pattern)
         .case_insensitive(input.case_insensitive.unwrap_or(false))
         .dot_matches_new_line(input.multiline.unwrap_or(false))
         .build()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+
+    let cache_key = grep_cache_key(input, &base_path);
+    if let Some(cached) = grep_cache_lookup(&cache_key, &base_path) {
+        eprintln!("[search-cache] grep hit: {}", input.pattern);
+        return Ok(cached);
+    }
 
     let glob_filter = input
         .glob
@@ -550,6 +710,8 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     let mut filenames = Vec::new();
     let mut content_lines = Vec::new();
     let mut total_matches = 0usize;
+    // Collect scanned files for the touched_files list in the cache entry.
+    let mut scanned_files: Vec<PathBuf> = Vec::new();
 
     for file_path in collect_search_files(&base_path)? {
         if !matches_optional_filters(&file_path, glob_filter.as_ref(), file_type) {
@@ -559,6 +721,7 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         let Ok(file_contents) = fs::read_to_string(&file_path) else {
             continue;
         };
+        scanned_files.push(file_path.clone());
 
         if output_mode == "count" {
             let count = regex.find_iter(&file_contents).count();
@@ -601,9 +764,9 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
 
     let (filenames, applied_limit, applied_offset) =
         apply_limit(filenames, input.head_limit, input.offset);
-    let content_output = if output_mode == "content" {
+    let output = if output_mode == "content" {
         let (lines, limit, offset) = apply_limit(content_lines, input.head_limit, input.offset);
-        return Ok(GrepSearchOutput {
+        GrepSearchOutput {
             mode: Some(output_mode),
             num_files: filenames.len(),
             filenames,
@@ -612,21 +775,26 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
             num_matches: None,
             applied_limit: limit,
             applied_offset: offset,
-        });
+        }
     } else {
-        None
+        GrepSearchOutput {
+            mode: Some(output_mode.clone()),
+            num_files: filenames.len(),
+            filenames,
+            content: None,
+            num_lines: None,
+            num_matches: (output_mode == "count").then_some(total_matches),
+            applied_limit,
+            applied_offset,
+        }
     };
 
-    Ok(GrepSearchOutput {
-        mode: Some(output_mode.clone()),
-        num_files: filenames.len(),
-        filenames,
-        content: content_output,
-        num_lines: None,
-        num_matches: (output_mode == "count").then_some(total_matches),
-        applied_limit,
-        applied_offset,
-    })
+    // #8 cache store: persist result with all scanned files as touched_files.
+    // CommandCacheManager.lookup_raw will invalidate this entry the moment any
+    // scanned file's mtime exceeds captured_at.
+    grep_cache_store(&cache_key, &base_path, &output, &scanned_files);
+
+    Ok(output)
 }
 
 fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
@@ -1199,6 +1367,116 @@ mod tests {
         assert!(
             err.to_string().contains("read-only"),
             "edit_file should fire the read-only guard: {err}"
+        );
+    }
+
+    // ─── #8 search-result cache tests ─────────────────────────────────────────
+
+    /// Verify that a second identical `glob_search` against unchanged files
+    /// returns a cache HIT (no filesystem re-scan).
+    ///
+    /// This is the 8-axis contract test: "demonstrate a cache HIT on a repeated
+    /// identical invocation against unchanged files."
+    #[test]
+    fn glob_search_second_call_hits_cache() {
+        use super::{glob_cache_key, glob_cache_lookup};
+
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = temp_path("glob-cache-test");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let file = dir.join("cache_test.rs");
+        std::fs::write(&file, "fn foo() {}").expect("write file");
+
+        // Canonicalize to match what normalize_path() resolves inside glob_search
+        // (on macOS /tmp is a symlink to /private/tmp).
+        let canonical_dir = dir.canonicalize().unwrap_or(dir.clone());
+
+        // First call — cold cache.
+        let result1 = glob_search("*.rs", Some(dir.to_string_lossy().as_ref()))
+            .expect("first glob_search must succeed");
+        assert_eq!(result1.num_files, 1, "should find the one .rs file");
+
+        // Verify the cache was populated by probing it directly.
+        let cache_key = glob_cache_key("*.rs", &canonical_dir);
+        let cached = glob_cache_lookup(&cache_key, &canonical_dir);
+        assert!(cached.is_some(), "cache must be populated after first call");
+
+        // Second call — warm cache.  The result must come from cache
+        // (same filenames, same num_files).
+        let result2 = glob_search("*.rs", Some(dir.to_string_lossy().as_ref()))
+            .expect("second glob_search must succeed");
+        assert_eq!(result2.num_files, result1.num_files,
+            "cached result num_files must match original");
+        assert_eq!(result2.filenames, result1.filenames,
+            "cached result filenames must match original");
+    }
+
+    /// Verify that a second identical `grep_search` against unchanged files
+    /// returns a cache HIT and that mtime-based invalidation works when a
+    /// file changes.
+    #[test]
+    fn grep_search_second_call_hits_cache_and_invalidates_on_file_change() {
+        use super::{grep_cache_key, grep_cache_lookup};
+
+        let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = temp_path("grep-cache-test");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let file_path = dir.join("search_me.txt");
+        std::fs::write(&file_path, "hello world\nfoo bar\nhello again\n").expect("write file");
+
+        // Canonicalize to match what normalize_path() resolves inside grep_search.
+        let canonical_dir = dir.canonicalize().unwrap_or(dir.clone());
+
+        let input = GrepSearchInput {
+            pattern: String::from("hello"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: None,
+            output_mode: Some(String::from("files_with_matches")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: None,
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: None,
+            offset: None,
+            multiline: Some(false),
+        };
+        // Build the canonical input (with the resolved path) for cache key
+        // computation, since grep_search calls normalize_path internally.
+        let canonical_input = GrepSearchInput {
+            path: Some(canonical_dir.to_string_lossy().into_owned()),
+            ..input.clone()
+        };
+
+        // First call — cold cache.
+        let result1 = grep_search(&input).expect("first grep_search must succeed");
+        assert_eq!(result1.num_files, 1, "should find the file with 'hello'");
+
+        // Probe cache directly using the canonical path: must be populated.
+        let cache_key = grep_cache_key(&canonical_input, &canonical_dir);
+        let hit = grep_cache_lookup(&cache_key, &canonical_dir);
+        assert!(hit.is_some(), "cache must be populated after first grep_search");
+
+        // Second call — warm cache.
+        let result2 = grep_search(&input).expect("second grep_search must succeed");
+        assert_eq!(result2.num_files, result1.num_files,
+            "second call num_files must match original");
+        assert_eq!(result2.filenames, result1.filenames,
+            "second call filenames must match original");
+
+        // Invalidation: sleep >1s so the new write's mtime > captured_at,
+        // then verify the cache is invalidated (returns no hit for the old key).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&file_path, "no match here\n").expect("overwrite file");
+
+        // The cache entry's touched_file (search_me.txt) now has mtime >
+        // captured_at, so lookup_raw must return None.
+        let after_change = grep_cache_lookup(&cache_key, &canonical_dir);
+        assert!(
+            after_change.is_none(),
+            "cache must be invalidated after a scanned file's mtime changes"
         );
     }
 }
