@@ -15,7 +15,11 @@ use crate::config::default_config_home;
 // ─── Data Types ─────────────────────────────────────────────────────────────
 
 /// Top-level daily record.  One file per calendar day.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+///
+/// Note: implements `PartialEq` but not `Eq` because `total_cost_usd: f64`
+/// cannot satisfy `Eq` (`NaN != NaN`). This is intentional — equality on
+/// summaries is only used in tests where NaN values do not arise.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct DailySummary {
     /// Calendar date in `YYYY-MM-DD` format.
     pub date: String,
@@ -30,7 +34,7 @@ pub struct DailySummary {
 }
 
 /// One REPL session's contribution to the daily record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionSummary {
     pub session_id: String,
     pub model: String,

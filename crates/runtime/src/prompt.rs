@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::{ConfigError, ConfigLoader, RuntimeConfig};
+use crate::daily::{DailyStore, DailySummary};
 use crate::memory::MemoryManager;
 use crate::prompt_section::{PromptSection, PromptSectionKind, PromptSectionsExt};
 use crate::qmd::{render_qmd_context, QmdClient, QmdResult};
@@ -122,8 +123,12 @@ impl ProjectContext {
 const QMD_MIN_SCORE: f64 = 0.3;
 /// Maximum number of QMD results to inject per turn.
 const QMD_MAX_RESULTS: usize = 5;
+/// Number of recent daily summaries to inject when `ANVIL_DAILY_INJECT=1`.
+const DAILY_INJECT_DEFAULT_DAYS: usize = 3;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Note: `Eq` is intentionally absent — the `daily_summaries` field holds
+/// `DailySummary` which contains `f64` cost fields that cannot implement `Eq`.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SystemPromptBuilder {
     output_style_name: Option<String>,
     output_style_prompt: Option<String>,
@@ -143,6 +148,9 @@ pub struct SystemPromptBuilder {
     config: Option<RuntimeConfig>,
     /// Pre-fetched QMD results to inject as workspace knowledge.
     qmd_results: Vec<QmdResult>,
+    /// L2 episodic: daily summaries to inject when `ANVIL_DAILY_INJECT=1`.
+    /// Populated by [`Self::with_daily_summaries`]; empty by default (opt-in).
+    daily_summaries: Vec<DailySummary>,
 }
 
 impl SystemPromptBuilder {
@@ -230,6 +238,36 @@ impl SystemPromptBuilder {
     #[must_use]
     pub fn with_qmd_results(mut self, results: Vec<QmdResult>) -> Self {
         self.qmd_results = results;
+        self
+    }
+
+    /// L2 episodic: load recent daily summaries and stage them for injection.
+    ///
+    /// Only runs when `ANVIL_DAILY_INJECT=1` is set in the environment.
+    /// When disabled (the default), this is a no-op so cold-start latency is
+    /// unaffected. When enabled, the most recent `max_days` daily summaries
+    /// (default 3) are read from `~/.anvil/daily/` and stored for injection
+    /// in [`Self::build`] as a [`PromptSectionKind::DailySummary`] block.
+    #[must_use]
+    pub fn with_daily_summaries(self) -> Self {
+        self.with_daily_summaries_inner(DAILY_INJECT_DEFAULT_DAYS)
+    }
+
+    /// Variant used in tests: pass an explicit store and day cap so tests
+    /// can inject controlled data without touching `~/.anvil/daily/`.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_daily_summaries_from(mut self, store: &DailyStore, max_days: usize) -> Self {
+        self.daily_summaries = store.recent(max_days);
+        self
+    }
+
+    fn with_daily_summaries_inner(mut self, max_days: usize) -> Self {
+        if std::env::var("ANVIL_DAILY_INJECT").as_deref() != Ok("1") {
+            return self;
+        }
+        let store = DailyStore::new();
+        self.daily_summaries = store.recent(max_days);
         self
     }
 
@@ -328,6 +366,21 @@ impl SystemPromptBuilder {
                     memory_section,
                 ));
             }
+        }
+        // L2 episodic: inject recent daily summaries when ANVIL_DAILY_INJECT=1
+        // and summaries were pre-loaded via with_daily_summaries().
+        if !self.daily_summaries.is_empty() {
+            let store = DailyStore::new();
+            let body = self
+                .daily_summaries
+                .iter()
+                .map(|s| store.format_summary(s))
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n");
+            sections.push(PromptSection::new(
+                PromptSectionKind::DailySummary,
+                format!("# Recent daily activity (L2 episodic)\n\n{body}"),
+            ));
         }
         // Inject QMD workspace knowledge when results were pre-fetched.
         let qmd_section = render_qmd_context(&self.qmd_results);
@@ -1338,5 +1391,148 @@ mod tests {
             split_system_prompt_at_boundary(&body).expect("must split");
         assert!(head.is_empty(), "head must be empty when boundary is first");
         assert_eq!(tail, "only tail body");
+    }
+
+    // ── DailySummary injection ────────────────────────────────────────────────
+
+    /// When no daily summaries are loaded, the build output must not contain
+    /// a DailySummary section at all.
+    #[test]
+    fn daily_summaries_absent_when_not_loaded() {
+        use crate::prompt_section::PromptSectionKind;
+        let sections = SystemPromptBuilder::new().build();
+        assert!(
+            sections.iter().all(|s| s.kind != PromptSectionKind::DailySummary),
+            "DailySummary section must be absent when with_daily_summaries not called"
+        );
+    }
+
+    /// When a store with one entry is injected via the test helper (bypassing
+    /// the env-var gate), the DailySummary section must appear in the output
+    /// and its body must contain the session task text.
+    #[test]
+    fn daily_summaries_injected_when_loaded() {
+        use crate::daily::{DailySummary, DailyStore, SessionSummary};
+        use crate::prompt_section::PromptSectionKind;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = DailyStore::with_dir(dir.path().to_path_buf());
+
+        let session = SessionSummary {
+            session_id: "test-s1".to_owned(),
+            model: "claude-sonnet-4-6".to_owned(),
+            duration_secs: 120,
+            tokens_used: 500,
+            messages_count: 3,
+            tasks_completed: vec!["Build the feature.".to_owned()],
+            tasks_open: vec![],
+            files_modified: vec![],
+            nominations_generated: 0,
+            credentials_auto_vaulted: 0,
+        };
+        store.record_session(session).expect("record session");
+
+        let sections = SystemPromptBuilder::new()
+            .with_daily_summaries_from(&store, 3)
+            .build();
+
+        let daily = sections
+            .iter()
+            .find(|s| s.kind == PromptSectionKind::DailySummary)
+            .expect("DailySummary section must be present when summaries are loaded");
+
+        assert!(
+            daily.body.contains("Build the feature."),
+            "DailySummary body must contain the completed task text"
+        );
+        assert!(
+            daily.body.contains("Recent daily activity"),
+            "DailySummary body must have the section heading"
+        );
+    }
+
+    /// The DailySummary section must appear after PersistentMemory and before
+    /// the Qmd section in the default build order.
+    #[test]
+    fn daily_summary_section_order_after_persistent_memory() {
+        use crate::daily::{DailyStore, SessionSummary};
+        use crate::prompt_section::PromptSectionKind;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = DailyStore::with_dir(dir.path().to_path_buf());
+        let session = SessionSummary {
+            session_id: "s-order".to_owned(),
+            model: "m".to_owned(),
+            duration_secs: 10,
+            tokens_used: 10,
+            messages_count: 1,
+            tasks_completed: vec!["Order test.".to_owned()],
+            tasks_open: vec![],
+            files_modified: vec![],
+            nominations_generated: 0,
+            credentials_auto_vaulted: 0,
+        };
+        store.record_session(session).expect("record");
+
+        // Build with a minimal project context so PersistentMemory CAN appear.
+        let tmp_cwd = tempfile::tempdir().expect("cwd temp dir");
+        let ctx = ProjectContext {
+            cwd: tmp_cwd.path().to_path_buf(),
+            current_date: "2026-05-14".to_owned(),
+            git_status: None,
+            git_diff: None,
+            instruction_files: vec![],
+        };
+
+        let sections = SystemPromptBuilder::new()
+            .with_project_context(ctx)
+            .with_daily_summaries_from(&store, 3)
+            .build();
+
+        let kinds: Vec<&PromptSectionKind> = sections.iter().map(|s| &s.kind).collect();
+
+        let daily_pos = kinds
+            .iter()
+            .position(|k| **k == PromptSectionKind::DailySummary)
+            .expect("DailySummary must be present");
+
+        // DailySummary must come after Environment (always present) and before
+        // any Custom / KnownFiles append sections (tail of the list).
+        let env_pos = kinds
+            .iter()
+            .position(|k| **k == PromptSectionKind::Environment)
+            .expect("Environment must be present");
+
+        assert!(
+            daily_pos > env_pos,
+            "DailySummary ({daily_pos}) must come after Environment ({env_pos})"
+        );
+    }
+
+    /// with_daily_summaries (the real method with env-var gate) must be a
+    /// no-op when ANVIL_DAILY_INJECT is unset or not "1".
+    #[test]
+    #[serial(anvil_config_home)]
+    fn with_daily_summaries_noop_when_env_not_set() {
+        use crate::prompt_section::PromptSectionKind;
+
+        let _lock = env_lock();
+        // Ensure the env var is not set.
+        unsafe { std::env::remove_var("ANVIL_DAILY_INJECT"); }
+
+        let sections = SystemPromptBuilder::new().with_daily_summaries().build();
+        assert!(
+            sections.iter().all(|s| s.kind != PromptSectionKind::DailySummary),
+            "with_daily_summaries must be no-op when ANVIL_DAILY_INJECT is unset"
+        );
+
+        // Also verify "0" is not treated as enabled.
+        unsafe { std::env::set_var("ANVIL_DAILY_INJECT", "0"); }
+        let sections2 = SystemPromptBuilder::new().with_daily_summaries().build();
+        unsafe { std::env::remove_var("ANVIL_DAILY_INJECT"); }
+        assert!(
+            sections2.iter().all(|s| s.kind != PromptSectionKind::DailySummary),
+            "with_daily_summaries must be no-op when ANVIL_DAILY_INJECT=0"
+        );
     }
 }

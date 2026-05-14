@@ -75,6 +75,10 @@ pub enum PromptSectionKind {
     Config,
     /// `<known-files>` W11 file-fingerprint cache block.
     KnownFiles,
+    /// L2 episodic: recent `DailySummary` entries from `~/.anvil/daily/`,
+    /// injected when `ANVIL_DAILY_INJECT=1`. Capped to the most-recent N days
+    /// (default 3) to keep prompt size bounded.
+    DailySummary,
     // ─── User-injected prepends (formerly `insert(0, ...)`) ────────────────
     /// Active goal fragment, from `/goal`.
     Goal,
@@ -119,6 +123,7 @@ impl PromptSectionKind {
             Self::Qmd => "qmd",
             Self::Config => "config",
             Self::KnownFiles => "known_files",
+            Self::DailySummary => "daily_summary",
             Self::Goal => "goal",
             Self::Skill => "skill",
             Self::Custom => "custom",
@@ -498,6 +503,7 @@ mod tests {
         assert_eq!(PromptSectionKind::DynamicBoundary.as_tag(), "dynamic_boundary");
         assert_eq!(PromptSectionKind::FastMode.as_tag(), "fast_mode");
         assert_eq!(PromptSectionKind::OutputStyleCustom.as_tag(), "output_style_custom");
+        assert_eq!(PromptSectionKind::DailySummary.as_tag(), "daily_summary");
     }
 
     #[test]

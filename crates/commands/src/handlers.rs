@@ -1926,8 +1926,8 @@ fn memory_why(ctx: &MemoryContext<'_>) -> String {
         lines.push(
             "The vault, private memory, and encrypted tiers are NEVER injected automatically.\n\
              Nominations are SUGGESTED only — they only enter the prompt after /memory promote.\n\
-             /memory why reads ONLY the working-memory snapshot (L1) — it does NOT walk DailyStore (L2)\n\
-             or reconcile across tiers. Use /memory show <tier> for tier-by-tier views."
+             L2 episodic (DailyStore) is injected when ANVIL_DAILY_INJECT=1 is set; off by default.\n\
+             Use /memory show <tier> for tier-by-tier views."
                 .to_string(),
         );
         return lines.join("\n");
@@ -1941,6 +1941,7 @@ System prompt injection order (no live runtime — static documentation):
   Environment, retrieval-order, project context
   ANVIL.md files (project root, then ~/.anvil/memory/*.md)
   Persistent memory (MEMORY.md)
+  L2 episodic daily summaries (when ANVIL_DAILY_INJECT=1, capped to 3 days)
   QMD context (when present)
   Configuration block
   <known-files> from L7 FileCacheManager (W11)
@@ -1948,8 +1949,8 @@ System prompt injection order (no live runtime — static documentation):
 
 The vault, private memory, and encrypted tiers are NEVER injected automatically.
 Nominations are SUGGESTED only -- they only enter the prompt after /memory promote.
-/memory why reads ONLY the working-memory snapshot (L1) -- it does NOT walk DailyStore (L2)
-or reconcile across tiers. Use /memory show <tier> for tier-by-tier views.
+L2 episodic (DailyStore) is injected when ANVIL_DAILY_INJECT=1 is set; off by default.
+Use /memory show <tier> for tier-by-tier views.
 "
     .to_string()
 }
@@ -2408,6 +2409,42 @@ mod memory_tests {
         assert!(result.contains("intro"));
         assert!(result.contains("instruction_files"));
         assert!(result.contains("known_files"));
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_why_disclaimer_mentions_daily_inject_env() {
+        // After task #500 the disclaimer must describe the ANVIL_DAILY_INJECT
+        // env gate rather than the old "does NOT walk DailyStore" text.
+        let result = memory_why(&MemoryContext::default());
+        assert!(
+            result.contains("ANVIL_DAILY_INJECT"),
+            "static disclaimer must mention ANVIL_DAILY_INJECT env var: {result}"
+        );
+        assert!(
+            !result.contains("does NOT walk DailyStore"),
+            "old wiring-gap disclaimer must be gone: {result}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_why_live_snapshot_disclaimer_mentions_daily_inject_env() {
+        // The live-snapshot path must also carry the updated disclaimer.
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![
+            PromptSection::new(PromptSectionKind::Intro, "intro"),
+        ]);
+        let ctx = MemoryContext::with_working(&snap, 0, 0);
+        let result = memory_why(&ctx);
+        assert!(
+            result.contains("ANVIL_DAILY_INJECT"),
+            "live-snapshot disclaimer must mention ANVIL_DAILY_INJECT: {result}"
+        );
+        assert!(
+            !result.contains("does NOT walk DailyStore"),
+            "old wiring-gap phrase must be gone from live path: {result}"
+        );
     }
 
     #[test]
