@@ -1168,9 +1168,10 @@ mod tests {
         execute_tool, mvp_tool_specs,
     };
     use super::config_ops::{
-        agent_permission_policy, allowed_tools_for_subagent, execute_agent_with_spawn,
-        final_assistant_text, persist_agent_terminal_state, push_output_block, AgentInput,
-        AgentJob, SubagentToolExecutor,
+        agent_permission_policy, agent_permission_policy_with_mode,
+        allowed_tools_for_subagent, clear_parent_permission_mode, execute_agent_with_spawn,
+        final_assistant_text, persist_agent_terminal_state, push_output_block,
+        set_parent_permission_mode, AgentInput, AgentJob, SubagentToolExecutor,
     };
     use api::OutputContentBlock;
     use runtime::{
@@ -2606,5 +2607,42 @@ printf 'pwsh:%s' "$1"
             )
             .into_bytes()
         }
+    }
+
+    // ── CC-BUG-3/4: subagent permission_mode inheritance ─────────────────────
+
+    /// Parent in DangerFullAccess → subagent inherits DangerFullAccess, not default.
+    #[test]
+    fn subagent_inherits_danger_full_access_from_parent() {
+        use runtime::PermissionMode;
+        set_parent_permission_mode(PermissionMode::DangerFullAccess);
+        let policy = agent_permission_policy_with_mode(
+            super::config_ops::current_parent_permission_mode(),
+        );
+        clear_parent_permission_mode();
+        assert_eq!(policy.active_mode(), PermissionMode::DangerFullAccess);
+    }
+
+    /// Parent in ReadOnly → subagent policy starts from ReadOnly base.
+    #[test]
+    fn subagent_inherits_read_only_mode_from_parent() {
+        use runtime::PermissionMode;
+        set_parent_permission_mode(PermissionMode::ReadOnly);
+        let policy = agent_permission_policy_with_mode(
+            super::config_ops::current_parent_permission_mode(),
+        );
+        clear_parent_permission_mode();
+        assert_eq!(policy.active_mode(), PermissionMode::ReadOnly);
+    }
+
+    /// No parent set → defaults to DangerFullAccess (backward compat).
+    #[test]
+    fn subagent_defaults_to_danger_full_access_when_no_parent() {
+        use runtime::PermissionMode;
+        clear_parent_permission_mode();
+        let policy = agent_permission_policy_with_mode(
+            super::config_ops::current_parent_permission_mode(),
+        );
+        assert_eq!(policy.active_mode(), PermissionMode::DangerFullAccess);
     }
 }

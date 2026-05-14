@@ -711,6 +711,38 @@ pub(crate) fn run_tool_search(input: ToolSearchInput) -> Result<String, String> 
 /// permitted inside `execute_tool`.
 pub(crate) static PLAN_MODE: Mutex<bool> = Mutex::new(false);
 
+/// Process-global parent permission mode.  When set by the host session's
+/// runtime, spawned subagents inherit this mode rather than defaulting to
+/// DangerFullAccess.  `None` means no parent context → use DangerFullAccess
+/// (backward-compat default).
+///
+/// CC-BUG-3/4 (task #83): subagent permission_mode inheritance.
+pub(crate) static PARENT_PERMISSION_MODE: Mutex<Option<PermissionMode>> = Mutex::new(None);
+
+/// Set the parent session's permission mode so subagents will inherit it.
+/// Called by the host ConversationRuntime before spawning an Agent tool call.
+pub fn set_parent_permission_mode(mode: PermissionMode) {
+    if let Ok(mut guard) = PARENT_PERMISSION_MODE.lock() {
+        *guard = Some(mode);
+    }
+}
+
+/// Clear the parent permission mode (call after the Agent tool returns).
+pub fn clear_parent_permission_mode() {
+    if let Ok(mut guard) = PARENT_PERMISSION_MODE.lock() {
+        *guard = None;
+    }
+}
+
+/// Read the current parent permission mode (or DangerFullAccess if unset).
+pub fn current_parent_permission_mode() -> PermissionMode {
+    PARENT_PERMISSION_MODE
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .unwrap_or(PermissionMode::DangerFullAccess)
+}
+
 pub(crate) fn run_enter_plan_mode() -> Result<String, String> {
     let mut guard = PLAN_MODE.lock().unwrap();
     let was_active = *guard;
@@ -1173,11 +1205,15 @@ fn build_agent_runtime(
     let allowed_tools = job.allowed_tools.clone();
     let api_client = ProviderRuntimeClient::new(model, allowed_tools.clone())?;
     let tool_executor = SubagentToolExecutor::new(allowed_tools);
+    // CC-BUG-3/4: inherit the parent session's permission mode rather than
+    // hardcoding DangerFullAccess so a parent in a restricted mode (e.g.
+    // ReadOnly / acceptEdits) doesn't spawn a fully-privileged subagent.
+    let inherited_mode = current_parent_permission_mode();
     Ok(ConversationRuntime::new(
         Session::new(),
         api_client,
         tool_executor,
-        agent_permission_policy(),
+        agent_permission_policy_with_mode(inherited_mode),
         job.system_prompt.clone(),
     ))
 }
@@ -1295,8 +1331,16 @@ pub(crate) fn allowed_tools_for_subagent(subagent_type: &str) -> BTreeSet<String
 }
 
 pub(crate) fn agent_permission_policy() -> PermissionPolicy {
+    agent_permission_policy_with_mode(PermissionMode::DangerFullAccess)
+}
+
+/// Build the subagent permission policy using the provided base `mode`.
+/// Per-tool requirements from `mvp_tool_specs()` are applied on top of `mode`
+/// so tools with stricter requirements still gate correctly, but the base mode
+/// matches what the parent session is operating under.
+pub(crate) fn agent_permission_policy_with_mode(mode: PermissionMode) -> PermissionPolicy {
     mvp_tool_specs().into_iter().fold(
-        PermissionPolicy::new(PermissionMode::DangerFullAccess),
+        PermissionPolicy::new(mode),
         |policy, spec| policy.with_tool_requirement(spec.name, spec.required_permission),
     )
 }
