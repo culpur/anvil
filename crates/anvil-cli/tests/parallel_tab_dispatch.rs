@@ -20,7 +20,7 @@
 
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Barrier};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -265,6 +265,14 @@ fn parallel_tabs_fast_finishes_before_slow_releases() {
 
 /// Two parallel runtimes — each emits its own `TaggedMockEvent`s and we
 /// observe the multiplexed stream end-to-end with no cross-contamination.
+///
+/// Previously used `thread::sleep(2ms)` to coerce interleaving, which was
+/// scheduling-sensitive and could flake when both threads completed before the
+/// drain loop drained any events.  Replaced with a `Barrier::new(2)` so both
+/// threads must rendezvous before each emission round — this forces structural
+/// interleaving independent of OS scheduling pressure.  The assertion checks
+/// that BOTH tabs' events are present (not one tab completing before the other
+/// started), which is the invariant the test was always meant to verify.
 #[test]
 fn shared_event_channel_routes_both_tabs_in_parallel() {
     let (tx, rx) = mpsc::sync_channel::<TaggedMockEvent>(128);
@@ -273,33 +281,38 @@ fn shared_event_channel_routes_both_tabs_in_parallel() {
     let tab2_sender = MockSender { inner: tx.clone(), tab_id: 2 };
     drop(tx);
 
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter1 = Arc::clone(&counter);
-    let counter2 = Arc::clone(&counter);
+    // Each emission round: both threads must arrive at the barrier before
+    // either is allowed to proceed to its send.  This guarantees that for
+    // every pair of iterations (i_t1, i_t2), both sends happen within the
+    // same scheduling window — interleaving is structural, not time-dependent.
+    let barrier = Arc::new(Barrier::new(2));
+    let barrier1 = Arc::clone(&barrier);
+    let barrier2 = Arc::clone(&barrier);
 
     let h1 = thread::spawn(move || {
         for i in 0..10u32 {
+            barrier1.wait(); // synchronise with t2 before this round's send
             tab1_sender.send(MockEvent::TextDelta(format!("t1:{i}")));
-            counter1.fetch_add(1, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(2));
         }
         tab1_sender.send(MockEvent::TurnDone);
     });
     let h2 = thread::spawn(move || {
         for i in 0..10u32 {
+            barrier2.wait(); // synchronise with t1 before this round's send
             tab2_sender.send(MockEvent::TextDelta(format!("t2:{i}")));
-            counter2.fetch_add(1, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(2));
         }
         tab2_sender.send(MockEvent::TurnDone);
     });
 
+    // Collect until both TurnDones arrive (or 3 s timeout as safety net).
+    let mut turn_done_count = 0usize;
     let collected = drain_until(
         &rx,
         |ev| {
-            // Stop draining once both TurnDones have been seen.
-            matches!(ev.event, MockEvent::TurnDone)
-                && counter.load(Ordering::SeqCst) >= 20
+            if matches!(ev.event, MockEvent::TurnDone) {
+                turn_done_count += 1;
+            }
+            turn_done_count >= 2
         },
         Duration::from_secs(3),
     );
@@ -322,34 +335,45 @@ fn shared_event_channel_routes_both_tabs_in_parallel() {
         })
         .collect();
 
-    assert_eq!(tab1_deltas.len(), 10);
-    assert_eq!(tab2_deltas.len(), 10);
-    // Tabs interleaved on the wire: their TextDeltas should not all be
-    // contiguous if execution was truly parallel. We don't assert exact
-    // interleaving (timing-sensitive) but we DO assert that the channel
-    // wasn't fully drained of one tab before the other appeared.
+    assert_eq!(tab1_deltas.len(), 10, "tab1 must have 10 deltas");
+    assert_eq!(tab2_deltas.len(), 10, "tab2 must have 10 deltas");
+
+    // The barrier guarantees that for every round i, both t1:i and t2:i were
+    // sent within the same scheduling quantum.  The channel serialises them
+    // in some order, but both must appear.  Verify both tabs' events exist in
+    // the collected output (the invariant: neither tab's events are absent).
+    //
+    // We also verify that the events are not fully serialised (all of one tab
+    // before any of the other).  Because the barrier forces paired sends,
+    // the maximum gap between the first t1 event and the first t2 event in
+    // the collected slice is at most 1 (they were sent in the same round).
     let positions_tab1: Vec<usize> = collected
         .iter()
         .enumerate()
-        .filter(|(_, ev)| ev.tab_id == 1)
+        .filter(|(_, ev)| matches!((&ev.tab_id, &ev.event), (1, MockEvent::TextDelta(_))))
         .map(|(i, _)| i)
         .collect();
     let positions_tab2: Vec<usize> = collected
         .iter()
         .enumerate()
-        .filter(|(_, ev)| ev.tab_id == 2)
+        .filter(|(_, ev)| matches!((&ev.tab_id, &ev.event), (2, MockEvent::TextDelta(_))))
         .map(|(i, _)| i)
         .collect();
-    if let (Some(&first_t1), Some(&first_t2)) = (positions_tab1.first(), positions_tab2.first()) {
-        // First events from both tabs should appear within a few channel
-        // slots of one another — if execution were serialised, one tab's
-        // events would all precede the other's.
-        let gap = first_t1.max(first_t2) - first_t1.min(first_t2);
-        assert!(
-            gap < collected.len(),
-            "tab events do not interleave at all: tab1@{first_t1} tab2@{first_t2}"
-        );
-    }
+
+    assert_eq!(positions_tab1.len(), 10, "must have 10 t1 positions");
+    assert_eq!(positions_tab2.len(), 10, "must have 10 t2 positions");
+
+    // With the barrier, round 0 of t1 and round 0 of t2 are released
+    // together.  The channel picks one first — so the first t1 event and the
+    // first t2 event differ by at most 1 position in the collected slice.
+    let first_t1 = positions_tab1[0];
+    let first_t2 = positions_tab2[0];
+    let gap = first_t1.max(first_t2) - first_t1.min(first_t2);
+    assert!(
+        gap <= 1,
+        "barrier must place t1 and t2 round-0 events adjacent in the stream; \
+         got tab1@{first_t1} tab2@{first_t2} (gap={gap})"
+    );
 }
 
 // ─── In-flight routing-decision tests ───────────────────────────────────────
