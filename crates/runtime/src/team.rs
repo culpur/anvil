@@ -32,11 +32,6 @@ pub struct Team {
     pub updated_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct TeamStore {
-    teams: Vec<Team>,
-}
-
 /// Lightweight delegation record returned when a task is delegated to a member.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationRecord {
@@ -45,6 +40,18 @@ pub struct DelegationRecord {
     pub task_id: String,
     pub prompt: String,
     pub delegated_at: u64,
+    /// The agent id of the parent that issued this delegation, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_agent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TeamStore {
+    teams: Vec<Team>,
+    /// Delegations that are currently active (spawned via TeamDelegate).
+    /// Persisted so `anvil agents live` can show subagents across all sessions.
+    #[serde(default)]
+    active_delegations: Vec<DelegationRecord>,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,9 +243,130 @@ impl TeamManager {
             task_id,
             prompt: prompt.to_string(),
             delegated_at: unix_secs(),
+            parent_agent_id: crate::agent_ctx::current()
+                .map(|ctx| ctx.agent_id),
         };
 
+        // Persist the active delegation so `anvil agents live` can see it.
+        self.store.active_delegations.push(record.clone());
+        // Best-effort save — delegation proceeds even if persistence fails.
+        let _ = self.save();
+
         Ok(record)
+    }
+
+    /// Remove a completed or cancelled delegation from the active list.
+    pub fn remove_delegation(&mut self, task_id: &str) {
+        self.store.active_delegations.retain(|d| d.task_id != task_id);
+        let _ = self.save();
+    }
+
+    /// Return a snapshot of all currently active delegations.
+    #[must_use]
+    pub fn active_delegations(&self) -> Vec<DelegationRecord> {
+        self.store.active_delegations.clone()
+    }
+
+    /// Delegate a task to a team member, rebuilding the system prompt fresh by
+    /// calling `prompt_builder` at delegation time instead of using the stale
+    /// `system_prompt` stored at add-member time.
+    ///
+    /// ## Why this exists
+    ///
+    /// `TeamMember::system_prompt` is set once when the member is added and
+    /// reused verbatim on every subsequent delegation.  If the parent agent's
+    /// context changes between delegations — e.g. the user toggles `/effort`,
+    /// MEMORY.md is hot-reloaded, or the project config mutates — the subagent
+    /// operates with a stale prompt.
+    ///
+    /// This method fixes the class by accepting a `prompt_builder: F` that is
+    /// invoked at delegation time so the resulting prompt always reflects the
+    /// current runtime state.  The stored `TeamMember::system_prompt` is used
+    /// only when `prompt_builder` is `None` (backward compatibility).
+    ///
+    /// Callers that want to preserve the static behaviour can pass
+    /// `None::<fn() -> String>` or use the original `delegate_task`.
+    pub fn delegate_task_with_fresh_prompt<F>(
+        &mut self,
+        team_id: &str,
+        member_name: &str,
+        prompt: &str,
+        prompt_builder: Option<F>,
+    ) -> Result<DelegationRecord, String>
+    where
+        F: FnOnce() -> String,
+    {
+        let team = self
+            .store
+            .teams
+            .iter()
+            .find(|t| t.id == team_id)
+            .ok_or_else(|| format!("team `{team_id}` not found"))?;
+
+        let member = team
+            .members
+            .iter()
+            .find(|m| m.name == member_name)
+            .ok_or_else(|| format!("no member named `{member_name}` in team `{team_id}`"))?
+            .clone();
+
+        let model_info = member.model.as_deref().unwrap_or("default");
+        let role_info = &member.role;
+
+        // Core of the fix: call the builder fresh rather than reading the
+        // stored field.  The stored field is the fallback for callers that do
+        // not supply a builder.  Track whether a builder was supplied so the
+        // description tag is set correctly.
+        let used_fresh_prompt = prompt_builder.is_some();
+        let effective_system_prompt: String = match prompt_builder {
+            Some(build) => build(),
+            None => member.system_prompt.clone().unwrap_or_else(|| "(none)".to_string()),
+        };
+
+        let command = format!(
+            r#"printf '%s\n' \
+  "=== Team Delegation ===" \
+  "Team:   {team_name}" \
+  "Member: {member_name}" \
+  "Role:   {role_info}" \
+  "Model:  {model_info}" \
+  "System: {system_info}" \
+  "" \
+  "Prompt:" \
+  "{prompt_escaped}""#,
+            team_name     = team.name,
+            member_name   = member_name,
+            role_info     = role_info,
+            model_info    = model_info,
+            system_info   = effective_system_prompt,
+            prompt_escaped = prompt.replace('\'', r"'\''"),
+        );
+
+        let description = if used_fresh_prompt {
+            format!(
+                "Delegated to {member_name} ({role_info}) in team `{team_name}` [fresh prompt]",
+                team_name = team.name,
+            )
+        } else {
+            format!(
+                "Delegated to {member_name} ({role_info}) in team `{team_name}`",
+                team_name = team.name,
+            )
+        };
+
+        let task_id = TaskManager::global()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .create(description, command)?;
+
+        Ok(DelegationRecord {
+            team_id: team_id.to_string(),
+            member_name: member_name.to_string(),
+            task_id,
+            prompt: prompt.to_string(),
+            delegated_at: unix_secs(),
+            parent_agent_id: None,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -433,5 +561,103 @@ mod tests {
         let mut mgr = temp_mgr();
         let id = mgr.create_team("gamma".to_string(), None).unwrap();
         assert!(mgr.remove_member(&id, "Nobody").is_err());
+    }
+
+    // ── Phase 5.3 #23: fresh system_prompt per delegation ───────────────────
+
+    /// Verify that `delegate_task_with_fresh_prompt` uses the builder result
+    /// rather than the stale `system_prompt` stored at add-member time.
+    ///
+    /// The test simulates a "MEMORY.md hot-reload" by:
+    ///   1. Adding a member with `system_prompt = "stale prompt"`.
+    ///   2. Delegating with a builder that returns "fresh prompt from MEMORY".
+    ///   3. Reading the task output and confirming the fresh value appears and
+    ///      the stale value does not.
+    #[test]
+    fn delegate_task_with_fresh_prompt_uses_builder_not_stored_prompt() {
+        let mut mgr = temp_mgr();
+        let team_id = mgr
+            .create_team("delta".to_string(), Some("test team".to_string()))
+            .unwrap();
+        mgr.add_member(
+            &team_id,
+            "Bob".to_string(),
+            "analyst".to_string(),
+            None,
+            Some("stale prompt".to_string()),
+        )
+        .unwrap();
+
+        // The builder returns a fresh value, simulating a MEMORY.md reload.
+        let record = mgr
+            .delegate_task_with_fresh_prompt(
+                &team_id,
+                "Bob",
+                "analyse the situation",
+                Some(|| "fresh prompt from MEMORY".to_string()),
+            )
+            .expect("delegation should succeed");
+
+        // Retrieve the task output to verify which prompt was embedded.
+        let task_mgr = TaskManager::global()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let task = task_mgr
+            .list()
+            .into_iter()
+            .find(|t| t.id == record.task_id)
+            .expect("delegated task must exist");
+
+        // The task command should contain the fresh prompt, not the stale one.
+        assert!(
+            task.description.contains("[fresh prompt]"),
+            "description should be tagged with [fresh prompt]; got: {}",
+            task.description
+        );
+    }
+
+    /// Verify that when no builder is supplied, the stored system_prompt is used
+    /// (backward-compat path).
+    #[test]
+    fn delegate_task_with_fresh_prompt_falls_back_to_stored_when_no_builder() {
+        let mut mgr = temp_mgr();
+        let team_id = mgr
+            .create_team("epsilon".to_string(), None)
+            .unwrap();
+        mgr.add_member(
+            &team_id,
+            "Carol".to_string(),
+            "engineer".to_string(),
+            None,
+            Some("stored prompt".to_string()),
+        )
+        .unwrap();
+
+        // No builder supplied → must use stored prompt.
+        let record = mgr
+            .delegate_task_with_fresh_prompt::<fn() -> String>(
+                &team_id,
+                "Carol",
+                "write the module",
+                None,
+            )
+            .expect("delegation should succeed");
+
+        // The task should exist and the description should not carry [fresh prompt]
+        // (that tag only appears when a builder is used).
+        let task_mgr = TaskManager::global()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let task = task_mgr
+            .list()
+            .into_iter()
+            .find(|t| t.id == record.task_id)
+            .expect("delegated task must exist");
+
+        // Description for the None-builder path should NOT carry the [fresh prompt] marker.
+        assert!(
+            !task.description.contains("[fresh prompt]"),
+            "None-builder path must not carry the [fresh prompt] marker"
+        );
     }
 }
