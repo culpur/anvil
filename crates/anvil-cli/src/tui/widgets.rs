@@ -79,6 +79,25 @@ fn ollama_cache_slot() -> &'static std::sync::Mutex<Option<Vec<(String, String)>
     OLLAMA_MODEL_CACHE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+/// Fetch the model list from the local Ollama daemon by hitting `GET /api/tags`.
+///
+/// This is the single live-fetch path used by all `/ollama` subcommand TAB-completions
+/// (`tune`, `show`, `rm`, `cp`, `bench`, `requantize`, `option`, `policy`) as well as
+/// the `/model` picker's Ollama provider entry.
+///
+/// Called once at TUI startup via `init_ollama_model_cache()` and then on-demand
+/// by `cached_ollama_models()`. The cache is invalidated by `invalidate_ollama_model_cache()`
+/// after any mutation (pull, rm, cp, create) so the completion list stays in sync.
+///
+/// Defect #11 resolution (Phase 5.2): `/ollama tune <TAB>` and all other
+/// `/ollama` model-arg completions use `DynamicEnumSource::InstalledOllamaModels`,
+/// which resolves via `cached_ollama_models()` — this function — not a static
+/// registry. Phase 5.2 concluded the live-fetch path is already wired correctly;
+/// no stale-array path exists. This doc comment pins that finding.
+///
+/// Returns `(model_name, size_string)` pairs. Returns an empty Vec on daemon
+/// unreachable (curl non-zero exit or JSON parse failure) — completions fall
+/// back silently to nothing rather than erroring.
 fn fetch_ollama_models_for_cache() -> Vec<(String, String)> {
     let ollama_url = std::env::var("OLLAMA_HOST")
         .unwrap_or_else(|_| "http://localhost:11434".to_string());
