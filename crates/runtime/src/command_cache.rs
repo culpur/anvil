@@ -907,6 +907,86 @@ impl CommandCacheManager {
         Ok(removed)
     }
 
+    /// Persist a pre-built `CommandCacheEntry` directly to disk.
+    ///
+    /// Unlike `store`, this method does NOT infer `touched_files` or TTL —
+    /// the caller provides a fully-populated entry.  Used by the web-fetch
+    /// and web-search cache layers (defect #9) where TTL is controlled by
+    /// env vars and there are no local file dependencies.
+    ///
+    /// Phase 3.5 (SECURITY): silently skips if `entry.cwd` is an L5 path.
+    pub fn store_raw_entry(&self, entry: &CommandCacheEntry) -> Result<(), CommandCacheError> {
+        if crate::file_cache::is_l5_path(&entry.cwd) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.cache_dir).map_err(CommandCacheError::DirCreate)?;
+        let path = self.entry_path(&entry.command, &entry.cwd);
+        let serialized = serde_json::to_string_pretty(entry)?;
+        atomic_write(&path, serialized.as_bytes())?;
+        Ok(())
+    }
+
+    /// Look up a cached entry using the raw command key and cwd, applying the
+    /// same TTL and file-watch invalidation as `lookup` but skipping the
+    /// `record_cacheable_invocation` hot-path counter (web ops have their own
+    /// call-site metrics).
+    ///
+    /// Phase 3.5 (SECURITY): returns `Ok(None)` for L5 `cwd` paths.
+    pub fn lookup_raw(
+        &self,
+        command: &str,
+        cwd: &Path,
+    ) -> Result<Option<CommandCacheEntry>, CommandCacheError> {
+        if crate::file_cache::is_l5_path(cwd) {
+            return Ok(None);
+        }
+        let canonical = normalize_command(command);
+        let path = self.entry_path(&canonical, cwd);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(&path)?;
+        let mut entry: CommandCacheEntry = serde_json::from_str(&raw)?;
+
+        // TTL check.
+        let now = now_secs();
+        if now.saturating_sub(entry.captured_at) >= entry.stale_after_secs {
+            let _ = std::fs::remove_file(&path);
+            return Ok(None);
+        }
+
+        // cwd must match exactly.
+        if entry.cwd != cwd {
+            return Ok(None);
+        }
+
+        // File-watch invalidation (web entries have empty touched_files, so
+        // this loop is a no-op in the normal web-cache path).
+        for file in &entry.touched_files {
+            if let Ok(meta) = std::fs::metadata(file) {
+                if let Ok(modified) = meta.modified() {
+                    let mtime = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if mtime > entry.captured_at {
+                        let _ = std::fs::remove_file(&path);
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
+        // Cache hit — increment counter and persist.
+        entry.hits = entry.hits.saturating_add(1);
+        if let Ok(updated) = serde_json::to_string_pretty(&entry) {
+            let _ = atomic_write(&path, updated.as_bytes());
+        }
+
+        eprintln!("[command-cache] hit: {canonical}");
+        Ok(Some(entry))
+    }
+
     // ── Private helpers ────────────────────────────────────────────────────────
 
     fn entry_path(&self, canonical: &str, cwd: &Path) -> PathBuf {

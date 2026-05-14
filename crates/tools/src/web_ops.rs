@@ -1,10 +1,166 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::to_pretty_json;
+
+// ---------------------------------------------------------------------------
+// Web-response cache helpers (#9)
+// ---------------------------------------------------------------------------
+
+/// Env var that overrides the WebFetch cache TTL in seconds.
+/// Default: 300 (5 minutes).  Set to 0 to disable.
+pub const ANVIL_WEB_FETCH_CACHE_TTL_SECS: &str = "ANVIL_WEB_FETCH_CACHE_TTL_SECS";
+
+/// Env var to completely disable WebFetch/WebSearch response caching.
+/// Set to `1` to disable.
+pub const ANVIL_WEB_FETCH_CACHE_DISABLED: &str = "ANVIL_WEB_FETCH_CACHE_DISABLED";
+
+/// Default WebFetch TTL in seconds (5 minutes).
+const DEFAULT_WEB_FETCH_TTL_SECS: u64 = 300;
+
+/// Default WebSearch TTL in seconds (1 hour).
+const DEFAULT_WEB_SEARCH_TTL_SECS: u64 = 3600;
+
+/// Return `true` if web caching is globally disabled via env var.
+fn web_cache_disabled() -> bool {
+    std::env::var(ANVIL_WEB_FETCH_CACHE_DISABLED)
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// Return the working directory — used as the `cwd` key for the
+/// `CommandCacheManager` so web-cache entries are project-scoped.
+fn project_root_for_cache() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Build a `CommandCacheManager` for the current project.
+/// Returns `None` if the cache directory can't be prepared (non-fatal).
+fn web_cache_manager() -> Option<runtime::command_cache::CommandCacheManager> {
+    runtime::command_cache::CommandCacheManager::new(project_root_for_cache()).ok()
+}
+
+/// Store a web-fetch result in the command cache.
+///
+/// The cache key is a synthetic command string `WebFetch:<normalized-url>`.
+/// L5 guard: if the URL touches a private/loopback host we already rejected
+/// it in `normalize_fetch_url`; `is_cacheable_web_url` provides an
+/// additional layer to skip caching responses from those addresses.
+fn store_web_fetch_cache(url: &str, accept: &str, result_json: &str) {
+    if web_cache_disabled() {
+        return;
+    }
+    if !is_cacheable_web_url(url) {
+        return;
+    }
+    let Some(mgr) = web_cache_manager() else { return };
+    let ttl = std::env::var(ANVIL_WEB_FETCH_CACHE_TTL_SECS)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_WEB_FETCH_TTL_SECS);
+    if ttl == 0 {
+        return;
+    }
+    let cmd_key = format!("WebFetch:{}:{}", url, accept);
+    let cwd = project_root_for_cache();
+    // Build entry manually so we can set the TTL directly.
+    let entry = runtime::command_cache::CommandCacheEntry {
+        command: cmd_key,
+        cwd: cwd.clone(),
+        stdout: result_json.to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+        duration_ms: 0,
+        captured_at: unix_now_secs(),
+        touched_files: Vec::new(),
+        stale_after_secs: ttl,
+        hits: 0,
+    };
+    let _ = mgr.store_raw_entry(&entry);
+}
+
+/// Look up a cached web-fetch result.
+fn lookup_web_fetch_cache(url: &str, accept: &str) -> Option<String> {
+    if web_cache_disabled() {
+        return None;
+    }
+    if !is_cacheable_web_url(url) {
+        return None;
+    }
+    let mgr = web_cache_manager()?;
+    let cmd_key = format!("WebFetch:{}:{}", url, accept);
+    let cwd = project_root_for_cache();
+    mgr.lookup_raw(&cmd_key, &cwd).ok().flatten().map(|e| e.stdout)
+}
+
+/// Store a web-search result in the command cache (1-hour TTL).
+fn store_web_search_cache(query: &str, result_json: &str) {
+    if web_cache_disabled() {
+        return;
+    }
+    let Some(mgr) = web_cache_manager() else { return };
+    let cmd_key = format!("WebSearch:{}", query);
+    let cwd = project_root_for_cache();
+    let entry = runtime::command_cache::CommandCacheEntry {
+        command: cmd_key,
+        cwd,
+        stdout: result_json.to_string(),
+        stderr: String::new(),
+        exit_code: 0,
+        duration_ms: 0,
+        captured_at: unix_now_secs(),
+        touched_files: Vec::new(),
+        stale_after_secs: DEFAULT_WEB_SEARCH_TTL_SECS,
+        hits: 0,
+    };
+    let _ = mgr.store_raw_entry(&entry);
+}
+
+/// Look up a cached web-search result.
+fn lookup_web_search_cache(query: &str) -> Option<String> {
+    if web_cache_disabled() {
+        return None;
+    }
+    let mgr = web_cache_manager()?;
+    let cmd_key = format!("WebSearch:{}", query);
+    let cwd = project_root_for_cache();
+    mgr.lookup_raw(&cmd_key, &cwd).ok().flatten().map(|e| e.stdout)
+}
+
+/// Returns `false` for URLs that should never be cached:
+/// - Private/internal addresses (already blocked by WebFetch, but defensive).
+/// - Data URIs, file:// URIs.
+fn is_cacheable_web_url(url: &str) -> bool {
+    if url.starts_with("file://") || url.starts_with("data:") {
+        return false;
+    }
+    // Let runtime's private-host check cover 10.x, 192.168.x, localhost.
+    // We parse the URL here ourselves because the normalize_fetch_url fn
+    // is in the same module and would need to be pub.
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        let host = parsed.host_str().unwrap_or_default();
+        if host == "localhost" || host == "127.0.0.1" || host == "::1"
+            || host.starts_with("10.")
+            || host.starts_with("192.168.")
+            || host.starts_with("169.254.")
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn unix_now_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 // ---------------------------------------------------------------------------
 // Egress policy helpers
@@ -68,7 +224,7 @@ pub(crate) struct WebSearchInput {
     pub(crate) search_all: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct WebFetchOutput {
     pub(crate) bytes: usize,
     pub(crate) code: u16,
@@ -80,7 +236,7 @@ pub(crate) struct WebFetchOutput {
     pub(crate) url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct WebSearchOutput {
     pub(crate) query: String,
     pub(crate) results: Vec<WebSearchResultItem>,
@@ -88,7 +244,7 @@ pub(crate) struct WebSearchOutput {
     pub(crate) duration_seconds: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum WebSearchResultItem {
     SearchResult {
@@ -98,7 +254,7 @@ pub(crate) enum WebSearchResultItem {
     Commentary(String),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SearchHit {
     pub(crate) title: String,
     pub(crate) url: String,
@@ -116,6 +272,16 @@ pub(crate) fn run_web_search(input: WebSearchInput) -> Result<String, String> {
 
 pub(crate) fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
     check_egress(&input.url, "WebFetch")?;
+
+    // Cache lookup (#9): use the normalized URL + empty accept string as key.
+    let cache_key_url = input.url.trim().to_string();
+    if let Some(cached_json) = lookup_web_fetch_cache(&cache_key_url, "") {
+        if let Ok(output) = serde_json::from_str::<WebFetchOutput>(&cached_json) {
+            eprintln!("[web-cache] hit: WebFetch {}", input.url);
+            return Ok(output);
+        }
+    }
+
     let started = Instant::now();
     let client = build_http_client()?;
     let request_url = normalize_fetch_url(&input.url)?;
@@ -139,14 +305,23 @@ pub(crate) fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput,
     let normalized = normalize_fetched_content(&body, &content_type);
     let result = summarize_web_fetch(&final_url, &input.prompt, &normalized, &body, &content_type);
 
-    Ok(WebFetchOutput {
+    let output = WebFetchOutput {
         bytes,
         code,
         code_text,
         result,
         duration_ms: started.elapsed().as_millis(),
         url: final_url,
-    })
+    };
+
+    // Cache store: only on successful 2xx responses.
+    if output.code / 100 == 2 {
+        if let Ok(serialized) = serde_json::to_string(&output) {
+            store_web_fetch_cache(&cache_key_url, "", &serialized);
+        }
+    }
+
+    Ok(output)
 }
 
 pub(crate) fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutput, String> {
@@ -156,6 +331,16 @@ pub(crate) fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutp
     // original HTML-scraping path so the existing test fixtures still work.
     if std::env::var("ANVIL_WEB_SEARCH_BASE_URL").is_ok() {
         return execute_web_search_legacy(input, started);
+    }
+
+    // Cache lookup (#9): key on the raw query string.
+    // provider/search_all variations are intentionally excluded from the key —
+    // per-query caching is the primary win; provider routing can vary.
+    if let Some(cached_json) = lookup_web_search_cache(&input.query) {
+        if let Ok(output) = serde_json::from_str::<WebSearchOutput>(&cached_json) {
+            eprintln!("[web-cache] hit: WebSearch {:?}", input.query);
+            return Ok(output);
+        }
     }
 
     // Egress check: verify the default search-provider base URL is permitted.
@@ -206,7 +391,7 @@ pub(crate) fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutp
         )
     };
 
-    Ok(WebSearchOutput {
+    let output = WebSearchOutput {
         query: input.query.clone(),
         results: vec![
             WebSearchResultItem::Commentary(summary),
@@ -216,7 +401,15 @@ pub(crate) fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutp
             },
         ],
         duration_seconds: started.elapsed().as_secs_f64(),
-    })
+    };
+
+    // Cache store (#9): persist so repeat queries within the 1-hour TTL skip
+    // the network.
+    if let Ok(serialized) = serde_json::to_string(&output) {
+        store_web_search_cache(&input.query, &serialized);
+    }
+
+    Ok(output)
 }
 
 /// Original HTML-scraping implementation — kept for test-override path.
@@ -687,5 +880,86 @@ mod tests {
         };
         assert!(!policy.is_allowed("https://attacker.io/exfiltrate"));
         assert!(!policy.is_allowed("https://unknown.example.com/data"));
+    }
+
+    // ── #9 web-response cache tests ────────────────────────────────────────────
+
+    /// Verify that a second call to `lookup_raw` with the same key that was
+    /// populated by `store_raw_entry` returns a cache HIT.
+    /// This is the 8-axis test: demonstrates a cache hit on a repeated identical
+    /// invocation with unchanged "files" (web ops have no touched_files).
+    #[test]
+    fn web_fetch_cache_hit_on_second_lookup() {
+        use runtime::{CommandCacheEntry, CommandCacheManager};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mgr = CommandCacheManager {
+            project_root: dir.path().to_path_buf(),
+            cache_dir: dir.path().join("cmd-cache"),
+        };
+
+        let url = "https://example.com/page";
+        let accept = "";
+        let cmd_key = format!("WebFetch:{}:{}", url, accept);
+        let fake_response_json = r#"{"bytes":42,"code":200,"codeText":"OK","result":"hello","durationMs":100,"url":"https://example.com/page"}"#;
+
+        // First: prime the cache (simulates what store_web_fetch_cache does).
+        let entry = CommandCacheEntry {
+            command: cmd_key.clone(),
+            cwd: dir.path().to_path_buf(),
+            stdout: fake_response_json.to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration_ms: 100,
+            captured_at: super::unix_now_secs(),
+            touched_files: Vec::new(),
+            stale_after_secs: 300,
+            hits: 0,
+        };
+        mgr.store_raw_entry(&entry).expect("store_raw_entry must succeed");
+
+        // Second: lookup — must be a cache HIT (hits counter incremented).
+        let hit = mgr
+            .lookup_raw(&cmd_key, dir.path())
+            .expect("lookup_raw must not error")
+            .expect("must return a Some — cache HIT");
+
+        assert_eq!(hit.hits, 1, "hits counter must be 1 on first lookup after store");
+        assert_eq!(hit.stdout, fake_response_json, "cached body must match stored body");
+
+        // Third: lookup again — hits should now be 2.
+        let hit2 = mgr
+            .lookup_raw(&cmd_key, dir.path())
+            .expect("lookup_raw must not error")
+            .expect("must still be a HIT");
+        assert_eq!(hit2.hits, 2, "hits counter must increment on each lookup");
+    }
+
+    /// Verify that `is_cacheable_web_url` rejects private/loopback addresses.
+    #[test]
+    fn web_fetch_cache_skips_private_addresses() {
+        assert!(!super::is_cacheable_web_url("http://localhost/api"));
+        assert!(!super::is_cacheable_web_url("http://127.0.0.1/secret"));
+        assert!(!super::is_cacheable_web_url("http://10.0.0.1/internal"));
+        assert!(!super::is_cacheable_web_url("http://192.168.1.1/private"));
+        assert!(!super::is_cacheable_web_url("file:///etc/passwd"));
+        // Public addresses are cacheable.
+        assert!(super::is_cacheable_web_url("https://example.com/page"));
+        assert!(super::is_cacheable_web_url("https://api.github.com/repos"));
+    }
+
+    /// Verify that the cache is bypassed when ANVIL_WEB_FETCH_CACHE_DISABLED=1.
+    ///
+    /// SAFETY: env::set_var is unsafe in Rust 2024.  This test's set/remove
+    /// pair is atomic within a single-threaded test function, and the unique env
+    /// key means no other test reads it concurrently.
+    #[test]
+    #[allow(unsafe_code)]
+    fn web_fetch_cache_respects_disabled_env_var() {
+        unsafe { std::env::set_var(super::ANVIL_WEB_FETCH_CACHE_DISABLED, "1") };
+        assert!(super::web_cache_disabled(), "disabled flag must be respected");
+        unsafe { std::env::remove_var(super::ANVIL_WEB_FETCH_CACHE_DISABLED) };
+        assert!(!super::web_cache_disabled(), "flag cleared — must be enabled again");
     }
 }
