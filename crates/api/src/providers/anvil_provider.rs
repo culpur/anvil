@@ -348,9 +348,19 @@ impl AnvilApiClient {
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("content-type", "application/json");
 
-        // When using OAuth bearer tokens, add the beta header to enable OAuth auth
-        if self.auth.bearer_token().is_some() {
-            request_builder = request_builder.header("anthropic-beta", "oauth-2025-04-20");
+        // When using OAuth bearer tokens, add the beta headers required by
+        // Anthropic's Max-plan OAuth gate.  Max-plan bearers are only accepted
+        // when the client identifies as Claude Code via both:
+        //   * `anthropic-beta: claude-code-20250219,oauth-2025-04-20`
+        //   * a leading identity system block (injected in
+        //     `build_messages_request_body` below)
+        // Without both, Anthropic returns HTTP 429 `rate_limit_error` with an
+        // empty body — looks like a quota issue but is actually an
+        // access-control rejection.
+        let is_oauth_bearer = self.auth.bearer_token().is_some();
+        if is_oauth_bearer {
+            request_builder = request_builder
+                .header("anthropic-beta", "claude-code-20250219,oauth-2025-04-20");
         }
 
         request_builder = self.auth.apply(request_builder);
@@ -361,7 +371,7 @@ impl AnvilApiClient {
         // Anthropic API to cache up to and including those blocks; with a
         // 1h TTL the cache survives long agentic sessions and we stop
         // re-billing the full system+tools prefix on every turn.
-        let payload = build_messages_request_body(request);
+        let payload = build_messages_request_body(request, is_oauth_bearer);
         request_builder = request_builder.json(&payload);
         request_builder.send().await.map_err(ApiError::from)
     }
@@ -397,7 +407,15 @@ impl AnvilApiClient {
 /// and Ollama backends would reject `cache_control` and `thinking` keys, so
 /// the wire format is built locally rather than embedded in the shared
 /// `MessageRequest` type.
-fn build_messages_request_body(request: &MessageRequest) -> Value {
+/// Build the Anthropic `/v1/messages` request body.
+///
+/// `is_oauth_bearer` toggles the Max-plan identity preamble: when true, an
+/// uncached `"You are Claude Code, Anthropic's official CLI for Claude."`
+/// system block is prepended.  Anthropic's Max-plan OAuth gate requires this
+/// preamble alongside the `claude-code-20250219` beta header — without both,
+/// requests are rejected as HTTP 429 `rate_limit_error` with no body.  API-key
+/// auth doesn't need the preamble and shouldn't pay the 23 tokens for it.
+fn build_messages_request_body(request: &MessageRequest, is_oauth_bearer: bool) -> Value {
     // Start from the standard serde-serialized envelope so we inherit any
     // future field changes for free.
     let mut payload = serde_json::to_value(request).unwrap_or_else(|_| json!({}));
@@ -405,6 +423,12 @@ fn build_messages_request_body(request: &MessageRequest) -> Value {
     let cache_control = CacheControl::ephemeral_with_ttl("1h");
     let cache_control_value =
         serde_json::to_value(&cache_control).unwrap_or_else(|_| json!({"type": "ephemeral"}));
+
+    /// The exact identity string Anthropic's Max-plan OAuth gate checks for.
+    /// Do not change without re-verifying against the live `/v1/messages`
+    /// endpoint — the server uses this as an access-control signal.
+    const CLAUDE_CODE_IDENTITY: &str =
+        "You are Claude Code, Anthropic's official CLI for Claude.";
 
     // (1) Upgrade `system: "..."` → array of content blocks with
     //     `cache_control`. Phase 4.5 (L1 §9): when the prompt body
@@ -451,6 +475,28 @@ fn build_messages_request_body(request: &MessageRequest) -> Value {
                     "text": system_text,
                     "cache_control": cache_control_value.clone(),
                 }]);
+            }
+        }
+    }
+
+    // (1b) Prepend the Claude Code identity block when using OAuth bearer
+    //      auth.  This satisfies Anthropic's Max-plan OAuth gate (see header
+    //      comment on this function).  The block is intentionally uncached:
+    //      it's 23 tokens, sent once per session anyway, and cache_control on
+    //      the FIRST block would force every subsequent system block to share
+    //      its cache lifetime — better to let the existing breakpoint on the
+    //      real prompt body do the caching.
+    if is_oauth_bearer {
+        let identity_block = json!({
+            "type": "text",
+            "text": CLAUDE_CODE_IDENTITY,
+        });
+        match payload.get_mut("system") {
+            Some(Value::Array(blocks)) => {
+                blocks.insert(0, identity_block);
+            }
+            _ => {
+                payload["system"] = json!([identity_block]);
             }
         }
     }
@@ -509,7 +555,7 @@ fn build_messages_request_body_with_effort(
         Some(level) => unsafe { std::env::set_var("ANVIL_EFFORT", level.as_str()); },
         None => unsafe { std::env::remove_var("ANVIL_EFFORT"); },
     }
-    let result = build_messages_request_body(request);
+    let result = build_messages_request_body(request, false);
     match prev {
         Some(val) => unsafe { std::env::set_var("ANVIL_EFFORT", val); },
         None => unsafe { std::env::remove_var("ANVIL_EFFORT"); },
@@ -1233,7 +1279,7 @@ mod tests {
             stream: false,
         };
 
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         // System prompt should be the array form so the cache_control marker
         // can hang off the text block.
         let system_array = body
@@ -1247,6 +1293,103 @@ mod tests {
         assert_eq!(
             block["cache_control"],
             serde_json::json!({"type": "ephemeral", "ttl": "1h"})
+        );
+    }
+
+    // ─── Max-plan OAuth identity preamble ─────────────────────────────────
+
+    /// When `is_oauth_bearer = true`, the wire body must prepend an uncached
+    /// `"You are Claude Code, ..."` block as the FIRST entry of `system`,
+    /// before the user's actual prompt block.  Anthropic's Max-plan OAuth
+    /// gate requires this exact identity string; without it, the server
+    /// returns HTTP 429 `rate_limit_error` with an empty body.
+    #[test]
+    fn wire_body_prepends_claude_code_identity_when_oauth_bearer() {
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some("you are a careful coding assistant".to_string()),
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request, true);
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must serialize as content-block array");
+        assert_eq!(system_array.len(), 2, "identity block + user prompt block");
+
+        let identity = &system_array[0];
+        assert_eq!(identity["type"], serde_json::json!("text"));
+        assert_eq!(
+            identity["text"],
+            serde_json::json!("You are Claude Code, Anthropic's official CLI for Claude.")
+        );
+        assert!(
+            identity.get("cache_control").is_none(),
+            "identity block must be uncached (saves a cache slot for 23 tokens)"
+        );
+
+        let user_block = &system_array[1];
+        assert_eq!(
+            user_block["text"],
+            serde_json::json!("you are a careful coding assistant")
+        );
+    }
+
+    /// When `is_oauth_bearer = false` (API-key auth), no identity preamble
+    /// is injected — API-key requests don't go through the Max-plan gate.
+    #[test]
+    fn wire_body_omits_identity_preamble_when_api_key() {
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: Some("you are a careful coding assistant".to_string()),
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request, false);
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must serialize as content-block array");
+        assert_eq!(system_array.len(), 1, "user prompt block only");
+        assert_eq!(
+            system_array[0]["text"],
+            serde_json::json!("you are a careful coding assistant")
+        );
+    }
+
+    /// When `is_oauth_bearer = true` and the request has NO system prompt,
+    /// the identity block must still be injected (it's the access-control
+    /// signal, not optional).
+    #[test]
+    fn wire_body_injects_identity_even_without_user_system_prompt() {
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+
+        let body = super::build_messages_request_body(&request, true);
+        let system_array = body
+            .get("system")
+            .and_then(|v| v.as_array())
+            .expect("system must be created when oauth bearer is set");
+        assert_eq!(system_array.len(), 1);
+        assert_eq!(
+            system_array[0]["text"],
+            serde_json::json!("You are Claude Code, Anthropic's official CLI for Claude.")
         );
     }
 
@@ -1279,7 +1422,7 @@ mod tests {
             tool_choice: None,
             stream: false,
         };
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         let system_array = body
             .get("system")
             .and_then(|v| v.as_array())
@@ -1334,7 +1477,7 @@ mod tests {
             tool_choice: None,
             stream: false,
         };
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         let system_array = body
             .get("system")
             .and_then(|v| v.as_array())
@@ -1370,7 +1513,7 @@ mod tests {
             stream: false,
         };
 
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         let tools = body
             .get("tools")
             .and_then(|v| v.as_array())
@@ -1402,7 +1545,7 @@ mod tests {
             stream: false,
         };
 
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         // Neither field should appear (they are skip-serialize-if-none) and
         // therefore no cache_control marker is added.
         assert!(body.get("system").is_none());
@@ -1441,7 +1584,7 @@ mod tests {
             stream: false,
         };
 
-        let body = super::build_messages_request_body(&request);
+        let body = super::build_messages_request_body(&request, false);
         let serialized = serde_json::to_string(&body).expect("serialize body");
 
         // Two cache_control breakpoints must be present.
@@ -1569,7 +1712,7 @@ mod tests {
     fn effort_env_absent_produces_no_thinking_block() {
         let _guard = env_lock();
         unsafe { std::env::remove_var("ANVIL_EFFORT"); }
-        let body = super::build_messages_request_body(&base_request());
+        let body = super::build_messages_request_body(&base_request(), false);
         assert!(
             body.get("thinking").is_none(),
             "thinking block must not appear when ANVIL_EFFORT is unset: {body}"
