@@ -6,6 +6,51 @@ use serde::{Deserialize, Serialize};
 
 use crate::to_pretty_json;
 
+// ---------------------------------------------------------------------------
+// Egress policy helpers
+// ---------------------------------------------------------------------------
+
+/// Load the current session's egress policy from config.
+/// Returns a default (disabled) policy on any I/O or parse error so
+/// the tool never hard-fails due to config unavailability.
+fn load_egress_policy() -> runtime::egress::EgressPolicy {
+    let home = runtime::default_config_home();
+    let loader = runtime::ConfigLoader::new(
+        std::env::current_dir().unwrap_or_else(|_| home.clone()),
+        home,
+    );
+    match loader.load() {
+        Ok(cfg) => {
+            let ec = cfg.egress();
+            runtime::egress::EgressPolicy::from_config(ec.extra_allowlist(), ec.enabled())
+        }
+        Err(_) => runtime::egress::EgressPolicy::default(),
+    }
+}
+
+/// Return an `Err` with a structured egress-denied message when the policy
+/// blocks `url`; otherwise return `Ok(())`.
+pub(crate) fn check_egress(url: &str, tool: &str) -> Result<(), String> {
+    let policy = load_egress_policy();
+    if policy.is_allowed(url) {
+        return Ok(());
+    }
+    let domain = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    // Emit a best-effort OTel event (non-fatal if tracing is unavailable).
+    runtime::otel::emit_event("egress.denied", &[("domain", domain), ("tool", tool)]);
+    Err(format!(
+        "EgressPolicy denied outbound request to `{domain}` from tool `{tool}`. \
+         To allow this domain add it to `security.egress_allowlist` in your settings.json, \
+         or set `security.egress_enabled: false` to disable filtering."
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct WebFetchInput {
     pub(crate) url: String,
@@ -70,6 +115,7 @@ pub(crate) fn run_web_search(input: WebSearchInput) -> Result<String, String> {
 }
 
 pub(crate) fn execute_web_fetch(input: &WebFetchInput) -> Result<WebFetchOutput, String> {
+    check_egress(&input.url, "WebFetch")?;
     let started = Instant::now();
     let client = build_http_client()?;
     let request_url = normalize_fetch_url(&input.url)?;
@@ -111,6 +157,12 @@ pub(crate) fn execute_web_search(input: &WebSearchInput) -> Result<WebSearchOutp
     if std::env::var("ANVIL_WEB_SEARCH_BASE_URL").is_ok() {
         return execute_web_search_legacy(input, started);
     }
+
+    // Egress check: verify the default search-provider base URL is permitted.
+    // Uses the well-known DuckDuckGo domain as the canonical representative.
+    // Users who configure a custom provider via ANVIL_WEB_SEARCH_BASE_URL
+    // (tested above) bypass here and are checked in execute_web_search_legacy.
+    check_egress("https://html.duckduckgo.com/html/", "WebSearch")?;
 
     // --- Multi-provider path via SearchEngine ---
     let mut engine = runtime::SearchEngine::from_env_and_config();
@@ -172,8 +224,10 @@ fn execute_web_search_legacy(
     input: &WebSearchInput,
     started: Instant,
 ) -> Result<WebSearchOutput, String> {
-    let client = build_http_client()?;
     let search_url = build_search_url(&input.query)?;
+    // Egress check against the resolved search base URL.
+    check_egress(search_url.as_str(), "WebSearch")?;
+    let client = build_http_client()?;
     let response = client
         .get(search_url)
         .send()
@@ -593,4 +647,45 @@ fn normalize_domain_filter(domain: &str) -> String {
 fn dedupe_hits(hits: &mut Vec<SearchHit>) {
     let mut seen = BTreeSet::new();
     hits.retain(|hit| seen.insert(hit.url.clone()));
+}
+
+#[cfg(test)]
+mod tests {
+    use runtime::egress::EgressPolicy;
+
+    use super::check_egress;
+
+    /// Allowed URL passes the gate when policy is disabled (default).
+    #[test]
+    fn egress_policy_disabled_allows_everything() {
+        // Default policy is disabled — every URL should pass.
+        let policy = EgressPolicy::default();
+        assert!(!policy.enabled);
+        assert!(policy.is_allowed("https://evil.example.com/exfiltrate"));
+        // check_egress uses load_egress_policy() which reads config;
+        // in test environments with no config file the policy is also disabled.
+        assert!(check_egress("https://evil.example.com/exfiltrate", "WebFetch").is_ok());
+    }
+
+    /// When policy is enabled and URL domain is allowlisted, is_allowed returns true.
+    #[test]
+    fn egress_policy_enabled_allows_listed_domain() {
+        let policy = EgressPolicy {
+            enabled: true,
+            ..Default::default()
+        };
+        // api.anthropic.com is in the default allowlist.
+        assert!(policy.is_allowed("https://api.anthropic.com/v1/messages"));
+    }
+
+    /// When policy is enabled and URL domain is NOT in the allowlist, is_allowed returns false.
+    #[test]
+    fn egress_policy_enabled_blocks_unknown_domain() {
+        let policy = EgressPolicy {
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(!policy.is_allowed("https://attacker.io/exfiltrate"));
+        assert!(!policy.is_allowed("https://unknown.example.com/data"));
+    }
 }

@@ -3,7 +3,7 @@ use runtime::CronManager;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::to_pretty_json;
+use crate::{to_pretty_json, web_ops::check_egress};
 
 // ---------------------------------------------------------------------------
 // RemoteTrigger
@@ -37,6 +37,8 @@ pub(crate) fn run_remote_trigger(input: RemoteTriggerInput) -> Result<String, St
             input.url
         ));
     }
+    // Egress policy gate — must pass before any network I/O.
+    check_egress(&input.url, "RemoteTrigger")?;
 
     let base = input.url.trim_end_matches('/');
 
