@@ -1146,13 +1146,14 @@ mod tests {
             .expect("hooks object")
             .contains_key("PostToolUse"));
         use plugins::HookSpec;
+        use crate::hooks::RuntimeHookSpec;
         assert_eq!(
             loaded.hooks().pre_tool_use(),
-            &[HookSpec::Command("base".to_string())]
+            &[RuntimeHookSpec::Plugin(HookSpec::Command("base".to_string()))]
         );
         assert_eq!(
             loaded.hooks().post_tool_use(),
-            &[HookSpec::Command("project".to_string())]
+            &[RuntimeHookSpec::Plugin(HookSpec::Command("project".to_string()))]
         );
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());

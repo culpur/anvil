@@ -199,15 +199,16 @@ pub struct NotificationPayload {
 //   { "type": "mcp_tool", "server": "myserver", "tool": "redact",
 //     "input": { "key": "value" } }
 //
-// TODO(stream-b): config/hooks.rs::parse_hook_spec_array currently deserializes
-// each entry as `plugins::HookSpec` (Command|Tagged).  To wire the parser side
-// for `type: "mcp_tool"`, Stream B's partial-tolerance rewrite needs to:
-//   1. Switch the per-element parse target to `RuntimeHookSpec` (this enum).
-//   2. Migrate `RuntimeHookConfig` to hold `Vec<RuntimeHookSpec>` instead of
-//      `Vec<plugins::HookSpec>`.
-// Until that lands, `RuntimeHookSpec::McpTool` is reachable only via direct
-// construction (e.g. tests / programmatic callers via
-// `HookRunner::from_runtime_specs`).
+// Phase 5.3 #19 (Stream B complete): `RuntimeHookConfig` now holds
+// `Vec<RuntimeHookSpec>` for every event type, and the config parser
+// (`config/hooks.rs::parse_runtime_hook_spec_array`) uses
+// `RuntimeHookSpec::from_json_value` so that `mcp_tool` entries parsed from
+// `settings.json` flow through to `HookRunner::collect_specs` without needing
+// the `_extra` programmatic bypass.
+//
+// The `_extra` fields on `HookRunner` are retained for programmatic injection
+// at runtime (e.g. from the MCP server registry start-up path); they are
+// additive and do not conflict with the config-parsed specs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeHookSpec {
     /// Pass-through for the existing plugins-side variants (Command / Prompt).
@@ -231,6 +232,55 @@ impl RuntimeHookSpec {
 impl From<HookSpec> for RuntimeHookSpec {
     fn from(spec: HookSpec) -> Self {
         Self::Plugin(spec)
+    }
+}
+
+impl RuntimeHookSpec {
+    /// Deserialize a single hook entry from a `serde_json::Value`, supporting
+    /// both the `plugins::HookSpec` variants (bare string, tagged command/prompt,
+    /// exec-args array) and the runtime-only `McpTool` variant.
+    ///
+    /// Dispatch order:
+    ///   1. If the value is an object with `"type": "mcp_tool"`, parse as McpTool.
+    ///   2. Otherwise, fall through to `serde_json::from_value::<HookSpec>`.
+    ///
+    /// Returns `None` (with a stderr warning) if neither branch succeeds.
+    pub fn from_json_value(value: &serde_json::Value) -> Option<Self> {
+        // Fast path: detect the mcp_tool discriminant before attempting HookSpec
+        // deserialization, which would silently discard an unknown `type` field.
+        if let Some(obj) = value.as_object() {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("mcp_tool") {
+                let server = obj
+                    .get("server")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let tool = obj
+                    .get("tool")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let input = obj
+                    .get("input")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                if server.is_empty() || tool.is_empty() {
+                    eprintln!(
+                        "anvil: mcp_tool hook entry missing required `server` or `tool` field; skipping"
+                    );
+                    return None;
+                }
+                return Some(Self::McpTool { server, tool, input });
+            }
+        }
+        // Fall back to HookSpec deserialization for Command/Tagged/Exec forms.
+        match serde_json::from_value::<HookSpec>(value.clone()) {
+            Ok(spec) => Some(Self::Plugin(spec)),
+            Err(err) => {
+                eprintln!("anvil: skipping malformed hook entry: {err}");
+                None
+            }
+        }
     }
 }
 
@@ -738,11 +788,14 @@ impl HookRunner {
         HookRunResult::allow(messages)
     }
 
-    /// Merge the config-derived plugin-side specs with runtime-only extras
-    /// (e.g. `McpTool`) into a single dispatch list.  Plugin specs come first
-    /// to preserve existing ordering semantics for callers.
+    /// Merge the config-derived specs with runtime-only extras into a single
+    /// dispatch list.  Config specs come first to preserve existing ordering.
+    ///
+    /// Phase 5.3 #19: `RuntimeHookConfig` now holds `Vec<RuntimeHookSpec>` so
+    /// `McpTool` entries parsed from `settings.json` flow through here directly
+    /// without needing the `_extra` bypass.
     fn collect_specs(&self, event: HookEvent) -> Vec<RuntimeHookSpec> {
-        let (config_specs, extras): (&[HookSpec], &Vec<RuntimeHookSpec>) = match event {
+        let (config_specs, extras): (&[RuntimeHookSpec], &Vec<RuntimeHookSpec>) = match event {
             HookEvent::PreToolUse => (self.config.pre_tool_use(), &self.pre_tool_use_extra),
             HookEvent::PostToolUse => (self.config.post_tool_use(), &self.post_tool_use_extra),
             HookEvent::SessionStart => (self.config.session_start(), &self.session_start_extra),
@@ -761,7 +814,8 @@ impl HookRunner {
             HookEvent::Notification => (self.config.notification(), &self.notification_extra),
         };
         let mut out = Vec::with_capacity(config_specs.len() + extras.len());
-        out.extend(config_specs.iter().map(RuntimeHookSpec::from_plugin));
+        // Config specs are already RuntimeHookSpec; no conversion needed.
+        out.extend(config_specs.iter().cloned());
         out.extend(extras.iter().cloned());
         out
     }
@@ -1328,7 +1382,13 @@ mod tests {
             vec!["printf 'ok'".to_string()],
             Vec::new(),
         );
-        assert!(!config.pre_tool_use()[0].is_prompt());
+        // pre_tool_use() now returns &[RuntimeHookSpec]; verify it's a Plugin(Command).
+        match &config.pre_tool_use()[0] {
+            RuntimeHookSpec::Plugin(spec) => {
+                assert!(!spec.is_prompt(), "from_commands must produce a Command, not a Prompt");
+            }
+            other => panic!("expected Plugin(Command), got: {other:?}"),
+        }
     }
 
     /// Captures every (server, tool, input) invocation and replays a scripted

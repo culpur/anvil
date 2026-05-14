@@ -1,31 +1,45 @@
 use plugins::HookSpec;
 
+use crate::hooks::RuntimeHookSpec;
 use crate::json::JsonValue;
 
 use super::helpers::expect_object;
 use super::ConfigError;
 
+/// Phase 5.3 #19: `RuntimeHookConfig` now holds `Vec<RuntimeHookSpec>` instead
+/// of `Vec<plugins::HookSpec>` so that `mcp_tool` hook entries can be parsed
+/// from `settings.json` and dispatched by `HookRunner::collect_specs`.
+///
+/// Prior to this migration (Stream B), `mcp_tool` hooks were only reachable via
+/// direct construction (`HookRunner::from_runtime_specs` or the `_extra` vectors).
+/// Now a plugin can ship:
+///   ```json
+///   { "type": "mcp_tool", "server": "vault", "tool": "redact", "input": {} }
+///   ```
+/// inside any hook event array and have it dispatched correctly.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RuntimeHookConfig {
-    pub(super) pre_tool_use: Vec<HookSpec>,
-    pub(super) post_tool_use: Vec<HookSpec>,
+    pub(super) pre_tool_use: Vec<RuntimeHookSpec>,
+    pub(super) post_tool_use: Vec<RuntimeHookSpec>,
     // v2.2.11: new CC-parity event hooks.
-    pub(super) session_start: Vec<HookSpec>,
-    pub(super) session_end: Vec<HookSpec>,
-    pub(super) file_changed: Vec<HookSpec>,
-    pub(super) cwd_changed: Vec<HookSpec>,
-    pub(super) permission_request: Vec<HookSpec>,
-    pub(super) permission_denied: Vec<HookSpec>,
-    pub(super) post_tool_batch: Vec<HookSpec>,
-    pub(super) notification: Vec<HookSpec>,
+    pub(super) session_start: Vec<RuntimeHookSpec>,
+    pub(super) session_end: Vec<RuntimeHookSpec>,
+    pub(super) file_changed: Vec<RuntimeHookSpec>,
+    pub(super) cwd_changed: Vec<RuntimeHookSpec>,
+    pub(super) permission_request: Vec<RuntimeHookSpec>,
+    pub(super) permission_denied: Vec<RuntimeHookSpec>,
+    pub(super) post_tool_batch: Vec<RuntimeHookSpec>,
+    pub(super) notification: Vec<RuntimeHookSpec>,
 }
 
 impl RuntimeHookConfig {
+    /// Construct from explicit `HookSpec` lists (backward-compat API used by
+    /// tests and `from_commands`).
     #[must_use]
     pub fn new(pre_tool_use: Vec<HookSpec>, post_tool_use: Vec<HookSpec>) -> Self {
         Self {
-            pre_tool_use,
-            post_tool_use,
+            pre_tool_use: pre_tool_use.into_iter().map(RuntimeHookSpec::Plugin).collect(),
+            post_tool_use: post_tool_use.into_iter().map(RuntimeHookSpec::Plugin).collect(),
             session_start: Vec::new(),
             session_end: Vec::new(),
             file_changed: Vec::new(),
@@ -44,8 +58,8 @@ impl RuntimeHookConfig {
         post_tool_use: Vec<String>,
     ) -> Self {
         Self {
-            pre_tool_use: pre_tool_use.into_iter().map(HookSpec::Command).collect(),
-            post_tool_use: post_tool_use.into_iter().map(HookSpec::Command).collect(),
+            pre_tool_use: pre_tool_use.into_iter().map(|s| RuntimeHookSpec::Plugin(HookSpec::Command(s))).collect(),
+            post_tool_use: post_tool_use.into_iter().map(|s| RuntimeHookSpec::Plugin(HookSpec::Command(s))).collect(),
             session_start: Vec::new(),
             session_end: Vec::new(),
             file_changed: Vec::new(),
@@ -58,60 +72,60 @@ impl RuntimeHookConfig {
     }
 
     #[must_use]
-    pub fn pre_tool_use(&self) -> &[HookSpec] {
+    pub fn pre_tool_use(&self) -> &[RuntimeHookSpec] {
         &self.pre_tool_use
     }
 
     #[must_use]
-    pub fn post_tool_use(&self) -> &[HookSpec] {
+    pub fn post_tool_use(&self) -> &[RuntimeHookSpec] {
         &self.post_tool_use
     }
 
     /// v2.2.11: fires after config + MCP servers loaded, before first prompt.
     #[must_use]
-    pub fn session_start(&self) -> &[HookSpec] {
+    pub fn session_start(&self) -> &[RuntimeHookSpec] {
         &self.session_start
     }
 
     /// v2.2.11: fires on clean exit.
     #[must_use]
-    pub fn session_end(&self) -> &[HookSpec] {
+    pub fn session_end(&self) -> &[RuntimeHookSpec] {
         &self.session_end
     }
 
     /// v2.2.11: fires after Edit/Write/MultiEdit tool succeeds.
     #[must_use]
-    pub fn file_changed(&self) -> &[HookSpec] {
+    pub fn file_changed(&self) -> &[RuntimeHookSpec] {
         &self.file_changed
     }
 
     /// v2.2.11: fires when cwd changes mid-session.
     #[must_use]
-    pub fn cwd_changed(&self) -> &[HookSpec] {
+    pub fn cwd_changed(&self) -> &[RuntimeHookSpec] {
         &self.cwd_changed
     }
 
     /// v2.2.11: fires when permission prompt is about to be shown.
     #[must_use]
-    pub fn permission_request(&self) -> &[HookSpec] {
+    pub fn permission_request(&self) -> &[RuntimeHookSpec] {
         &self.permission_request
     }
 
     /// v2.2.11: fires after a tool call is denied.
     #[must_use]
-    pub fn permission_denied(&self) -> &[HookSpec] {
+    pub fn permission_denied(&self) -> &[RuntimeHookSpec] {
         &self.permission_denied
     }
 
     /// v2.2.11: fires once per parallel tool batch.
     #[must_use]
-    pub fn post_tool_batch(&self) -> &[HookSpec] {
+    pub fn post_tool_batch(&self) -> &[RuntimeHookSpec] {
         &self.post_tool_batch
     }
 
     /// v2.2.11: fires when Anvil displays a notification to the user.
     #[must_use]
-    pub fn notification(&self) -> &[HookSpec] {
+    pub fn notification(&self) -> &[RuntimeHookSpec] {
         &self.notification
     }
 
@@ -145,43 +159,41 @@ pub fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig
     };
     let hooks = expect_object(hooks_value, "merged settings.hooks")?;
     Ok(RuntimeHookConfig {
-        pre_tool_use: parse_hook_spec_array(hooks, "PreToolUse", "merged settings.hooks")?,
-        post_tool_use: parse_hook_spec_array(hooks, "PostToolUse", "merged settings.hooks")?,
+        pre_tool_use: parse_runtime_hook_spec_array(hooks, "PreToolUse", "merged settings.hooks")?,
+        post_tool_use: parse_runtime_hook_spec_array(hooks, "PostToolUse", "merged settings.hooks")?,
         // v2.2.11: new CC-parity event hooks.
-        session_start: parse_hook_spec_array(hooks, "SessionStart", "merged settings.hooks")?,
-        session_end: parse_hook_spec_array(hooks, "SessionEnd", "merged settings.hooks")?,
-        file_changed: parse_hook_spec_array(hooks, "FileChanged", "merged settings.hooks")?,
-        cwd_changed: parse_hook_spec_array(hooks, "CwdChanged", "merged settings.hooks")?,
-        permission_request: parse_hook_spec_array(
+        session_start: parse_runtime_hook_spec_array(hooks, "SessionStart", "merged settings.hooks")?,
+        session_end: parse_runtime_hook_spec_array(hooks, "SessionEnd", "merged settings.hooks")?,
+        file_changed: parse_runtime_hook_spec_array(hooks, "FileChanged", "merged settings.hooks")?,
+        cwd_changed: parse_runtime_hook_spec_array(hooks, "CwdChanged", "merged settings.hooks")?,
+        permission_request: parse_runtime_hook_spec_array(
             hooks,
             "PermissionRequest",
             "merged settings.hooks",
         )?,
-        permission_denied: parse_hook_spec_array(
+        permission_denied: parse_runtime_hook_spec_array(
             hooks,
             "PermissionDenied",
             "merged settings.hooks",
         )?,
-        post_tool_batch: parse_hook_spec_array(hooks, "PostToolBatch", "merged settings.hooks")?,
-        notification: parse_hook_spec_array(hooks, "Notification", "merged settings.hooks")?,
+        post_tool_batch: parse_runtime_hook_spec_array(hooks, "PostToolBatch", "merged settings.hooks")?,
+        notification: parse_runtime_hook_spec_array(hooks, "Notification", "merged settings.hooks")?,
     })
 }
 
-/// Parse a JSON array that may contain bare strings or tagged hook-spec objects.
+/// Parse a JSON array that may contain bare strings, tagged hook-spec objects
+/// (`Command`, `Prompt`, `Exec`), or runtime-only `mcp_tool` objects.
 ///
-/// Bare strings become `HookSpec::Command`.  Tagged objects (e.g.
-/// `{"type":"prompt","body":"..."}`) deserialize via `serde_json` into their
-/// respective `HookSpec` variant.
+/// Uses `RuntimeHookSpec::from_json_value` so that `mcp_tool` entries are
+/// accepted and dispatched correctly (Phase 5.3 #19 fix).
 ///
 /// Partial-tolerance: a single malformed entry is logged to stderr and
-/// skipped rather than aborting the entire array.  This matches Claude
-/// Code's settings.json parsing behavior — one bad hook should not wipe
-/// out every other valid hook in the same array.
-fn parse_hook_spec_array(
+/// skipped rather than aborting the entire array.
+fn parse_runtime_hook_spec_array(
     object: &std::collections::BTreeMap<String, JsonValue>,
     key: &str,
     context: &str,
-) -> Result<Vec<HookSpec>, ConfigError> {
+) -> Result<Vec<RuntimeHookSpec>, ConfigError> {
     let Some(value) = object.get(key) else {
         return Ok(Vec::new());
     };
@@ -190,14 +202,18 @@ fn parse_hook_spec_array(
             "{context}: field {key} must be an array"
         )));
     };
-    // Re-serialize each element through serde_json so the existing
-    // HookSpec serde(untagged) logic handles both bare strings and tagged objects.
     let mut hooks = Vec::with_capacity(array.len());
     for item in array {
-        // Convert our internal JsonValue to a serde_json::Value via render().
+        // Re-serialize to serde_json::Value so RuntimeHookSpec::from_json_value
+        // can work with the full serde type system.
         let json_str = item.render();
-        match serde_json::from_str::<HookSpec>(&json_str) {
-            Ok(spec) => hooks.push(spec),
+        match serde_json::from_str::<serde_json::Value>(&json_str) {
+            Ok(val) => match RuntimeHookSpec::from_json_value(&val) {
+                Some(spec) => hooks.push(spec),
+                None => {
+                    // from_json_value already printed a warning.
+                }
+            },
             Err(error) => {
                 eprintln!(
                     "anvil: skipping malformed hook entry in {context}.{key}: {error}"
@@ -208,13 +224,13 @@ fn parse_hook_spec_array(
     Ok(hooks)
 }
 
-fn extend_unique(target: &mut Vec<HookSpec>, values: &[HookSpec]) {
+fn extend_unique(target: &mut Vec<RuntimeHookSpec>, values: &[RuntimeHookSpec]) {
     for value in values {
         push_unique(target, value.clone());
     }
 }
 
-fn push_unique(target: &mut Vec<HookSpec>, value: HookSpec) {
+fn push_unique(target: &mut Vec<RuntimeHookSpec>, value: RuntimeHookSpec) {
     if !target.iter().any(|existing| existing == &value) {
         target.push(value);
     }
@@ -244,13 +260,78 @@ mod tests {
             object.insert(key.clone(), value.clone());
         }
 
-        let hooks = parse_hook_spec_array(&object, "PreToolUse", "test")
+        let hooks = parse_runtime_hook_spec_array(&object, "PreToolUse", "test")
             .expect("tolerant parse should not error");
         assert_eq!(hooks.len(), 2, "two valid hooks should survive");
-        assert_eq!(hooks[0], HookSpec::Command("./hooks/pre.sh".to_string()));
+        assert_eq!(
+            hooks[0],
+            RuntimeHookSpec::Plugin(HookSpec::Command("./hooks/pre.sh".to_string()))
+        );
         assert_eq!(
             hooks[1],
-            HookSpec::Command("./hooks/also-pre.sh".to_string())
+            RuntimeHookSpec::Plugin(HookSpec::Command("./hooks/also-pre.sh".to_string()))
+        );
+    }
+
+    /// Phase 5.3 #19: verify that an mcp_tool hook entry in settings.json is
+    /// parsed correctly into a RuntimeHookSpec::McpTool variant.
+    #[test]
+    fn parse_hook_spec_array_accepts_mcp_tool_entries() {
+        let mut object = BTreeMap::new();
+        let parsed = JsonValue::parse(
+            r#"{"PreToolUse":[
+                "./hooks/pre.sh",
+                {"type":"mcp_tool","server":"vault","tool":"redact","input":{"k":"v"}}
+            ]}"#,
+        )
+        .expect("seed JSON parses");
+        for (key, value) in parsed.as_object().expect("object root") {
+            object.insert(key.clone(), value.clone());
+        }
+
+        let hooks = parse_runtime_hook_spec_array(&object, "PreToolUse", "test")
+            .expect("tolerant parse should not error");
+        assert_eq!(hooks.len(), 2, "both entries should survive");
+
+        // First: Command hook.
+        assert_eq!(
+            hooks[0],
+            RuntimeHookSpec::Plugin(HookSpec::Command("./hooks/pre.sh".to_string()))
+        );
+
+        // Second: McpTool hook.
+        match &hooks[1] {
+            RuntimeHookSpec::McpTool { server, tool, input } => {
+                assert_eq!(server, "vault");
+                assert_eq!(tool, "redact");
+                assert_eq!(input, &serde_json::json!({"k": "v"}));
+            }
+            other => panic!("expected McpTool variant, got: {other:?}"),
+        }
+    }
+
+    /// Phase 5.3 #19: mcp_tool entry missing required fields should be skipped.
+    #[test]
+    fn mcp_tool_entry_without_server_is_skipped() {
+        let mut object = BTreeMap::new();
+        let parsed = JsonValue::parse(
+            r#"{"PreToolUse":[
+                {"type":"mcp_tool","tool":"redact"},
+                "./hooks/good.sh"
+            ]}"#,
+        )
+        .expect("seed JSON parses");
+        for (key, value) in parsed.as_object().expect("object root") {
+            object.insert(key.clone(), value.clone());
+        }
+
+        let hooks = parse_runtime_hook_spec_array(&object, "PreToolUse", "test")
+            .expect("tolerant parse should not error");
+        // The mcp_tool entry without server should be dropped; the command survives.
+        assert_eq!(hooks.len(), 1, "malformed mcp_tool must be skipped");
+        assert_eq!(
+            hooks[0],
+            RuntimeHookSpec::Plugin(HookSpec::Command("./hooks/good.sh".to_string()))
         );
     }
 }
