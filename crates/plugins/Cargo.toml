@@ -18,5 +18,8 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # synchronous CLI bootstrap path; rustls avoids native OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
+[dev-dependencies]
+serial_test = "3"
+
 [lints]
 workspace = true

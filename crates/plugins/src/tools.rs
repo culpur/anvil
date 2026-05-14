@@ -132,6 +132,7 @@ mod tests {
     use super::*;
     use crate::manifest::{PluginToolDefinition, PluginToolPermission};
     use serde_json::json;
+    use serial_test::serial;
 
     fn make_tool(command: &str) -> PluginTool {
         PluginTool {
@@ -156,6 +157,7 @@ mod tests {
     /// This test is Unix-only because the shell snippet uses `sh -c`.
     #[cfg(unix)]
     #[test]
+    #[serial(traceparent_env)]
     fn plugin_tool_forwards_traceparent_to_subprocess() {
         // Use a syntactically valid W3C traceparent.  The exact value is
         // irrelevant — we just need to confirm it passes through.
@@ -187,6 +189,7 @@ mod tests {
     /// TRACEPARENT env var (no injection of empty/garbage values).
     #[cfg(unix)]
     #[test]
+    #[serial(traceparent_env)]
     fn plugin_tool_does_not_inject_traceparent_when_absent() {
         // Ensure no TRACEPARENT in env for this test.
         unsafe { std::env::remove_var("TRACEPARENT") };
