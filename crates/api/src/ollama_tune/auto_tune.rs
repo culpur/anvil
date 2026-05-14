@@ -374,6 +374,7 @@ fn parse_num_ctx_env(raw: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::ollama_tune::tuner::{KvCacheType, OllamaOptions};
+    use serial_test::serial;
 
     fn fake_options() -> OllamaOptions {
         OllamaOptions {
@@ -473,6 +474,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(ollama_tune_cache)]
     fn invalidate_cache_specific_model() {
         // Seed the cache directly so we don't need a daemon.
         if let Ok(mut g) = cache().lock() {
@@ -505,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(ollama_tune_cache)]
     fn invalidate_cache_all_models() {
         if let Ok(mut g) = cache().lock() {
             g.insert(
