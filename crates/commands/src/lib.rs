@@ -2759,4 +2759,351 @@ mod tests {
              the hint with commas (e.g. `fn,class,struct` instead of `fn|class|struct`).",
         );
     }
+
+    // ── Phase 5.0 Gate 1 — handler-axis drift prevention ─────────────────────
+    //
+    // Background:
+    //   `every_slash_command_variant_has_a_spec` (above) locks the
+    //   enum-variant ↔ spec bidirection.  That leaves a third axis uncovered:
+    //   the handler dispatch in `handle_slash_command`.  A new command can be
+    //   added with a spec and a parser arm but with its handler arm pointing to
+    //   the wrong variant (or just missing from the `match`).  These two tests
+    //   close that gap.
+    //
+    // Defect #12 note:
+    //   The audit flagged `goal` as an orphan spec (spec with no parser arm).
+    //   That finding is INCORRECT.  `goal` has a parser arm (lib.rs line ~882),
+    //   a spec (specs.rs), a handler arm (handlers.rs), and an exemplar in the
+    //   existing bidirectional test.  The existing test DOES check both
+    //   directions (variant→spec and spec→variant); defect #12 is a false
+    //   positive.  These tests extend coverage to the handler axis.
+    //
+    // How to fix a failure:
+    //   every_spec_has_a_handler:
+    //     A spec name is in slash_command_specs() but not in HANDLER_NAMES.
+    //     Add the spec name to HANDLER_NAMES and add a match arm in
+    //     crates/commands/src/handlers.rs::handle_slash_command.
+    //
+    //   every_handler_has_a_spec:
+    //     A name is in HANDLER_NAMES but not in slash_command_specs().
+    //     Either add a spec in crates/commands/src/specs.rs, or remove the
+    //     orphan handler arm.
+
+    /// The canonical set of slash-command names that have a match arm in
+    /// `handle_slash_command` in `handlers.rs`.
+    ///
+    /// This list MUST be kept in sync with `handlers.rs::handle_slash_command`.
+    /// Both tests below depend on it; they catch drift in opposite directions.
+    ///
+    /// NOTE: `Unknown` is deliberately absent — it is the parser's no-op
+    /// sentinel and is intentionally handled as a catch-all, not a named
+    /// command.
+    const HANDLER_NAMES: &[&str] = &[
+        "help",
+        "compact",
+        "status",
+        "branch",
+        "bughunter",
+        "worktree",
+        "commit",
+        "commit-push-pr",
+        "pr",
+        "issue",
+        "ultraplan",
+        "teleport",
+        "debug-tool-call",
+        "model",
+        "permissions",
+        "clear",
+        "cost",
+        "resume",
+        "config",
+        "memory",
+        "ollama",
+        "init",
+        "diff",
+        "version",
+        "export",
+        "session",
+        "plugin",
+        "agents",
+        "skills",
+        "qmd",
+        "undo",
+        "history",
+        "context",
+        "pin",
+        "unpin",
+        "chat",
+        "vim",
+        "web",
+        "doctor",
+        "tokens",
+        "provider",
+        "login",
+        "search",
+        "failover",
+        "generate-image",
+        "history-archive",
+        "configure",
+        "theme",
+        "semantic-search",
+        "docker",
+        "test",
+        "git",
+        "refactor",
+        "screenshot",
+        "db",
+        "security",
+        "api",
+        "docs",
+        "scaffold",
+        "perf",
+        "debug",
+        "voice",
+        "collab",
+        "changelog",
+        "env",
+        "hub",
+        "language",
+        "lsp",
+        "notebook",
+        "k8s",
+        "iac",
+        "pipeline",
+        "review",
+        "deps",
+        "mono",
+        "browser",
+        "notify",
+        "vault",
+        "migrate",
+        "regex",
+        "ssh",
+        "logs",
+        "markdown",
+        "snippets",
+        "finetune",
+        "webhook",
+        "plugin-sdk",
+        "sleep",
+        "think",
+        "fast",
+        "review-pr",
+        "remote-control",
+        "loop",
+        "focus",
+        "mcp",
+        "productivity",
+        "knowledge",
+        "daily",
+        "tab",
+        "fork",
+        "share",
+        "audit",
+        "restart",
+        "agent",
+        "output-style",
+        "profile",
+        "effort",
+        "skill",
+        "goal",
+        "file-cache",
+        "cmd-cache",
+        "scroll-speed",
+    ];
+
+    /// Gate 1a: every spec name has a corresponding handler arm.
+    ///
+    /// If this test fails: a spec exists in slash_command_specs() with no match
+    /// arm in handle_slash_command.  Add the name to HANDLER_NAMES and add the
+    /// arm to handlers.rs.
+    #[test]
+    fn every_spec_has_a_handler() {
+        use std::collections::HashSet;
+        use super::specs::slash_command_specs;
+
+        let handler_set: HashSet<&str> = HANDLER_NAMES.iter().copied().collect();
+        let spec_names: Vec<&str> = slash_command_specs()
+            .iter()
+            .map(|s| s.name)
+            .filter(|name| !handler_set.contains(name))
+            .collect();
+        assert!(
+            spec_names.is_empty(),
+            "slash_command_specs entries with no handler arm in HANDLER_NAMES: {spec_names:?}\n\
+             Fix: add the spec name to HANDLER_NAMES in lib.rs and add a match arm to\n\
+             crates/commands/src/handlers.rs::handle_slash_command.\n\
+             See Phase 5.0 Bucket 0 comment above HANDLER_NAMES for details.",
+        );
+    }
+
+    /// Gate 1b: every handler name has a corresponding spec entry.
+    ///
+    /// If this test fails: a handler arm exists for a command that has no spec.
+    /// Either add the spec to slash_command_specs() or remove the orphan arm.
+    #[test]
+    fn every_handler_has_a_spec() {
+        use std::collections::HashSet;
+        use super::specs::slash_command_specs;
+
+        let spec_set: HashSet<&str> = slash_command_specs()
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        let orphans: Vec<&&str> = HANDLER_NAMES
+            .iter()
+            .filter(|name| !spec_set.contains(**name))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "HANDLER_NAMES entries with no slash_command_specs entry: {orphans:?}\n\
+             Fix: either add a spec in crates/commands/src/specs.rs, or remove the\n\
+             orphan entry from HANDLER_NAMES in lib.rs.\n\
+             See Phase 5.0 Bucket 0 comment above HANDLER_NAMES for details.",
+        );
+    }
+
+    // ── Phase 5.0 Gate 2 — menu↔handler reachability smoke test ──────────────
+    //
+    // Background:
+    //   Even when every spec has a handler arm, the handler might return a
+    //   bare "(stub)" string — a sign that the arm was wired in mechanically
+    //   but the dispatch never reaches real logic.  This gate invokes every
+    //   slash command with an empty argument list and asserts:
+    //     1. The dispatch returns Some (handler is reachable).
+    //     2. The response message is non-empty.
+    //     3. The response does not contain the literal string "(stub)".
+    //
+    //   Commands with `requires_arguments: true` in their spec are exempt from
+    //   assertion 3 — a "usage:" or "(stub)" fallback is acceptable there
+    //   because the command genuinely cannot do anything without arguments.
+    //
+    //   The current tree has no "(stub)" handlers, so this test passes today.
+    //   It would fail if a developer wires a new handler arm that just returns
+    //   "(stub)" or leaves the response empty.
+    //
+    // How to fix a failure:
+    //   - If the handler returns "(stub)": implement the handler or return a
+    //     descriptive "not yet implemented" message instead.
+    //   - If the handler returns an empty string: always return at least one
+    //     line of guidance text.
+    //   - If the command legitimately needs arguments to produce output: set
+    //     `requires_arguments: true` in its SlashCommandSpec entry.
+    #[test]
+    fn every_spec_has_a_callable_handler() {
+        use super::handlers::handle_slash_command;
+        use super::specs::slash_command_specs;
+
+        let session = runtime::Session::default();
+        let config = runtime::CompactionConfig::default();
+        let mut failures: Vec<String> = Vec::new();
+
+        for spec in slash_command_specs() {
+            let input = format!("/{}", spec.name);
+            match handle_slash_command(&input, &session, config.clone()) {
+                None => {
+                    failures.push(format!(
+                        "{}: handle_slash_command returned None (handler not wired)",
+                        spec.name
+                    ));
+                }
+                Some(result) if result.message.is_empty() => {
+                    failures.push(format!(
+                        "{}: handler returned an empty message",
+                        spec.name
+                    ));
+                }
+                Some(result) if !spec.requires_arguments && result.message.contains("(stub)") => {
+                    failures.push(format!(
+                        "{}: handler returned \"(stub)\" boilerplate without requires_arguments: true. \
+                         Either implement the handler or mark requires_arguments: true in the spec.",
+                        spec.name
+                    ));
+                }
+                Some(_) => {} // OK
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "menu↔handler smoke test failures:\n  {}\n\n\
+             Fix: implement the handler, return a non-empty guidance message, or\n\
+             mark `requires_arguments: true` in the spec for commands that need args.\n\
+             See Phase 5.0 Gate 2 comment above for details.",
+            failures.join("\n  ")
+        );
+    }
+
+    // ── Phase 5.0 Gate 3 — sync-LLM call lint ────────────────────────────────
+    //
+    // Background:
+    //   Slash handlers run on the TUI input thread (synchronously, not async).
+    //   Any handler that calls `run_internal_prompt_text` or
+    //   `run_internal_prompt_text_with_progress` will block the entire TUI for
+    //   the duration of the inference — potentially seconds to minutes on a
+    //   local model.  This was the `/changelog` bug class, fixed before Phase 5.
+    //
+    //   This test asserts that none of the banned function names appear in the
+    //   handlers source file.  It uses `include_str!` so it runs at test time
+    //   with zero I/O overhead and catches future regressions at commit
+    //   boundaries.
+    //
+    // Banned symbols:
+    //   run_internal_prompt_text               — synchronous LLM call (blocks input thread)
+    //   run_internal_prompt_text_with_progress — same, with progress spinner
+    //   ConversationRuntime::run_turn_sync      — direct synchronous turn execution
+    //
+    // Chosen approach: Option B (test-time grep).
+    //   Option A (build.rs grep) would prevent compilation but is brittle
+    //   across platforms.  Option C (type-system SyncSafe marker) would require
+    //   adding a trait bound to every handler signature — invasive for v2.2.14.
+    //   Option B is a single test that is robust, cheap, and has a clear error.
+    //
+    // How to fix a failure:
+    //   Remove the sync LLM call from handlers.rs.  If you need AI assistance
+    //   in a slash command, dispatch an async task and return a placeholder
+    //   message; let the runtime deliver the result via the standard event loop.
+    //   Never call run_internal_prompt_text directly from a handler.
+    #[test]
+    fn slash_handlers_have_no_sync_llm_calls() {
+        const HANDLERS_SOURCE: &str = include_str!("handlers.rs");
+
+        // Each entry is (symbol_name, rationale)
+        let banned: &[(&str, &str)] = &[
+            (
+                "run_internal_prompt_text",
+                "blocks the TUI input thread — use async dispatch instead",
+            ),
+            (
+                "ConversationRuntime::run_turn_sync",
+                "synchronous turn execution blocks the calling thread",
+            ),
+        ];
+
+        let mut violations: Vec<String> = Vec::new();
+        for (symbol, rationale) in banned {
+            if HANDLERS_SOURCE.contains(symbol) {
+                // Find approximate line numbers for better error messages
+                let lines: Vec<usize> = HANDLERS_SOURCE
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, line)| line.contains(symbol))
+                    .map(|(i, _)| i + 1)
+                    .collect();
+                violations.push(format!(
+                    "{symbol} (line(s) {lines:?}): {rationale}"
+                ));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "Banned sync-LLM symbols found in handlers.rs:\n  {}\n\n\
+             Slash handlers run on the TUI input thread.  Any synchronous LLM\n\
+             call here will freeze the UI for the duration of inference.\n\
+             See Phase 5.0 Gate 3 comment above for the correct dispatch pattern.",
+            violations.join("\n  ")
+        );
+    }
 }

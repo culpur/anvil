@@ -43,6 +43,18 @@ pub struct SlashCommandSpec {
     pub requires_vault: bool,
     /// How much restart is needed after the command completes.
     pub requires_restart: RestartRequirement,
+    // ── Phase 5.0 additions ───────────────────────────────────────────────────
+    /// When `true`, the command requires at least one positional argument to
+    /// produce meaningful output.  The menu-handler smoke test
+    /// (`every_spec_has_a_callable_handler`) skips the "no (stub) response"
+    /// assertion for specs with this flag set.
+    ///
+    /// Mark a spec `requires_arguments: true` only when invoking the command
+    /// with an empty argv is genuinely meaningless — e.g. `/web` has no
+    /// query, `/unpin` has no path.  Informational commands (even
+    /// "not-yet-implemented" ones) should remain `false` because they must
+    /// at minimum return helpful guidance text, not a bare stub.
+    pub requires_arguments: bool,
 }
 
 const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
@@ -59,6 +71,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "status",
@@ -74,6 +87,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "compact",
@@ -89,6 +103,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "model",
@@ -118,6 +133,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "permissions",
@@ -133,6 +149,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "clear",
@@ -148,6 +165,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "cost",
@@ -163,6 +181,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "provider",
@@ -192,6 +211,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "login",
@@ -207,6 +227,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "resume",
@@ -222,6 +243,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "config",
@@ -237,6 +259,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "memory",
@@ -300,6 +323,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "init",
@@ -315,6 +339,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "diff",
@@ -330,6 +355,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "version",
@@ -345,6 +371,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "bughunter",
@@ -360,6 +387,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "branch",
@@ -375,6 +403,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "worktree",
@@ -390,6 +419,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "commit",
@@ -405,6 +435,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "commit-push-pr",
@@ -420,6 +451,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "pr",
@@ -435,6 +467,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "issue",
@@ -450,6 +483,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "ultraplan",
@@ -465,6 +499,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "teleport",
@@ -480,6 +515,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "debug-tool-call",
@@ -495,6 +531,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "export",
@@ -510,6 +547,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "session",
@@ -525,6 +563,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "plugin",
@@ -542,6 +581,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "agents",
@@ -557,6 +597,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "skills",
@@ -572,6 +613,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "qmd",
@@ -587,6 +629,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "undo",
@@ -602,6 +645,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "history",
@@ -617,6 +661,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "context",
@@ -632,6 +677,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "pin",
@@ -647,6 +693,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "unpin",
@@ -662,6 +709,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "chat",
@@ -677,6 +725,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "vim",
@@ -692,6 +741,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "web",
@@ -707,6 +757,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "doctor",
@@ -722,6 +773,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "tokens",
@@ -737,6 +789,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "search",
@@ -752,6 +805,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "failover",
@@ -767,6 +821,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "generate-image",
@@ -782,6 +837,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "history-archive",
@@ -797,6 +853,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "configure",
@@ -812,6 +869,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "theme",
@@ -827,6 +885,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 3 — semantic code search
     SlashCommandSpec {
@@ -849,6 +908,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 4 — Docker / container awareness
     SlashCommandSpec {
@@ -877,6 +937,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 5 — test generation
     SlashCommandSpec {
@@ -903,6 +964,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 6 — advanced git
     SlashCommandSpec {
@@ -919,6 +981,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 7 — refactoring tools
     SlashCommandSpec {
@@ -935,6 +998,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 8 — screenshot / clipboard image input
     SlashCommandSpec {
@@ -951,6 +1015,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 9 — database tools
     SlashCommandSpec {
@@ -967,6 +1032,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 10 — security scanning
     SlashCommandSpec {
@@ -995,6 +1061,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 11 — API development helpers
     SlashCommandSpec {
@@ -1011,6 +1078,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 12 — documentation generation
     SlashCommandSpec {
@@ -1027,6 +1095,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 13 — project scaffolding
     SlashCommandSpec {
@@ -1043,6 +1112,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 14 — performance profiling
     SlashCommandSpec {
@@ -1059,6 +1129,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 15 — debugging integration
     SlashCommandSpec {
@@ -1075,6 +1146,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 16 — voice input (placeholder)
     SlashCommandSpec {
@@ -1091,6 +1163,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 17 — collaboration (placeholder)
     SlashCommandSpec {
@@ -1107,6 +1180,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 19 — changelog generator
     SlashCommandSpec {
@@ -1123,6 +1197,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 20 — environment manager
     SlashCommandSpec {
@@ -1139,6 +1214,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // AnvilHub marketplace
     SlashCommandSpec {
@@ -1170,6 +1246,7 @@ Examples:
         web_available: true,
         requires_vault: true, // install action requires unlocked vault
         requires_restart: RestartRequirement::Full, // installing plugins/MCP servers needs restart
+        requires_arguments: false,
     },
     // i18n language switcher
     SlashCommandSpec {
@@ -1186,6 +1263,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature A — LSP autocomplete
     SlashCommandSpec {
@@ -1202,6 +1280,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature B — Jupyter notebook support
     SlashCommandSpec {
@@ -1218,6 +1297,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature C — Kubernetes management
     SlashCommandSpec {
@@ -1246,6 +1326,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature D — Terraform/IaC
     SlashCommandSpec {
@@ -1262,6 +1343,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature E — CI/CD pipeline builder
     SlashCommandSpec {
@@ -1278,6 +1360,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature F — Code review
     SlashCommandSpec {
@@ -1307,6 +1390,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature G — Dependency graph
     SlashCommandSpec {
@@ -1323,6 +1407,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature H — Monorepo awareness
     SlashCommandSpec {
@@ -1339,6 +1424,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature I — Browser automation
     SlashCommandSpec {
@@ -1355,6 +1441,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature J — Desktop & webhook notifications
     SlashCommandSpec {
@@ -1381,6 +1468,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 21 — Credential Vault
     SlashCommandSpec {
@@ -1418,6 +1506,7 @@ Examples:
         web_available: true,
         requires_vault: false, // setup/unlock don't need vault, others checked at runtime
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 11 — codebase migration
     SlashCommandSpec {
@@ -1434,6 +1523,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 12 — regex builder / tester
     SlashCommandSpec {
@@ -1450,6 +1540,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 13 — SSH session manager
     SlashCommandSpec {
@@ -1466,6 +1557,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 14 — log analysis
     SlashCommandSpec {
@@ -1482,6 +1574,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 15 — markdown preview
     SlashCommandSpec {
@@ -1498,6 +1591,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 16 — snippet library
     SlashCommandSpec {
@@ -1514,6 +1608,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 17 — AI fine-tuning assistant
     SlashCommandSpec {
@@ -1530,6 +1625,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 18 — webhook manager
     SlashCommandSpec {
@@ -1546,6 +1642,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Feature 20 — plugin SDK
     SlashCommandSpec {
@@ -1562,6 +1659,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Screensaver / burn-in protection
     SlashCommandSpec {
@@ -1578,6 +1676,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // Fast mode toggle
     SlashCommandSpec {
@@ -1601,6 +1700,7 @@ Toggle again to restore normal mode.",
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // GitHub PR review
     SlashCommandSpec {
@@ -1635,6 +1735,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // ── Commands present in the enum but previously missing from specs ────────
     SlashCommandSpec {
@@ -1650,6 +1751,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "productivity",
@@ -1664,6 +1766,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "knowledge",
@@ -1678,6 +1781,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "daily",
@@ -1692,6 +1796,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "think",
@@ -1706,6 +1811,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "focus",
@@ -1720,6 +1826,7 @@ Examples:
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "loop",
@@ -1734,6 +1841,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "remote-control",
@@ -1748,6 +1856,7 @@ Examples:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // ── Ghost commands promoted to real variants (v2.2.6 Phase 0) ────────────
     SlashCommandSpec {
@@ -1770,6 +1879,7 @@ Subcommands:
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "fork",
@@ -1784,6 +1894,7 @@ Subcommands:
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "share",
@@ -1810,6 +1921,7 @@ Notes:
         web_available: true,
         requires_vault: true,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "audit",
@@ -1832,6 +1944,7 @@ Results are combined into a single report.",
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // ── Respawn mechanism (v2.2.6 Phase 5) ─────────────────────────────────
     SlashCommandSpec {
@@ -1858,6 +1971,7 @@ Notes:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::Full,
+        requires_arguments: false,
     },
     // ── Agent composition (v2.2.7) ────────────────────────────────────────────
     SlashCommandSpec {
@@ -1878,6 +1992,7 @@ Usage:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // ── Skill dispatch (v2.2.7) ──────────────────────────────────────────────
     SlashCommandSpec {
@@ -1900,6 +2015,7 @@ Usage:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "output-style",
@@ -1937,6 +2053,7 @@ Custom styles:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "goal",
@@ -1972,6 +2089,7 @@ project directory and persist across sessions in ~/.anvil/goals/.",
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     // W4 — Named profiles
     SlashCommandSpec {
@@ -2004,6 +2122,7 @@ Overridable fields per profile:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "effort",
@@ -2036,6 +2155,7 @@ or the session ends. Set a persistent default in settings.json with:
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "ollama",
@@ -2080,6 +2200,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "file-cache",
@@ -2112,6 +2233,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "cmd-cache",
@@ -2144,6 +2266,7 @@ EXAMPLES
         web_available: true,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
     SlashCommandSpec {
         name: "scroll-speed",
@@ -2158,6 +2281,7 @@ EXAMPLES
         web_available: false,
         requires_vault: false,
         requires_restart: RestartRequirement::None,
+        requires_arguments: false,
     },
 ];
 
