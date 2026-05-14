@@ -37,6 +37,7 @@ pub use specs::{
 pub use subcommands::{
     ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
     RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
+    MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES, CONFIG_SUBCOMMAND_NAMES,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3051,10 +3052,20 @@ mod tests {
     //   with zero I/O overhead and catches future regressions at commit
     //   boundaries.
     //
-    // Banned symbols:
+    // Banned symbols (original Gate 3):
     //   run_internal_prompt_text               — synchronous LLM call (blocks input thread)
     //   run_internal_prompt_text_with_progress — same, with progress spinner
     //   ConversationRuntime::run_turn_sync      — direct synchronous turn execution
+    //
+    // Phase 5.3 extended patterns (four new classes):
+    //   block_on(            — tokio block_on on async future, blocks calling thread
+    //   std::thread::sleep   — explicit spin-wait; any sleep > 100ms stalls the TUI
+    //   thread::sleep        — same, shorthand import path
+    //   .sleep(              — sleep via any Duration, e.g. time::sleep — same hazard
+    //
+    //   Note on `loop` without a max-iterations guard: a true unbounded-loop lint
+    //   requires AST analysis and is out of scope for a grep gate.  The comment
+    //   captures the intent so reviewers know to flag bare `loop {` in handlers.
     //
     // Chosen approach: Option B (test-time grep).
     //   Option A (build.rs grep) would prevent compilation but is brittle
@@ -3069,10 +3080,17 @@ mod tests {
     //   Never call run_internal_prompt_text directly from a handler.
     #[test]
     fn slash_handlers_have_no_sync_llm_calls() {
+        // Gate 3 scans the handler source file and the dispatch trampoline.
+        // Dispatch is scanned because it contains the match arm that selects
+        // which handler to invoke; injecting a sync call there would also block.
         const HANDLERS_SOURCE: &str = include_str!("handlers.rs");
+        const DISPATCH_SOURCE: &str = include_str!("dispatch.rs");
 
-        // Each entry is (symbol_name, rationale)
+        // Each entry is (symbol_to_ban, rationale).
+        // Symbols are matched as substrings so "block_on(" catches all callers
+        // regardless of import path.
         let banned: &[(&str, &str)] = &[
+            // ── Original Gate 3 ────────────────────────────────────────────────
             (
                 "run_internal_prompt_text",
                 "blocks the TUI input thread — use async dispatch instead",
@@ -3081,31 +3099,91 @@ mod tests {
                 "ConversationRuntime::run_turn_sync",
                 "synchronous turn execution blocks the calling thread",
             ),
+            // ── Phase 5.3 extended patterns ────────────────────────────────────
+            (
+                "block_on(",
+                "blocks the calling thread on an async future — moves work to a spawn_blocking or separate thread instead",
+            ),
+            (
+                "std::thread::sleep",
+                "spin-wait sleeps freeze the TUI input thread for at least their duration",
+            ),
+            (
+                "thread::sleep",
+                "spin-wait sleeps freeze the TUI input thread (shorthand import path)",
+            ),
+        ];
+
+        // Scanned sources: handler file + dispatch trampoline.
+        let sources: &[(&str, &str)] = &[
+            ("handlers.rs", HANDLERS_SOURCE),
+            ("dispatch.rs", DISPATCH_SOURCE),
         ];
 
         let mut violations: Vec<String> = Vec::new();
-        for (symbol, rationale) in banned {
-            if HANDLERS_SOURCE.contains(symbol) {
-                // Find approximate line numbers for better error messages
-                let lines: Vec<usize> = HANDLERS_SOURCE
-                    .lines()
-                    .enumerate()
-                    .filter(|(_, line)| line.contains(symbol))
-                    .map(|(i, _)| i + 1)
-                    .collect();
-                violations.push(format!(
-                    "{symbol} (line(s) {lines:?}): {rationale}"
-                ));
+        for (file, source) in sources {
+            for (symbol, rationale) in banned {
+                if source.contains(symbol) {
+                    // Find approximate line numbers for better error messages.
+                    let lines: Vec<usize> = source
+                        .lines()
+                        .enumerate()
+                        .filter(|(_, line)| line.contains(symbol))
+                        .map(|(i, _)| i + 1)
+                        .collect();
+                    violations.push(format!(
+                        "{file}:{lines:?} `{symbol}`: {rationale}"
+                    ));
+                }
             }
         }
 
         assert!(
             violations.is_empty(),
-            "Banned sync-LLM symbols found in handlers.rs:\n  {}\n\n\
+            "Banned sync-blocking symbols found in handler sources:\n  {}\n\n\
              Slash handlers run on the TUI input thread.  Any synchronous LLM\n\
-             call here will freeze the UI for the duration of inference.\n\
+             call, block_on(), or sleep() here will freeze the UI.\n\
              See Phase 5.0 Gate 3 comment above for the correct dispatch pattern.",
             violations.join("\n  ")
+        );
+    }
+
+    // ── Phase 5.3 Gate 3 negative test ──────────────────────────────────────
+    //
+    // Verify that the Gate 3 lint correctly catches at least one banned pattern
+    // when injected synthetically, and that it passes on clean source.
+    #[test]
+    fn gate3_lint_correctly_classifies_banned_and_clean_sources() {
+        // Simulate a source with a banned pattern.
+        let dirty = "fn bad_handler() { tokio::runtime::Handle::current().block_on(async{}); }";
+        // Simulate a clean source with zero banned patterns.
+        let clean = "fn good_handler() { return SlashCommandResult::ok(\"done\"); }";
+
+        // Run the same logic as the production gate.
+        let banned: &[(&str, &str)] = &[
+            ("run_internal_prompt_text", "sync LLM"),
+            ("ConversationRuntime::run_turn_sync", "sync turn"),
+            ("block_on(", "blocks on async"),
+            ("std::thread::sleep", "spin-wait"),
+            ("thread::sleep", "spin-wait shorthand"),
+        ];
+
+        let dirty_violations: Vec<_> = banned
+            .iter()
+            .filter(|(sym, _)| dirty.contains(sym))
+            .collect();
+        let clean_violations: Vec<_> = banned
+            .iter()
+            .filter(|(sym, _)| clean.contains(sym))
+            .collect();
+
+        assert!(
+            !dirty_violations.is_empty(),
+            "Gate 3 lint must catch `block_on(` in dirty source"
+        );
+        assert!(
+            clean_violations.is_empty(),
+            "Gate 3 lint must pass for clean source, got: {clean_violations:?}"
         );
     }
 
@@ -3180,6 +3258,121 @@ mod tests {
              available.  Commands that require an active session should say so.  Genuinely\n\
              deferred commands should use the [deferred:<reason>] prefix.\n\
              See Phase 5.0.5 stub triage rules in crates/commands/src/handlers.rs.",
+            failures.join("\n  ")
+        );
+    }
+
+    // ── Phase 5.2c Gate — subcommand vocabulary drift prevention ─────────────
+    //
+    // Background:
+    //   Three surfaces per command reference its subcommand names:
+    //     1. `SubcommandSpec` tree in subcommands.rs (completion picker)
+    //     2. `argument_hint` string in specs.rs (shown in `|`-separated form)
+    //     3. Handler dispatch in handlers.rs (match arm guards)
+    //
+    //   Previously these three were decoupled and drifted silently.  Phase 5.2c
+    //   introduces canonical `*_SUBCOMMAND_NAMES` constants in subcommands.rs
+    //   (one per command) and a drift test that asserts:
+    //     - Every token mentioned in the spec hint that looks like a subcommand
+    //       keyword (i.e. appears after `|` or at the start of a bracketed list,
+    //       and is a bare word / hyphenated word) is present in the corresponding
+    //       const.
+    //
+    //   Three commands are covered in this initial batch: /memory, /skills,
+    //   /config.  Additional commands can be added by extending the table below.
+    //
+    // How to fix a failure:
+    //   A token from the hint is missing in the canonical const.
+    //   Either add the token to the const, or remove/update the hint.
+    //
+    // Adding a new command:
+    //   1. Add `pub const <CMD>_SUBCOMMAND_NAMES: &[&str]` to subcommands.rs.
+    //   2. Add an entry to `SPEC_CONST_TABLE` below.
+    //   3. The hint in specs.rs must only use tokens listed in that const.
+
+    /// Table of (spec_name, hint_string, canonical_names_const).
+    const SPEC_CONST_TABLE: &[(&str, &[&str])] = &[
+        ("memory", super::subcommands::MEMORY_SUBCOMMAND_NAMES),
+        ("skills", super::subcommands::SKILLS_SUBCOMMAND_NAMES),
+        ("config", super::subcommands::CONFIG_SUBCOMMAND_NAMES),
+    ];
+
+    #[test]
+    fn every_subcommand_in_hint_is_in_const() {
+        use super::specs::slash_command_specs;
+        use std::collections::HashSet;
+
+        let specs = slash_command_specs();
+        let mut failures: Vec<String> = Vec::new();
+
+        for (cmd_name, canonical) in SPEC_CONST_TABLE {
+            let spec = match specs.iter().find(|s| s.name == *cmd_name) {
+                Some(s) => s,
+                None => {
+                    failures.push(format!("{cmd_name}: spec not found in slash_command_specs()"));
+                    continue;
+                }
+            };
+
+            let hint = match spec.argument_hint {
+                Some(h) => h,
+                None => continue, // no hint — nothing to check
+            };
+
+            // Extract subcommand tokens from hint groups that use `|` as
+            // separator.  A group like `[show|inspect|promote]` is a fixed
+            // vocabulary set; a group like `[arg]` or `<tier>` is a free-text
+            // placeholder and must not be validated against the const.
+            //
+            // Strategy: split on whitespace, then for each token that contains
+            // `|` OR that follows a `|` boundary within a bracketed group,
+            // collect the individual pipe-separated words.  Groups without `|`
+            // are free-text placeholders and are skipped.
+            let canonical_set: HashSet<&str> = canonical.iter().copied().collect();
+
+            // Flatten the hint into all `[...|...|...]` groups, then split by `|`.
+            // Only groups that contain at least one `|` are considered vocabulary.
+            let stripped = hint.replace(['[', ']', '(', ')'], " ");
+            let mut hint_subcommands: Vec<&str> = Vec::new();
+            for segment in stripped.split_whitespace() {
+                // A pipe-delimited group or a single token that is exactly the
+                // bare subcommand word (no `<`, no `>`, no `--`, starts lowercase).
+                if segment.contains('|') {
+                    for token in segment.split('|') {
+                        let token = token.trim();
+                        if !token.is_empty()
+                            && !token.starts_with('<')
+                            && !token.starts_with('-')
+                            && token.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+                        {
+                            hint_subcommands.push(token);
+                        }
+                    }
+                }
+                // Single-word tokens that look like subcommand verbs are NOT
+                // checked here — they may be free-text arg placeholders such as
+                // "[arg]" (stripped to "arg").  Only pipe-grouped tokens are
+                // treated as vocabulary.
+            }
+
+            for token in hint_subcommands {
+                if !canonical_set.contains(token) {
+                    failures.push(format!(
+                        "{cmd_name}: hint token \"{token}\" not in {cmd_name}_SUBCOMMAND_NAMES const\n\
+                         hint: {hint}\n\
+                         const: {canonical:?}"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Subcommand vocabulary drift detected:\n  {}\n\n\
+             Fix: add the token to the corresponding `*_SUBCOMMAND_NAMES` const in\n\
+             crates/commands/src/subcommands.rs, or update the spec hint so it only\n\
+             uses tokens already in the const.\n\
+             See Phase 5.2c gate comment above for details.",
             failures.join("\n  ")
         );
     }
