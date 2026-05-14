@@ -554,6 +554,8 @@ fn decode_hex(byte: u8) -> Result<u8, String> {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use serial_test::serial;
+
     use super::{
         clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
         generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
@@ -643,6 +645,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn oauth_credentials_round_trip_and_clear_preserves_other_fields() {
         let _guard = env_lock();
         let config_home = temp_config_home();

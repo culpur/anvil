@@ -211,9 +211,14 @@ pub fn pid_is_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::Mutex;
 
-    // Snapshot tests mutate ANVIL_CONFIG_HOME — serialise them.
+    // Snapshot tests mutate ANVIL_CONFIG_HOME — serialise them with the
+    // crate-internal ENV_LOCK for in-binary mutual exclusion AND the
+    // workspace-wide `#[serial(anvil_config_home)]` token so we don't race
+    // any other crate's ANVIL_CONFIG_HOME-mutating test that happens to be
+    // scheduled into the same binary's thread pool.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg_attr(test, allow(unsafe_code))]
@@ -253,6 +258,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn write_then_read_roundtrip() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -274,6 +280,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn dead_pid_snapshot_is_pruned() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -311,6 +318,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn malformed_snapshot_is_pruned() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -330,6 +338,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn empty_dir_returns_empty() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -339,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn atomic_write_no_tmp_left_behind() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tempdir");

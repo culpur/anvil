@@ -844,6 +844,7 @@ mod tests {
         ContextFile, ProjectContext, SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     };
     use crate::config::ConfigLoader;
+    use serial_test::serial;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1014,6 +1015,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn load_system_prompt_reads_anvil_files_and_config() {
         let root = temp_dir();
         fs::create_dir_all(root.join(".anvil")).expect("anvil dir");

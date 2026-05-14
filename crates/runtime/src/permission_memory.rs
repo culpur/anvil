@@ -277,6 +277,7 @@ impl PermissionMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     fn temp_project() -> TempDir {
@@ -317,6 +318,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn is_allowed_returns_false_when_empty() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -325,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn grant_session_allows_immediately() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -335,6 +338,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn grant_with_pattern_matches_substring() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -345,6 +349,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn save_and_reload_project_scope() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -358,6 +363,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn session_scope_not_persisted() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -373,6 +379,7 @@ mod tests {
     // ── Phase 3.4: PermissionEffect tests ───────────────────────────
 
     #[test]
+    #[serial(anvil_config_home)]
     fn effect_for_returns_allow_for_legacy_grant() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -386,6 +393,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn effect_for_returns_deny_when_grant_is_deny() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -398,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn effect_for_returns_prompt_when_grant_is_prompt() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -410,6 +419,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn deny_outranks_allow_when_both_match() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -430,6 +440,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn deny_persists_through_save_and_reload() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -452,6 +463,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn legacy_entries_without_effect_field_deserialise_as_allow() {
         let _guard = ConfigHomeGuard::new();
         let dir = temp_project();
@@ -486,6 +498,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn is_allowed_is_false_for_deny_grant() {
         // is_allowed is the legacy bool API. After 3.4 it returns true ONLY
         // for Allow matches — Deny and Prompt return false so the gate

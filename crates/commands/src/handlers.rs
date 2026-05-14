@@ -2104,8 +2104,21 @@ fn prune_decided_nominations(nom_dir: &std::path::Path) -> usize {
 #[cfg(test)]
 mod memory_tests {
     use super::*;
+    use serial_test::serial;
+
+    // ── Workspace-wide test isolation ────────────────────────────────────────
+    //
+    // Every `memory_show(...)` path eventually walks `default_config_home()`
+    // (via MemoryManager / NominationStore / GoalManager / CronManager /
+    // VaultManager / CommandCacheManager / etc.), so its result depends on
+    // the live value of `ANVIL_CONFIG_HOME`. Other tests in the workspace
+    // mutate that env var; we use `#[serial(anvil_config_home)]` (named
+    // token) to serialise every test in this module against every other
+    // ANVIL_CONFIG_HOME-mutating test in the workspace, without serialising
+    // against unrelated tests. See `feedback-test-isolation-parallel-env-var-races.md`.
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_summary_contains_all_tiers() {
         let result = memory_summary();
         assert!(result.contains("anvil-md"), "should mention anvil-md tier");
@@ -2115,18 +2128,21 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_unknown_tier_returns_error() {
         let result = memory_show(Some("nonexistent-tier"), &MemoryContext::default());
         assert!(result.contains("Unknown tier"), "should report unknown tier");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_no_tier_returns_usage() {
         let result = memory_show(None, &MemoryContext::default());
         assert!(result.contains("Usage"), "should show usage when no tier given");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_vault_tier_returns_security_message() {
         let result = memory_show(Some("vault"), &MemoryContext::default());
         assert!(
@@ -2136,6 +2152,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_private_tier_returns_security_message() {
         let result = memory_show(Some("private"), &MemoryContext::default());
         assert!(
@@ -2145,6 +2162,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_working_without_snapshot_explains_requirement() {
         // L1 §4 acceptance: without a live runtime, the working view should
         // tell the user why no data is shown — not silently return empty.
@@ -2156,6 +2174,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_working_with_snapshot_lists_sections() {
         // L1 §4 acceptance: with a live snapshot, every section should
         // appear with its kind tag and a byte count.
@@ -2177,24 +2196,28 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_inspect_empty_key_returns_usage() {
         let result = memory_inspect("");
         assert!(result.contains("Usage"), "should show usage for empty key");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_inspect_nonexistent_key_reports_not_found() {
         let result = memory_inspect("xyzzy_nonexistent_key_99999");
         assert!(result.contains("No entries"), "should report no entries found");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_promote_empty_id_returns_usage() {
         let result = memory_promote("");
         assert!(result.contains("Usage"), "should show usage for empty id");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_promote_unknown_id_reports_not_found() {
         let result = memory_promote("nom-xxx-not-real");
         assert!(
@@ -2204,6 +2227,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn atomic_append_creates_file_when_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("ANVIL.md");
@@ -2213,6 +2237,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn atomic_append_appends_to_existing_file() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("ANVIL.md");
@@ -2227,6 +2252,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn atomic_append_handles_missing_trailing_newline() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("ANVIL.md");
@@ -2248,6 +2274,7 @@ mod memory_tests {
     /// Round-trip test: create a nomination, dry-run promote, real promote,
     /// verify ANVIL.md has the content and the nomination JSON is Accepted.
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_promote_roundtrip_writes_anvil_md_and_marks_accepted() {
         let _lock = env_lock();
         let home = tempfile::tempdir().expect("home");
@@ -2311,12 +2338,14 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_forget_empty_key_returns_usage() {
         let result = memory_forget("");
         assert!(result.contains("Usage"), "should show usage for empty key");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_why_mentions_injection_order() {
         let result = memory_why(&MemoryContext::default());
         assert!(result.contains("System prompt"), "should describe system prompt");
@@ -2324,6 +2353,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_why_live_snapshot_lists_kinds() {
         // L1 §4 acceptance: with a live snapshot, /memory why enumerates
         // every section kind in the order it ends up in the prompt.
@@ -2342,6 +2372,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_budget_shows_tiers_and_totals() {
         let result = memory_budget(&MemoryContext::default());
         assert!(result.contains("anvil-md"), "should show anvil-md tier");
@@ -2353,6 +2384,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_budget_adds_working_row_when_snapshot_present() {
         // L1 §5 acceptance: budget shows the live working-memory bytes
         // alongside the on-disk tiers — only when a snapshot is provided.
@@ -2368,6 +2400,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_semantic_default_combines_approved_and_pending_count() {
         // L3 §1 acceptance: default `semantic` view combines anvil-md
         // (approved) with the pending-nomination count, framing the
@@ -2383,6 +2416,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_semantic_pending_routes_to_nominations_store() {
         // L3 §1 acceptance: `semantic --pending` (and `pending` short
         // form, and the legacy `nominations` sub-view) all hit the
@@ -2401,6 +2435,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_nominations_alias_carries_deprecation_banner() {
         // L3 §1 acceptance: the legacy top-level `nominations` tier is
         // kept for one cycle, but the output explains the rename so
@@ -2419,6 +2454,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_semantic_unknown_sub_view_lists_known() {
         let result = memory_show(Some("semantic explode"), &MemoryContext::default());
         assert!(
@@ -2429,6 +2465,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_subcommand_picker_lists_seven_layer_tiers() {
         // Phase 2.8 acceptance: the show-tier picker must enumerate
         // every L1-L7 layer name. If a future edit drops one we want a
@@ -2452,6 +2489,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_cache_default_lists_three_sources() {
         // L7 §3-5 acceptance: default `cache` view summarises file,
         // cmd, qmd in one place so the user can see the L7 vocabulary.
@@ -2466,6 +2504,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_cache_file_routes_to_file_cache_manager() {
         let result = memory_show(Some("cache file"), &MemoryContext::default());
         assert!(
@@ -2475,6 +2514,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_cache_cmd_routes_to_cmd_cache_manager() {
         let result = memory_show(Some("cache cmd"), &MemoryContext::default());
         assert!(
@@ -2484,6 +2524,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_cache_qmd_routes_to_qmd_client() {
         // QMD binary may or may not be on PATH in CI. Either way, the
         // header should appear.
@@ -2492,12 +2533,14 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_cache_unknown_sub_view_lists_known() {
         let result = memory_show(Some("cache explode"), &MemoryContext::default());
         assert!(result.contains("Unknown cache sub-view"), "got: {result}");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_policy_lists_all_four_sections() {
         // L6 §2-5 acceptance: the policy view labels each of the four
         // policy sources so the user can see what's in play.
@@ -2516,6 +2559,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_policy_shows_default_egress_status_line() {
         // L6 §5 acceptance: even when the egress block is not in
         // settings.json, the view reads EgressPolicy::default and tells
@@ -2528,6 +2572,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_identity_never_renders_secrets() {
         // L5 §1-4 acceptance: whichever state the vault is in
         // (uninitialised / locked / unlocked), the rendered string must
@@ -2547,6 +2592,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_identity_routes_via_initialised_state() {
         // Each branch is selected by vault_is_initialized/unlocked.
         // The shape of the message lets us assert which branch fired.
@@ -2558,6 +2604,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_default_summarises_four_sources() {
         // L4 §1-5 acceptance: the default view summarises goals + skills
         // + cron + routines so the user sees the L4 vocabulary in one
@@ -2573,6 +2620,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_routines_is_stubbed_with_roadmap_pointer() {
         // L4 §5 acceptance: routines sub-view advertises the deferred
         // arrival rather than emitting fake data.
@@ -2586,6 +2634,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_skills_lists_loaded_skill_names_from_snapshot() {
         // L4 §2 acceptance: skill sub-view enumerates each loaded skill
         // from the live PromptSection::Skill labels.
@@ -2602,6 +2651,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_goals_routes_to_goal_manager() {
         let result = memory_show(Some("procedural goals"), &MemoryContext::default());
         assert!(
@@ -2611,6 +2661,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_cron_routes_to_cron_manager() {
         // L4 §3 acceptance: cron sub-view goes through CronManager::global.
         let result = memory_show(Some("procedural cron"), &MemoryContext::default());
@@ -2621,6 +2672,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_procedural_unknown_sub_view_lists_known() {
         let result = memory_show(Some("procedural explode"), &MemoryContext::default());
         assert!(result.contains("Unknown procedural sub-view"), "got: {result}");
@@ -2629,6 +2681,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_episodic_default_lists_archive_count() {
         // L2 §1 acceptance: the episodic tier surfaces the HistoryArchiver
         // archive count and tells the user where it lives. The directory
@@ -2643,6 +2696,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_show_episodic_daily_routes_to_daily_summary() {
         // L2 §1 acceptance: `episodic daily` (or `episodic --daily`) shows
         // the structured DailySummary. The directory is likely empty under
@@ -2660,6 +2714,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_summary_lists_episodic_tier() {
         // L2 §1 acceptance: `/memory` (no args) summary mentions episodic.
         let result = memory_summary();
@@ -2670,6 +2725,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_budget_lists_episodic_row() {
         // L2 §1 acceptance: `/memory budget` includes an episodic row.
         let result = memory_budget(&MemoryContext::default());
@@ -2680,6 +2736,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn memory_prune_returns_summary_with_both_tiers() {
         let result = memory_prune();
         assert!(result.contains("daily"), "should mention daily pruning");
@@ -2687,12 +2744,14 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn handle_memory_command_none_dispatches_to_summary() {
         let result = handle_memory_command(None, &MemoryContext::default());
         assert!(result.contains("anvil-md"), "summary should contain tier info");
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn handle_memory_command_dispatches_subcommands() {
         let why = handle_memory_command(Some("why"), &MemoryContext::default());
         assert!(why.contains("System prompt"), "why should describe injection");

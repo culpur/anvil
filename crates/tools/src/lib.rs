@@ -1178,6 +1178,7 @@ mod tests {
         RuntimeError, Session,
     };
     use serde_json::json;
+    use serial_test::serial;
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1557,6 +1558,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn skill_loads_local_skill_prompt() {
         let _guard = env_lock()
             .lock()
@@ -2061,6 +2063,14 @@ mod tests {
 
     #[test]
     fn bash_tool_reports_success_exit_failure_timeout_and_background() {
+        // The bash tool spawns a real `sh` subprocess; the spawn inherits the
+        // current process CWD. Other tools tests in this module mutate CWD
+        // via `set_current_dir` (file_tools_cover_*, glob_and_grep_*). Serialise
+        // through `env_lock` so the bash spawns never land in a CWD that
+        // another test has just unmounted.
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let success = execute_tool("bash", &json!({ "command": "printf 'hello'" }))
             .expect("bash should succeed");
         let success_output: serde_json::Value = serde_json::from_str(&success).expect("json");
@@ -2323,6 +2333,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn config_reads_and_writes_supported_values() {
         let _guard = env_lock()
             .lock()

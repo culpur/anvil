@@ -771,6 +771,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use serial_test::serial;
+
     use super::{
         build_known_files_block, detect_language, forget_entry_best_effort,
         refresh_entry_best_effort, truncate_to, FileCacheEntry, FileCacheManager,
@@ -820,6 +822,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn is_l5_path_returns_true_for_vault_paths() {
         let _lock = l5_env_lock();
         let home = tempfile::tempdir().expect("home");
@@ -838,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn is_l5_path_returns_false_for_non_vault_paths() {
         let _lock = l5_env_lock();
         let home = tempfile::tempdir().expect("home");
@@ -859,6 +863,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn is_l5_path_catches_symlinks_into_vault() {
         let _lock = l5_env_lock();
         let home = tempfile::tempdir().expect("home");
@@ -884,6 +889,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn file_cache_store_silent_skips_vault_paths() {
         let _lock = l5_env_lock();
         let home = tempfile::tempdir().expect("home");
@@ -907,6 +913,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn file_cache_lookup_silent_returns_none_for_vault_paths() {
         let _lock = l5_env_lock();
         let home = tempfile::tempdir().expect("home");

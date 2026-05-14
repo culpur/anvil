@@ -625,8 +625,16 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // AgentManager::spawn writes a process-local snapshot via
+    // `runtime::agent_snapshot::write_snapshot`, which resolves its target
+    // path through `default_config_home()` → `ANVIL_CONFIG_HOME`. Other tests
+    // in the workspace (see `main::cc_139_f1_tests`) mutate that env var, so
+    // any test here that spawns an agent must serialise on the same token.
 
     #[test]
+    #[serial(anvil_config_home)]
     fn spawn_and_poll_completes() {
         let mut mgr = AgentManager::new();
         let id = mgr.spawn("test", AgentType::General, "unit test task", |sender| {
@@ -653,6 +661,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn stop_agent() {
         let mut mgr = AgentManager::new();
         let id = mgr.spawn("slow", AgentType::General, "slow task", |_sender| {
@@ -691,6 +700,7 @@ mod tests {
     // sees the same ACTIVE_MODE that the parent set before spawning.
 
     #[test]
+    #[serial(anvil_config_home)]
     fn spawned_agent_inherits_process_sandbox_mode() {
         use runtime::{active_sandbox_mode, set_active_sandbox_mode, SandboxMode};
         use std::sync::{Arc, Mutex};
@@ -741,6 +751,7 @@ mod tests {
     // handle leaves the Running state — otherwise `anvil agents live` shows a
     // permanent "Working" ghost for the lifetime of the process.
     #[test]
+    #[serial(anvil_config_home)]
     fn panicking_runner_transitions_to_failed() {
         let mut mgr = AgentManager::new();
         let id = mgr.spawn("boom", AgentType::General, "panic task", |_sender| -> AgentResult {

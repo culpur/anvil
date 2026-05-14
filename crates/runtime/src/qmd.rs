@@ -593,6 +593,7 @@ pub fn render_qmd_context(results: &[QmdResult]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn strip_qmd_prefix_removes_scheme_and_collection() {
@@ -664,6 +665,7 @@ mod tests {
     // ── Phase 3.2: anvil-semantic collection helpers ────────────────────
 
     #[test]
+    #[serial(anvil_config_home)]
     fn index_promoted_nomination_writes_frontmatter_file() {
         let _lock = crate::test_env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -699,6 +701,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn normalize_semantic_index_renames_memory_md() {
         let _lock = crate::test_env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
