@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-cli"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "api",
  "async-trait",
@@ -121,7 +121,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "dirs-next",
  "futures-util",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "commands"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "plugins",
  "runtime",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "compat-harness"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "api",
  "async-trait",
@@ -2033,7 +2033,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "lsp-types",
  "serde",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "plugins"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "include_dir",
  "reqwest",
@@ -3263,7 +3263,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3893,7 +3893,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "async-stream",
  "axum 0.8.8",
@@ -4546,7 +4546,7 @@ dependencies = [
 
 [[package]]
 name = "tools"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "api",
  "dirs-next",
