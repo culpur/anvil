@@ -429,18 +429,6 @@ impl OpenAiCompatConfig {
         }
     }
 
-    /// Cursor — REST proxy endpoint.  Auth via `CURSOR_API_KEY` or the key
-    /// stored in `~/.cursor/auth.json` under the `accessToken` field.
-    #[must_use]
-    pub const fn cursor() -> Self {
-        Self {
-            provider_name: "Cursor",
-            api_key_env: "CURSOR_API_KEY",
-            base_url_env: "CURSOR_BASE_URL",
-            default_base_url: DEFAULT_CURSOR_BASE_URL,
-        }
-    }
-
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
