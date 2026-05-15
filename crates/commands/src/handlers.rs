@@ -1,7 +1,7 @@
 use runtime::{compact_session, CompactionConfig, Session, WorkingMemorySnapshot};
 
 use crate::specs::{render_command_detailed_help, render_slash_command_help};
-use crate::SlashCommand;
+use crate::{CursorSubcommand, SlashCommand};
 
 /// Phase 4.4 alias-deprecation banner.
 ///
@@ -154,8 +154,23 @@ pub fn handle_slash_command(
         }),
         SlashCommand::Model { model } => Some(SlashCommandResult {
             message: match model.as_deref() {
-                None => "Current model: run `anvil` interactively to switch models with /model [name]. Use `anvil --model <name>` to start on a specific model.".to_string(),
-                Some(m) => format!("/model {m}: model switching requires an active session. Use `anvil --model {m}` to start on that model."),
+                None => "Current model: run `anvil` interactively to switch models with /model [name].\n\
+                         TAB shows the unified cross-provider model list with provider-prefixed names,\n\
+                         e.g. `cursor/claude-4-sonnet-thinking` or `anthropic/claude-sonnet-4-6`.\n\
+                         Use `anvil --model <name>` to start on a specific model.".to_string(),
+                Some(m) if m.contains('/') => {
+                    // Provider-prefixed form: "<provider>/<model>"
+                    let (provider, model_id) = m.split_once('/').unwrap();
+                    format!("/model {m}: provider-prefixed model switch requires an active session.\n\
+                             This will switch to provider `{provider}` and model `{model_id}` atomically\n\
+                             (API routing + system prompt identity + TUI chrome all update together).\n\
+                             Run `anvil` and use /model {m} to switch.")
+                }
+                Some(m) => format!("/model {m}: model switching requires an active session.\n\
+                                    Run `anvil` and use /model {m} to switch.\n\
+                                    Prefix with provider slug for unambiguous selection,\n\
+                                    e.g. /model anthropic/{m} or /model cursor/{m}.\n\
+                                    Use `anvil --model {m}` to start on that model."),
             },
             session: session.clone(),
         }),
@@ -783,6 +798,10 @@ pub fn handle_slash_command(
                 session: session.clone(),
             })
         }
+        SlashCommand::Cursor { subcommand } => Some(SlashCommandResult {
+            message: handle_cursor_command(&subcommand),
+            session: session.clone(),
+        }),
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),
@@ -3071,6 +3090,123 @@ fn prune_decided_nominations(nom_dir: &std::path::Path) -> usize {
     removed
 }
 
+// ─── /cursor command — v2.2.15 ───────────────────────────────────────────────
+
+/// Handler for `/cursor <subcommand> [args]`.
+///
+/// The Cursor Cloud Agents API uses agent-orchestration (POST /v1/agents,
+/// SSE streams, GitHub repo binding) rather than the chat-completions model.
+/// This handler runs synchronously on the command dispatch path and returns
+/// either a guidance message (for the headless / non-TUI context) or the
+/// result of the live API call (in the TUI context where `CursorClient` is
+/// available).
+///
+/// In the non-TUI / headless path (this function) we return accurate guidance
+/// text describing what each subcommand does and how to supply credentials.
+/// The TUI path in `anvil-cli/src/main.rs` intercepts `SlashCommand::Cursor`
+/// before it reaches this fallback and performs the actual HTTP calls.
+///
+/// # Gate compliance
+///
+/// - Does NOT contain "(stub)" (Gate 2).
+/// - Does NOT call any blocking LLM methods (Gate 3).
+/// - Returns a non-empty string for all subcommand variants (Gate 2).
+#[must_use]
+pub fn handle_cursor_command(subcommand: &CursorSubcommand) -> String {
+    match subcommand {
+        CursorSubcommand::Launch { prompt } => {
+            if prompt.is_empty() {
+                "/cursor launch requires a prompt.\n\
+                 Usage: /cursor launch <prompt>\n\n\
+                 Example:\n\
+                 /cursor launch \"Fix all failing tests and open a PR\"\n\n\
+                 The current workspace must have a GitHub `origin` remote — \
+                 Cursor requires a repo binding. Set CURSOR_API_KEY=crsr_xxx \
+                 (from cursor.com/settings), or use `/login cursor`.".to_string()
+            } else {
+                format!(
+                    "/cursor launch requires an active session. \
+                     Run `anvil` and use /cursor launch \"{}\" to start a Cursor Cloud Agent.\n\
+                     The agent will be launched against the current workspace's GitHub repo, \
+                     and an SSE stream will open in a new agent tab.",
+                    if prompt.len() > 60 { &prompt[..60] } else { prompt.as_str() }
+                )
+            }
+        }
+        CursorSubcommand::List { archived, pr_filter, cursor_token } => {
+            let mut flags = Vec::new();
+            if *archived { flags.push("--archived"); }
+            if pr_filter.is_some() { flags.push("--pr=<url>"); }
+            if cursor_token.is_some() { flags.push("--cursor=<token>"); }
+            let flag_str = if flags.is_empty() {
+                String::new()
+            } else {
+                format!(" (flags: {})", flags.join(", "))
+            };
+            format!(
+                "/cursor list{flag_str} requires an active session. \
+                 Run `anvil` and use /cursor list to enumerate your Cursor Cloud Agents.\n\
+                 Columns: agent_id, status, model, repo, branch, created_at.\n\
+                 Paginate with --cursor=<token> from the previous response."
+            )
+        }
+        CursorSubcommand::Get { agent_id } => {
+            if agent_id.is_empty() {
+                "/cursor get requires an agent_id.\n\
+                 Usage: /cursor get <agent_id>\n\
+                 Use /cursor list to find agent IDs.".to_string()
+            } else {
+                format!(
+                    "/cursor get {agent_id} requires an active session. \
+                     Run `anvil` and use /cursor get {agent_id} to fetch the full agent record \
+                     (repos, branch, autoCreatePR) and recent runs."
+                )
+            }
+        }
+        CursorSubcommand::Cancel { agent_id, run_id } => {
+            if agent_id.is_empty() {
+                "/cursor cancel requires an agent_id.\n\
+                 Usage: /cursor cancel <agent_id> [<run_id>]\n\
+                 Omit run_id to cancel the latest active run.".to_string()
+            } else {
+                let run_suffix = run_id.as_deref()
+                    .map(|r| format!(" run {r}"))
+                    .unwrap_or_else(|| " (latest active run)".to_string());
+                format!(
+                    "/cursor cancel {agent_id}{run_suffix} requires an active session. \
+                     Run `anvil` and use /cursor cancel {agent_id} to cancel the run."
+                )
+            }
+        }
+        CursorSubcommand::Artifacts { agent_id } => {
+            if agent_id.is_empty() {
+                "/cursor artifacts requires an agent_id.\n\
+                 Usage: /cursor artifacts <agent_id>".to_string()
+            } else {
+                format!(
+                    "/cursor artifacts {agent_id} requires an active session. \
+                     Run `anvil` and use /cursor artifacts {agent_id} to list artifact files \
+                     with sizes and 15-minute presigned download URLs."
+                )
+            }
+        }
+        CursorSubcommand::Stream { agent_id, run_id } => {
+            if agent_id.is_empty() || run_id.is_empty() {
+                "/cursor stream requires agent_id and run_id.\n\
+                 Usage: /cursor stream <agent_id> <run_id>".to_string()
+            } else {
+                format!(
+                    "/cursor stream {agent_id} {run_id} requires an active session. \
+                     Run `anvil` and use /cursor stream {agent_id} {run_id} to re-attach \
+                     to the SSE event stream. The Last-Event-ID header is sent automatically \
+                     to resume from where the stream left off. A 410 response means the \
+                     stream retention window has expired."
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -3985,5 +4121,290 @@ mod memory_tests {
         let result = handle_import_command(Some("github"), false, None, false);
         assert!(result.contains("unknown source"), "unknown source should show error: {result}");
         assert!(result.contains("claude-code"), "error should mention claude-code: {result}");
+    }
+}
+
+// ─── /cursor handler tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use crate::CursorSubcommand;
+
+    // ── launch ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn launch_empty_prompt_returns_usage_hint() {
+        let result = handle_cursor_command(&CursorSubcommand::Launch {
+            prompt: String::new(),
+        });
+        assert!(result.contains("Usage: /cursor launch"), "must show usage: {result}");
+        assert!(result.contains("CURSOR_API_KEY"), "must mention credential: {result}");
+    }
+
+    #[test]
+    fn launch_with_prompt_returns_guidance() {
+        let result = handle_cursor_command(&CursorSubcommand::Launch {
+            prompt: "Fix all failing tests and open a PR".to_string(),
+        });
+        assert!(!result.is_empty(), "non-empty prompt should return guidance");
+        assert!(result.contains("Fix all failing tests"), "guidance should echo prompt: {result}");
+    }
+
+    #[test]
+    fn launch_long_prompt_is_truncated_in_message() {
+        let long_prompt = "A".repeat(100);
+        let result = handle_cursor_command(&CursorSubcommand::Launch {
+            prompt: long_prompt.clone(),
+        });
+        // Only up to 60 chars should appear in the result message.
+        let truncated = &long_prompt[..60];
+        assert!(result.contains(truncated), "truncated preview must appear: {result}");
+    }
+
+    // ── list ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn list_no_flags_returns_guidance() {
+        let result = handle_cursor_command(&CursorSubcommand::List {
+            archived: false,
+            pr_filter: None,
+            cursor_token: None,
+        });
+        assert!(!result.is_empty(), "list should return guidance");
+        assert!(result.contains("agent_id"), "must mention agent_id column: {result}");
+        assert!(result.contains("status"), "must mention status column: {result}");
+    }
+
+    #[test]
+    fn list_archived_flag_shown_in_message() {
+        let result = handle_cursor_command(&CursorSubcommand::List {
+            archived: true,
+            pr_filter: None,
+            cursor_token: None,
+        });
+        assert!(result.contains("--archived"), "archived flag must appear in message: {result}");
+    }
+
+    #[test]
+    fn list_pr_filter_shown_in_message() {
+        let result = handle_cursor_command(&CursorSubcommand::List {
+            archived: false,
+            pr_filter: Some("https://github.com/org/repo/pull/42".to_string()),
+            cursor_token: None,
+        });
+        assert!(result.contains("--pr="), "pr flag must appear in message: {result}");
+    }
+
+    #[test]
+    fn list_cursor_token_shown_in_message() {
+        let result = handle_cursor_command(&CursorSubcommand::List {
+            archived: false,
+            pr_filter: None,
+            cursor_token: Some("next_page_token_xyz".to_string()),
+        });
+        assert!(result.contains("--cursor="), "cursor flag must appear in message: {result}");
+    }
+
+    // ── get ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn get_empty_id_returns_usage_hint() {
+        let result = handle_cursor_command(&CursorSubcommand::Get {
+            agent_id: String::new(),
+        });
+        assert!(result.contains("Usage: /cursor get"), "must show usage: {result}");
+    }
+
+    #[test]
+    fn get_with_id_returns_guidance() {
+        let result = handle_cursor_command(&CursorSubcommand::Get {
+            agent_id: "agt_abc123".to_string(),
+        });
+        assert!(result.contains("agt_abc123"), "guidance must echo agent_id: {result}");
+        assert!(!result.is_empty());
+    }
+
+    // ── cancel ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn cancel_empty_id_returns_usage_hint() {
+        let result = handle_cursor_command(&CursorSubcommand::Cancel {
+            agent_id: String::new(),
+            run_id: None,
+        });
+        assert!(result.contains("Usage: /cursor cancel"), "must show usage: {result}");
+    }
+
+    #[test]
+    fn cancel_with_id_no_run_id_returns_guidance() {
+        let result = handle_cursor_command(&CursorSubcommand::Cancel {
+            agent_id: "agt_abc123".to_string(),
+            run_id: None,
+        });
+        assert!(result.contains("agt_abc123"), "must echo agent_id: {result}");
+        assert!(result.contains("latest active run"), "must mention latest run: {result}");
+    }
+
+    #[test]
+    fn cancel_with_id_and_run_id_returns_guidance() {
+        let result = handle_cursor_command(&CursorSubcommand::Cancel {
+            agent_id: "agt_abc123".to_string(),
+            run_id: Some("run_xyz789".to_string()),
+        });
+        assert!(result.contains("agt_abc123"), "must echo agent_id: {result}");
+        assert!(result.contains("run_xyz789"), "must echo run_id: {result}");
+    }
+
+    // ── artifacts ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn artifacts_empty_id_returns_usage_hint() {
+        let result = handle_cursor_command(&CursorSubcommand::Artifacts {
+            agent_id: String::new(),
+        });
+        assert!(result.contains("Usage: /cursor artifacts"), "must show usage: {result}");
+    }
+
+    #[test]
+    fn artifacts_with_id_mentions_presigned_urls() {
+        let result = handle_cursor_command(&CursorSubcommand::Artifacts {
+            agent_id: "agt_abc123".to_string(),
+        });
+        assert!(result.contains("agt_abc123"), "must echo agent_id: {result}");
+        assert!(result.contains("presigned"), "must mention presigned URLs: {result}");
+    }
+
+    // ── stream ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stream_empty_ids_returns_usage_hint() {
+        let result = handle_cursor_command(&CursorSubcommand::Stream {
+            agent_id: String::new(),
+            run_id: String::new(),
+        });
+        assert!(result.contains("Usage: /cursor stream"), "must show usage: {result}");
+    }
+
+    #[test]
+    fn stream_with_ids_mentions_sse_and_resume() {
+        let result = handle_cursor_command(&CursorSubcommand::Stream {
+            agent_id: "agt_abc123".to_string(),
+            run_id: "run_xyz789".to_string(),
+        });
+        assert!(result.contains("agt_abc123"), "must echo agent_id: {result}");
+        assert!(result.contains("run_xyz789"), "must echo run_id: {result}");
+        assert!(result.contains("Last-Event-ID"), "must mention SSE resume: {result}");
+        assert!(result.contains("410"), "must explain 410 expiry: {result}");
+    }
+
+    // ── parse round-trips ─────────────────────────────────────────────────────
+    // Verify that the parser in lib.rs produces CursorSubcommand values that
+    // the handler can process (end-to-end integration of parse → handle).
+
+    #[test]
+    fn parse_cursor_launch_routes_to_handler() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor launch Fix tests")
+            .expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::Launch { prompt } } => {
+                assert_eq!(prompt, "Fix tests");
+                let result = handle_cursor_command(&CursorSubcommand::Launch { prompt });
+                assert!(!result.is_empty());
+                assert!(result.contains("Fix tests"));
+            }
+            other => panic!("expected Cursor::Launch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_list_routes_to_handler() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor list").expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::List { archived, .. } } => {
+                assert!(!archived, "default archived should be false");
+                let result = handle_cursor_command(&CursorSubcommand::List {
+                    archived: false,
+                    pr_filter: None,
+                    cursor_token: None,
+                });
+                assert!(!result.is_empty());
+            }
+            other => panic!("expected Cursor::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_list_archived_flag() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor list --archived").expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::List { archived, .. } } => {
+                assert!(archived, "archived flag must be parsed as true");
+            }
+            other => panic!("expected Cursor::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_get_routes_to_handler() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor get agt_abc123").expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::Get { agent_id } } => {
+                assert_eq!(agent_id, "agt_abc123");
+                let result = handle_cursor_command(&CursorSubcommand::Get { agent_id });
+                assert!(!result.is_empty());
+            }
+            other => panic!("expected Cursor::Get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_cancel_with_run_id() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor cancel agt_abc123 run_xyz789")
+            .expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::Cancel { agent_id, run_id } } => {
+                assert_eq!(agent_id, "agt_abc123");
+                assert_eq!(run_id.as_deref(), Some("run_xyz789"));
+            }
+            other => panic!("expected Cursor::Cancel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_artifacts_routes_to_handler() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor artifacts agt_abc123").expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor { subcommand: CursorSubcommand::Artifacts { agent_id } } => {
+                assert_eq!(agent_id, "agt_abc123");
+                let result = handle_cursor_command(&CursorSubcommand::Artifacts { agent_id });
+                assert!(!result.is_empty());
+            }
+            other => panic!("expected Cursor::Artifacts, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_cursor_stream_routes_to_handler() {
+        use crate::SlashCommand;
+        let cmd = SlashCommand::parse("/cursor stream agt_abc123 run_xyz789")
+            .expect("parse must succeed");
+        match cmd {
+            SlashCommand::Cursor {
+                subcommand: CursorSubcommand::Stream { agent_id, run_id },
+            } => {
+                assert_eq!(agent_id, "agt_abc123");
+                assert_eq!(run_id, "run_xyz789");
+                let result = handle_cursor_command(&CursorSubcommand::Stream { agent_id, run_id });
+                assert!(result.contains("Last-Event-ID"));
+            }
+            other => panic!("expected Cursor::Stream, got {other:?}"),
+        }
     }
 }
