@@ -46,6 +46,7 @@ pub mod manifest;
 pub mod memory;
 pub mod plugins;
 pub mod report;
+pub mod sessions;
 pub mod settings;
 pub mod skills;
 pub mod stage;
