@@ -1573,6 +1573,29 @@ pub const MEMORY_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[],
         subcommands: &[],
     },
+    SubcommandSpec {
+        name: "clean",
+        summary: "LLM-rewrite imported entries: normalize vocabulary, strip identity preambles",
+        args: &[
+            ArgSpec::OptionalFlag {
+                name: "--dry-run",
+                value: None,
+            },
+            ArgSpec::OptionalFlag {
+                name: "--auto",
+                value: None,
+            },
+            ArgSpec::OptionalFlag {
+                name: "--filter",
+                value: Some(ArgSpecValue::FreeText { hint: "<glob>" }),
+            },
+            ArgSpec::OptionalFlag {
+                name: "--dedup",
+                value: None,
+            },
+        ],
+        subcommands: &[],
+    },
 ];
 
 // ─── /ollama subcommands (v2.2.14 — drift-prevention) ────────────────────────
@@ -1936,6 +1959,7 @@ pub const MEMORY_SUBCOMMAND_NAMES: &[&str] = &[
     "why",
     "budget",
     "prune",
+    "clean",
 ];
 
 /// Canonical subcommand names for `/skills`.

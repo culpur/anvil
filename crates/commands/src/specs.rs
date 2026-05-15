@@ -265,7 +265,7 @@ Examples:
         name: "memory",
         aliases: &[],
         summary: "Inspect and manage all memory tiers (ANVIL.md, vault, nominations, cache, \u{2026})",
-        argument_hint: Some("[show|inspect|promote|forget|why|budget|prune] [arg]"),
+        argument_hint: Some("[show|inspect|promote|forget|why|budget|prune|clean] [arg]"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "\
@@ -285,6 +285,14 @@ SUBCOMMANDS
                       For tier-by-tier tables, use /memory show <tier>.
   budget              Per-tier byte/~token table including the working row
   prune               Remove stale entries from daily/nominations tiers
+  clean [flags]       LLM-rewrite imported entries: normalize vocabulary,
+                      strip identity preambles, optionally detect duplicates.
+                      EXPLICITLY OPT-IN — never auto-applied at import time.
+                      Flags:
+                        --dry-run          Preview without writing
+                        --auto             Skip confirmation prompt
+                        --filter=<glob>    Target specific entries by filename stem
+                        --dedup            Also detect duplicate-meaning entries
 
 TIERS  (seven-layer vocabulary, Phase 2 of the Memory Cohesion Arc)
   working             L1 — live system_prompt sections + message-buffer stats
@@ -316,6 +324,9 @@ EXAMPLES
   /memory inspect deploy
   /memory budget
   /memory prune
+  /memory clean --dry-run
+  /memory clean --filter=feedback-*
+  /memory clean --dedup
 ",
 
         subcommands: crate::subcommands::MEMORY_SUBCOMMANDS,

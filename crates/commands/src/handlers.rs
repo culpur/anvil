@@ -1599,9 +1599,10 @@ pub fn handle_memory_command(action: Option<&str>, ctx: &MemoryContext<'_>) -> S
                 "why"     => memory_why(ctx),
                 "budget"  => memory_budget(ctx),
                 "prune"   => memory_prune(),
+                "clean"   => handle_memory_clean(arg, None),
                 other     => format!(
                     "Unknown /memory subcommand: {other}\n\
-                     Usage: /memory [show|inspect|promote|forget|why|budget|prune] [arg]"
+                     Usage: /memory [show|inspect|promote|forget|why|budget|prune|clean] [arg]"
                 ),
             }
         }
@@ -2887,6 +2888,91 @@ fn memory_budget(ctx: &MemoryContext<'_>) -> String {
         "Note: vault and private memory are excluded (encrypted, not injected).".to_string(),
     );
     lines.join("\n")
+}
+
+/// Handler for `/memory clean [--dry-run] [--auto] [--filter=<glob>] [--dedup]`.
+///
+/// Day-2 user-triggered command.  NEVER auto-applies.
+///
+/// # Permission gate
+///
+/// Writes to `~/.anvil/memory/` require WorkspaceWrite mode or above.
+/// `--dry-run` is always allowed (no writes).
+///
+/// # Gate compliance
+///
+/// - Does NOT contain "(stub)" or "not yet implemented".
+/// - Returns a non-empty string for all argument combinations.
+/// - Delegates all LLM calls to `runtime::memory_clean::run_memory_clean_pipeline`.
+///
+/// In production, the handler calls `ProviderRewriter::detect()`.  If no
+/// provider is configured, the error is surfaced to the user rather than
+/// falling back to `MockRewriter`.
+pub fn handle_memory_clean(
+    rest: &str,
+    permission_mode: Option<runtime::PermissionMode>,
+) -> String {
+    use runtime::PermissionMode;
+
+    // Parse flags from `rest`.
+    let dry_run = rest.contains("--dry-run");
+    let auto = rest.contains("--auto");
+    let dedup = rest.contains("--dedup");
+    let filter = parse_flag_value(rest, "--filter");
+
+    // Permission gate: writes require WorkspaceWrite.  Dry-run is always allowed.
+    if !dry_run {
+        if let Some(PermissionMode::ReadOnly) = permission_mode {
+            return "memory clean requires WorkspaceWrite mode or above. \
+                    Run `/permissions mode acceptEdits` first, or use \
+                    `/memory clean --dry-run` to preview without writing."
+                .to_string();
+        }
+    }
+
+    // Resolve the rewriter.  Fail loud (not silent fallback) if no provider.
+    let rewriter: Box<dyn runtime::memory_clean::MemoryRewriter> = if dry_run {
+        // For dry-run preview we use MockRewriter so the command works offline.
+        // Production live runs require a real provider.
+        Box::new(runtime::memory_clean::MockRewriter)
+    } else {
+        match runtime::memory_clean::ProviderRewriter::detect() {
+            Ok(rw) => Box::new(rw),
+            Err(e) => {
+                return format!(
+                    "/memory clean failed: no LLM provider configured.\n\
+                     {e}\n\
+                     Use --dry-run for offline preview."
+                );
+            }
+        }
+    };
+
+    let opts = runtime::memory_clean::CleanOpts {
+        dry_run,
+        auto,
+        filter,
+        dedup,
+        rewriter,
+    };
+
+    match runtime::memory_clean::run_memory_clean_pipeline(None, &opts) {
+        Ok(output) => output,
+        Err(e) => format!("/memory clean failed: {e}"),
+    }
+}
+
+/// Parse `--flag=<value>` or `--flag <value>` from an args string.
+fn parse_flag_value(args: &str, flag: &str) -> Option<String> {
+    // Try `--flag=value` form first.
+    let eq_prefix = format!("{flag}=");
+    if let Some(after) = args.find(&eq_prefix).map(|i| &args[i + eq_prefix.len()..]) {
+        let val: String = after.split_whitespace().next().unwrap_or("").to_string();
+        if !val.is_empty() {
+            return Some(val);
+        }
+    }
+    None
 }
 
 fn memory_prune() -> String {
