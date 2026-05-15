@@ -22,7 +22,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use api::{ProviderCredentials, ProviderKind, ProviderModelsError};
+use api::{ProviderCredentials, ProviderKind, ProviderModelsError, provider_kind_to_slug};
 use commands::{CompletionContext, DynamicEnumSource};
 
 // ─── TuiCompletionContext ─────────────────────────────────────────────────────
@@ -50,6 +50,20 @@ fn model_choices_cache() -> &'static Arc<Mutex<ModelChoicesCache>> {
     use std::sync::OnceLock;
     static CACHE: OnceLock<Arc<Mutex<ModelChoicesCache>>> = OnceLock::new();
     CACHE.get_or_init(|| Arc::new(Mutex::new(ModelChoicesCache::default())))
+}
+
+/// Return a snapshot of the currently cached model choices, or an empty vec
+/// if the cache has not been populated yet.
+///
+/// Used by the `/model` TUI dispatch to perform an ambiguity check on bare
+/// model names without triggering a network fetch.
+pub fn model_choices_cache_snapshot() -> Vec<(String, String)> {
+    if let Ok(cache) = model_choices_cache().lock() {
+        if cache.fetched_at.is_some() {
+            return cache.models.clone();
+        }
+    }
+    vec![]
 }
 
 /// Drop the cached live model list so the next `/model <TAB>` re-fetches.
@@ -218,6 +232,15 @@ async fn fetch_models_for_credentials(
 /// fallback for transient failures into the final `(name, provider-label)`
 /// list rendered by the picker.
 ///
+/// The `name` field (first tuple element) is the **provider-prefixed** form
+/// `"<slug>/<model_id>"` (e.g. `"anthropic/claude-sonnet-4-6"`).  This is
+/// what the TUI submits to `apply_model_switch` when the user selects an
+/// entry — enabling the atomic cross-provider switch without any further
+/// parsing at the dispatch site.
+///
+/// The `label` field (second tuple element) is the human-readable provider
+/// display name shown as the completion description (e.g. `"Anthropic (Anvil)"`).
+///
 /// Rules from `feedback-model-list-is-live-not-registry.md`:
 /// - `Unauthorized` (401/403) → omit provider, log warning
 /// - `Transient` → fall back to registry entries for that provider
@@ -237,6 +260,7 @@ fn build_label_list(
         .any(|c| matches!(c, ProviderCredentials::OllamaCloud));
 
     for (kind, outcome) in fetched {
+        let slug = provider_kind_to_slug(*kind);
         match outcome {
             Ok(entries) => {
                 for entry in entries {
@@ -254,7 +278,10 @@ fn build_label_list(
                     {
                         continue;
                     }
-                    models.push((entry.id.clone(), label.to_string()));
+                    // Emit "provider_slug/model_id" so apply_model_switch can
+                    // parse the provider without relying on detect_provider_kind
+                    // heuristics (which would mis-route cross-provider models).
+                    models.push((format!("{slug}/{}", entry.id), label.to_string()));
                 }
             }
             Err(ProviderModelsError::Unauthorized) => {
@@ -268,10 +295,14 @@ fn build_label_list(
                     "[warn] {} live model list unavailable ({error}); falling back to known-good entries.",
                     api::provider_display_name(*kind)
                 ));
-                // Fallback: registry entries matching this kind
+                // Fallback: registry entries matching this kind — still prefixed.
                 for (name, k) in api::known_models() {
                     if k == *kind {
-                        models.push((name.to_string(), api::provider_display_name(k).to_string()));
+                        let k_slug = provider_kind_to_slug(k);
+                        models.push((
+                            format!("{k_slug}/{name}"),
+                            api::provider_display_name(k).to_string(),
+                        ));
                     }
                 }
             }
@@ -289,7 +320,7 @@ fn build_label_list(
             } else {
                 "Ollama (local)"
             };
-            models.push((name.clone(), label.to_string()));
+            models.push((format!("ollama/{name}"), label.to_string()));
         }
     }
 
@@ -299,12 +330,13 @@ fn build_label_list(
     if models.is_empty() {
         warnings.push("[warn] No reachable providers — using offline model list".to_string());
         for (name, kind) in api::known_models() {
-            models.push((name.to_string(), api::provider_display_name(kind).to_string()));
+            let k_slug = provider_kind_to_slug(kind);
+            models.push((format!("{k_slug}/{name}"), api::provider_display_name(kind).to_string()));
         }
     }
 
-    // De-dupe on model id, last write wins (so a live Ollama tag overrides
-    // a registry stub of the same name).
+    // De-dupe on the prefixed key, last write wins (so a live Ollama tag
+    // overrides a registry stub of the same name for the same provider).
     let mut seen = std::collections::HashSet::new();
     let mut deduped: Vec<(String, String)> = Vec::with_capacity(models.len());
     for entry in models.into_iter().rev() {
@@ -1109,12 +1141,13 @@ mod tests {
         let ctx = TuiCompletionContext::new();
         let models = ctx.model_choices();
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(ids.contains(&"claude-sonnet-4-7"), "anthropic entry missing: {ids:?}");
-        assert!(ids.contains(&"gpt-5.5"), "openai entry missing: {ids:?}");
-        assert!(ids.contains(&"llama4:8b"), "ollama entry missing: {ids:?}");
+        // Provider-prefixed form is the contract since v2.2.15.
+        assert!(ids.contains(&"anthropic/claude-sonnet-4-7"), "anthropic entry missing: {ids:?}");
+        assert!(ids.contains(&"openai/gpt-5.5"), "openai entry missing: {ids:?}");
+        assert!(ids.contains(&"ollama/llama4:8b"), "ollama entry missing: {ids:?}");
         let llama_label = models
             .iter()
-            .find(|(n, _)| n == "llama4:8b")
+            .find(|(n, _)| n == "ollama/llama4:8b")
             .map(|(_, l)| l.as_str())
             .unwrap_or("");
         assert_eq!(llama_label, "Ollama (local)");
@@ -1151,11 +1184,11 @@ mod tests {
         let models = ctx.model_choices();
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
-            !ids.iter().any(|name| name.starts_with("claude")),
+            !ids.iter().any(|name| name.starts_with("anthropic/")),
             "no Anthropic models should appear after 401: {ids:?}"
         );
-        assert!(ids.contains(&"gpt-5.5"));
-        assert!(ids.contains(&"llama4:8b"));
+        assert!(ids.contains(&"openai/gpt-5.5"));
+        assert!(ids.contains(&"ollama/llama4:8b"));
         reset_cache_and_override();
     }
 
@@ -1178,7 +1211,7 @@ mod tests {
         let models = ctx.model_choices();
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
         assert!(
-            ids.iter().any(|name| name.starts_with("claude")),
+            ids.iter().any(|name| name.starts_with("anthropic/claude")),
             "transient failure should fall back to registry entries: {ids:?}"
         );
         reset_cache_and_override();
@@ -1198,14 +1231,14 @@ mod tests {
 
         let ctx = TuiCompletionContext::new();
         let models = ctx.model_choices();
-        // Offline fallback: every registry entry shows up.
+        // Offline fallback: every registry entry shows up, provider-prefixed.
         assert!(
             !models.is_empty(),
             "empty configured list should still produce offline registry"
         );
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(ids.iter().any(|n| n.starts_with("claude")));
-        assert!(ids.iter().any(|n| n.starts_with("gpt-")));
+        assert!(ids.iter().any(|n| n.starts_with("anthropic/claude")));
+        assert!(ids.iter().any(|n| n.starts_with("openai/gpt-")));
         reset_cache_and_override();
     }
 
@@ -1286,9 +1319,9 @@ mod tests {
         let ctx = TuiCompletionContext::new();
         let models = ctx.model_choices();
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(ids.contains(&"llama4:8b"), "local model must be present: {ids:?}");
+        assert!(ids.contains(&"ollama/llama4:8b"), "local model must be present: {ids:?}");
         assert!(
-            !ids.contains(&"kimi-k2.6:cloud"),
+            !ids.contains(&"ollama/kimi-k2.6:cloud"),
             "cloud-suffixed model must be filtered when only local creds: {ids:?}"
         );
         reset_cache_and_override();
@@ -1315,11 +1348,11 @@ mod tests {
         let ctx = TuiCompletionContext::new();
         let models = ctx.model_choices();
         let ids: Vec<&str> = models.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(ids.contains(&"llama4:8b"));
-        assert!(ids.contains(&"kimi-k2.6:cloud"));
+        assert!(ids.contains(&"ollama/llama4:8b"));
+        assert!(ids.contains(&"ollama/kimi-k2.6:cloud"));
         let cloud_label = models
             .iter()
-            .find(|(n, _)| n == "kimi-k2.6:cloud")
+            .find(|(n, _)| n == "ollama/kimi-k2.6:cloud")
             .map(|(_, l)| l.as_str())
             .unwrap_or("");
         assert_eq!(cloud_label, "Ollama Cloud");
