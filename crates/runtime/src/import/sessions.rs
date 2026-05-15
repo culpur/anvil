@@ -784,6 +784,15 @@ fn extract_content_value(v: &serde_json::Value) -> String {
 /// Split `transcript` on user-turn boundaries into chunks of at most
 /// `CHUNK_CHARS` characters, then summarize each chunk with `summarizer`.
 /// Finally, summarize the concatenated chunk-summaries.
+///
+/// Exposed as `pub` for integration testing (`import_phase63.rs`).
+pub fn summarize_chunked_pub(
+    transcript: &str,
+    summarizer: &dyn SessionSummarizer,
+) -> Result<SummarizedSession, String> {
+    summarize_chunked(transcript, summarizer)
+}
+
 fn summarize_chunked(
     transcript: &str,
     summarizer: &dyn SessionSummarizer,
