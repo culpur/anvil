@@ -87,6 +87,7 @@ pub const STAGING_SUBDIRS: &[&str] = &[
     "plugins",
     "agents",
     "sessions/daily",
+    "nominations",
 ];
 
 // ── StagingDir ───────────────────────────────────────────────────────────────

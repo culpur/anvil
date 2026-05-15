@@ -918,6 +918,17 @@ pub struct ImportPlanSummary {
     pub needs_review_items: Vec<(String, String)>,
     /// Conflicting keys/paths detected: (key_or_path, description).
     pub conflicts: Vec<(String, String)>,
+    // ── Phase 6.3 — session import counters ──────────────────────────────────
+    /// Count of session JSONL files discovered.
+    pub sessions_discovered: usize,
+    /// Count of sessions successfully summarized and staged.
+    pub sessions_summarized: usize,
+    /// Count of sessions skipped because they exceeded 50 MB.
+    pub sessions_skipped_oversized: usize,
+    /// Count of sessions that failed summarization.
+    pub sessions_failed: usize,
+    /// Count of lesson nominations written to staging.
+    pub sessions_nominations_staged: usize,
 }
 
 impl ImportPlanSummary {
@@ -985,6 +996,19 @@ impl ImportPlanSummary {
             self.plugins_found, self.plugins_staged, plugins_review, self.plugins_skipped
         );
 
+        // Sessions line
+        let sessions_line = if self.sessions_discovered == 0 {
+            "  Sessions:          SKIPPED (run with --include-sessions to summarize)".to_string()
+        } else {
+            format!(
+                "  Sessions:          {} discovered, {} summarized, {} skipped (oversized), {} nominations",
+                self.sessions_discovered,
+                self.sessions_summarized,
+                self.sessions_skipped_oversized,
+                self.sessions_nominations_staged,
+            )
+        };
+
         let mut lines = vec![
             format!("=== Import Plan{mode_label} ==="),
             String::new(),
@@ -993,7 +1017,7 @@ impl ImportPlanSummary {
             settings_line,
             skills_line,
             plugins_line,
-            "  Sessions:          SKIPPED (run with --include-sessions to summarize)".to_string(),
+            sessions_line,
         ];
 
         if !self.needs_review_items.is_empty() {
@@ -1056,11 +1080,11 @@ pub fn run_import_pipeline_headless(
     use runtime::import::settings::run_settings_import;
     use runtime::import::skills::run_skills_import;
     use runtime::import::plugins::run_plugins_import;
+    use runtime::import::sessions::{run_sessions_import, commit_sessions_from_staging, SessionImportStatus};
     use runtime::import::commit::run_commit;
 
     let start = std::time::Instant::now();
     let scope = "all";
-    let _ = include_sessions; // Phase 6.3 wires session import
 
     // Step 1: OTel — import.invoked
     otel_import_invoked(&source.label(), scope, dry_run, include_sessions);
@@ -1151,6 +1175,49 @@ pub fn run_import_pipeline_headless(
     let plugins_needs_review_cnt = plugins_records.iter().filter(|r| r.needs_review).count();
 
     otel_import_discovered("plugins", plugins_found);
+
+    // ── 6. Sessions (gated on include_sessions) ───────────────────────────────────
+    // Build a MockSummarizer-based opts object for the headless pipeline.
+    // The real ProviderSummarizer is injected by callers that have a live runtime;
+    // the headless (wizard/CLI) path uses MockSummarizer as a safe default so the
+    // pipeline can report discovery counts even when no provider is configured.
+    // The actual summarization runs only when include_sessions is true.
+    let mut session_opts = if include_sessions {
+        // Attempt to detect a real provider; fall back to mock on failure.
+        runtime::import::sessions::SessionImportOpts {
+            include_sessions: true,
+            summarizer: runtime::import::sessions::ProviderSummarizer::detect()
+                .map(|p| Box::new(p) as Box<dyn runtime::import::sessions::SessionSummarizer>)
+                .unwrap_or_else(|_| Box::new(runtime::import::sessions::MockSummarizer)),
+        }
+    } else {
+        runtime::import::sessions::SessionImportOpts::disabled()
+    };
+    let sessions_records = run_sessions_import(&profile_dir, &staging, &mut session_opts);
+    let sessions_discovered = sessions_records.len();
+    let sessions_summarized = sessions_records
+        .iter()
+        .filter(|r| r.status == SessionImportStatus::Summarized)
+        .count();
+    let sessions_skipped_oversized = sessions_records
+        .iter()
+        .filter(|r| r.status == SessionImportStatus::Skipped && r.reason.as_deref() == Some("oversized"))
+        .count();
+    let sessions_failed = sessions_records
+        .iter()
+        .filter(|r| r.status == SessionImportStatus::Failed)
+        .count();
+    let sessions_nominations_staged: usize = sessions_records
+        .iter()
+        .map(|r| r.nominations_written)
+        .sum();
+
+    if sessions_discovered > 0 {
+        otel_import_discovered("session", sessions_discovered);
+    }
+    if sessions_skipped_oversized > 0 {
+        otel_import_skipped("session", sessions_skipped_oversized, "oversized");
+    }
 
     // ── Build manifest and commit/skip ────────────────────────────────────────────
     let mut m = base_manifest.clone();
@@ -1298,7 +1365,8 @@ pub fn run_import_pipeline_headless(
         }
 
         total_committed = 0;
-        let all_found = mem_found + instr_found + settings_found + skills_found + plugins_found;
+        let all_found = mem_found + instr_found + settings_found + skills_found + plugins_found
+            + sessions_discovered;
         (0usize, all_found)
     } else {
         // Live commit mode: push entries into manifest, then run_commit.
@@ -1427,11 +1495,27 @@ pub fn run_import_pipeline_headless(
         otel_import_committed("skills", skills_staged_cnt);
         otel_import_committed("plugins", plugins_staged_cnt);
 
+        // Sessions: commit staged daily records and nominations.
+        if sessions_summarized > 0 {
+            match commit_sessions_from_staging(&staging) {
+                Ok(n) => {
+                    otel_import_committed("session", n);
+                    otel_import_committed("nomination", sessions_nominations_staged);
+                }
+                Err(e) => {
+                    // Non-fatal: log and continue.
+                    eprintln!("warning: session commit failed: {e}");
+                }
+            }
+        }
+
         let _ = m.save(&manifest_path);
 
         total_committed = commit_result.committed;
-        let all_staged = mem_stage_cnt + instr_stage_cnt + settings_found + skills_staged_cnt + plugins_staged_cnt;
-        let all_skipped = mem_skip_cnt + instr_skip_cnt + skills_skipped_cnt + plugins_skipped_cnt;
+        let all_staged = mem_stage_cnt + instr_stage_cnt + settings_found + skills_staged_cnt
+            + plugins_staged_cnt + sessions_summarized;
+        let all_skipped = mem_skip_cnt + instr_skip_cnt + skills_skipped_cnt + plugins_skipped_cnt
+            + sessions_skipped_oversized + sessions_failed;
         (all_staged, all_skipped)
     };
 
@@ -1474,6 +1558,11 @@ pub fn run_import_pipeline_headless(
         total_needs_review: needs_review.len(),
         needs_review_items: needs_review.clone(),
         conflicts: conflicts_list,
+        sessions_discovered,
+        sessions_summarized,
+        sessions_skipped_oversized,
+        sessions_failed,
+        sessions_nominations_staged,
     };
 
     let mut summary = plan.render_confirmation_block(dry_run);
