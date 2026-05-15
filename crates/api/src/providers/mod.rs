@@ -9,6 +9,7 @@ pub mod azure;
 pub mod bedrock;
 pub mod common;
 pub mod copilot;
+pub mod cross_provider_models;
 pub mod cursor;
 pub mod gemini_oauth;
 pub mod model_list;

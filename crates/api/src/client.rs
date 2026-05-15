@@ -126,6 +126,41 @@ impl ProviderClient {
         }
     }
 
+    /// Build a `ProviderClient` for a **known** provider kind, bypassing the
+    /// `detect_provider_kind` heuristic.
+    ///
+    /// Used by the `/model <provider>/<model>` cross-provider switch path so
+    /// that `"cursor/claude-4-sonnet-thinking"` routes to `ProviderKind::Cursor`
+    /// rather than to Anthropic (which `detect_provider_kind` would infer from
+    /// the bare `"claude-4-sonnet-thinking"` name).
+    ///
+    /// `model` is the **bare** model ID without any provider prefix.
+    pub fn from_kind(kind: ProviderKind) -> Result<Self, ApiError> {
+        match kind {
+            ProviderKind::AnvilApi => Ok(Self::AnvilApi(AnvilApiClient::from_env()?)),
+            ProviderKind::Ollama => Ok(Self::Ollama(OllamaClient::from_env())),
+            ProviderKind::Copilot => Ok(Self::Copilot(CopilotClient::from_env()?)),
+            ProviderKind::Azure => Ok(Self::Azure(AzureOpenAiClient::from_env()?)),
+            ProviderKind::Bedrock => Ok(Self::Bedrock(BedrockClient::from_env()?)),
+            ProviderKind::Cursor => Ok(Self::Cursor(CursorClient::from_env()?)),
+            ProviderKind::Antigravity => Ok(Self::GeminiOAuth(GeminiOAuthClient::from_env_or_saved()?)),
+            other => {
+                if let Some(config) = openai_compat_config(other) {
+                    let client = if config.api_key_env.is_empty() {
+                        OpenAiCompatClient::new_no_auth(openai_compat::read_base_url(config))
+                    } else {
+                        OpenAiCompatClient::from_env(config)?
+                    };
+                    Ok(Self::OpenAiCompat(client, other))
+                } else {
+                    Err(ApiError::Auth(format!(
+                        "no client implementation for provider {other:?}"
+                    )))
+                }
+            }
+        }
+    }
+
     #[must_use]
     pub const fn provider_kind(&self) -> ProviderKind {
         match self {

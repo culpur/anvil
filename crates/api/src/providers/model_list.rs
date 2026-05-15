@@ -993,6 +993,211 @@ pub async fn fetch_models_for_slug(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-provider unified model list (v2.2.15)
+// ---------------------------------------------------------------------------
+
+/// A single model entry in the cross-provider unified picker.
+///
+/// `display` is the provider-prefixed slug shown to the user, e.g.
+/// `"cursor/claude-4-sonnet-thinking"` or `"anthropic/claude-sonnet-4-6"`.
+/// The TUI picker surfaces `display` and switches atomically when selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnifiedModel {
+    /// The provider this model belongs to.
+    pub provider: ProviderKind,
+    /// The bare model ID as returned by the provider's `/models` endpoint.
+    pub model_id: String,
+    /// Provider-prefixed display slug, e.g. `"cursor/claude-4-sonnet-thinking"`.
+    pub display: String,
+}
+
+/// Map a [`ProviderKind`] to the slug used in the provider-prefixed display.
+///
+/// Must stay in sync with the `slug_to_provider_kind` reverse table above.
+/// Public so that `TuiCompletionContext` can build prefixed model names for
+/// the `/model` picker without re-implementing this mapping.
+pub fn provider_kind_to_slug(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::AnvilApi => "anthropic",
+        ProviderKind::Xai => "xai",
+        ProviderKind::OpenAi => "openai",
+        ProviderKind::Gemini => "gemini",
+        ProviderKind::Ollama => "ollama",
+        ProviderKind::Fireworks => "fireworks",
+        ProviderKind::Groq => "groq",
+        ProviderKind::Mistral => "mistral",
+        ProviderKind::Perplexity => "perplexity",
+        ProviderKind::DeepSeek => "deepseek",
+        ProviderKind::TogetherAi => "togetherai",
+        ProviderKind::DeepInfra => "deepinfra",
+        ProviderKind::Cerebras => "cerebras",
+        ProviderKind::NvidiaNim => "nvidia-nim",
+        ProviderKind::HuggingFace => "huggingface",
+        ProviderKind::MoonshotAi => "moonshotai",
+        ProviderKind::Nebius => "nebius",
+        ProviderKind::OpenRouter => "openrouter",
+        ProviderKind::LmStudio => "lmstudio",
+        ProviderKind::Chutes => "chutes",
+        ProviderKind::Scaleway => "scaleway",
+        ProviderKind::Baseten => "baseten",
+        ProviderKind::MiniMax => "minimax",
+        ProviderKind::StackIt => "stackit",
+        ProviderKind::Cortecs => "cortecs",
+        ProviderKind::Ai302 => "302ai",
+        ProviderKind::Zai => "zai",
+        ProviderKind::OpenCode => "opencode",
+        ProviderKind::OpenCodeGo => "opencode-go",
+        ProviderKind::Copilot => "copilot",
+        ProviderKind::Azure => "azure",
+        ProviderKind::Bedrock => "bedrock",
+        ProviderKind::Alibaba => "alibaba",
+        ProviderKind::Antigravity => "antigravity",
+        ProviderKind::Cursor => "cursor",
+    }
+}
+
+/// Fetch the unified cross-provider model list.
+///
+/// Enumerates every configured provider (same logic as
+/// [`enumerate_configured_providers`]), fires their live `/models` endpoint
+/// in parallel, and merges results into a flat `Vec<UnifiedModel>`.
+///
+/// Each entry carries a provider-prefixed `display` slug, e.g.
+/// `"cursor/claude-4-sonnet-thinking"`, so the TUI picker can present a
+/// single scrollable list covering all configured providers.
+///
+/// # Failure modes
+///
+/// - Unconfigured providers are silently omitted (no credentials → not shown).
+/// - Providers returning `Unauthorized` (401/403) are omitted with no entry.
+/// - Providers with transient errors fall back to `known_models()` registry
+///   entries for that provider so the list is never empty for a configured
+///   provider.
+///
+/// Uses the existing per-provider 4 s [`DEFAULT_FETCH_TIMEOUT`] — no new
+/// timeout infrastructure.
+pub async fn fetch_all_configured_models() -> Vec<UnifiedModel> {
+    let configured = enumerate_configured_providers().await;
+    if configured.is_empty() {
+        // Offline fallback: return every known-good model as unified.
+        return crate::known_models()
+            .into_iter()
+            .map(|(id, kind)| {
+                let slug = provider_kind_to_slug(kind);
+                UnifiedModel {
+                    provider: kind,
+                    model_id: id.to_string(),
+                    display: format!("{slug}/{id}"),
+                }
+            })
+            .collect();
+    }
+
+    // Fan out fetch tasks in parallel — one per configured credential.
+    // Reuses the same fetch functions that the TUI completion path uses.
+    let mut handles: Vec<
+        tokio::task::JoinHandle<(ProviderKind, Result<Vec<ProviderModel>, ProviderModelsError>)>,
+    > = Vec::with_capacity(configured.len());
+    let mut emitted_ollama = false;
+
+    for cred in &configured {
+        match cred {
+            ProviderCredentials::Anthropic => {
+                handles.push(tokio::spawn(async {
+                    (ProviderKind::AnvilApi, fetch_anthropic_models().await)
+                }));
+            }
+            ProviderCredentials::OpenAi => {
+                handles.push(tokio::spawn(async {
+                    (ProviderKind::OpenAi, fetch_openai_models().await)
+                }));
+            }
+            ProviderCredentials::Xai => {
+                handles.push(tokio::spawn(async {
+                    (ProviderKind::Xai, fetch_xai_models().await)
+                }));
+            }
+            ProviderCredentials::Gemini => {
+                handles.push(tokio::spawn(async {
+                    (ProviderKind::Gemini, fetch_gemini_models().await)
+                }));
+            }
+            ProviderCredentials::OllamaLocal | ProviderCredentials::OllamaCloud => {
+                if !emitted_ollama {
+                    emitted_ollama = true;
+                    handles.push(tokio::spawn(async {
+                        (ProviderKind::Ollama, fetch_ollama_local_models().await)
+                    }));
+                }
+            }
+            ProviderCredentials::GroupB(slug) => {
+                let slug: &'static str = slug;
+                handles.push(tokio::spawn(async move {
+                    let kind = slug_to_provider_kind(slug).unwrap_or(ProviderKind::AnvilApi);
+                    let result = fetch_models_for_slug(slug).await;
+                    (kind, result)
+                }));
+            }
+        }
+    }
+
+    let configured_kinds: std::collections::HashSet<ProviderKind> =
+        configured.iter().map(|c| c.kind()).collect();
+
+    let mut out: Vec<UnifiedModel> = Vec::new();
+    for handle in handles {
+        let (kind, result) = match handle.await {
+            Ok(pair) => pair,
+            Err(e) => (ProviderKind::AnvilApi, Err(ProviderModelsError::Other(e.to_string()))),
+        };
+        let slug = provider_kind_to_slug(kind);
+        match result {
+            Ok(models) => {
+                for m in models {
+                    out.push(UnifiedModel {
+                        provider: kind,
+                        model_id: m.id.clone(),
+                        display: format!("{slug}/{}", m.id),
+                    });
+                }
+            }
+            Err(ProviderModelsError::Unauthorized) => {
+                // Silently omit: credentials were invalid.
+            }
+            Err(_) => {
+                // Transient: fall back to registry for this provider.
+                for (id, k) in crate::known_models() {
+                    if k == kind {
+                        out.push(UnifiedModel {
+                            provider: kind,
+                            model_id: id.to_string(),
+                            display: format!("{slug}/{id}"),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: if all providers returned nothing, include registry entries
+    // for every configured kind.
+    if out.is_empty() {
+        for (id, kind) in crate::known_models() {
+            if configured_kinds.contains(&kind) {
+                let slug = provider_kind_to_slug(kind);
+                out.push(UnifiedModel {
+                    provider: kind,
+                    model_id: id.to_string(),
+                    display: format!("{slug}/{id}"),
+                });
+            }
+        }
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

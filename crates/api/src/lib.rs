@@ -17,11 +17,15 @@ pub use failover::{
     FailoverEventKind, UsageBudget,
 };
 pub use providers::anvil_provider::{AuthSource, AnvilApiClient, AnvilApiClient as ApiClient};
+pub use providers::cross_provider_models::{
+    format_ambiguous_model_error, resolve_model_switch, ModelSwitchResolution,
+};
 pub use providers::model_list::{
-    enumerate_configured_providers, fetch_anthropic_models, fetch_gemini_models,
-    fetch_models_for_slug, fetch_ollama_cloud_models, fetch_ollama_local_models,
-    fetch_openai_models, fetch_xai_models, is_provider_configured, slug_to_provider_kind,
-    ProviderCredentials, ProviderModel, ProviderModelsError, DEFAULT_FETCH_TIMEOUT,
+    enumerate_configured_providers, fetch_all_configured_models, fetch_anthropic_models,
+    fetch_gemini_models, fetch_models_for_slug, fetch_ollama_cloud_models,
+    fetch_ollama_local_models, fetch_openai_models, fetch_xai_models, is_provider_configured,
+    provider_kind_to_slug, slug_to_provider_kind, ProviderCredentials, ProviderModel,
+    ProviderModelsError, UnifiedModel, DEFAULT_FETCH_TIMEOUT,
 };
 pub use providers::ollama::{cloud_model_context_window, is_ollama_cloud_model, OllamaClient};
 pub use providers::ollama_manage::{
