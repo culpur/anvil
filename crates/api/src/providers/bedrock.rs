@@ -819,6 +819,7 @@ mod tests {
     fn invoke_url_non_streaming() {
         // Edition 2024: env::set_var requires unsafe.
         #![allow(unsafe_code)]
+        let _guard = crate::providers::crate_env_lock();
         unsafe {
             std::env::set_var("AWS_ACCESS_KEY_ID", "AKIATEST");
             std::env::set_var("AWS_SECRET_ACCESS_KEY", "secret");
@@ -841,6 +842,7 @@ mod tests {
     #[test]
     fn invoke_url_streaming() {
         #![allow(unsafe_code)]
+        let _guard = crate::providers::crate_env_lock();
         unsafe {
             std::env::set_var("AWS_ACCESS_KEY_ID", "AKIATEST");
             std::env::set_var("AWS_SECRET_ACCESS_KEY", "secret");
@@ -918,6 +920,7 @@ mod tests {
     #[test]
     fn from_env_errors_without_credentials() {
         #![allow(unsafe_code)]
+        let _guard = crate::providers::crate_env_lock();
         unsafe {
             std::env::remove_var("AWS_ACCESS_KEY_ID");
             std::env::remove_var("AWS_SECRET_ACCESS_KEY");
