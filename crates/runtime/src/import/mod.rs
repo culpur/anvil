@@ -41,8 +41,13 @@
 pub mod artifact;
 pub mod commit;
 pub mod discover;
+pub mod instructions;
 pub mod manifest;
+pub mod memory;
+pub mod plugins;
 pub mod report;
+pub mod settings;
+pub mod skills;
 pub mod stage;
 pub mod staging;
 pub mod triage;
@@ -54,7 +59,7 @@ pub use artifact::{ImportArtifact, ImportArtifactMeta, ImportSource, SettingsSco
 pub use commit::{run_commit, CommitResult};
 pub use discover::{DiscoveredArtifact, Discoverer};
 pub use manifest::{ImportEntry, ImportEntryStatus, ImportManifest, ManifestError};
-pub use report::{generate_report, write_report};
+pub use report::{generate_report, generate_full_report, write_report, write_full_report, ReportOptions};
 pub use stage::{StageAction, Stager};
 pub use staging::{
     anvil_config_home, staging_dir, CommitReport, StagingDir, StagingError,
@@ -144,7 +149,9 @@ fn is_leap(y: u64) -> bool {
 // ── OTel trace events ────────────────────────────────────────────────────────
 
 /// OTel event constants for the import pipeline.
-/// Bucket 1+ emit these via the tracing crate when the feature is enabled.
+///
+/// Phase 6.0 declared the skeleton; Phase 6.4 adds the full set wired in the
+/// orchestrator.
 pub mod events {
     pub const DISCOVERED: &str = "import.discovered";
     pub const TRANSLATED: &str = "import.translated";
@@ -152,6 +159,91 @@ pub mod events {
     pub const COMMITTED: &str = "import.committed";
     pub const SKIPPED: &str = "import.skipped";
     pub const INVOKED: &str = "import.invoked";
+    // Phase 6.4 additions
+    pub const CONFLICT_DETECTED: &str = "import.conflict_detected";
+    pub const COMPLETED: &str = "import.completed";
+}
+
+// ── OTel emit helpers ────────────────────────────────────────────────────────
+
+/// Emit `import.invoked` at command entry.
+pub fn otel_import_invoked(source: &str, scope: &str, dry_run: bool, include_sessions: bool) {
+    crate::otel::emit_event(
+        events::INVOKED,
+        &[
+            ("source", source),
+            ("scope", scope),
+            ("dry_run", if dry_run { "true" } else { "false" }),
+            ("include_sessions", if include_sessions { "true" } else { "false" }),
+        ],
+    );
+}
+
+/// Emit `import.discovered` once per artifact type.
+pub fn otel_import_discovered(kind: &str, count: usize) {
+    let count_s = count.to_string();
+    crate::otel::emit_event(
+        events::DISCOVERED,
+        &[("kind", kind), ("count", &count_s)],
+    );
+}
+
+/// Emit `import.staged` once per artifact type.
+pub fn otel_import_staged(kind: &str, count: usize) {
+    let count_s = count.to_string();
+    crate::otel::emit_event(
+        events::STAGED,
+        &[("kind", kind), ("count", &count_s)],
+    );
+}
+
+/// Emit `import.conflict_detected` when conflicts surface during triage.
+pub fn otel_import_conflict_detected(kind: &str, count: usize) {
+    let count_s = count.to_string();
+    crate::otel::emit_event(
+        events::CONFLICT_DETECTED,
+        &[("kind", kind), ("count", &count_s)],
+    );
+}
+
+/// Emit `import.committed` once per artifact type after commit.
+pub fn otel_import_committed(kind: &str, count: usize) {
+    let count_s = count.to_string();
+    crate::otel::emit_event(
+        events::COMMITTED,
+        &[("kind", kind), ("count", &count_s)],
+    );
+}
+
+/// Emit `import.skipped` per skip category.
+pub fn otel_import_skipped(kind: &str, count: usize, reason: &str) {
+    let count_s = count.to_string();
+    crate::otel::emit_event(
+        events::SKIPPED,
+        &[("kind", kind), ("count", &count_s), ("reason", reason)],
+    );
+}
+
+/// Emit `import.completed` — the final pipeline event.
+pub fn otel_import_completed(
+    total_committed: usize,
+    total_skipped: usize,
+    total_needs_review: usize,
+    duration_ms: u64,
+) {
+    let committed_s = total_committed.to_string();
+    let skipped_s = total_skipped.to_string();
+    let needs_review_s = total_needs_review.to_string();
+    let duration_s = duration_ms.to_string();
+    crate::otel::emit_event(
+        events::COMPLETED,
+        &[
+            ("total_committed", &committed_s),
+            ("total_skipped", &skipped_s),
+            ("total_needs_review", &needs_review_s),
+            ("duration_ms", &duration_s),
+        ],
+    );
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
