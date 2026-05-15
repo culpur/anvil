@@ -2345,6 +2345,82 @@ Status:
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // v2.2.15: Cursor Cloud Agents first-class command tree
+    //
+    // The Cursor API uses agent-orchestration (POST /v1/agents, SSE streams,
+    // GitHub repo binding) rather than the chat-completions model used by
+    // `/model`.  This dedicated command tree exposes its six-subcommand API
+    // surface directly.
+    //
+    // The six subcommands are wired end-to-end:
+    //   launch   — POST /v1/agents + open SSE stream in new agent tab
+    //   list     — GET /v1/agents (paginated, filterable)
+    //   get      — GET /v1/agents/{id} + recent runs
+    //   cancel   — POST /v1/agents/{id}/runs/{runId}/cancel
+    //   artifacts — GET /v1/agents/{id}/artifacts + presigned URLs
+    //   stream   — re-attach SSE stream with Last-Event-ID resume
+    SlashCommandSpec {
+        name: "cursor",
+        aliases: &[],
+        summary: "Cursor Cloud Agents — launch, list, get, cancel, artifacts, stream",
+        argument_hint: Some("[launch|list|get|cancel|artifacts|stream] [args]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/cursor — Cursor Cloud Agents command tree (v2.2.15)
+
+The Cursor API uses agent-orchestration (POST /v1/agents + SSE streams)
+rather than chat-completions. All six subcommands require CURSOR_API_KEY.
+
+Subcommands:
+  /cursor launch <prompt>
+      Launch a new Cloud Agent with the given prompt. The current workspace
+      must have a GitHub `origin` remote — Cursor requires a repo binding.
+      Opens an SSE stream in a new agent tab; events route to TUI:
+        assistant → TextDelta  |  thinking → ThinkingDelta
+        tool_call → ToolUse    |  status   → status-line update
+        result    → terminal   |  done     → close stream
+
+  /cursor list [--archived] [--pr=<url>] [--cursor=<token>]
+      List agents. --archived includes finished/failed/cancelled runs.
+      --pr filters to agents associated with a PR URL.
+      --cursor continues pagination from the supplied opaque token.
+
+  /cursor get <agent_id>
+      Full agent record: repos, branch, autoCreatePR, and recent runs.
+
+  /cursor cancel <agent_id> [<run_id>]
+      Cancel the active run. Omit run_id to cancel the latest active run
+      (fetched automatically via GET /v1/agents/{id}/runs?limit=1).
+
+  /cursor artifacts <agent_id>
+      List artifact files with sizes, then fetch 15-minute presigned
+      download URLs for each artifact.
+
+  /cursor stream <agent_id> <run_id>
+      Re-attach to an existing SSE stream. Sends Last-Event-ID resume
+      header if the stream was previously active. Returns a clear error
+      on 410 (stream_expired) rather than hanging.
+
+Setup:
+  Set CURSOR_API_KEY=crsr_xxx (from cursor.com/settings), or
+  use `/login cursor` to save the key to ~/.anvil/credentials.json.
+
+Examples:
+  /cursor launch \"Fix all failing tests and open a PR\"
+  /cursor list
+  /cursor list --archived --pr=https://github.com/org/repo/pull/42
+  /cursor get agnt_abc123
+  /cursor cancel agnt_abc123
+  /cursor artifacts agnt_abc123
+  /cursor stream agnt_abc123 run_xyz789",
+        subcommands: crate::subcommands::CURSOR_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
 ];
 
 #[must_use]
