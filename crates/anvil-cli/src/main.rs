@@ -62,7 +62,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    detect_provider_kind, max_tokens_for_model, provider_display_name, ToolDefinition,
+    detect_provider_kind, max_tokens_for_model, provider_display_name, slug_to_provider_kind,
+    ToolDefinition,
 };
 
 use commands::{
@@ -106,8 +107,8 @@ use upgrade::run_upgrade;
 use vault::{run_vault_command_impl, write_curl_auth_header};
 use wizard::{anvil_config_json_exists, run_first_run_wizard};
 use providers::{
-    build_plugin_manager, build_runtime, build_runtime_with_tui_slot, resolve_cli_auth_source,
-    CliPermissionPrompter, DefaultRuntimeClient, CliToolExecutor,
+    build_plugin_manager, build_runtime, build_runtime_for_provider, build_runtime_with_tui_slot,
+    resolve_cli_auth_source, CliPermissionPrompter, DefaultRuntimeClient, CliToolExecutor,
     InternalPromptProgressReporter,
     final_assistant_text, collect_tool_uses, collect_tool_results,
     slash_command_completion_candidates,
@@ -1805,6 +1806,7 @@ fn run_resume_command(
         | SlashCommand::ScrollSpeed { .. }
         | SlashCommand::Import { .. }
         | SlashCommand::Profile { .. }
+        | SlashCommand::Cursor { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -4780,6 +4782,48 @@ impl LiveCli {
                 // system-prompt identity, and TUI chrome all flip
                 // together. Without this the chrome updated but
                 // inference kept hitting the previous provider.
+                //
+                // For bare model names (no "/" prefix), check the model
+                // choices cache for ambiguity: if >1 providers expose the
+                // same bare model ID, surface an error with qualified options
+                // rather than silently routing to the heuristic winner.
+                if !new_model.contains('/') {
+                    // Build a UnifiedModel catalog from the picker cache so we
+                    // can call resolve_model_switch without a network fetch.
+                    let cache_models = crate::tui::completion::model_choices_cache_snapshot();
+                    if !cache_models.is_empty() {
+                        // Cache is in "(provider_slug/model_id, label)" form.
+                        let catalog: Vec<api::UnifiedModel> = cache_models
+                            .iter()
+                            .filter_map(|(prefixed, _label)| {
+                                let (slug, model_id) = prefixed.split_once('/')?;
+                                let provider = api::slug_to_provider_kind(slug)?;
+                                Some(api::UnifiedModel {
+                                    provider,
+                                    model_id: model_id.to_string(),
+                                    display: prefixed.clone(),
+                                })
+                            })
+                            .collect();
+                        match api::resolve_model_switch(new_model, &catalog) {
+                            api::ModelSwitchResolution::Ambiguous { model_id, providers } => {
+                                tui.push_system(api::format_ambiguous_model_error(
+                                    &model_id,
+                                    &providers,
+                                ));
+                                return Ok(false);
+                            }
+                            api::ModelSwitchResolution::NotFound { .. } => {
+                                // Let apply_model_switch fall through — it may
+                                // still succeed via detect_provider_kind heuristics
+                                // for models that aren't in the picker cache yet.
+                            }
+                            api::ModelSwitchResolution::Resolved { .. } => {
+                                // Unambiguous — fall through to apply_model_switch.
+                            }
+                        }
+                    }
+                }
                 match self.apply_model_switch(new_model, Some(tui)) {
                     Ok((previous, msg_count)) => {
                         if previous == self.model {
@@ -5682,6 +5726,15 @@ impl LiveCli {
                 let msg = render_profile_command(action.as_deref());
                 (msg, false)
             }
+            SlashCommand::Cursor { subcommand } => {
+                // Intercept the live Cursor Cloud Agents API calls here.
+                // The commands crate handler returns guidance text; this site
+                // is where actual CursorClient calls would be triggered for
+                // subcommands that need a live response (launch, stream, etc.).
+                // For now, dispatch to the guidance handler.
+                let msg = commands::handlers::handle_cursor_command(&subcommand);
+                (msg, false)
+            }
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
@@ -6456,11 +6509,28 @@ impl LiveCli {
         use runtime::{PromptSection, PromptSectionKind, PromptSectionsExt, SystemPromptBuilder};
 
         let previous = self.model.clone();
-        let resolved = resolve_model_alias(new_model).to_string();
         let message_count = self.active_runtime().session().messages.len();
 
-        // Same-model: no-op, preserve no-rebuild guarantee.
-        if resolved == self.model {
+        // Check for cross-provider prefix form: "provider_slug/model_id".
+        // When present we route to the explicit provider, bypassing
+        // detect_provider_kind heuristics (which would mis-classify e.g.
+        // "claude-4-sonnet-thinking" as AnvilApi when it's meant for Cursor).
+        let (resolved, explicit_kind) = if let Some((slug, bare)) = new_model.split_once('/') {
+            let kind = slug_to_provider_kind(slug);
+            match kind {
+                Some(k) => (resolve_model_alias(bare).to_string(), Some(k)),
+                None => {
+                    return Err(format!(
+                        "unknown provider slug \"{slug}\"; use /model to list providers"
+                    ).into());
+                }
+            }
+        } else {
+            (resolve_model_alias(new_model).to_string(), None)
+        };
+
+        // Same-model (and same provider): no-op, preserve no-rebuild guarantee.
+        if resolved == self.model && explicit_kind.is_none() {
             return Ok((previous, message_count));
         }
 
@@ -6468,9 +6538,16 @@ impl LiveCli {
         //    section (Goal, Skill, Memory, ProjectContext, …) byte-
         //    identical so we don't accidentally drop /goal, /skill load,
         //    or other in-session prompt state.
-        let provider_label = friendly_provider_label(&resolved);
+        //
+        //    For cross-provider switches the provider label comes from the
+        //    explicit kind; for single-provider switches the existing
+        //    friendly_provider_label heuristic is used.
+        let provider_label: Option<String> = match explicit_kind {
+            Some(k) => Some(provider_display_name(k).to_string()),
+            None => friendly_provider_label(&resolved),
+        };
         let mut builder = SystemPromptBuilder::new().with_model_name(resolved.clone());
-        if let Some(provider) = provider_label.as_deref() {
+        if let Some(ref provider) = provider_label {
             builder = builder.with_provider_name(provider);
         }
         // OS detail matches startup (`build_system_prompt_with_identity`
@@ -6486,21 +6563,40 @@ impl LiveCli {
         //    provider through the right ApiClient. Without this, the
         //    chrome swaps but inference still hits the previous backend.
         let session = self.active_runtime().session().clone();
-        self.install_active_runtime(build_runtime_with_tui_slot(
-            session,
-            resolved.clone(),
-            self.system_prompt.clone(),
-            true,
-            true,
-            self.allowed_tools.clone(),
-            self.permission_mode,
-            None,
-            self.active_tui_slot(),
-            self.agent_manager.clone(),
-        )?);
+        if let Some(kind) = explicit_kind {
+            // Cross-provider switch: use explicit kind to bypass detect_provider_kind.
+            self.install_active_runtime(build_runtime_for_provider(
+                session,
+                resolved.clone(),
+                kind,
+                self.system_prompt.clone(),
+                true,
+                true,
+                self.allowed_tools.clone(),
+                self.permission_mode,
+                None,
+                self.active_tui_slot(),
+                self.agent_manager.clone(),
+            )?);
+        } else {
+            self.install_active_runtime(build_runtime_with_tui_slot(
+                session,
+                resolved.clone(),
+                self.system_prompt.clone(),
+                true,
+                true,
+                self.allowed_tools.clone(),
+                self.permission_mode,
+                None,
+                self.active_tui_slot(),
+                self.agent_manager.clone(),
+            )?);
+        }
 
         // 3. Commit the model state and update TUI chrome (status bar,
-        //    Thinking header, tab title).
+        //    Thinking header, tab title).  The stored model is always the
+        //    bare ID so downstream code (MessageRequest, format_model_report)
+        //    never sees the provider prefix.
         self.model = resolved;
         if let Some(tui) = tui {
             tui.set_model(self.model.clone());

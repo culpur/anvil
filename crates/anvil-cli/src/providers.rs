@@ -576,6 +576,119 @@ pub(crate) fn build_runtime_with_tui_slot(
     ))
 }
 
+/// Variant of [`build_runtime_with_tui_slot`] that bypasses
+/// `detect_provider_kind` heuristics by accepting an explicit `ProviderKind`.
+///
+/// Used by the cross-provider `/model <provider>/<model>` switch path so
+/// that e.g. `cursor/claude-4-sonnet-thinking` routes to `ProviderKind::Cursor`
+/// rather than to Anthropic (which `detect_provider_kind` would infer from the
+/// bare `"claude-4-sonnet-thinking"` name).
+///
+/// `model` is the **bare** model ID (no provider prefix).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_runtime_for_provider(
+    session: Session,
+    model: String,
+    provider_kind: ProviderKind,
+    system_prompt: Vec<runtime::PromptSection>,
+    enable_tools: bool,
+    emit_output: bool,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    progress_reporter: Option<InternalPromptProgressReporter>,
+    tui_slot: TuiSenderSlot,
+    agent_manager: Arc<Mutex<agents::AgentManager>>,
+) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
+{
+    runtime::set_active_sandbox_mode(match permission_mode {
+        PermissionMode::ReadOnly => runtime::SandboxMode::ReadOnly,
+        PermissionMode::WorkspaceWrite => runtime::SandboxMode::WorkspaceWrite,
+        PermissionMode::DangerFullAccess => runtime::SandboxMode::DangerFullAccess,
+        PermissionMode::Prompt | PermissionMode::Allow => runtime::SandboxMode::WorkspaceWrite,
+    });
+
+    let (feature_config, mut tool_registry, runtime_config) = build_runtime_plugin_state()?;
+    runtime::otel::init_tracer(runtime_config.otel());
+
+    let mcp_manager = {
+        let mut manager = McpServerManager::from_runtime_config(&runtime_config);
+        let tokio_rt = tokio::runtime::Runtime::new()?;
+        let discovered = tokio_rt.block_on(manager.discover_tools()).unwrap_or_else(|err| {
+            eprintln!("[mcp] tool discovery failed: {err}");
+            Vec::new()
+        });
+        let mcp_defs = discovered
+            .into_iter()
+            .map(|t| McpToolDefinition {
+                name: t.qualified_name,
+                description: t.tool.description,
+                input_schema: t.tool.input_schema,
+            })
+            .collect::<Vec<_>>();
+        tool_registry.add_mcp_tools(mcp_defs);
+        Arc::new(Mutex::new(manager))
+    };
+
+    let lsp_manager = {
+        let lsp_cfg = runtime_config.lsp();
+        let manager = if lsp_cfg.servers.is_empty() {
+            None
+        } else {
+            let server_configs = lsp_cfg
+                .servers
+                .iter()
+                .map(|entry| LspServerConfig {
+                    name: entry.name.clone(),
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    env: entry.env.clone(),
+                    workspace_root: entry.workspace_root.clone(),
+                    initialization_options: None,
+                    extension_to_language: entry.extension_to_language.clone(),
+                })
+                .collect::<Vec<_>>();
+            match LspManager::new(server_configs) {
+                Ok(m) => Some(m),
+                Err(err) => {
+                    eprintln!("[lsp] failed to initialize LSP manager: {err}");
+                    None
+                }
+            }
+        };
+        Arc::new(Mutex::new(manager))
+    };
+
+    let project_dir = std::env::current_dir().ok();
+
+    Ok(ConversationRuntime::new_with_features_and_project_dir(
+        session,
+        DefaultRuntimeClient::new_with_kind(
+            model.clone(),
+            provider_kind,
+            enable_tools,
+            emit_output,
+            allowed_tools.clone(),
+            tool_registry.clone(),
+            progress_reporter,
+            tui_slot.clone(),
+        )?,
+        CliToolExecutor::new(
+            allowed_tools,
+            emit_output,
+            tool_registry.clone(),
+            mcp_manager,
+            lsp_manager,
+            tui_slot,
+            agent_manager,
+            model,
+        ),
+        permission_policy(permission_mode, &tool_registry),
+        system_prompt,
+        feature_config,
+        project_dir,
+    ))
+}
+
 pub(crate) struct CliPermissionPrompter {
     current_mode: PermissionMode,
     /// When `Some`, permission decisions go through the TUI channel rather than
@@ -731,6 +844,36 @@ impl DefaultRuntimeClient {
             tui_slot,
         })
     }
+
+    /// Variant of [`new`] that bypasses `detect_provider_kind` heuristics.
+    ///
+    /// Used when the caller knows the exact provider kind (e.g. from a
+    /// `"provider_slug/model_id"` picker selection).  The `model` string is
+    /// the **bare** model ID sent in the API request body; `kind` controls
+    /// which `ProviderClient` variant is constructed.
+    fn new_with_kind(
+        model: String,
+        kind: ProviderKind,
+        enable_tools: bool,
+        emit_output: bool,
+        allowed_tools: Option<AllowedToolSet>,
+        tool_registry: GlobalToolRegistry,
+        progress_reporter: Option<InternalPromptProgressReporter>,
+        tui_slot: TuiSenderSlot,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let client = build_provider_client_for_kind(kind)?;
+        Ok(Self {
+            runtime: tokio::runtime::Runtime::new()?,
+            client,
+            model,
+            enable_tools,
+            emit_output,
+            allowed_tools,
+            tool_registry,
+            progress_reporter,
+            tui_slot,
+        })
+    }
 }
 
 /// Build the correct `ProviderClient` for the given model name.
@@ -748,6 +891,33 @@ pub(crate) fn build_provider_client(model: &str) -> Result<ProviderClient, Box<d
             ))
         }
         _ => Ok(ProviderClient::from_model(model)?),
+    }
+}
+
+/// Build the correct `ProviderClient` using an **explicit** provider kind.
+///
+/// This bypasses `detect_provider_kind`'s heuristic matching and is used for
+/// cross-provider model switches where the user explicitly qualified the model
+/// with a provider slug (e.g. `"cursor/claude-4-sonnet-thinking"` → explicit
+/// `ProviderKind::Cursor`).  Without this, `detect_provider_kind` would
+/// mistake `"claude-4-sonnet-thinking"` for an Anthropic model and route it
+/// to the wrong backend.
+///
+/// For `ProviderKind::AnvilApi` the OAuth / API-key resolution path is used
+/// so that saved credentials continue to work.  For all other kinds the
+/// `ProviderClient::from_kind` method selects credentials by kind directly.
+pub(crate) fn build_provider_client_for_kind(
+    kind: ProviderKind,
+) -> Result<ProviderClient, Box<dyn std::error::Error>> {
+    match kind {
+        ProviderKind::AnvilApi => {
+            // AnvilApi (Anthropic) — use saved OAuth token if present.
+            let auth = resolve_cli_auth_source()?;
+            Ok(ProviderClient::AnvilApi(
+                AnvilApiClient::from_auth(auth).with_base_url(api::read_base_url()),
+            ))
+        }
+        other => Ok(ProviderClient::from_kind(other)?),
     }
 }
 
