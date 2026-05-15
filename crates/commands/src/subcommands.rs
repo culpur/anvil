@@ -2018,3 +2018,76 @@ pub const IMPORT_SCOPE_VALUES: &[&str] = &["all", "current-project", "global"];
 /// is intentionally NOT added to SPEC_CONST_TABLE — there are no pipe-delimited
 /// subcommand names in the hint that need to be cross-checked.
 pub const IMPORT_SUBCOMMAND_NAMES: &[&str] = &["claude-code"];
+
+// ── /cursor ────────────────────────────────────────────────────────────────────
+
+/// Subcommand tree for `/cursor` (v2.2.15).
+///
+/// Six subcommands drive the Cursor Cloud Agents REST API.  The list here
+/// must stay in sync with the `CursorSubcommand` enum in `lib.rs`, the spec
+/// hint in `specs.rs`, and the handler in `handlers.rs`.
+pub const CURSOR_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "launch",
+        summary: "Launch a new Cursor Cloud Agent with the given prompt",
+        args: &[ArgSpec::FreeText { hint: "<prompt>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "list",
+        summary: "List agents (optionally filtered by --archived or --pr=<url>)",
+        args: &[
+            ArgSpec::OptionalFlag {
+                name: "--archived",
+                value: None,
+            },
+            ArgSpec::OptionalFlag {
+                name: "--pr",
+                value: Some(ArgSpecValue::FreeText { hint: "<url>" }),
+            },
+            ArgSpec::OptionalFlag {
+                name: "--cursor",
+                value: Some(ArgSpecValue::FreeText { hint: "<token>" }),
+            },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "get",
+        summary: "Show full details for a specific agent (and recent runs)",
+        args: &[ArgSpec::FreeText { hint: "<agent_id>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "cancel",
+        summary: "Cancel the active (or specified) run for an agent",
+        args: &[
+            ArgSpec::FreeText { hint: "<agent_id>" },
+            ArgSpec::FreeText { hint: "[run_id]" },
+        ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "artifacts",
+        summary: "List artifacts and render presigned download URLs",
+        args: &[ArgSpec::FreeText { hint: "<agent_id>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "stream",
+        summary: "Re-attach to the SSE event stream for an existing run",
+        args: &[
+            ArgSpec::FreeText { hint: "<agent_id>" },
+            ArgSpec::FreeText { hint: "<run_id>" },
+        ],
+        subcommands: &[],
+    },
+];
+
+/// Canonical subcommand names for `/cursor`.
+///
+/// These tokens match the `CursorSubcommand` enum variants and the hint in
+/// `specs.rs`.  The drift-prevention gate `every_subcommand_in_hint_is_in_const`
+/// validates them.
+pub const CURSOR_SUBCOMMAND_NAMES: &[&str] =
+    &["launch", "list", "get", "cancel", "artifacts", "stream"];

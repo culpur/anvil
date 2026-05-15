@@ -38,7 +38,7 @@ pub use subcommands::{
     ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
     RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
     MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES, CONFIG_SUBCOMMAND_NAMES,
-    IMPORT_SUBCOMMAND_NAMES,
+    IMPORT_SUBCOMMAND_NAMES, CURSOR_SUBCOMMAND_NAMES,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,7 +493,45 @@ pub enum SlashCommand {
         /// When `true`, also import session transcripts (expensive; Bucket 3).
         include_sessions: bool,
     },
+    /// `/cursor <subcommand> …` — Cursor Cloud Agents command tree (v2.2.15).
+    ///
+    /// Six subcommands drive the Cursor Cloud Agents REST API directly:
+    ///   launch, list, get, cancel, artifacts, stream.
+    ///
+    /// The Cursor API uses agent-orchestration (POST /v1/agents, SSE streams,
+    /// GitHub repo binding) rather than the chat-completions model used by
+    /// `/model`; this dedicated command tree exposes its full surface.
+    Cursor {
+        subcommand: CursorSubcommand,
+    },
     Unknown(String),
+}
+
+/// Sub-commands for `/cursor`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CursorSubcommand {
+    /// `/cursor launch <prompt>` — POST /v1/agents, open SSE stream
+    Launch { prompt: String },
+    /// `/cursor list [--archived] [--pr=<url>] [--cursor=<token>]`
+    List {
+        archived: bool,
+        pr_filter: Option<String>,
+        cursor_token: Option<String>,
+    },
+    /// `/cursor get <agent_id>` — GET /v1/agents/{id} + recent runs
+    Get { agent_id: String },
+    /// `/cursor cancel <agent_id> [<run_id>]`
+    Cancel {
+        agent_id: String,
+        run_id: Option<String>,
+    },
+    /// `/cursor artifacts <agent_id>` — list + presigned download URLs
+    Artifacts { agent_id: String },
+    /// `/cursor stream <agent_id> <run_id>` — re-attach SSE stream
+    Stream {
+        agent_id: String,
+        run_id: String,
+    },
 }
 
 /// Sub-commands for `/agent`.
@@ -906,6 +944,80 @@ impl SlashCommand {
             "scroll-speed" | "scroll_speed" | "scrollspeed" => Self::ScrollSpeed {
                 lines: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
+            "cursor" => {
+                // `/cursor <subcommand> [args…]`
+                let sub = parts.next().unwrap_or("");
+                match sub {
+                    "launch" => {
+                        let prompt = parts.collect::<Vec<_>>().join(" ");
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Launch { prompt },
+                        }
+                    }
+                    "list" => {
+                        let mut archived = false;
+                        let mut pr_filter: Option<String> = None;
+                        let mut cursor_token: Option<String> = None;
+                        for arg in parts.by_ref() {
+                            if arg == "--archived" {
+                                archived = true;
+                            } else if let Some(val) = arg.strip_prefix("--pr=") {
+                                pr_filter = Some(val.to_string());
+                            } else if let Some(val) = arg.strip_prefix("--cursor=") {
+                                cursor_token = Some(val.to_string());
+                            }
+                        }
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::List {
+                                archived,
+                                pr_filter,
+                                cursor_token,
+                            },
+                        }
+                    }
+                    "get" => {
+                        let agent_id = parts.next().unwrap_or("").to_string();
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Get { agent_id },
+                        }
+                    }
+                    "cancel" => {
+                        let agent_id = parts.next().unwrap_or("").to_string();
+                        let run_id = parts.next().map(ToOwned::to_owned);
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Cancel { agent_id, run_id },
+                        }
+                    }
+                    "artifacts" => {
+                        let agent_id = parts.next().unwrap_or("").to_string();
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Artifacts { agent_id },
+                        }
+                    }
+                    "stream" => {
+                        let agent_id = parts.next().unwrap_or("").to_string();
+                        let run_id = parts.next().unwrap_or("").to_string();
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Stream { agent_id, run_id },
+                        }
+                    }
+                    // No subcommand or unknown: parse as Launch with empty
+                    // prompt so parse() still returns Some(_) and the handler
+                    // can print usage guidance.
+                    _ => {
+                        let rest = if sub.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{sub} {}", parts.collect::<Vec<_>>().join(" "))
+                                .trim()
+                                .to_string()
+                        };
+                        Self::Cursor {
+                            subcommand: CursorSubcommand::Launch { prompt: rest },
+                        }
+                    }
+                }
+            }
             "import" => {
                 // `/import [claude-code] [--dry-run] [--scope=<val>] [--include-sessions]`
                 let mut source: Option<String> = None;
@@ -1547,7 +1659,7 @@ mod tests {
         // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
         // v2.2.14: +1 (/ollama spec re-added in 142d5fa to close W4-merge drift) = 112 total
         // v2.2.14 Phase 6.0: +1 (/import — migration arc foundation) = 113 total
-        assert_eq!(slash_command_specs().len(), 113);
+        assert_eq!(slash_command_specs().len(), 114);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -2469,7 +2581,7 @@ mod tests {
     #[test]
     fn every_slash_command_variant_has_a_spec() {
         use super::specs::slash_command_specs;
-        use super::{AgentSubcommand, SkillSubcommand, SlashCommand};
+        use super::{AgentSubcommand, CursorSubcommand, SkillSubcommand, SlashCommand};
         use std::collections::HashSet;
 
         // Exhaustive match — no `_ =>` wildcard. Compiler enforces every
@@ -2591,6 +2703,7 @@ mod tests {
                 SlashCommand::CmdCache { .. } => Some("cmd-cache"),
                 SlashCommand::ScrollSpeed { .. } => Some("scroll-speed"),
                 SlashCommand::Import { .. } => Some("import"),
+                SlashCommand::Cursor { .. } => Some("cursor"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -2717,6 +2830,9 @@ mod tests {
                 dry_run: false,
                 scope: None,
                 include_sessions: false,
+            },
+            SlashCommand::Cursor {
+                subcommand: CursorSubcommand::Launch { prompt: String::new() },
             },
             SlashCommand::Unknown(String::new()),
         ];
@@ -2965,6 +3081,7 @@ mod tests {
         "cmd-cache",
         "scroll-speed",
         "import",
+        "cursor",
     ];
 
     /// Gate 1a: every spec name has a corresponding handler arm.
@@ -3346,6 +3463,7 @@ mod tests {
         ("memory", super::subcommands::MEMORY_SUBCOMMAND_NAMES),
         ("skills", super::subcommands::SKILLS_SUBCOMMAND_NAMES),
         ("config", super::subcommands::CONFIG_SUBCOMMAND_NAMES),
+        ("cursor", super::subcommands::CURSOR_SUBCOMMAND_NAMES),
     ];
 
     #[test]
