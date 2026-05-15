@@ -1177,18 +1177,20 @@ pub fn run_import_pipeline_headless(
     otel_import_discovered("plugins", plugins_found);
 
     // ── 6. Sessions (gated on include_sessions) ───────────────────────────────────
-    // Build a MockSummarizer-based opts object for the headless pipeline.
-    // The real ProviderSummarizer is injected by callers that have a live runtime;
-    // the headless (wizard/CLI) path uses MockSummarizer as a safe default so the
-    // pipeline can report discovery counts even when no provider is configured.
-    // The actual summarization runs only when include_sessions is true.
+    // When --include-sessions is explicit, provider detection must fail loud
+    // rather than fall back to MockSummarizer (which would produce nonsense
+    // summaries stamped as real in DailyStore). Per feedback-no-silent-deferral.md:
+    // don't silently substitute output the user didn't ask for.
     let mut session_opts = if include_sessions {
-        // Attempt to detect a real provider; fall back to mock on failure.
+        let summarizer = runtime::import::sessions::ProviderSummarizer::detect()
+            .map_err(|e| format!(
+                "--include-sessions requested but no summarization provider available: {e}. \
+                 Configure a provider (run `anvil login` or start `ollama serve`) and retry, \
+                 or omit --include-sessions to skip session summarization."
+            ))?;
         runtime::import::sessions::SessionImportOpts {
             include_sessions: true,
-            summarizer: runtime::import::sessions::ProviderSummarizer::detect()
-                .map(|p| Box::new(p) as Box<dyn runtime::import::sessions::SessionSummarizer>)
-                .unwrap_or_else(|_| Box::new(runtime::import::sessions::MockSummarizer)),
+            summarizer: Box::new(summarizer),
         }
     } else {
         runtime::import::sessions::SessionImportOpts::disabled()
