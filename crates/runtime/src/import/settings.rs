@@ -783,7 +783,7 @@ impl Stager for SettingsStager {
 /// This is the standalone function called by `handlers.rs::handle_import_command`
 /// (or by the Phase 6.1 composer) — no trait plumbing needed at the call site.
 ///
-/// Returns `(has_conflicts, warnings, unknown_keys)` so the caller can record
+/// Returns `(conflict_count, warnings, unknown_keys)` so the caller can record
 /// the outcome in the manifest.
 ///
 /// # Errors
@@ -793,10 +793,10 @@ impl Stager for SettingsStager {
 pub fn run_settings_import(
     cc_profile_dir: &Path,
     staging: &StagingDir,
-) -> Result<(bool, Vec<String>, Vec<String>), String> {
+) -> Result<(usize, Vec<String>, Vec<String>), String> {
     let cc_settings_path = cc_profile_dir.join("settings.json");
     if !cc_settings_path.exists() {
-        return Ok((false, vec![], vec![]));
+        return Ok((0, vec![], vec![]));
     }
 
     let cc_bytes = std::fs::read(&cc_settings_path)
@@ -844,8 +844,8 @@ pub fn run_settings_import(
         .stage_bytes("settings/conflicts.json", &conflicts_bytes)
         .map_err(|e| e.to_string())?;
 
-    let has_conflicts = !result.conflicts.is_empty();
-    Ok((has_conflicts, result.warnings, result.unknown_keys))
+    let conflict_count = result.conflicts.len();
+    Ok((conflict_count, result.warnings, result.unknown_keys))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1196,8 +1196,8 @@ mod tests {
 
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
 
-        let (has_conflicts, warnings, unknown_keys) = result.unwrap();
-        assert!(!has_conflicts);
+        let (conflict_count, warnings, unknown_keys) = result.unwrap();
+        assert_eq!(conflict_count, 0);
         assert!(warnings.is_empty() || !warnings.is_empty()); // just that it ran
         assert!(unknown_keys.is_empty());
 
@@ -1246,8 +1246,9 @@ mod tests {
 
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
 
-        let (has_conflicts, _warnings, _unknown_keys) = result.unwrap();
-        assert!(has_conflicts, "should detect theme conflict");
+        let (conflict_count, _warnings, _unknown_keys) = result.unwrap();
+        assert!(conflict_count > 0, "should detect at least 1 theme conflict");
+        assert_eq!(conflict_count, 1, "exactly 1 theme conflict");
 
         let conflicts_path = staging.path("settings/conflicts.json");
         let conflicts: JsonValue =
@@ -1271,8 +1272,8 @@ mod tests {
 
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME") };
 
-        let (has_conflicts, warnings, unknown_keys) = result.unwrap();
-        assert!(!has_conflicts);
+        let (conflict_count, warnings, unknown_keys) = result.unwrap();
+        assert_eq!(conflict_count, 0);
         assert!(warnings.is_empty());
         assert!(unknown_keys.is_empty());
     }

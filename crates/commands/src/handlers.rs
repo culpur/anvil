@@ -1116,13 +1116,13 @@ pub fn run_import_pipeline_headless(
     otel_import_discovered("instructions", instr_found);
 
     // ── 3. Settings ───────────────────────────────────────────────────────────────
-    // run_settings_import returns (has_conflicts, warnings, unknown_keys)
+    // run_settings_import returns (conflict_count, warnings, unknown_keys)
     let settings_result = run_settings_import(&profile_dir, &staging);
     let (settings_found, settings_has_conflicts, settings_conflict_count) = match &settings_result {
-        Ok((has_conflicts, _warnings, _unknown_keys)) => {
+        Ok((conflict_count, _warnings, _unknown_keys)) => {
             let found = if profile_dir.join("settings.json").exists() { 1usize } else { 0usize };
-            let conflict_count = if *has_conflicts { 1usize } else { 0usize }; // at least one key conflicts
-            (found, *has_conflicts, conflict_count)
+            let has_conflicts = *conflict_count > 0;
+            (found, has_conflicts, *conflict_count)
         }
         Err(_) => (0usize, false, 0usize),
     };
