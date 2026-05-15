@@ -858,6 +858,9 @@ pub(crate) fn run_first_run_wizard() {
         }
     };
 
+    // ── Step 8 (optional): CC migration detection ────────────────────────────
+    wizard_run_migration_step();
+
     // ── Final summary banner ───────────────────────────────────────────────────
     let provider_chain = provider_priority.join(" \u{2192} ");
     println!();
@@ -874,4 +877,110 @@ pub(crate) fn run_first_run_wizard() {
     wizard_box_line("");
     wizard_box_bot();
     println!();
+}
+
+// ── Migration detection step ─────────────────────────────────────────────────
+
+/// Return the path where the "user declined migration" flag is stored.
+///
+/// When this file exists, the wizard migration step is silently skipped.
+/// The user can still run `/import claude-code` manually.
+pub(crate) fn import_skipped_flag_path() -> Option<std::path::PathBuf> {
+    dirs_next::home_dir().map(|h| h.join(".anvil").join(".import-skipped"))
+}
+
+/// Return `true` if the user has previously declined the migration prompt.
+pub(crate) fn import_was_skipped() -> bool {
+    import_skipped_flag_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+/// Write the `.import-skipped` flag so the wizard does not prompt again.
+pub(crate) fn write_import_skipped_flag() -> io::Result<()> {
+    let Some(path) = import_skipped_flag_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, b"")
+}
+
+/// Run the optional migration detection step during the first-run wizard.
+///
+/// - If `~/.claude/` does not exist, nothing is shown.
+/// - If the `.import-skipped` flag is present, nothing is shown.
+/// - If CC is detected, prompt the user; on yes run the migration, on no
+///   write the skip flag.
+fn wizard_run_migration_step() {
+    // Check for the skip flag first.
+    if import_was_skipped() {
+        return;
+    }
+
+    let claude_dir = dirs_next::home_dir()
+        .map(|h| h.join(".claude"))
+        .filter(|p| p.exists());
+
+    let Some(claude_dir) = claude_dir else {
+        return;
+    };
+
+    println!();
+    println!("\x1b[1;33mCC Installation Detected\x1b[0m");
+    println!("\x1b[33m{}\x1b[0m", "\u{2501}".repeat(40));
+    println!();
+    println!("  I found CC at: {}", claude_dir.display());
+    println!("  Want me to migrate your memory, instructions, and skills?");
+    println!();
+    println!("  This imports:");
+    println!("    - Memory entries  (~/.claude/projects/*/memory/*.md)");
+    println!("    - CLAUDE.md files (global + per-project)");
+    println!("    - Skills and settings (translated to Anvil format)");
+    println!();
+    println!("  Nothing is deleted from CC — Anvil reads only.");
+    println!();
+
+    let choice = wizard_read_line("  Migrate now? [Y/n]: ");
+    match choice.to_ascii_lowercase().trim() {
+        "n" | "no" => {
+            println!("  OK. Run `/import claude-code` any time to migrate manually.");
+            if let Err(e) = write_import_skipped_flag() {
+                eprintln!("  Warning: could not write skip flag: {e}");
+            }
+        }
+        _ => {
+            // Default is yes.
+            println!();
+            println!("  Starting migration...");
+            println!("  (Run `/import claude-code --dry-run` first to preview what will land)");
+            println!();
+            wizard_run_import_pipeline(&claude_dir);
+        }
+    }
+}
+
+/// Run the import pipeline from inside the wizard.
+///
+/// Calls the same library function used by `/import claude-code`.
+/// Progress is printed to stdout since the TUI is not yet running.
+fn wizard_run_import_pipeline(claude_dir: &std::path::Path) {
+    use runtime::ImportSource;
+    let source = ImportSource::ClaudeCode {
+        profile_dir: claude_dir.to_path_buf(),
+    };
+    match commands::handlers::run_import_pipeline_headless(&source, false, false) {
+        Ok(summary) => {
+            println!("{summary}");
+            println!();
+            println!("  \x1b[32mMigration complete.\x1b[0m");
+            println!("  Report written to ~/.anvil/.import-report.md");
+            println!("  Run `/memory show semantic` to see imported memory entries.");
+        }
+        Err(e) => {
+            println!("  \x1b[31mMigration encountered an error: {e}\x1b[0m");
+            println!("  You can retry later with `/import claude-code`.");
+        }
+    }
 }
