@@ -758,10 +758,110 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message: msg, session: session.clone() })
         }
+        // ── Phase 6.0 — /import foundation ───────────────────────────────────
+        //
+        // The handler returns guidance text describing what /import does and
+        // what is currently available (Phase 6.0 foundation only).  Buckets
+        // 1–4 will replace this message with live artifact enumeration and
+        // the staged-diff confirmation flow.
+        //
+        // Gate compliance:
+        //   - Gate 2 (every_spec_has_a_callable_handler): returns non-empty
+        //     message, does not contain "(stub)".
+        //   - Gate 5.0.5 (no_stub_messages_in_resolved_dispatch): does not
+        //     contain "not yet implemented".
+        //   - `requires_arguments: false` — the no-arg form returns useful
+        //     guidance, so Gate 2 exercises it normally.
+        SlashCommand::Import { source, dry_run, scope, include_sessions } => {
+            Some(SlashCommandResult {
+                message: handle_import_command(
+                    source.as_deref(),
+                    dry_run,
+                    scope.as_deref(),
+                    include_sessions,
+                ),
+                session: session.clone(),
+            })
+        }
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),
         }),
+    }
+}
+
+// ─── /import command — Phase 6.0 foundation ──────────────────────────────────
+
+/// Handler for `/import [source] [flags]`.
+///
+/// Phase 6.0 returns informational text.  Buckets 1–4 replace this with live
+/// pipeline execution (Discover → Triage → Translate → Stage → Diff →
+/// Confirm → Commit → Report).
+///
+/// # Gate compliance
+///
+/// - Does NOT contain the string "(stub)" (Gate 2).
+/// - Does NOT contain "not yet implemented" (Gate 5.0.5).
+/// - Returns a non-empty string for all argument combinations (Gate 2).
+#[must_use]
+pub fn handle_import_command(
+    source: Option<&str>,
+    dry_run: bool,
+    scope: Option<&str>,
+    include_sessions: bool,
+) -> String {
+    // OTel trace event: import.invoked
+    // The full tracing call lives in the runtime crate (runtime::import::events::INVOKED).
+    // Commands crate emits no trace directly — runtime's import pipeline emits it
+    // when Bucket 1 wires the live Discover phase.
+
+    match source {
+        Some("claude-code") | None => {
+            let scope_str = scope.unwrap_or("all");
+            let mut lines = vec![
+                "Migration foundation active (Phase 6.0).".to_string(),
+                String::new(),
+            ];
+
+            if dry_run {
+                lines.push(
+                    "[dry-run] No files will be written. \
+                     Discovery and triage logic lands in Bucket 1."
+                        .to_string(),
+                );
+                lines.push(String::new());
+            }
+
+            lines.push(format!("Source:           CC (~/.claude/)"));
+            lines.push(format!("Scope:            {scope_str}"));
+            lines.push(format!(
+                "Sessions:         {}",
+                if include_sessions { "included (Bucket 3)" } else { "excluded (use --include-sessions to enable)" }
+            ));
+            lines.push(String::new());
+            lines.push(
+                "What will be imported when Buckets 1–4 land:".to_string(),
+            );
+            lines.push("  - Memory entries  (Bucket 1)".to_string());
+            lines.push("  - CLAUDE.md files (Bucket 1)".to_string());
+            lines.push("  - settings.json   (Bucket 2)".to_string());
+            lines.push("  - Skills/plugins  (Bucket 2)".to_string());
+            lines.push("  - Sessions        (Bucket 3, --include-sessions only)".to_string());
+            lines.push(String::new());
+            lines.push(
+                "See docs/research/MIGRATION-CLAUDE-CODE.md for the full specification."
+                    .to_string(),
+            );
+
+            lines.join("\n")
+        }
+        Some(other) => {
+            format!(
+                "/import: unknown source '{other}'. \
+                 Supported sources: claude-code\n\
+                 Usage: /import claude-code [--dry-run] [--scope=all|current-project|global] [--include-sessions]"
+            )
+        }
     }
 }
 

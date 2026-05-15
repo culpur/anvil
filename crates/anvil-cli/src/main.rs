@@ -1803,6 +1803,7 @@ fn run_resume_command(
         | SlashCommand::FileCache { .. }
         | SlashCommand::CmdCache { .. }
         | SlashCommand::ScrollSpeed { .. }
+        | SlashCommand::Import { .. }
         | SlashCommand::Profile { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
@@ -5634,6 +5635,17 @@ impl LiveCli {
             }
             SlashCommand::ScrollSpeed { lines } => {
                 (run_scroll_speed_command(lines.as_deref()), false)
+            }
+            SlashCommand::Import { source, dry_run, scope, include_sessions } => {
+                // Phase 6.0 foundation: route through the commands-crate handler.
+                // Buckets 1–4 will replace this with live pipeline execution.
+                let msg = commands::handlers::handle_import_command(
+                    source.as_deref(),
+                    dry_run,
+                    scope.as_deref(),
+                    include_sessions,
+                );
+                (msg, false)
             }
             SlashCommand::Profile { action } => {
                 let msg = render_profile_command(action.as_deref());

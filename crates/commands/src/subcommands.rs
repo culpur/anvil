@@ -1955,3 +1955,42 @@ pub const CONFIG_SUBCOMMAND_NAMES: &[&str] = &[
     "model",
     "plugins",
 ];
+
+// ── /import ────────────────────────────────────────────────────────────────
+
+/// Subcommand tree for `/import`.
+///
+/// Phase 6.0 ships one source: `claude-code`.  `file` and `url` are future
+/// arcs and are listed here for completeness but have no dispatch logic yet.
+pub const IMPORT_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "claude-code",
+        summary: "Import from a local CC installation (~/.claude/)",
+        args: &[
+            ArgSpec::OptionalFlag {
+                name: "--dry-run",
+                value: None,
+            },
+            ArgSpec::OptionalFlag {
+                name: "--scope",
+                value: Some(ArgSpecValue::OneOf(IMPORT_SCOPE_VALUES)),
+            },
+            ArgSpec::OptionalFlag {
+                name: "--include-sessions",
+                value: None,
+            },
+        ],
+        subcommands: &[],
+    },
+];
+
+/// Scope values for `/import --scope`.
+pub const IMPORT_SCOPE_VALUES: &[&str] = &["all", "current-project", "global"];
+
+/// Canonical subcommand names for `/import`.
+///
+/// Used by the Phase 5.2c drift-prevention gate `every_subcommand_in_hint_is_in_const`.
+/// The hint in specs.rs uses comma-separated scope values (not `|`) so it
+/// is intentionally NOT added to SPEC_CONST_TABLE — there are no pipe-delimited
+/// subcommand names in the hint that need to be cross-checked.
+pub const IMPORT_SUBCOMMAND_NAMES: &[&str] = &["claude-code"];

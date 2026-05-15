@@ -38,6 +38,7 @@ pub use subcommands::{
     ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
     RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
     MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES, CONFIG_SUBCOMMAND_NAMES,
+    IMPORT_SUBCOMMAND_NAMES,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,6 +478,21 @@ pub enum SlashCommand {
     ScrollSpeed {
         lines: Option<String>,
     },
+    /// `/import [claude-code] [--dry-run] [--scope=all|current-project|global] [--include-sessions]`
+    ///
+    /// Phase 6 migration arc: import artifacts from a CC installation into
+    /// Anvil.  Phase 6.0 wires the variant and routing; concrete artifact
+    /// import logic lands in Buckets 1–4.
+    Import {
+        /// Import source: `claude-code` (Phase 6.0), `file`, `url` (future arcs).
+        source: Option<String>,
+        /// When `true`, enumerate and report without writing anything.
+        dry_run: bool,
+        /// Scope: `all` (default), `current-project`, `global`.
+        scope: Option<String>,
+        /// When `true`, also import session transcripts (expensive; Bucket 3).
+        include_sessions: bool,
+    },
     Unknown(String),
 }
 
@@ -890,6 +906,32 @@ impl SlashCommand {
             "scroll-speed" | "scroll_speed" | "scrollspeed" => Self::ScrollSpeed {
                 lines: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
+            "import" => {
+                // `/import [claude-code] [--dry-run] [--scope=<val>] [--include-sessions]`
+                let mut source: Option<String> = None;
+                let mut dry_run = false;
+                let mut scope: Option<String> = None;
+                let mut include_sessions = false;
+
+                for token in parts.by_ref() {
+                    match token {
+                        "--dry-run" => dry_run = true,
+                        "--include-sessions" => include_sessions = true,
+                        t if t.starts_with("--scope=") => {
+                            scope = Some(t["--scope=".len()..].to_string());
+                        }
+                        t if t.starts_with("--scope") => {
+                            // Handle `--scope value` (space-separated form)
+                            // consumed by the next iteration if present
+                            scope = None; // will be overwritten below if next token is value
+                            let _ = t; // flag without value — ignore
+                        }
+                        "claude-code" => source = Some("claude-code".to_string()),
+                        _ => {} // unknown tokens: ignore for forward-compat
+                    }
+                }
+                Self::Import { source, dry_run, scope, include_sessions }
+            }
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1504,7 +1546,8 @@ mod tests {
         // v2.3 W11: +1 (file-cache), W12: +1 (cmd-cache) = 110 total
         // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
         // v2.2.14: +1 (/ollama spec re-added in 142d5fa to close W4-merge drift) = 112 total
-        assert_eq!(slash_command_specs().len(), 112);
+        // v2.2.14 Phase 6.0: +1 (/import — migration arc foundation) = 113 total
+        assert_eq!(slash_command_specs().len(), 113);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -2547,6 +2590,7 @@ mod tests {
                 SlashCommand::FileCache { .. } => Some("file-cache"),
                 SlashCommand::CmdCache { .. } => Some("cmd-cache"),
                 SlashCommand::ScrollSpeed { .. } => Some("scroll-speed"),
+                SlashCommand::Import { .. } => Some("import"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -2668,6 +2712,12 @@ mod tests {
             SlashCommand::FileCache { action: None },
             SlashCommand::CmdCache { action: None },
             SlashCommand::ScrollSpeed { lines: None },
+            SlashCommand::Import {
+                source: None,
+                dry_run: false,
+                scope: None,
+                include_sessions: false,
+            },
             SlashCommand::Unknown(String::new()),
         ];
 
@@ -2914,6 +2964,7 @@ mod tests {
         "file-cache",
         "cmd-cache",
         "scroll-speed",
+        "import",
     ];
 
     /// Gate 1a: every spec name has a corresponding handler arm.

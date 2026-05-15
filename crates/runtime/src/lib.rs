@@ -19,6 +19,7 @@ pub mod memory;
 pub mod nominations;
 pub mod private_memory;
 pub mod qmd;
+pub mod import;
 pub mod routines;
 pub mod ollama_tune;
 pub mod scroll_speed;
@@ -155,6 +156,15 @@ pub use team::{
 };
 pub use memory::{memory_dir_for_project, project_path_hash, MemoryFile, MemoryManager, MemoryType};
 pub use scroll_speed::{get_scroll_speed, reset_scroll_speed, set_scroll_speed};
+pub use import::{
+    sha256_hex, sha256_file, now_rfc3339,
+    ImportArtifact, ImportArtifactMeta, ImportSource, SettingsScope,
+    ImportEntry, ImportEntryStatus, ImportManifest, ManifestError,
+    StagingDir, StagingError, CommitReport, CommitResult,
+    TriageDecision, TranslationResult,
+    generate_report,
+    staging_dir, anvil_config_home,
+};
 pub use auto_mode::AutoModeConfig;
 pub use auto_promote::{
     install_default as install_auto_promote_default, install_global as install_auto_promote,

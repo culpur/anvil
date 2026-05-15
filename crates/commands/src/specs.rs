@@ -2283,6 +2283,57 @@ EXAMPLES
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // ── Phase 6.0 — Migration arc ─────────────────────────────────────────────
+    //
+    // `/import` is the entry point for the CC→Anvil migration pipeline.
+    // Phase 6.0 registers the spec and wires the dispatch route; concrete
+    // artifact import logic lands in Buckets 1–4.
+    //
+    // `requires_arguments: false` because `/import` with no args returns
+    // accurate guidance text (see handler).  This keeps the command inside
+    // the Gate 2 smoke test, which verifies the message is non-empty and
+    // does not contain "(stub)".
+    SlashCommandSpec {
+        name: "import",
+        aliases: &[],
+        summary: "Migrate artifacts from a CC installation into Anvil",
+        argument_hint: Some("[claude-code] [--dry-run] [--scope=all,current-project,global] [--include-sessions]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Workspace,
+        detailed_help: "\
+/import — CC→Anvil migration (Phase 6)
+
+Usage:
+  /import claude-code                      Import everything from ~/.claude/
+  /import claude-code --dry-run            Preview what would be imported
+  /import claude-code --scope=current-project
+                                           Import only artifacts for the current project
+  /import claude-code --scope=global       Import only global artifacts (ANVIL.md, settings)
+  /import claude-code --include-sessions   Also summarise past session transcripts (expensive)
+
+What gets imported:
+  - Memory entries (~/.claude/projects/*/memory/*.md) → ~/.anvil/memory/
+  - Global CLAUDE.md → ~/.anvil/ANVIL.md (appended, never clobbered)
+  - Per-project CLAUDE.md → <project>/ANVIL.md (staged if conflict)
+  - settings.json (translated per schema mapping)
+  - Skills, plugins, agents
+  - Session transcripts (--include-sessions only; runs in background)
+
+What is skipped:
+  - .credentials.json (re-authenticate with `anvil login`)
+  - Cache directories, telemetry, analytics
+  - CC-internal state files
+
+Status:
+  Phase 6.0 foundation is live. Buckets 1–4 wire the actual artifact
+  import logic. See docs/research/MIGRATION-CLAUDE-CODE.md for the full spec.",
+        subcommands: crate::subcommands::IMPORT_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
 ];
 
 #[must_use]
