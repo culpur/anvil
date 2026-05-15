@@ -6,13 +6,13 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.13-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.15-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
-[![6 AI Providers](https://img.shields.io/badge/6%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![31 AI Providers](https://img.shields.io/badge/31%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
 
 **Your providers. Your credentials. Your data. Your cost.**<br>
-**Six AI providers, one terminal. Switch freely. Own your workflow.**
+**31 AI providers, one terminal. Switch freely. Own your workflow.**
 
 [**Download**](https://github.com/culpur/anvil/releases/latest) &bull; [**AnvilHub**](https://anvilhub.culpur.net) &bull; [**Changelog**](#changelog) &bull; [**Product Page**](https://culpur.net/anvil/)
 
@@ -27,7 +27,7 @@ Other AI coding assistants come with a leash. One vendor's pipe, one vendor's pr
 
 **Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
 
-No account required. No telemetry. No lock-in. A single ~22&ndash;27 MB binary, zero dependencies, six providers, seven platforms.
+No account required. No telemetry. No lock-in. A single ~24&ndash;42 MB binary, zero dependencies, **31 providers, seven platforms**.
 
 ---
 
@@ -35,7 +35,7 @@ No account required. No telemetry. No lock-in. A single ~22&ndash;27 MB binary, 
 
 | | |
 |---|---|
-| &#128273; **Your providers** | Anthropic, OpenAI, Google, xAI, Ollama local, or Ollama Cloud. Configure priority chains. Automatic failover when one throttles. Never locked in. |
+| &#128273; **Your providers** | 31 providers including Anthropic (Max-plan OAuth supported), OpenAI, Google Gemini (Code Assist OAuth), AWS Bedrock (manual SigV4, no AWS SDK), Cursor Cloud Agents, GitHub Copilot, Azure OpenAI, Ollama (local + cloud), Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax. Configure priority chains. Automatic failover when one throttles. Never locked in. |
 | &#128274; **Your credentials** | Typed credential vault &mdash; AES-256-GCM encrypted with Argon2id. API keys, SSH keys, TLS certs, TOTP codes, DB URLs. Nothing touches disk unencrypted. |
 | &#128737; **Your data** | Single binary, zero telemetry, local Ollama support. Run air-gapped. Your prompts and code never leave your machine unless you send them. |
 | &#128176; **Your cost** | Per-provider budgets. Per-session cost tracking. Hard caps. See what every token costs before you spend it. Run Ollama for zero-cost inference. |
@@ -77,21 +77,55 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
-## What's new in v2.2.13
+## What's new in v2.2.15 &mdash; The largest release in Anvil's history
 
-**Windows is back, BSD joins, routines on disk.**
+**121 commits over v2.2.13. The provider catalog grows 6x. Cursor lands as a first-class agent surface. `/model` reaches across every configured provider in one TAB-completable list. Two foundational arcs that started in v2.2.5 finish here.**
+
+### Provider catalog: 5 &rarr; 31
+
+Six became thirty-one. Every implementation either uses a documented public API or identifies as Anvil honestly in headers &mdash; **no IDE spoofing, no scraped credentials, no silent fallbacks.**
+
+- **AWS Bedrock** &mdash; hand-rolled SigV4 signing (no AWS SDK = ~50&nbsp;MB smaller binary), audited against AWS test vectors. `InvokeModel` + `InvokeModelWithResponseStream`.
+- **Google Gemini OAuth + Antigravity** &mdash; Code Assist OAuth with PKCE flow, dynamic-port localhost callback, atomic token save, pre-emptive refresh. Headers identify Anvil honestly &mdash; not VS Code.
+- **GitHub Copilot** &mdash; device flow.
+- **Azure OpenAI** &mdash; deployment-name + `api-version` URL pattern.
+- **Cursor Cloud Agents** &mdash; public API, repo-bound (see `/cursor` below).
+- **24 OpenAI-compatible providers** added in one cycle: Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together&nbsp;AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, OpenCode, OpenCode-Go.
+
+`/provider login <slug>` runs the right flow for each: API-key paste with live validation for direct-key providers, OAuth PKCE for Google, device flow for Copilot, SigV4 for Bedrock.
+
+### `/cursor` first-class command tree
+
+Cursor's public Cloud Agents API is repo-bound and uses a different UX than a typical chat provider, so it gets its own command tree. Six TAB-completable subcommands:
+
+- `/cursor launch <prompt>` &mdash; spawn an agent on the current workspace's GitHub repo, opens an SSE-streamed agent tab
+- `/cursor list` &mdash; show active agents with status, model, repo, branch
+- `/cursor get <agent_id>` &mdash; full agent record + recent runs
+- `/cursor cancel <agent_id> [<run_id>]` &mdash; terminate an in-flight run
+- `/cursor artifacts <agent_id>` &mdash; list and download generated files
+- `/cursor stream <agent_id> <run_id>` &mdash; re-attach to an SSE stream with `Last-Event-ID` resume
+
+`git remote get-url origin` is mandatory &mdash; Cursor errors loudly if the current workspace isn't a GitHub repo.
+
+### `/model` cross-provider unified picker
+
+`/model<TAB>` now enumerates **every configured provider's models in one list**, provider-prefixed (`anthropic/claude-4.5-sonnet`, `groq/llama-3.3-70b`, `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0`, `cursor/claude-4-sonnet-thinking`, `ollama/qwen-coder`, ...). Picking a model performs an **atomic switch** &mdash; provider routing, system prompt identity, and TUI chrome all update together. Lists are live-fetched from each provider's `/models` endpoint (cached per session). Unconfigured providers are excluded from the picker.
+
+### Memory Cohesion Arc &mdash; completing v2.2.5
+
+The seven-layer memory system from v2.2.5 (Sensory / Working / Episodic / Semantic / Procedural / Reflective / Long-term) finally cohesion-tests end-to-end. Retrieval-order block in the system prompt, `WorkingMemorySnapshot` as `Vec<PromptSection>`, `PermissionMemory` wired into the permission gate, `/file-cache` real handler replacing the stub, egress allowlist wired into settings + `/policy view`, `/memory why` actually injecting daily summaries into the prompt.
+
+### Capability Cohesion Arc &mdash; 8 axes, enforced at build time
+
+Every Anvil capability now meets an 8-axis contract: **definition / registration / completion / handler / dispatch / rendering / permission gate / OTel + tests**. The cheap-drift gate enforces this at workspace build time &mdash; `every_slash_command_variant_has_a_spec` blocks bidirectional drift. Slash dispatch is unified at one site. Stub messages are banned.
+
+### CC&rarr;Anvil migration
+
+`anvil import claude-code` brings your prior assistant's investment forward verbatim with provenance frontmatter: memory entries get `imported_from` stamps, project instruction files get merge semantics that never clobber existing files, settings get conflict detection, skills get collision handling. Past sessions (up to ~1,800 JSONL files, ~1&nbsp;GB) can be optionally summarized via your configured provider into daily records. The day-2 command `anvil memory clean` rewrites imported entries through a configurable LLM and detects duplicate-meaning entries via Jaccard similarity. The first-run setup wizard offers migration as an opt-in step.
 
 ### Seven platforms
 
-v2.2.13 ships native binaries for **macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, and NetBSD x86_64**. Windows returns from the v2.2.12 hold &mdash; the SSH agent code now `#[cfg(unix)]`-gates the Unix-domain-socket path, and the rest of SSH (key-file, password, keyboard-interactive) works on Windows exactly as it does on Unix. FreeBSD and NetBSD users get drop-in binaries for the first time &mdash; download, `chmod +x`, run.
-
-### Routines foundation on disk
-
-A new module sits quietly in the runtime: `crates/runtime/src/routines/`. Schedule grammar (duration / interval / cron / ISO 8601), on-disk output archive with atomic writes and 0o700 perms, and a packet schema that wraps routine output in anti-injection delimiters with a SHA-256 input hash. No user-facing command surfaces it yet &mdash; this is foundation for the v2.2.14 daemon. **63 new tests.**
-
-### Release pipeline hardening
-
-The v2.2.12 release shipped four binaries instead of five because a subprocess output filter masked the Windows build failure and a stale artifact was published. v2.2.13 removes the mask: failed cross-compiles now hard-fail before any artifact gets uploaded. Combined with v2.2.12's tag-vs-HEAD pre-flight, build-from-tagged-commit, and render-time changelog injection, partial or stale releases are no longer possible.
+macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified at [anvilhub.culpur.net/sha256/](https://anvilhub.culpur.net/sha256/).
 
 ---
 
@@ -141,18 +175,45 @@ No account. No sign-in. Download, run, configure your providers.
 
 ---
 
-## Six providers, one terminal
+## 31 providers, one terminal
 
 | Provider | Models | Auth |
 |----------|--------|------|
-| **Anthropic** | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 | OAuth or API Key |
+| **Anthropic** | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 | OAuth (Max plan supported) or API Key |
 | **OpenAI** | GPT-5, o3, o4-mini | API Key |
-| **Google** | Gemini 2.5 Pro, Gemini 2.5 Flash | API Key |
-| **xAI** | Grok-3, Grok-3-mini | API Key |
-| **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma | Local &mdash; no key needed |
+| **OpenAI Codex** | codex-mini | API Key |
+| **Google Gemini OAuth + Antigravity** | Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash Thinking | Code Assist OAuth (PKCE) |
+| **AWS Bedrock** | Anthropic Claude family, Llama, Mistral, Titan | manual SigV4 (no AWS SDK) |
+| **Cursor Cloud Agents** | claude-4-sonnet-thinking, sonnet-4, sonnet-3-7-thinking | API Key + GitHub repo binding |
+| **GitHub Copilot** | gpt-5, gpt-5-mini, gpt-4.1, gpt-4o, sonnet-4, opus-4.5 | Device flow |
+| **Azure OpenAI** | (deployment-name based) | API Key + `api-version` |
+| **xAI** | Grok-4, Grok-4-mini, Grok-3 | API Key |
+| **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma, GPT-OSS | Local &mdash; no key needed |
 | **Ollama Cloud** | kimi-k2.6:cloud, gpt-oss:120b-cloud | ed25519 device key (via local daemon) |
+| **Groq** | Llama 3.3 70B, Mixtral, DeepSeek R1 | API Key |
+| **Fireworks AI** | Llama 3.1/3.2 family, Mixtral, DeepSeek | API Key |
+| **Mistral** | Mistral Large, Codestral, Mixtral | API Key |
+| **Perplexity** | sonar, sonar-pro, sonar-reasoning | API Key |
+| **DeepSeek** | deepseek-chat, deepseek-coder, deepseek-r1 | API Key |
+| **Together AI** | Llama, Qwen, Mistral, Mixtral, DeepSeek | API Key |
+| **DeepInfra** | Llama, Qwen, DeepSeek, Mistral | API Key |
+| **Cerebras** | Llama 3.1/3.3, Qwen | API Key |
+| **NVIDIA NIM** | Llama 3.x, Nemotron family | API Key |
+| **HuggingFace** | Inference-API hosted models | API Token |
+| **Moonshot AI** | Kimi K2, moonshot-v1 | API Key |
+| **Nebius** | Llama, Qwen, DeepSeek | API Key |
+| **Scaleway** | Llama, Mistral | API Key |
+| **STACKIT** | Llama 3.1 | API Key |
+| **Baseten** | Llama, Qwen, DeepSeek | API Key |
+| **Cortecs** | Llama, Qwen, Mistral | API Key |
+| **302.AI** | OpenAI-compatible aggregator | API Key |
+| **ZAI** | OpenAI-compatible aggregator | API Key |
+| **OpenRouter** | 200+ models from every major provider | API Key |
+| **LMStudio** | local OpenAI-compatible server | Local &mdash; no key needed |
+| **Chutes** | OpenAI-compatible aggregator | API Key |
+| **MiniMax** | minimax-text, abab models | API Key |
 
-Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Cost tracking per session. Zero-cost local inference with Ollama.
+Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Cost tracking per session. Zero-cost local inference with Ollama or LMStudio. **No IDE spoofing, no scraped credentials.** Every provider implementation either uses a documented public API or identifies as Anvil honestly in headers.
 
 ---
 
@@ -176,7 +237,7 @@ anvil                               # Start interactive session
 
 ## Also in the box
 
-**114 slash commands.** 45 built-in tools. MCP integration. Per-tab parallel inference. SSH tabs. Tool-call cards with Ctrl+O expand. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. First-run setup wizard. anvil(1) manpage. All of it optional. None of it required.
+**120+ slash commands** (including the new `/cursor` command tree and `/memory clean` / `/cursor stream` / `anvil agents` cross-session monitor). **31 AI providers.** 45 built-in tools. MCP integration. Per-tab parallel inference. SSH tabs. Tool-call cards with Ctrl+O expand. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. First-run setup wizard. CC&rarr;Anvil migration (`anvil import claude-code`). anvil(1) manpage. All of it optional. None of it required.
 
 Feature list is in [the changelog below](#changelog) and [anvilhub.culpur.net/about](https://anvilhub.culpur.net/about). The feature list isn't the story. The freedom is.
 
@@ -201,6 +262,25 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ## Changelog
 
+
+### v2.2.15 &mdash; May 15, 2026
+
+**The largest release in Anvil's history. 121 commits over v2.2.13. Supersedes the corrupted v2.2.14 tag (never published).**
+
+- &#10003; **Provider catalog 5 &rarr; 31** &mdash; AWS Bedrock (manual SigV4, no AWS SDK), Google Gemini OAuth + Antigravity (Code Assist OAuth with honest Anvil identification &mdash; not VS Code spoofing), GitHub Copilot (device flow), Azure OpenAI (deployment-name + api-version), Cursor Cloud Agents (repo-bound), plus 24 OpenAI-compatible providers: Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, OpenCode, OpenCode-Go.
+- &#10003; **`/cursor` first-class command tree** &mdash; six TAB-completable subcommands (`launch`, `list`, `get`, `cancel`, `artifacts`, `stream`) for Cursor's public Cloud Agents API. Repo-bound by design &mdash; `git remote get-url origin` is mandatory.
+- &#10003; **`/model` cross-provider unified picker** &mdash; one TAB-completable list across every configured provider, provider-prefixed (`anthropic/claude-4.5-sonnet`, `groq/llama-3.3-70b`, `cursor/claude-4-sonnet-thinking`). Atomic switch updates routing + system prompt identity + TUI chrome together. Live-fetched from each provider's `/models` endpoint; static registry is fallback only.
+- &#10003; **Memory Cohesion Arc** &mdash; the seven-layer memory system from v2.2.5 (Sensory / Working / Episodic / Semantic / Procedural / Reflective / Long-term) cohesion-tested end-to-end. Retrieval-order block in system prompt, `WorkingMemorySnapshot` as `Vec<PromptSection>`, `PermissionMemory` wired into permission gate, `/file-cache` real handler, egress allowlist in settings + `/policy view`, `/memory why` injecting daily summaries.
+- &#10003; **Capability Cohesion Arc** &mdash; every Anvil capability now meets an 8-axis contract (definition / registration / completion / handler / dispatch / rendering / permission gate / OTel + tests). Build-time drift gate enforces it. Slash dispatch unified at one site. Stub messages banned.
+- &#10003; **CC&rarr;Anvil migration** &mdash; `anvil import claude-code` brings prior assistant work forward verbatim with provenance frontmatter. Memory entries get `imported_from` stamps. Project instruction files merged without clobbering. Settings get conflict detection. Skills get collision handling. Past sessions (up to ~1,800 JSONL, ~1&nbsp;GB) optionally summarized into daily records. The day-2 command `anvil memory clean` rewrites entries through a configurable LLM and detects duplicate meanings via Jaccard similarity. First-run wizard offers migration as opt-in.
+- &#10003; **CC parity catch-up v2.1.132 &rarr; v2.1.139** &mdash; 17 features + 7 security/verify items: `ANVIL_PROJECT_DIR` / `ANVIL_SESSION_ID` / `ANVIL_DISABLE_ALTERNATE_SCREEN` / `ANVIL_EFFORT` env propagation, transcript view nav, cross-session `anvil agents` live monitor, `worktree.baseRef`, `autoMode.hard_deny` short-circuit, hook `continueOnBlock`, hook args `string[]` exec form, `/scroll-speed` with live preview, `anvil plugin details`, subagent OTel headers with parent-agent-id, plus security gates on `--resume`/`--continue` underscore paths, plan-mode + Edit allow rule write blocking, MCP content-block result visibility, `Skill(name *)` wildcard delimiter check, settings hot-reload on symlinks, stream-idle false-fire elimination, multi-image paste correctness.
+- &#10003; **Token economy + reliability** &mdash; file-fingerprint cache wired into `read_file`/`write_file`/`edit_file`/system prompt (shipped dormant in v2.2.11). Command-output cache wired into `glob_search` and `grep_search`. WebFetch + WebSearch get 5-min and 1-hour TTL caches. Skill-chaining engine depth-3 wired (suggestion engine; executor lands in v2.2.16). Auto-promote engine for `/memory` notes active.
+- &#10003; **Honesty contract codified** &mdash; test-suite-enforced contracts: no silent deferral, 8-axis capability contract, CC-only naming, changelog preservation (historical entries byte-immutable), migration instinct (bring everything verbatim-with-flag), live-model-list (not registry), atomic provider/model switch.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
+
+### v2.2.14 &mdash; (internal-only, never publicly released)
+
+v2.2.14 was tagged internally but never published as binaries due to a release-pipeline incident. All v2.2.14 work is included in v2.2.15 above (Memory Cohesion Arc, Capability Cohesion Arc, CC parity v2.1.132-139, per-tab parallel inference fixes, file-fingerprint cache wiring, auto-promote engine).
 
 ### v2.2.13 &mdash; May 11, 2026
 
