@@ -6,6 +6,8 @@ use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConf
 use crate::providers::copilot::CopilotClient;
 use crate::providers::azure::AzureOpenAiClient;
 use crate::providers::bedrock::BedrockClient;
+use crate::providers::cursor::CursorClient;
+use crate::providers::gemini_oauth::GeminiOAuthClient;
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
@@ -56,10 +58,10 @@ fn openai_compat_config(kind: ProviderKind) -> Option<OpenAiCompatConfig> {
         ProviderKind::OpenCode => Some(OpenAiCompatConfig::opencode()),
         ProviderKind::OpenCodeGo => Some(OpenAiCompatConfig::opencode_go()),
         ProviderKind::Alibaba => Some(OpenAiCompatConfig::alibaba()),
-        ProviderKind::Antigravity => Some(OpenAiCompatConfig::antigravity()),
-        ProviderKind::Cursor => Some(OpenAiCompatConfig::cursor()),
-        // Bespoke clients
-        ProviderKind::AnvilApi
+        // Bespoke clients — return None so the caller uses the dedicated client.
+        ProviderKind::Antigravity
+        | ProviderKind::Cursor
+        | ProviderKind::AnvilApi
         | ProviderKind::Ollama
         | ProviderKind::Copilot
         | ProviderKind::Azure
@@ -76,6 +78,9 @@ pub enum ProviderClient {
     Copilot(CopilotClient),
     Azure(AzureOpenAiClient),
     Bedrock(BedrockClient),
+    Cursor(CursorClient),
+    /// Google Code Assist (Antigravity) via PKCE OAuth — no IDE spoofing.
+    GeminiOAuth(GeminiOAuthClient),
 }
 
 impl ProviderClient {
@@ -99,6 +104,8 @@ impl ProviderClient {
             ProviderKind::Copilot => Ok(Self::Copilot(CopilotClient::from_env()?)),
             ProviderKind::Azure => Ok(Self::Azure(AzureOpenAiClient::from_env()?)),
             ProviderKind::Bedrock => Ok(Self::Bedrock(BedrockClient::from_env()?)),
+            ProviderKind::Cursor => Ok(Self::Cursor(CursorClient::from_env()?)),
+            ProviderKind::Antigravity => Ok(Self::GeminiOAuth(GeminiOAuthClient::from_env_or_saved()?)),
             other => {
                 if let Some(config) = openai_compat_config(other) {
                     // LM Studio and Ollama local have no auth env — use new_no_auth.
@@ -128,6 +135,8 @@ impl ProviderClient {
             Self::Copilot(_) => ProviderKind::Copilot,
             Self::Azure(_) => ProviderKind::Azure,
             Self::Bedrock(_) => ProviderKind::Bedrock,
+            Self::Cursor(_) => ProviderKind::Cursor,
+            Self::GeminiOAuth(_) => ProviderKind::Antigravity,
         }
     }
 
@@ -142,6 +151,8 @@ impl ProviderClient {
             Self::Copilot(client) => send_via_provider(client, request).await,
             Self::Azure(client) => send_via_provider(client, request).await,
             Self::Bedrock(client) => send_via_provider(client, request).await,
+            Self::Cursor(client) => send_via_provider(client, request).await,
+            Self::GeminiOAuth(client) => send_via_provider(client, request).await,
         }
     }
 
@@ -168,6 +179,12 @@ impl ProviderClient {
             Self::Bedrock(client) => stream_via_provider(client, request)
                 .await
                 .map(|s| MessageStream::BedrockStream(s)),
+            Self::Cursor(client) => stream_via_provider(client, request)
+                .await
+                .map(|s| MessageStream::CursorStream(s)),
+            Self::GeminiOAuth(client) => stream_via_provider(client, request)
+                .await
+                .map(|s| MessageStream::GeminiOAuthStream(s)),
         }
     }
 }
@@ -178,6 +195,8 @@ pub enum MessageStream {
     OpenAiCompat(openai_compat::MessageStream),
     AzureStream(crate::providers::azure::AzureMessageStream),
     BedrockStream(crate::providers::bedrock::BedrockMessageStream),
+    CursorStream(crate::providers::cursor::CursorMessageStream),
+    GeminiOAuthStream(crate::providers::gemini_oauth::GeminiOAuthStream),
 }
 
 impl MessageStream {
@@ -188,6 +207,8 @@ impl MessageStream {
             Self::OpenAiCompat(stream) => stream.request_id(),
             Self::AzureStream(stream) => stream.request_id(),
             Self::BedrockStream(_) => None,
+            Self::CursorStream(_) => None,
+            Self::GeminiOAuthStream(_) => None,
         }
     }
 
@@ -197,6 +218,8 @@ impl MessageStream {
             Self::OpenAiCompat(stream) => stream.next_event().await,
             Self::AzureStream(stream) => stream.next_event().await,
             Self::BedrockStream(stream) => stream.next_event().await,
+            Self::CursorStream(stream) => stream.next_event().await,
+            Self::GeminiOAuthStream(stream) => stream.next_event().await,
         }
     }
 }

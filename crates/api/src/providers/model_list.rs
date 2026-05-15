@@ -200,12 +200,22 @@ pub async fn is_provider_configured(kind: ProviderKind) -> Option<ProviderCreden
         ProviderKind::OpenAi => {
             has_api_key("OPENAI_API_KEY").then_some(ProviderCredentials::OpenAi)
         }
-        ProviderKind::Gemini | ProviderKind::Antigravity => {
-            if has_api_key("GEMINI_API_KEY")
-                || has_api_key("GOOGLE_API_KEY")
-                || has_api_key("ANTIGRAVITY_API_KEY")
-            {
+        ProviderKind::Gemini => {
+            if has_api_key("GEMINI_API_KEY") || has_api_key("GOOGLE_API_KEY") {
                 Some(ProviderCredentials::Gemini)
+            } else {
+                None
+            }
+        }
+        ProviderKind::Antigravity => {
+            // Primary: saved Gemini OAuth token (Code Assist).
+            let has_oauth = super::gemini_oauth::load_gemini_oauth_token()
+                .map(|opt| opt.is_some())
+                .unwrap_or(false);
+            // Fallback: legacy ANTIGRAVITY_API_KEY env var.
+            let has_key = has_api_key("ANTIGRAVITY_API_KEY");
+            if has_oauth || has_key {
+                Some(ProviderCredentials::GroupB("antigravity"))
             } else {
                 None
             }
@@ -673,8 +683,71 @@ group_b_fetcher!(fetch_zai_models, zai, ProviderKind::Zai);
 group_b_fetcher!(fetch_opencode_models, opencode, ProviderKind::OpenCode);
 group_b_fetcher!(fetch_opencode_go_models, opencode_go, ProviderKind::OpenCodeGo);
 group_b_fetcher!(fetch_alibaba_models, alibaba, ProviderKind::Alibaba);
-group_b_fetcher!(fetch_antigravity_models, antigravity, ProviderKind::Antigravity);
-group_b_fetcher!(fetch_cursor_models, cursor, ProviderKind::Cursor);
+
+/// Fetch models for Antigravity (Google Code Assist via OAuth).
+///
+/// Uses the saved Gemini OAuth token to call `loadCodeAssist` — the same
+/// endpoint that the runtime `GeminiOAuthClient` uses.  Falls back to the
+/// static registry on any transient error; returns `Unauthorized` if no token
+/// is saved (so the TUI hides the provider).
+pub async fn fetch_antigravity_models() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    use super::gemini_oauth::{
+        load_gemini_oauth_token, fetch_gemini_oauth_models,
+        CODE_ASSIST_ENDPOINT, CODE_ASSIST_API_VERSION,
+    };
+
+    let token = load_gemini_oauth_token()
+        .map_err(|e| ProviderModelsError::Transient(e.to_string()))?
+        .ok_or(ProviderModelsError::Unauthorized)?;
+
+    let base_url = std::env::var("CODE_ASSIST_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| CODE_ASSIST_ENDPOINT.to_string());
+    let api_version = std::env::var("CODE_ASSIST_API_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| CODE_ASSIST_API_VERSION.to_string());
+
+    let mut models = fetch_gemini_oauth_models(&token.access_token, &base_url, &api_version)
+        .await?;
+
+    // Tag all returned models as Antigravity rather than Gemini so the TUI
+    // groups them under the right provider label.
+    for m in &mut models {
+        m.provider = ProviderKind::Antigravity;
+    }
+
+    Ok(models)
+}
+
+/// Fetch the live Cursor model list from `GET /v1/models`.
+///
+/// Cursor returns `{"items": [...]}` — NOT the OpenAI-compat `{"data": [...]}`
+/// envelope — so we cannot reuse the generic `fetch_group_b_models` helper.
+pub async fn fetch_cursor_models() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    use super::cursor::fetch_cursor_models_live;
+
+    // Resolve the API key the same way CursorClient::from_env() does.
+    let api_key = std::env::var("CURSOR_API_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| super::cursor::load_cursor_saved_key().ok().flatten())
+        .or_else(|| super::copilot::load_cursor_auth_token().ok().flatten())
+        .ok_or(ProviderModelsError::Unauthorized)?;
+
+    let base_url = std::env::var("CURSOR_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| super::cursor::BASE_URL.to_string());
+
+    fetch_cursor_models_live(&api_key, &base_url)
+        .await
+        .map_err(|e| match e {
+            ProviderModelsError::Unauthorized => ProviderModelsError::Unauthorized,
+            other => ProviderModelsError::Transient(other.to_string()),
+        })
+}
 
 /// Fetch models for GitHub Copilot.  Uses the same OpenAI-compat shape;
 /// tries `GITHUB_TOKEN` first then the saved device-flow token.

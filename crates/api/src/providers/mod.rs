@@ -9,6 +9,8 @@ pub mod azure;
 pub mod bedrock;
 pub mod common;
 pub mod copilot;
+pub mod cursor;
+pub mod gemini_oauth;
 pub mod model_list;
 pub mod ollama;
 pub mod ollama_manage;
@@ -322,16 +324,19 @@ const ALIBABA_META: ProviderMetadata = ProviderMetadata {
 
 const ANTIGRAVITY_META: ProviderMetadata = ProviderMetadata {
     provider: ProviderKind::Antigravity,
+    // Antigravity uses Google Code Assist OAuth — no static API key.
+    // The auth_env field is kept for legacy env-var fallback only;
+    // the primary path is the saved gemini_oauth token.
     auth_env: "ANTIGRAVITY_API_KEY",
-    base_url_env: "ANTIGRAVITY_BASE_URL",
-    default_base_url: openai_compat::DEFAULT_ANTIGRAVITY_BASE_URL,
+    base_url_env: "CODE_ASSIST_ENDPOINT",
+    default_base_url: gemini_oauth::CODE_ASSIST_ENDPOINT,
 };
 
 const CURSOR_META: ProviderMetadata = ProviderMetadata {
     provider: ProviderKind::Cursor,
     auth_env: "CURSOR_API_KEY",
     base_url_env: "CURSOR_BASE_URL",
-    default_base_url: openai_compat::DEFAULT_CURSOR_BASE_URL,
+    default_base_url: cursor::BASE_URL,
 };
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
@@ -572,7 +577,7 @@ pub const fn provider_display_name(kind: ProviderKind) -> &'static str {
         ProviderKind::Azure => "Azure OpenAI",
         ProviderKind::Bedrock => "AWS Bedrock",
         ProviderKind::Alibaba => "Alibaba DashScope",
-        ProviderKind::Antigravity => "Antigravity",
+        ProviderKind::Antigravity => "Antigravity (Google Code Assist)",
         ProviderKind::Cursor => "Cursor",
     }
 }
