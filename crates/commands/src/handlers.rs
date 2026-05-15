@@ -874,22 +874,50 @@ pub fn handle_import_command_with_mode(
 pub struct ImportPlanSummary {
     /// Count of memory artifacts discovered.
     pub memory_found: usize,
+    /// Count of memory artifacts that were staged (will land or would land).
+    pub memory_staged: usize,
+    /// Count of memory artifacts skipped.
+    pub memory_skipped: usize,
     /// Count of instruction files (CLAUDE.md → ANVIL.md) discovered.
     pub instructions_found: usize,
+    /// Count of instruction files staged.
+    pub instructions_staged: usize,
+    /// Count of instruction files that need review (conflict).
+    pub instructions_needs_review: usize,
+    /// Count of instruction files skipped.
+    pub instructions_skipped: usize,
     /// Count of settings artifacts discovered.
     pub settings_found: usize,
+    /// True if the settings translation produced conflicts.
+    pub settings_has_conflicts: bool,
+    /// Count of settings conflict keys.
+    pub settings_conflict_count: usize,
     /// Count of skill artifacts discovered.
     pub skills_found: usize,
+    /// Count of skills staged.
+    pub skills_staged: usize,
+    /// Count of skills skipped.
+    pub skills_skipped: usize,
+    /// Count of skills that need review (name collision).
+    pub skills_needs_review: usize,
     /// Count of plugin artifacts discovered.
     pub plugins_found: usize,
-    /// Count of artifacts staged (will be committed).
+    /// Count of plugins staged.
+    pub plugins_staged: usize,
+    /// Count of plugins skipped.
+    pub plugins_skipped: usize,
+    /// Count of plugins that need review (name collision).
+    pub plugins_needs_review: usize,
+    /// Count of artifacts staged (will be committed) — all categories.
     pub total_staged: usize,
-    /// Count of artifacts that need user review.
+    /// Count of artifacts that need user review — all categories.
     pub total_needs_review: usize,
-    /// Count of artifacts that will be skipped.
+    /// Count of artifacts that will be skipped — all categories.
     pub total_skipped: usize,
     /// Items that need explicit user review: (description, path).
     pub needs_review_items: Vec<(String, String)>,
+    /// Conflicting keys/paths detected: (key_or_path, description).
+    pub conflicts: Vec<(String, String)>,
 }
 
 impl ImportPlanSummary {
@@ -904,22 +932,68 @@ impl ImportPlanSummary {
             ""
         };
 
+        let verb = if dry_run { "would be committed" } else { "committed" };
+
+        // Memory line
+        let mem_line = format!(
+            "  Memory entries:    {} found, {} {}, {} skipped",
+            self.memory_found, self.memory_staged, verb, self.memory_skipped
+        );
+
+        // Instructions line
+        let instr_review = if self.instructions_needs_review > 0 {
+            format!(", {} NEEDS REVIEW", self.instructions_needs_review)
+        } else {
+            String::new()
+        };
+        let instr_line = format!(
+            "  Instructions:      {} found, {} staged{}, {} skipped",
+            self.instructions_found, self.instructions_staged, instr_review, self.instructions_skipped
+        );
+
+        // Settings line
+        let settings_line = if self.settings_found == 0 {
+            "  Settings:          none found".to_string()
+        } else if self.settings_has_conflicts {
+            format!(
+                "  Settings:          1 settings.json ({} key(s) CONFLICT — see ~/.anvil/.import-review/)",
+                self.settings_conflict_count
+            )
+        } else {
+            "  Settings:          1 settings.json (no conflicts)".to_string()
+        };
+
+        // Skills line
+        let skills_review = if self.skills_needs_review > 0 {
+            format!(", {} NEEDS REVIEW", self.skills_needs_review)
+        } else {
+            String::new()
+        };
+        let skills_line = format!(
+            "  Skills:            {} found, {} staged{} (DISABLED by default), {} skipped",
+            self.skills_found, self.skills_staged, skills_review, self.skills_skipped
+        );
+
+        // Plugins line
+        let plugins_review = if self.plugins_needs_review > 0 {
+            format!(", {} NEEDS REVIEW", self.plugins_needs_review)
+        } else {
+            String::new()
+        };
+        let plugins_line = format!(
+            "  Plugins:           {} found, {} staged{}, {} skipped",
+            self.plugins_found, self.plugins_staged, plugins_review, self.plugins_skipped
+        );
+
         let mut lines = vec![
             format!("=== Import Plan{mode_label} ==="),
             String::new(),
-            format!("  Memory entries:    {} found, {} will land at ~/.anvil/memory/, {} skipped",
-                self.memory_found,
-                self.memory_found.saturating_sub(self.total_skipped),
-                self.total_skipped.min(self.memory_found)),
-            format!("  Instructions:      {} file(s) found",
-                self.instructions_found),
-            format!("  Settings:          {} file(s) found",
-                self.settings_found),
-            format!("  Skills:            {} found, will land at ~/.anvil/skills/ (DISABLED by default)",
-                self.skills_found),
-            format!("  Plugins:           {} found",
-                self.plugins_found),
-            format!("  Sessions:          SKIPPED (run with --include-sessions to summarize)"),
+            mem_line,
+            instr_line,
+            settings_line,
+            skills_line,
+            plugins_line,
+            "  Sessions:          SKIPPED (run with --include-sessions to summarize)".to_string(),
         ];
 
         if !self.needs_review_items.is_empty() {
@@ -930,6 +1004,14 @@ impl ImportPlanSummary {
                 if !path.is_empty() {
                     lines.push(format!("      Inspect: {path}"));
                 }
+            }
+        }
+
+        if !self.conflicts.is_empty() {
+            lines.push(String::new());
+            lines.push("  Conflicts:".to_string());
+            for (key, desc) in &self.conflicts {
+                lines.push(format!("    - {key}: {desc}"));
             }
         }
 
@@ -970,6 +1052,10 @@ pub fn run_import_pipeline_headless(
         ImportEntry, ImportEntryStatus,
     };
     use runtime::import::memory::run_memory_pipeline;
+    use runtime::import::instructions::run_instructions_pipeline;
+    use runtime::import::settings::run_settings_import;
+    use runtime::import::skills::run_skills_import;
+    use runtime::import::plugins::run_plugins_import;
     use runtime::import::commit::run_commit;
 
     let start = std::time::Instant::now();
@@ -985,83 +1071,372 @@ pub fn run_import_pipeline_headless(
         .unwrap_or_else(|_| ImportManifest::new(env!("CARGO_PKG_VERSION")));
 
     let timestamp = now_rfc3339();
-    let needs_review: Vec<(String, String)> = Vec::new();
+    let mut needs_review: Vec<(String, String)> = Vec::new();
+    let mut conflicts_list: Vec<(String, String)> = Vec::new();
 
-    // Steps 2–5: Discover + Triage + Translate + Stage + Commit.
-    // run_memory_pipeline handles the Discover→Triage→Translate→Stage chain.
-    // Phase 6.1 adds instructions; Phase 6.2 adds settings/skills/plugins.
-    let (memory_found, staged_count, skipped_count, committed_count, manifest) = {
-        // Always create a staging dir — dry-run uses it too (scratch only).
-        let staging = StagingDir::create_clean()
-            .map_err(|e| format!("staging setup failed: {e}"))?;
-
-        let pipeline_result = run_memory_pipeline(source, &staging, &base_manifest);
-
-        let found = pipeline_result.staged.len()
-            + pipeline_result.skipped.len()
-            + pipeline_result.needs_review.len();
-        let skip_cnt = pipeline_result.skipped.len();
-        let stage_cnt = pipeline_result.staged.len();
-
-        otel_import_discovered("memory", found);
-
-        let mut m = base_manifest.clone();
-
-        if dry_run {
-            otel_import_skipped("memory", found, "dry-run");
-            // Record all would-be staged as Skipped in the report manifest.
-            for se in &pipeline_result.staged {
-                let mut e = se.entry.clone();
-                e.status = ImportEntryStatus::Skipped;
-                e.skip_reason = Some("dry-run: no changes committed".to_string());
-                m.push(e);
-            }
-            for se in &pipeline_result.skipped {
-                let mut e = ImportEntry::pending(
-                    "memory",
-                    se.source_path.clone(),
-                    se.source_path.clone(),
-                    "",
-                    &timestamp,
-                );
-                e.status = ImportEntryStatus::Skipped;
-                e.skip_reason = Some(se.reason.clone());
-                m.push(e);
-            }
-            (found, 0usize, found, 0usize, m)
-        } else {
-            otel_import_staged("memory", stage_cnt);
-
-            for se in &pipeline_result.staged {
-                m.push(se.entry.clone());
-            }
-            for se in &pipeline_result.skipped {
-                otel_import_skipped("memory", 1, &se.reason);
-                let mut e = ImportEntry::pending(
-                    "memory",
-                    se.source_path.clone(),
-                    se.source_path.clone(),
-                    "",
-                    &timestamp,
-                );
-                e.status = ImportEntryStatus::Skipped;
-                e.skip_reason = Some(se.reason.clone());
-                m.push(e);
-            }
-
-            // Commit staged → final destinations.
-            let commit_result: CommitResult = run_commit(&mut m, &staging)
-                .map_err(|e| format!("commit failed: {e}"))?;
-
-            otel_import_committed("memory", commit_result.committed);
-            let _ = m.save(&manifest_path);
-
-            (found, stage_cnt, skip_cnt, commit_result.committed, m)
+    // Obtain the CC profile directory for pipelines that take a &Path directly.
+    let profile_dir = match source {
+        runtime::ImportSource::ClaudeCode { profile_dir } => profile_dir.clone(),
+        _ => {
+            return Err(format!("unsupported import source: {}", source.label()));
         }
     };
 
+    // Always create a staging dir — dry-run uses it too (scratch only).
+    let staging = StagingDir::create_clean()
+        .map_err(|e| format!("staging setup failed: {e}"))?;
+
+    // ── Pipeline counters ────────────────────────────────────────────────────────
+    // Each counter triple: (found, staged, skipped)
+
+    // ── 1. Memory ────────────────────────────────────────────────────────────────
+    let memory_pipeline = run_memory_pipeline(source, &staging, &base_manifest);
+    let mem_found = memory_pipeline.staged.len()
+        + memory_pipeline.skipped.len()
+        + memory_pipeline.needs_review.len();
+    let mem_stage_cnt = memory_pipeline.staged.len();
+    let mem_skip_cnt = memory_pipeline.skipped.len();
+
+    otel_import_discovered("memory", mem_found);
+
+    // ── 2. Instructions ───────────────────────────────────────────────────────────
+    let instr_pipeline = run_instructions_pipeline(
+        source,
+        &staging,
+        &base_manifest,
+        None, // use default ~/projects/ walk root
+    );
+    let instr_found = instr_pipeline.staged.len() + instr_pipeline.skipped.len();
+    let instr_stage_cnt = instr_pipeline.staged.len();
+    let instr_skip_cnt = instr_pipeline.skipped.len();
+    let instr_needs_review_cnt = instr_pipeline.staged.iter()
+        .filter(|s| matches!(s.conflict, runtime::import::instructions::InstructionConflict::NeedsReview { .. }))
+        .count();
+
+    otel_import_discovered("instructions", instr_found);
+
+    // ── 3. Settings ───────────────────────────────────────────────────────────────
+    // run_settings_import returns (has_conflicts, warnings, unknown_keys)
+    let settings_result = run_settings_import(&profile_dir, &staging);
+    let (settings_found, settings_has_conflicts, settings_conflict_count) = match &settings_result {
+        Ok((has_conflicts, _warnings, _unknown_keys)) => {
+            let found = if profile_dir.join("settings.json").exists() { 1usize } else { 0usize };
+            let conflict_count = if *has_conflicts { 1usize } else { 0usize }; // at least one key conflicts
+            (found, *has_conflicts, conflict_count)
+        }
+        Err(_) => (0usize, false, 0usize),
+    };
+
+    otel_import_discovered("settings", settings_found);
+    if settings_has_conflicts {
+        runtime::otel_import_conflict_detected("settings", settings_conflict_count);
+    }
+
+    // ── 4. Skills ─────────────────────────────────────────────────────────────────
+    // run_skills_import returns Vec<SkillImportRecord>
+    let skills_records = run_skills_import(&profile_dir, &staging);
+    let skills_found = skills_records.len();
+    let skills_staged_cnt = skills_records.iter().filter(|r| !r.skipped).count();
+    let skills_skipped_cnt = skills_records.iter().filter(|r| r.skipped).count();
+    let skills_needs_review_cnt = skills_records.iter().filter(|r| r.needs_review).count();
+
+    otel_import_discovered("skills", skills_found);
+
+    // ── 5. Plugins ────────────────────────────────────────────────────────────────
+    // run_plugins_import returns Vec<PluginImportRecord>
+    let plugins_records = run_plugins_import(&profile_dir, &staging);
+    let plugins_found = plugins_records.len();
+    let plugins_staged_cnt = plugins_records.iter().filter(|r| !r.skipped).count();
+    let plugins_skipped_cnt = plugins_records.iter().filter(|r| r.skipped).count();
+    let plugins_needs_review_cnt = plugins_records.iter().filter(|r| r.needs_review).count();
+
+    otel_import_discovered("plugins", plugins_found);
+
+    // ── Build manifest and commit/skip ────────────────────────────────────────────
+    let mut m = base_manifest.clone();
+
+    // Helper: record instructions needs-review items
+    for s in &instr_pipeline.staged {
+        if let runtime::import::instructions::InstructionConflict::NeedsReview { reason } = &s.conflict {
+            needs_review.push((
+                reason.clone(),
+                s.entry.destination_path.display().to_string(),
+            ));
+        }
+    }
+    // Record settings conflicts
+    if settings_has_conflicts {
+        conflicts_list.push((
+            "settings.json".to_string(),
+            format!(
+                "{} key(s) conflict — staged to ~/.anvil/.import-review/conflicts.json",
+                settings_conflict_count
+            ),
+        ));
+    }
+    // Record skills needs-review
+    for r in &skills_records {
+        if r.needs_review {
+            for w in &r.warnings {
+                needs_review.push((
+                    format!("skill '{}': {w}", r.skill_name),
+                    r.staged_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+    // Record plugins needs-review
+    for r in &plugins_records {
+        if r.needs_review {
+            for w in &r.warnings {
+                needs_review.push((
+                    format!("plugin '{}': {w}", r.plugin_name),
+                    r.staged_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+                ));
+            }
+        }
+    }
+
+    let total_committed: usize;
+    let (total_staged_count, total_skipped_count) = if dry_run {
+        // Dry-run: record everything as Skipped in the report manifest.
+
+        // Memory
+        otel_import_skipped("memory", mem_found, "dry-run");
+        for se in &memory_pipeline.staged {
+            let mut e = se.entry.clone();
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some("dry-run: no changes committed".to_string());
+            m.push(e);
+        }
+        for se in &memory_pipeline.skipped {
+            let mut e = ImportEntry::pending(
+                "memory",
+                se.source_path.clone(),
+                se.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some(se.reason.clone());
+            m.push(e);
+        }
+
+        // Instructions
+        otel_import_skipped("instructions", instr_found, "dry-run");
+        for si in &instr_pipeline.staged {
+            let mut e = si.entry.clone();
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some("dry-run: no changes committed".to_string());
+            m.push(e);
+        }
+        for si in &instr_pipeline.skipped {
+            let mut e = ImportEntry::pending(
+                "instructions",
+                si.source_path.clone(),
+                si.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some(si.reason.clone());
+            m.push(e);
+        }
+
+        // Settings
+        if settings_found > 0 {
+            otel_import_skipped("settings", settings_found, "dry-run");
+            let settings_path = profile_dir.join("settings.json");
+            let mut e = ImportEntry::pending(
+                "settings",
+                settings_path.clone(),
+                settings_path,
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some("dry-run: no changes committed".to_string());
+            m.push(e);
+        }
+
+        // Skills
+        otel_import_skipped("skills", skills_found, "dry-run");
+        for r in &skills_records {
+            let mut e = ImportEntry::pending(
+                "skills",
+                r.source_path.clone(),
+                r.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = if r.skipped {
+                r.warnings.first().cloned().or_else(|| Some("skipped".to_string()))
+            } else {
+                Some("dry-run: no changes committed".to_string())
+            };
+            m.push(e);
+        }
+
+        // Plugins
+        otel_import_skipped("plugins", plugins_found, "dry-run");
+        for r in &plugins_records {
+            let mut e = ImportEntry::pending(
+                "plugins",
+                r.source_path.clone(),
+                r.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = if r.skipped {
+                r.warnings.first().cloned().or_else(|| Some("skipped".to_string()))
+            } else {
+                Some("dry-run: no changes committed".to_string())
+            };
+            m.push(e);
+        }
+
+        total_committed = 0;
+        let all_found = mem_found + instr_found + settings_found + skills_found + plugins_found;
+        (0usize, all_found)
+    } else {
+        // Live commit mode: push entries into manifest, then run_commit.
+
+        // Memory
+        otel_import_staged("memory", mem_stage_cnt);
+        for se in &memory_pipeline.staged {
+            m.push(se.entry.clone());
+        }
+        for se in &memory_pipeline.skipped {
+            otel_import_skipped("memory", 1, &se.reason);
+            let mut e = ImportEntry::pending(
+                "memory",
+                se.source_path.clone(),
+                se.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some(se.reason.clone());
+            m.push(e);
+        }
+
+        // Instructions
+        otel_import_staged("instructions", instr_stage_cnt);
+        for si in &instr_pipeline.staged {
+            m.push(si.entry.clone());
+        }
+        for si in &instr_pipeline.skipped {
+            otel_import_skipped("instructions", 1, &si.reason);
+            let mut e = ImportEntry::pending(
+                "instructions",
+                si.source_path.clone(),
+                si.source_path.clone(),
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Skipped;
+            e.skip_reason = Some(si.reason.clone());
+            m.push(e);
+        }
+
+        // Settings (staged to disk by run_settings_import already; record in manifest)
+        if settings_found > 0 {
+            otel_import_staged("settings", 1);
+            let settings_dest = runtime::anvil_config_home().join("settings.json");
+            let settings_path = profile_dir.join("settings.json");
+            let mut e = ImportEntry::pending(
+                "settings",
+                settings_path,
+                settings_dest,
+                "",
+                &timestamp,
+            );
+            e.status = ImportEntryStatus::Staged;
+            if settings_has_conflicts {
+                e.skip_reason = Some(format!(
+                    "{} conflict(s) — see ~/.anvil/.import-review/conflicts.json",
+                    settings_conflict_count
+                ));
+            }
+            m.push(e);
+        }
+
+        // Skills
+        otel_import_staged("skills", skills_staged_cnt);
+        for r in &skills_records {
+            let dest = runtime::anvil_config_home()
+                .join("skills")
+                .join(&r.skill_name)
+                .join("SKILL.md");
+            let mut e = ImportEntry::pending(
+                "skills",
+                r.source_path.clone(),
+                dest,
+                "",
+                &timestamp,
+            );
+            if r.skipped {
+                otel_import_skipped("skills", 1, r.warnings.first().map(String::as_str).unwrap_or("skipped"));
+                e.status = ImportEntryStatus::Skipped;
+                e.skip_reason = r.warnings.first().cloned();
+            } else {
+                e.status = ImportEntryStatus::Staged;
+                if r.needs_review {
+                    e.skip_reason = r.warnings.first().cloned();
+                }
+            }
+            m.push(e);
+        }
+
+        // Plugins
+        otel_import_staged("plugins", plugins_staged_cnt);
+        for r in &plugins_records {
+            let dest = runtime::anvil_config_home()
+                .join("plugins")
+                .join(&r.plugin_name)
+                .join("plugin.json");
+            let mut e = ImportEntry::pending(
+                "plugins",
+                r.source_path.clone(),
+                dest,
+                "",
+                &timestamp,
+            );
+            if r.skipped {
+                otel_import_skipped("plugins", 1, r.warnings.first().map(String::as_str).unwrap_or("skipped"));
+                e.status = ImportEntryStatus::Skipped;
+                e.skip_reason = r.warnings.first().cloned();
+            } else {
+                e.status = ImportEntryStatus::Staged;
+                if r.needs_review {
+                    e.skip_reason = r.warnings.first().cloned();
+                }
+            }
+            m.push(e);
+        }
+
+        // Commit staged → final destinations.
+        let commit_result: CommitResult = run_commit(&mut m, &staging)
+            .map_err(|e| format!("commit failed: {e}"))?;
+
+        otel_import_committed("memory", commit_result.committed);
+        otel_import_committed("instructions", instr_stage_cnt);
+        otel_import_committed("settings", if settings_found > 0 { 1 } else { 0 });
+        otel_import_committed("skills", skills_staged_cnt);
+        otel_import_committed("plugins", plugins_staged_cnt);
+
+        let _ = m.save(&manifest_path);
+
+        total_committed = commit_result.committed;
+        let all_staged = mem_stage_cnt + instr_stage_cnt + settings_found + skills_staged_cnt + plugins_staged_cnt;
+        let all_skipped = mem_skip_cnt + instr_skip_cnt + skills_skipped_cnt + plugins_skipped_cnt;
+        (all_staged, all_skipped)
+    };
+
     let duration_ms = start.elapsed().as_millis() as u64;
-    otel_import_completed(committed_count, skipped_count, needs_review.len(), duration_ms);
+    otel_import_completed(total_committed, total_skipped_count, needs_review.len(), duration_ms);
 
     // Step 6: Write full-format report (always — even on dry-run).
     let source_label = format!("CC at `{}`", source.label().trim_start_matches("cc:"));
@@ -1072,16 +1447,33 @@ pub fn run_import_pipeline_headless(
         needs_review: &needs_review,
         next_steps: &[],
     };
-    let report_path = write_full_report(&manifest, &report_opts)
+    let report_path = write_full_report(&m, &report_opts)
         .unwrap_or_else(|e| std::path::PathBuf::from(format!("(report write failed: {e})")));
 
     let plan = ImportPlanSummary {
-        memory_found,
-        total_staged: staged_count,
-        total_skipped: skipped_count,
+        memory_found: mem_found,
+        memory_staged: mem_stage_cnt,
+        memory_skipped: mem_skip_cnt,
+        instructions_found: instr_found,
+        instructions_staged: instr_stage_cnt,
+        instructions_needs_review: instr_needs_review_cnt,
+        instructions_skipped: instr_skip_cnt,
+        settings_found,
+        settings_has_conflicts,
+        settings_conflict_count,
+        skills_found,
+        skills_staged: skills_staged_cnt,
+        skills_skipped: skills_skipped_cnt,
+        skills_needs_review: skills_needs_review_cnt,
+        plugins_found,
+        plugins_staged: plugins_staged_cnt,
+        plugins_skipped: plugins_skipped_cnt,
+        plugins_needs_review: plugins_needs_review_cnt,
+        total_staged: total_staged_count,
+        total_skipped: total_skipped_count,
         total_needs_review: needs_review.len(),
-        needs_review_items: needs_review,
-        ..Default::default()
+        needs_review_items: needs_review.clone(),
+        conflicts: conflicts_list,
     };
 
     let mut summary = plan.render_confirmation_block(dry_run);
@@ -3380,6 +3772,7 @@ mod memory_tests {
     }
 
     #[test]
+    #[serial(anvil_config_home)]
     fn dry_run_report_content_has_dry_run_prefix() {
         // Verify the Phase 6.4 dry-run behavior via the result summary string:
         // the confirmation block must contain the [DRY RUN] label, and the
