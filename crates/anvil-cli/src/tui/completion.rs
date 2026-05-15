@@ -179,6 +179,17 @@ async fn fetch_models_for_credentials(
                     }));
                 }
             }
+            ProviderCredentials::GroupB(slug) => {
+                // All Group B + Group A (Copilot/Azure/Bedrock) providers use the
+                // generic slug-to-kind resolver to fetch their live model list.
+                let slug: &'static str = slug;
+                futures.push(Box::pin(async move {
+                    let kind = api::slug_to_provider_kind(slug)
+                        .unwrap_or(ProviderKind::AnvilApi);
+                    let result = api::fetch_models_for_slug(slug).await;
+                    (kind, result)
+                }));
+            }
         }
     }
 

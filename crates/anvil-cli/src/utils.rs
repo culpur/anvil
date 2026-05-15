@@ -1446,6 +1446,7 @@ pub(crate) fn friendly_provider_label(model: &str) -> Option<String> {
                 Some("Ollama (local)".to_string())
             }
         }
+        other => Some(api::provider_display_name(other).to_string()),
     }
 }
 

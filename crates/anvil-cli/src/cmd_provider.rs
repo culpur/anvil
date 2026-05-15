@@ -378,6 +378,13 @@ impl LiveCli {
                         out.push_str("  gemini-1.5-pro           Gemini 1.5 Pro (2M context)\n");
                         out.push_str("  gemini-1.5-flash         Gemini 1.5 Flash\n");
                     }
+                    _ => {
+                        let display = api::provider_display_name(current_kind);
+                        let _ = writeln!(
+                            out,
+                            "  (Use /model <tab> to browse live models for {display})"
+                        );
+                    }
                 }
                 out
             }
@@ -435,6 +442,36 @@ impl LiveCli {
                 ProviderKind::Gemini => "gemini",
                 ProviderKind::Ollama => "ollama",
                 ProviderKind::Xai => "xai",
+                ProviderKind::Fireworks => "fireworks",
+                ProviderKind::MiniMax => "minimax",
+                ProviderKind::Groq => "groq",
+                ProviderKind::Mistral => "mistral",
+                ProviderKind::Perplexity => "perplexity",
+                ProviderKind::DeepSeek => "deepseek",
+                ProviderKind::TogetherAi => "togetherai",
+                ProviderKind::DeepInfra => "deepinfra",
+                ProviderKind::Chutes => "chutes",
+                ProviderKind::Cerebras => "cerebras",
+                ProviderKind::NvidiaNim => "nvidia-nim",
+                ProviderKind::HuggingFace => "huggingface",
+                ProviderKind::MoonshotAi => "moonshotai",
+                ProviderKind::Nebius => "nebius",
+                ProviderKind::Scaleway => "scaleway",
+                ProviderKind::StackIt => "stackit",
+                ProviderKind::Baseten => "baseten",
+                ProviderKind::Cortecs => "cortecs",
+                ProviderKind::Ai302 => "302ai",
+                ProviderKind::Zai => "zai",
+                ProviderKind::OpenRouter => "openrouter",
+                ProviderKind::LmStudio => "lmstudio",
+                ProviderKind::OpenCode => "opencode",
+                ProviderKind::OpenCodeGo => "opencode-go",
+                ProviderKind::Copilot => "copilot",
+                ProviderKind::Azure => "azure",
+                ProviderKind::Bedrock => "bedrock",
+                ProviderKind::Alibaba => "alibaba",
+                ProviderKind::Antigravity => "antigravity",
+                ProviderKind::Cursor => "cursor",
             }
         });
 
@@ -514,8 +551,168 @@ impl LiveCli {
                 crate::tui::restore_alt_screen();
                 "Ollama configured.".to_string()
             }
+            // ── Group B: OpenAI-compatible API-key providers ─────────────────
+            slug @ ("fireworks" | "minimax" | "groq" | "mistral" | "perplexity"
+                | "deepseek" | "togetherai" | "deepinfra" | "chutes" | "cerebras"
+                | "nvidia-nim" | "huggingface" | "moonshotai" | "nebius"
+                | "scaleway" | "stackit" | "baseten" | "cortecs" | "302ai"
+                | "zai" | "kimi" | "glm" | "openrouter" | "lmstudio"
+                | "opencode" | "opencode-go" | "alibaba" | "dashscope"
+                | "antigravity" | "cursor") => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                let (display, env_var, creds_key, prefix) = match slug {
+                    "fireworks"   => ("Fireworks",          "FIREWORKS_API_KEY",    "fireworks_api_key",    "fw-"),
+                    "minimax"     => ("MiniMax",             "MINIMAX_API_KEY",      "minimax_api_key",      ""),
+                    "groq"        => ("Groq",                "GROQ_API_KEY",         "groq_api_key",         "gsk_"),
+                    "mistral"     => ("Mistral",             "MISTRAL_API_KEY",      "mistral_api_key",      ""),
+                    "perplexity"  => ("Perplexity",          "PPLX_API_KEY",         "perplexity_api_key",   "pplx-"),
+                    "deepseek"    => ("DeepSeek",            "DEEPSEEK_API_KEY",     "deepseek_api_key",     "sk-"),
+                    "togetherai"  => ("Together AI",         "TOGETHER_API_KEY",     "together_api_key",     ""),
+                    "deepinfra"   => ("DeepInfra",           "DEEPINFRA_API_KEY",    "deepinfra_api_key",    ""),
+                    "chutes"      => ("Chutes",              "CHUTES_API_KEY",       "chutes_api_key",       ""),
+                    "cerebras"    => ("Cerebras",            "CEREBRAS_API_KEY",     "cerebras_api_key",     "csk-"),
+                    "nvidia-nim"  => ("NVIDIA NIM",          "NVIDIA_API_KEY",       "nvidia_api_key",       "nvapi-"),
+                    "huggingface" => ("Hugging Face",        "HF_TOKEN",             "huggingface_token",    "hf_"),
+                    "moonshotai"  => ("Moonshot AI",         "MOONSHOT_API_KEY",     "moonshot_api_key",     "sk-"),
+                    "nebius"      => ("Nebius",              "NEBIUS_API_KEY",       "nebius_api_key",       ""),
+                    "scaleway"    => ("Scaleway",            "SCALEWAY_API_KEY",     "scaleway_api_key",     ""),
+                    "stackit"     => ("STACKIT",             "STACKIT_API_KEY",      "stackit_api_key",      ""),
+                    "baseten"     => ("Baseten",             "BASETEN_API_KEY",      "baseten_api_key",      ""),
+                    "cortecs"     => ("Cortecs",             "CORTECS_API_KEY",      "cortecs_api_key",      ""),
+                    "302ai"       => ("302.ai",              "AI302_API_KEY",        "ai302_api_key",        ""),
+                    "zai" | "kimi" | "glm" => ("Zai/Kimi/GLM", "ZAI_API_KEY",      "zai_api_key",          ""),
+                    "openrouter"  => ("OpenRouter",          "OPENROUTER_API_KEY",   "openrouter_api_key",   "sk-or-"),
+                    "lmstudio"    => ("LM Studio",           "LMSTUDIO_API_KEY",     "lmstudio_api_key",     ""),
+                    "opencode"    => ("OpenCode",            "OPENCODE_API_KEY",     "opencode_api_key",     ""),
+                    "opencode-go" => ("OpenCode Go",         "OPENCODE_GO_API_KEY",  "opencode_go_api_key",  ""),
+                    "alibaba" | "dashscope" => ("Alibaba DashScope", "DASHSCOPE_API_KEY", "dashscope_api_key", "sk-"),
+                    "antigravity" => ("Antigravity",         "ANTIGRAVITY_API_KEY",  "antigravity_api_key",  ""),
+                    "cursor"      => ("Cursor",              "CURSOR_API_KEY",       "cursor_api_key",       ""),
+                    _             => ("Unknown",             "UNKNOWN_API_KEY",      "unknown_api_key",      ""),
+                };
+
+                println!("\n⚒ {display} API Key Setup\n");
+                match run_openai_apikey_setup(display, env_var, creds_key, prefix) {
+                    Ok(()) => println!("\nPress any key to return to Anvil."),
+                    Err(e) => println!("\n✗ Setup failed: {e}\nPress any key to return to Anvil."),
+                }
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                format!("{display} API key configured.")
+            }
+            // ── Copilot: GitHub device flow ───────────────────────────────────
+            "copilot" | "github-copilot" => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                println!("\n⚒ GitHub Copilot Login\n");
+                println!("  Running GitHub device flow authentication...\n");
+
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio runtime");
+                match rt.block_on(api::copilot_run_device_flow()) {
+                    Ok(token_set) => {
+                        match api::save_copilot_token(&token_set) {
+                            Ok(()) => println!("\n✓ GitHub Copilot token saved. Press any key to return."),
+                            Err(e) => println!("\n✗ Failed to save token: {e}\nPress any key to return."),
+                        }
+                    }
+                    Err(e) => println!("\n✗ Device flow failed: {e}\nPress any key to return."),
+                }
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                "GitHub Copilot login complete.".to_string()
+            }
+            // ── Azure: endpoint + key ─────────────────────────────────────────
+            "azure" => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                println!("\n⚒ Azure OpenAI Setup\n");
+                println!("  Set these environment variables (or add to ~/.anvil/credentials.json):\n");
+                println!("    AZURE_OPENAI_ENDPOINT        — e.g. https://MY.openai.azure.com");
+                println!("    AZURE_OPENAI_DEPLOYMENT_NAME — e.g. gpt-4o");
+                println!("    AZURE_OPENAI_API_VERSION     — e.g. 2025-01-01-preview");
+                println!("    AZURE_OPENAI_API_KEY         — your api-key  (or set AZURE_AD_TOKEN)");
+                println!("    AZURE_AD_TOKEN               — AAD bearer token (optional, overrides api-key)\n");
+                println!("  Press any key to return to Anvil.");
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                "Azure setup instructions displayed.".to_string()
+            }
+            // ── Bedrock: AWS credentials ─────────────────────────────────────
+            "bedrock" | "aws" | "aws-bedrock" => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                println!("\n⚒ AWS Bedrock Setup\n");
+                println!("  Set these environment variables:\n");
+                println!("    AWS_ACCESS_KEY_ID     — your access key");
+                println!("    AWS_SECRET_ACCESS_KEY — your secret key");
+                println!("    AWS_REGION            — e.g. us-east-1");
+                println!("    AWS_SESSION_TOKEN     — (optional, for temporary credentials)\n");
+                println!("  Alternatively configure via `aws configure` (standard AWS credential chain).\n");
+                println!("  Press any key to return to Anvil.");
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                "AWS Bedrock setup instructions displayed.".to_string()
+            }
+            "gemini" | "google" => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                println!("\n⚒ Gemini API Key Setup\n");
+                match run_openai_apikey_setup("Gemini", "GEMINI_API_KEY", "gemini_api_key", "AIza") {
+                    Ok(()) => println!("\nPress any key to return to Anvil."),
+                    Err(e) => println!("\n✗ Setup failed: {e}\nPress any key to return to Anvil."),
+                }
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                "Gemini API key configured.".to_string()
+            }
+            "xai" | "grok" => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+
+                println!("\n⚒ xAI API Key Setup\n");
+                match run_openai_apikey_setup("xAI", "XAI_API_KEY", "xai_api_key", "xai-") {
+                    Ok(()) => println!("\nPress any key to return to Anvil."),
+                    Err(e) => println!("\n✗ Setup failed: {e}\nPress any key to return to Anvil."),
+                }
+                let _ = io::stdout().flush();
+                let _ = crossterm::terminal::enable_raw_mode();
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                "xAI API key configured.".to_string()
+            }
             other => {
-                format!("Unknown provider: {other}. Use: anthropic, openai, ollama")
+                format!("Unknown provider: {other}. Use /provider list to see all providers.")
             }
         }
     }

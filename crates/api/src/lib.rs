@@ -19,9 +19,9 @@ pub use failover::{
 pub use providers::anvil_provider::{AuthSource, AnvilApiClient, AnvilApiClient as ApiClient};
 pub use providers::model_list::{
     enumerate_configured_providers, fetch_anthropic_models, fetch_gemini_models,
-    fetch_ollama_cloud_models, fetch_ollama_local_models, fetch_openai_models, fetch_xai_models,
-    is_provider_configured, ProviderCredentials, ProviderModel, ProviderModelsError,
-    DEFAULT_FETCH_TIMEOUT,
+    fetch_models_for_slug, fetch_ollama_cloud_models, fetch_ollama_local_models,
+    fetch_openai_models, fetch_xai_models, is_provider_configured, slug_to_provider_kind,
+    ProviderCredentials, ProviderModel, ProviderModelsError, DEFAULT_FETCH_TIMEOUT,
 };
 pub use providers::ollama::{cloud_model_context_window, is_ollama_cloud_model, OllamaClient};
 pub use providers::ollama_manage::{
@@ -43,6 +43,7 @@ pub use providers::ollama_tool_parser::{
     ParseSource, SilentWriteDetection,
 };
 pub use ollama_tune::{OllamaConfig, OllamaModelOverride};
+pub use providers::copilot::{run_device_flow as copilot_run_device_flow, save_copilot_token, CopilotTokenSet};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     detect_provider_kind, known_models, max_tokens_for_model, provider_display_name,

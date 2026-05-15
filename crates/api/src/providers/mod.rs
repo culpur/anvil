@@ -5,7 +5,10 @@ use crate::error::ApiError;
 use crate::types::{MessageRequest, MessageResponse};
 
 pub mod anvil_provider;
+pub mod azure;
+pub mod bedrock;
 pub mod common;
+pub mod copilot;
 pub mod model_list;
 pub mod ollama;
 pub mod ollama_manage;
@@ -32,11 +35,44 @@ pub trait Provider {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProviderKind {
+    // ── Original five ────────────────────────────────────────────────────────
     AnvilApi,
     Xai,
     OpenAi,
     Gemini,
     Ollama,
+    // ── Group B: direct API-key, OpenAI-compatible endpoints ─────────────────
+    Fireworks,
+    Groq,
+    Mistral,
+    Perplexity,
+    DeepSeek,
+    TogetherAi,
+    DeepInfra,
+    Cerebras,
+    NvidiaNim,
+    HuggingFace,
+    MoonshotAi,
+    Nebius,
+    OpenRouter,
+    LmStudio,
+    Chutes,
+    Scaleway,
+    Baseten,
+    MiniMax,
+    StackIt,
+    Cortecs,
+    Ai302,
+    Zai,
+    OpenCode,
+    OpenCodeGo,
+    // ── Group A: OAuth / specialised auth ────────────────────────────────────
+    Copilot,
+    Azure,
+    Bedrock,
+    Alibaba,
+    Antigravity,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +116,222 @@ const OLLAMA_META: ProviderMetadata = ProviderMetadata {
     auth_env: "",
     base_url_env: "OLLAMA_HOST",
     default_base_url: ollama::DEFAULT_OLLAMA_BASE_URL,
+};
+
+// ── Group B: OpenAI-compatible API-key providers ──────────────────────────────
+
+const FIREWORKS_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Fireworks,
+    auth_env: "FIREWORKS_API_KEY",
+    base_url_env: "FIREWORKS_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_FIREWORKS_BASE_URL,
+};
+
+const GROQ_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Groq,
+    auth_env: "GROQ_API_KEY",
+    base_url_env: "GROQ_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_GROQ_BASE_URL,
+};
+
+const MISTRAL_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Mistral,
+    auth_env: "MISTRAL_API_KEY",
+    base_url_env: "MISTRAL_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_MISTRAL_BASE_URL,
+};
+
+const PERPLEXITY_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Perplexity,
+    auth_env: "PERPLEXITY_API_KEY",
+    base_url_env: "PERPLEXITY_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_PERPLEXITY_BASE_URL,
+};
+
+const DEEPSEEK_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::DeepSeek,
+    auth_env: "DEEPSEEK_API_KEY",
+    base_url_env: "DEEPSEEK_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_DEEPSEEK_BASE_URL,
+};
+
+const TOGETHERAI_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::TogetherAi,
+    auth_env: "TOGETHER_API_KEY",
+    base_url_env: "TOGETHER_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_TOGETHERAI_BASE_URL,
+};
+
+const DEEPINFRA_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::DeepInfra,
+    auth_env: "DEEPINFRA_API_KEY",
+    base_url_env: "DEEPINFRA_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_DEEPINFRA_BASE_URL,
+};
+
+const CEREBRAS_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Cerebras,
+    auth_env: "CEREBRAS_API_KEY",
+    base_url_env: "CEREBRAS_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_CEREBRAS_BASE_URL,
+};
+
+const NVIDIA_NIM_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::NvidiaNim,
+    auth_env: "NVIDIA_API_KEY",
+    base_url_env: "NVIDIA_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_NVIDIA_NIM_BASE_URL,
+};
+
+const HUGGINGFACE_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::HuggingFace,
+    auth_env: "HF_TOKEN",
+    base_url_env: "HF_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_HUGGINGFACE_BASE_URL,
+};
+
+const MOONSHOTAI_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::MoonshotAi,
+    auth_env: "MOONSHOT_API_KEY",
+    base_url_env: "MOONSHOT_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_MOONSHOTAI_BASE_URL,
+};
+
+const NEBIUS_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Nebius,
+    auth_env: "NEBIUS_API_KEY",
+    base_url_env: "NEBIUS_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_NEBIUS_BASE_URL,
+};
+
+const OPENROUTER_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::OpenRouter,
+    auth_env: "OPENROUTER_API_KEY",
+    base_url_env: "OPENROUTER_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_OPENROUTER_BASE_URL,
+};
+
+/// LM Studio runs locally with no authentication required.
+const LMSTUDIO_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::LmStudio,
+    auth_env: "",
+    base_url_env: "LMSTUDIO_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_LMSTUDIO_BASE_URL,
+};
+
+const CHUTES_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Chutes,
+    auth_env: "CHUTES_API_KEY",
+    base_url_env: "CHUTES_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_CHUTES_BASE_URL,
+};
+
+const SCALEWAY_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Scaleway,
+    auth_env: "SCALEWAY_API_KEY",
+    base_url_env: "SCALEWAY_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_SCALEWAY_BASE_URL,
+};
+
+const BASETEN_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Baseten,
+    auth_env: "BASETEN_API_KEY",
+    base_url_env: "BASETEN_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_BASETEN_BASE_URL,
+};
+
+const MINIMAX_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::MiniMax,
+    auth_env: "MINIMAX_API_KEY",
+    base_url_env: "MINIMAX_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_MINIMAX_BASE_URL,
+};
+
+const STACKIT_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::StackIt,
+    auth_env: "STACKIT_API_KEY",
+    base_url_env: "STACKIT_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_STACKIT_BASE_URL,
+};
+
+const CORTECS_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Cortecs,
+    auth_env: "CORTECS_API_KEY",
+    base_url_env: "CORTECS_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_CORTECS_BASE_URL,
+};
+
+const AI302_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Ai302,
+    auth_env: "AI302_API_KEY",
+    base_url_env: "AI302_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_AI302_BASE_URL,
+};
+
+/// Zai — also accepts `kimi` and `glm` slugs.
+const ZAI_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Zai,
+    auth_env: "ZAI_API_KEY",
+    base_url_env: "ZAI_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_ZAI_BASE_URL,
+};
+
+const OPENCODE_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::OpenCode,
+    auth_env: "OPENCODE_API_KEY",
+    base_url_env: "OPENCODE_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_OPENCODE_BASE_URL,
+};
+
+const OPENCODE_GO_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::OpenCodeGo,
+    auth_env: "OPENCODE_API_KEY",
+    base_url_env: "OPENCODE_GO_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_OPENCODE_GO_BASE_URL,
+};
+
+// ── Group A: OAuth / specialised auth ────────────────────────────────────────
+
+const COPILOT_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Copilot,
+    auth_env: "GITHUB_TOKEN",
+    base_url_env: "COPILOT_BASE_URL",
+    default_base_url: "https://api.githubcopilot.com",
+};
+
+const AZURE_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Azure,
+    auth_env: "AZURE_OPENAI_API_KEY",
+    base_url_env: "AZURE_OPENAI_ENDPOINT",
+    default_base_url: "",
+};
+
+const BEDROCK_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Bedrock,
+    auth_env: "AWS_ACCESS_KEY_ID",
+    base_url_env: "AWS_BEDROCK_ENDPOINT",
+    default_base_url: "",
+};
+
+const ALIBABA_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Alibaba,
+    auth_env: "DASHSCOPE_API_KEY",
+    base_url_env: "ALIBABA_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_ALIBABA_BASE_URL,
+};
+
+const ANTIGRAVITY_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Antigravity,
+    auth_env: "ANTIGRAVITY_API_KEY",
+    base_url_env: "ANTIGRAVITY_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_ANTIGRAVITY_BASE_URL,
+};
+
+const CURSOR_META: ProviderMetadata = ProviderMetadata {
+    provider: ProviderKind::Cursor,
+    auth_env: "CURSOR_API_KEY",
+    base_url_env: "CURSOR_BASE_URL",
+    default_base_url: openai_compat::DEFAULT_CURSOR_BASE_URL,
 };
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
@@ -184,7 +436,7 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi | ProviderKind::Gemini | ProviderKind::Ollama => trimmed,
+                _ => trimmed,
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -209,13 +461,26 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
     {
         return Some(OPENAI_META);
     }
+    // DeepSeek: route to DeepSeek provider when the API key is set; fall
+    // through to Ollama otherwise (deepseek-r1 etc. are pullable locally).
+    if lower.starts_with("deepseek") {
+        if openai_compat::has_api_key("DEEPSEEK_API_KEY") {
+            return Some(DEEPSEEK_META);
+        }
+        return Some(OLLAMA_META);
+    }
+    // Mistral: route to Mistral AI when the API key is present; Ollama
+    // otherwise (mistral and mixtral are common local pull targets).
+    if lower.starts_with("mistral") || lower.starts_with("mixtral") {
+        if openai_compat::has_api_key("MISTRAL_API_KEY") {
+            return Some(MISTRAL_META);
+        }
+        return Some(OLLAMA_META);
+    }
     if lower.starts_with("llama")
-        || lower.starts_with("mistral")
-        || lower.starts_with("mixtral")
         || lower.starts_with("qwen")
         || lower.starts_with("gemma")
         || lower.starts_with("phi")
-        || lower.starts_with("deepseek")
         || lower.starts_with("codellama")
         || lower.starts_with("vicuna")
         || lower.starts_with("falcon")
@@ -277,6 +542,38 @@ pub const fn provider_display_name(kind: ProviderKind) -> &'static str {
         ProviderKind::OpenAi => "OpenAI",
         ProviderKind::Gemini => "Google Gemini",
         ProviderKind::Ollama => "Ollama (local)",
+        // Group B
+        ProviderKind::Fireworks => "Fireworks AI",
+        ProviderKind::Groq => "Groq",
+        ProviderKind::Mistral => "Mistral AI",
+        ProviderKind::Perplexity => "Perplexity",
+        ProviderKind::DeepSeek => "DeepSeek",
+        ProviderKind::TogetherAi => "Together AI",
+        ProviderKind::DeepInfra => "DeepInfra",
+        ProviderKind::Cerebras => "Cerebras",
+        ProviderKind::NvidiaNim => "NVIDIA NIM",
+        ProviderKind::HuggingFace => "HuggingFace",
+        ProviderKind::MoonshotAi => "Moonshot AI",
+        ProviderKind::Nebius => "Nebius",
+        ProviderKind::OpenRouter => "OpenRouter",
+        ProviderKind::LmStudio => "LM Studio (local)",
+        ProviderKind::Chutes => "Chutes",
+        ProviderKind::Scaleway => "Scaleway",
+        ProviderKind::Baseten => "Baseten",
+        ProviderKind::MiniMax => "MiniMax",
+        ProviderKind::StackIt => "StackIT",
+        ProviderKind::Cortecs => "Cortecs",
+        ProviderKind::Ai302 => "302.AI",
+        ProviderKind::Zai => "Zai (kimi/glm)",
+        ProviderKind::OpenCode => "OpenCode",
+        ProviderKind::OpenCodeGo => "OpenCode-Go",
+        // Group A — specialised auth
+        ProviderKind::Copilot => "GitHub Copilot",
+        ProviderKind::Azure => "Azure OpenAI",
+        ProviderKind::Bedrock => "AWS Bedrock",
+        ProviderKind::Alibaba => "Alibaba DashScope",
+        ProviderKind::Antigravity => "Antigravity",
+        ProviderKind::Cursor => "Cursor",
     }
 }
 

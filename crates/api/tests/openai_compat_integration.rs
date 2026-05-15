@@ -10,7 +10,7 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use api::{
     ContentBlockDelta, ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent,
     InputContentBlock, InputMessage, MessageRequest, OpenAiCompatClient, OpenAiCompatConfig,
-    OutputContentBlock, ProviderClient, StreamEvent, ToolChoice, ToolDefinition,
+    OutputContentBlock, ProviderClient, ProviderKind, StreamEvent, ToolChoice, ToolDefinition,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -218,7 +218,7 @@ async fn provider_client_dispatches_xai_requests_from_env() {
 
     let client =
         ProviderClient::from_model("grok").expect("xAI provider client should be constructed");
-    assert!(matches!(client, ProviderClient::Xai(_)));
+    assert!(matches!(client, ProviderClient::OpenAiCompat(_, ProviderKind::Xai)));
 
     let response = client
         .send_message(&sample_request(false))

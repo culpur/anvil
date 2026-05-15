@@ -348,6 +348,10 @@ pub(crate) fn resolve_provider_from_model(model: &str) -> String {
         ProviderKind::Xai => "xai".to_string(),
         ProviderKind::Gemini => "google".to_string(),
         ProviderKind::Ollama => "ollama".to_string(),
+        other => {
+            // For all extended providers, use the display name lowercased as slug
+            api::provider_display_name(other).to_lowercase().replace(' ', "-")
+        }
     }
 }
 

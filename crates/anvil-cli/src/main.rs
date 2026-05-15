@@ -4018,12 +4018,43 @@ impl LiveCli {
         cli.persist_session()?;
         // Emit session_start OTel event (no-op when disabled).
         {
-            let provider_name = match api::detect_provider_kind(&cli.model) {
+            let _detected_provider_kind = api::detect_provider_kind(&cli.model);
+            let provider_name: &str = match _detected_provider_kind {
                 api::ProviderKind::AnvilApi => "anthropic",
                 api::ProviderKind::Xai => "xai",
                 api::ProviderKind::OpenAi => "openai",
                 api::ProviderKind::Gemini => "gemini",
                 api::ProviderKind::Ollama => "ollama",
+                api::ProviderKind::Fireworks => "fireworks",
+                api::ProviderKind::MiniMax => "minimax",
+                api::ProviderKind::Groq => "groq",
+                api::ProviderKind::Mistral => "mistral",
+                api::ProviderKind::Perplexity => "perplexity",
+                api::ProviderKind::DeepSeek => "deepseek",
+                api::ProviderKind::TogetherAi => "togetherai",
+                api::ProviderKind::DeepInfra => "deepinfra",
+                api::ProviderKind::Chutes => "chutes",
+                api::ProviderKind::Cerebras => "cerebras",
+                api::ProviderKind::NvidiaNim => "nvidia-nim",
+                api::ProviderKind::HuggingFace => "huggingface",
+                api::ProviderKind::MoonshotAi => "moonshotai",
+                api::ProviderKind::Nebius => "nebius",
+                api::ProviderKind::Scaleway => "scaleway",
+                api::ProviderKind::StackIt => "stackit",
+                api::ProviderKind::Baseten => "baseten",
+                api::ProviderKind::Cortecs => "cortecs",
+                api::ProviderKind::Ai302 => "302ai",
+                api::ProviderKind::Zai => "zai",
+                api::ProviderKind::OpenRouter => "openrouter",
+                api::ProviderKind::LmStudio => "lmstudio",
+                api::ProviderKind::OpenCode => "opencode",
+                api::ProviderKind::OpenCodeGo => "opencode-go",
+                api::ProviderKind::Copilot => "copilot",
+                api::ProviderKind::Azure => "azure",
+                api::ProviderKind::Bedrock => "bedrock",
+                api::ProviderKind::Alibaba => "alibaba",
+                api::ProviderKind::Antigravity => "antigravity",
+                api::ProviderKind::Cursor => "cursor",
             };
             runtime::otel::session_start(
                 &cli.session.id,

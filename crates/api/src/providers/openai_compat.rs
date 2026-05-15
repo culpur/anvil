@@ -29,6 +29,43 @@ pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 
+// ── Group B: OpenAI-compatible provider base URLs ────────────────────────────
+pub const DEFAULT_FIREWORKS_BASE_URL: &str = "https://api.fireworks.ai/inference/v1";
+pub const DEFAULT_GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
+pub const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
+pub const DEFAULT_PERPLEXITY_BASE_URL: &str = "https://api.perplexity.ai";
+pub const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/v1";
+pub const DEFAULT_TOGETHERAI_BASE_URL: &str = "https://api.together.xyz/v1";
+pub const DEFAULT_DEEPINFRA_BASE_URL: &str = "https://api.deepinfra.com/v1/openai";
+pub const DEFAULT_CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+pub const DEFAULT_NVIDIA_NIM_BASE_URL: &str = "https://integrate.api.nvidia.com/v1";
+pub const DEFAULT_HUGGINGFACE_BASE_URL: &str = "https://api-inference.huggingface.co/v1";
+pub const DEFAULT_MOONSHOTAI_BASE_URL: &str = "https://api.moonshot.cn/v1";
+pub const DEFAULT_NEBIUS_BASE_URL: &str = "https://api.studio.nebius.ai/v1";
+pub const DEFAULT_OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+/// LM Studio local server — no authentication required.
+pub const DEFAULT_LMSTUDIO_BASE_URL: &str = "http://localhost:1234/v1";
+pub const DEFAULT_CHUTES_BASE_URL: &str = "https://llm.chutes.ai/v1";
+pub const DEFAULT_SCALEWAY_BASE_URL: &str = "https://api.scaleway.ai/v1";
+pub const DEFAULT_BASETEN_BASE_URL: &str = "https://inference.baseten.co/v1";
+pub const DEFAULT_MINIMAX_BASE_URL: &str = "https://api.minimax.chat/v1";
+pub const DEFAULT_STACKIT_BASE_URL: &str =
+    "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1";
+pub const DEFAULT_CORTECS_BASE_URL: &str = "https://api.cortecs.ai/v1";
+pub const DEFAULT_AI302_BASE_URL: &str = "https://api.302.ai/v1";
+pub const DEFAULT_ZAI_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
+/// OpenCode community endpoint — mirrors the OpenAI-compat shape.
+pub const DEFAULT_OPENCODE_BASE_URL: &str = "https://opencode.ai/v1";
+/// OpenCode-Go community endpoint.
+pub const DEFAULT_OPENCODE_GO_BASE_URL: &str = "https://go.opencode.ai/v1";
+/// Alibaba DashScope OpenAI-compatible mode.
+pub const DEFAULT_ALIBABA_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+/// Antigravity uses the Gemini generativelanguage endpoint with custom routing.
+pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta";
+/// Cursor API — REST endpoint exposed by the Cursor subscription service.
+pub const DEFAULT_CURSOR_BASE_URL: &str = "https://api2.cursor.sh/v1";
+
 /// Default per-request timeout: 10 minutes.  Generous enough for slow Ollama
 /// or local-LLM calls on consumer hardware; configurable via
 /// `ANVIL_API_TIMEOUT_MS` for tighter or looser requirements.
@@ -120,6 +157,287 @@ impl OpenAiCompatConfig {
             api_key_env: "",
             base_url_env: "OLLAMA_HOST",
             default_base_url: DEFAULT_OLLAMA_BASE_URL,
+        }
+    }
+
+    // ── Group B constructors ─────────────────────────────────────────────────
+
+    #[must_use]
+    pub const fn fireworks() -> Self {
+        Self {
+            provider_name: "Fireworks",
+            api_key_env: "FIREWORKS_API_KEY",
+            base_url_env: "FIREWORKS_BASE_URL",
+            default_base_url: DEFAULT_FIREWORKS_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn groq() -> Self {
+        Self {
+            provider_name: "Groq",
+            api_key_env: "GROQ_API_KEY",
+            base_url_env: "GROQ_BASE_URL",
+            default_base_url: DEFAULT_GROQ_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn mistral() -> Self {
+        Self {
+            provider_name: "Mistral",
+            api_key_env: "MISTRAL_API_KEY",
+            base_url_env: "MISTRAL_BASE_URL",
+            default_base_url: DEFAULT_MISTRAL_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn perplexity() -> Self {
+        Self {
+            provider_name: "Perplexity",
+            api_key_env: "PERPLEXITY_API_KEY",
+            base_url_env: "PERPLEXITY_BASE_URL",
+            default_base_url: DEFAULT_PERPLEXITY_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn deepseek() -> Self {
+        Self {
+            provider_name: "DeepSeek",
+            api_key_env: "DEEPSEEK_API_KEY",
+            base_url_env: "DEEPSEEK_BASE_URL",
+            default_base_url: DEFAULT_DEEPSEEK_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn togetherai() -> Self {
+        Self {
+            provider_name: "TogetherAI",
+            api_key_env: "TOGETHER_API_KEY",
+            base_url_env: "TOGETHER_BASE_URL",
+            default_base_url: DEFAULT_TOGETHERAI_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn deepinfra() -> Self {
+        Self {
+            provider_name: "DeepInfra",
+            api_key_env: "DEEPINFRA_API_KEY",
+            base_url_env: "DEEPINFRA_BASE_URL",
+            default_base_url: DEFAULT_DEEPINFRA_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn cerebras() -> Self {
+        Self {
+            provider_name: "Cerebras",
+            api_key_env: "CEREBRAS_API_KEY",
+            base_url_env: "CEREBRAS_BASE_URL",
+            default_base_url: DEFAULT_CEREBRAS_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn nvidia_nim() -> Self {
+        Self {
+            provider_name: "NVIDIA NIM",
+            api_key_env: "NVIDIA_API_KEY",
+            base_url_env: "NVIDIA_BASE_URL",
+            default_base_url: DEFAULT_NVIDIA_NIM_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn huggingface() -> Self {
+        Self {
+            provider_name: "HuggingFace",
+            api_key_env: "HF_TOKEN",
+            base_url_env: "HF_BASE_URL",
+            default_base_url: DEFAULT_HUGGINGFACE_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn moonshotai() -> Self {
+        Self {
+            provider_name: "MoonshotAI",
+            api_key_env: "MOONSHOT_API_KEY",
+            base_url_env: "MOONSHOT_BASE_URL",
+            default_base_url: DEFAULT_MOONSHOTAI_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn nebius() -> Self {
+        Self {
+            provider_name: "Nebius",
+            api_key_env: "NEBIUS_API_KEY",
+            base_url_env: "NEBIUS_BASE_URL",
+            default_base_url: DEFAULT_NEBIUS_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn openrouter() -> Self {
+        Self {
+            provider_name: "OpenRouter",
+            api_key_env: "OPENROUTER_API_KEY",
+            base_url_env: "OPENROUTER_BASE_URL",
+            default_base_url: DEFAULT_OPENROUTER_BASE_URL,
+        }
+    }
+
+    /// LM Studio runs locally — no authentication required.
+    #[must_use]
+    pub const fn lmstudio() -> Self {
+        Self {
+            provider_name: "LM Studio",
+            api_key_env: "",
+            base_url_env: "LMSTUDIO_BASE_URL",
+            default_base_url: DEFAULT_LMSTUDIO_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn chutes() -> Self {
+        Self {
+            provider_name: "Chutes",
+            api_key_env: "CHUTES_API_KEY",
+            base_url_env: "CHUTES_BASE_URL",
+            default_base_url: DEFAULT_CHUTES_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn scaleway() -> Self {
+        Self {
+            provider_name: "Scaleway",
+            api_key_env: "SCALEWAY_API_KEY",
+            base_url_env: "SCALEWAY_BASE_URL",
+            default_base_url: DEFAULT_SCALEWAY_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn baseten() -> Self {
+        Self {
+            provider_name: "Baseten",
+            api_key_env: "BASETEN_API_KEY",
+            base_url_env: "BASETEN_BASE_URL",
+            default_base_url: DEFAULT_BASETEN_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn minimax() -> Self {
+        Self {
+            provider_name: "MiniMax",
+            api_key_env: "MINIMAX_API_KEY",
+            base_url_env: "MINIMAX_BASE_URL",
+            default_base_url: DEFAULT_MINIMAX_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn stackit() -> Self {
+        Self {
+            provider_name: "StackIT",
+            api_key_env: "STACKIT_API_KEY",
+            base_url_env: "STACKIT_BASE_URL",
+            default_base_url: DEFAULT_STACKIT_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn cortecs() -> Self {
+        Self {
+            provider_name: "Cortecs",
+            api_key_env: "CORTECS_API_KEY",
+            base_url_env: "CORTECS_BASE_URL",
+            default_base_url: DEFAULT_CORTECS_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn ai302() -> Self {
+        Self {
+            provider_name: "302AI",
+            api_key_env: "AI302_API_KEY",
+            base_url_env: "AI302_BASE_URL",
+            default_base_url: DEFAULT_AI302_BASE_URL,
+        }
+    }
+
+    /// Zai — also known as `kimi` or `glm`.  `ZAI_API_KEY` is the primary env var.
+    #[must_use]
+    pub const fn zai() -> Self {
+        Self {
+            provider_name: "Zai",
+            api_key_env: "ZAI_API_KEY",
+            base_url_env: "ZAI_BASE_URL",
+            default_base_url: DEFAULT_ZAI_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn opencode() -> Self {
+        Self {
+            provider_name: "OpenCode",
+            api_key_env: "OPENCODE_API_KEY",
+            base_url_env: "OPENCODE_BASE_URL",
+            default_base_url: DEFAULT_OPENCODE_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn opencode_go() -> Self {
+        Self {
+            provider_name: "OpenCode-Go",
+            api_key_env: "OPENCODE_API_KEY",
+            base_url_env: "OPENCODE_GO_BASE_URL",
+            default_base_url: DEFAULT_OPENCODE_GO_BASE_URL,
+        }
+    }
+
+    /// Alibaba DashScope — OpenAI-compatible mode.  `DASHSCOPE_API_KEY` is the
+    /// primary env var; `ALIBABA_API_KEY` is accepted as a fallback alias.
+    #[must_use]
+    pub const fn alibaba() -> Self {
+        Self {
+            provider_name: "Alibaba DashScope",
+            api_key_env: "DASHSCOPE_API_KEY",
+            base_url_env: "ALIBABA_BASE_URL",
+            default_base_url: DEFAULT_ALIBABA_BASE_URL,
+        }
+    }
+
+    /// Antigravity — Google Gemini fork with custom routing.  Uses a
+    /// `ANTIGRAVITY_API_KEY` (or `GEMINI_API_KEY` as fallback) against the
+    /// Gemini generativelanguage base URL.
+    #[must_use]
+    pub const fn antigravity() -> Self {
+        Self {
+            provider_name: "Antigravity",
+            api_key_env: "ANTIGRAVITY_API_KEY",
+            base_url_env: "ANTIGRAVITY_BASE_URL",
+            default_base_url: DEFAULT_ANTIGRAVITY_BASE_URL,
+        }
+    }
+
+    /// Cursor — REST proxy endpoint.  Auth via `CURSOR_API_KEY` or the key
+    /// stored in `~/.cursor/auth.json` under the `accessToken` field.
+    #[must_use]
+    pub const fn cursor() -> Self {
+        Self {
+            provider_name: "Cursor",
+            api_key_env: "CURSOR_API_KEY",
+            base_url_env: "CURSOR_BASE_URL",
+            default_base_url: DEFAULT_CURSOR_BASE_URL,
         }
     }
 
@@ -777,6 +1095,18 @@ fn parse_num_ctx(raw: &str) -> Option<u64> {
 
     let n: u64 = digits.trim().parse().ok()?;
     n.checked_mul(multiplier)
+}
+
+/// Public wrapper used by non-OpenAiCompat providers (Azure, etc.) that share
+/// the same OpenAI-compatible wire format but need to inject their own URL/auth.
+#[must_use]
+pub fn build_chat_completion_request_value(request: &MessageRequest, stream: bool) -> Value {
+    let req = if stream != request.stream {
+        MessageRequest { stream, ..request.clone() }
+    } else {
+        request.clone()
+    };
+    build_chat_completion_request(&req)
 }
 
 fn build_chat_completion_request(request: &MessageRequest) -> Value {

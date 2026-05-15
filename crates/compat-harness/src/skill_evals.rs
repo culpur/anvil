@@ -352,6 +352,16 @@ impl ArmCaller for AnvilProviderCaller {
                     .map_err(|e| format!("Ollama error: {e}"))?;
                 extract_text_from_response(&resp)
             }
+            // All remaining providers use the unified ProviderClient dispatcher.
+            _ => {
+                let client = api::ProviderClient::from_model(model)
+                    .map_err(|e| format!("provider client init: {e}"))?;
+                let resp = client
+                    .send_message(&request)
+                    .await
+                    .map_err(|e| format!("provider error: {e}"))?;
+                extract_text_from_response(&resp)
+            }
         };
 
         Ok(response_text)

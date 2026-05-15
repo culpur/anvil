@@ -3,6 +3,9 @@ use crate::failover::{FailoverChain, FailoverEvent, format_failover_event};
 use crate::providers::anvil_provider::{self, AuthSource, AnvilApiClient};
 use crate::providers::ollama::{self, OllamaClient};
 use crate::providers::openai_compat::{self, OpenAiCompatClient, OpenAiCompatConfig};
+use crate::providers::copilot::CopilotClient;
+use crate::providers::azure::AzureOpenAiClient;
+use crate::providers::bedrock::BedrockClient;
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
 
@@ -20,13 +23,59 @@ async fn stream_via_provider<P: Provider>(
     provider.stream_message(request).await
 }
 
+/// Routes a [`ProviderKind`] that uses the OpenAI-compatible wire format to its
+/// [`OpenAiCompatConfig`].  Returns `None` for providers that need bespoke
+/// clients (Anthropic, Ollama, Copilot, Azure, Bedrock).
+fn openai_compat_config(kind: ProviderKind) -> Option<OpenAiCompatConfig> {
+    match kind {
+        ProviderKind::Xai => Some(OpenAiCompatConfig::xai()),
+        ProviderKind::OpenAi => Some(OpenAiCompatConfig::openai()),
+        ProviderKind::Gemini => Some(OpenAiCompatConfig::gemini()),
+        ProviderKind::Fireworks => Some(OpenAiCompatConfig::fireworks()),
+        ProviderKind::Groq => Some(OpenAiCompatConfig::groq()),
+        ProviderKind::Mistral => Some(OpenAiCompatConfig::mistral()),
+        ProviderKind::Perplexity => Some(OpenAiCompatConfig::perplexity()),
+        ProviderKind::DeepSeek => Some(OpenAiCompatConfig::deepseek()),
+        ProviderKind::TogetherAi => Some(OpenAiCompatConfig::togetherai()),
+        ProviderKind::DeepInfra => Some(OpenAiCompatConfig::deepinfra()),
+        ProviderKind::Cerebras => Some(OpenAiCompatConfig::cerebras()),
+        ProviderKind::NvidiaNim => Some(OpenAiCompatConfig::nvidia_nim()),
+        ProviderKind::HuggingFace => Some(OpenAiCompatConfig::huggingface()),
+        ProviderKind::MoonshotAi => Some(OpenAiCompatConfig::moonshotai()),
+        ProviderKind::Nebius => Some(OpenAiCompatConfig::nebius()),
+        ProviderKind::OpenRouter => Some(OpenAiCompatConfig::openrouter()),
+        ProviderKind::LmStudio => Some(OpenAiCompatConfig::lmstudio()),
+        ProviderKind::Chutes => Some(OpenAiCompatConfig::chutes()),
+        ProviderKind::Scaleway => Some(OpenAiCompatConfig::scaleway()),
+        ProviderKind::Baseten => Some(OpenAiCompatConfig::baseten()),
+        ProviderKind::MiniMax => Some(OpenAiCompatConfig::minimax()),
+        ProviderKind::StackIt => Some(OpenAiCompatConfig::stackit()),
+        ProviderKind::Cortecs => Some(OpenAiCompatConfig::cortecs()),
+        ProviderKind::Ai302 => Some(OpenAiCompatConfig::ai302()),
+        ProviderKind::Zai => Some(OpenAiCompatConfig::zai()),
+        ProviderKind::OpenCode => Some(OpenAiCompatConfig::opencode()),
+        ProviderKind::OpenCodeGo => Some(OpenAiCompatConfig::opencode_go()),
+        ProviderKind::Alibaba => Some(OpenAiCompatConfig::alibaba()),
+        ProviderKind::Antigravity => Some(OpenAiCompatConfig::antigravity()),
+        ProviderKind::Cursor => Some(OpenAiCompatConfig::cursor()),
+        // Bespoke clients
+        ProviderKind::AnvilApi
+        | ProviderKind::Ollama
+        | ProviderKind::Copilot
+        | ProviderKind::Azure
+        | ProviderKind::Bedrock => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ProviderClient {
     AnvilApi(AnvilApiClient),
-    Xai(OpenAiCompatClient),
-    OpenAi(OpenAiCompatClient),
-    Gemini(OpenAiCompatClient),
+    /// All OpenAI-compatible providers (Group B + Gemini + xAI + OpenAI + Ollama).
+    OpenAiCompat(OpenAiCompatClient, ProviderKind),
     Ollama(OllamaClient),
+    Copilot(CopilotClient),
+    Azure(AzureOpenAiClient),
+    Bedrock(BedrockClient),
 }
 
 impl ProviderClient {
@@ -39,21 +88,34 @@ impl ProviderClient {
         default_auth: Option<AuthSource>,
     ) -> Result<Self, ApiError> {
         let resolved_model = providers::resolve_model_alias(model);
-        match providers::detect_provider_kind(&resolved_model) {
+        let kind = providers::detect_provider_kind(&resolved_model);
+
+        match kind {
             ProviderKind::AnvilApi => Ok(Self::AnvilApi(match default_auth {
                 Some(auth) => AnvilApiClient::from_auth(auth),
                 None => AnvilApiClient::from_env()?,
             })),
-            ProviderKind::Xai => Ok(Self::Xai(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::xai(),
-            )?)),
-            ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::openai(),
-            )?)),
-            ProviderKind::Gemini => Ok(Self::Gemini(OpenAiCompatClient::from_env(
-                OpenAiCompatConfig::gemini(),
-            )?)),
             ProviderKind::Ollama => Ok(Self::Ollama(OllamaClient::from_env())),
+            ProviderKind::Copilot => Ok(Self::Copilot(CopilotClient::from_env()?)),
+            ProviderKind::Azure => Ok(Self::Azure(AzureOpenAiClient::from_env()?)),
+            ProviderKind::Bedrock => Ok(Self::Bedrock(BedrockClient::from_env()?)),
+            other => {
+                if let Some(config) = openai_compat_config(other) {
+                    // LM Studio and Ollama local have no auth env — use new_no_auth.
+                    let client = if config.api_key_env.is_empty() {
+                        OpenAiCompatClient::new_no_auth(
+                            openai_compat::read_base_url(config),
+                        )
+                    } else {
+                        OpenAiCompatClient::from_env(config)?
+                    };
+                    Ok(Self::OpenAiCompat(client, other))
+                } else {
+                    Err(ApiError::Auth(format!(
+                        "no client implementation for provider {other:?}"
+                    )))
+                }
+            }
         }
     }
 
@@ -61,10 +123,11 @@ impl ProviderClient {
     pub const fn provider_kind(&self) -> ProviderKind {
         match self {
             Self::AnvilApi(_) => ProviderKind::AnvilApi,
-            Self::Xai(_) => ProviderKind::Xai,
-            Self::OpenAi(_) => ProviderKind::OpenAi,
-            Self::Gemini(_) => ProviderKind::Gemini,
+            Self::OpenAiCompat(_, kind) => *kind,
             Self::Ollama(_) => ProviderKind::Ollama,
+            Self::Copilot(_) => ProviderKind::Copilot,
+            Self::Azure(_) => ProviderKind::Azure,
+            Self::Bedrock(_) => ProviderKind::Bedrock,
         }
     }
 
@@ -74,8 +137,11 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::AnvilApi(client) => send_via_provider(client, request).await,
-            Self::Xai(client) | Self::OpenAi(client) | Self::Gemini(client) => send_via_provider(client, request).await,
+            Self::OpenAiCompat(client, _) => send_via_provider(client, request).await,
             Self::Ollama(client) => send_via_provider(client, request).await,
+            Self::Copilot(client) => send_via_provider(client, request).await,
+            Self::Azure(client) => send_via_provider(client, request).await,
+            Self::Bedrock(client) => send_via_provider(client, request).await,
         }
     }
 
@@ -87,21 +153,31 @@ impl ProviderClient {
             Self::AnvilApi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::AnvilApi),
-            Self::Xai(client) | Self::OpenAi(client) | Self::Gemini(client) => stream_via_provider(client, request)
+            Self::OpenAiCompat(client, _) => stream_via_provider(client, request)
                 .await
-                .map(MessageStream::OpenAiCompat),
+                .map(|s| MessageStream::OpenAiCompat(s)),
             Self::Ollama(client) => stream_via_provider(client, request)
                 .await
-                .map(MessageStream::OpenAiCompat),
+                .map(|s| MessageStream::OpenAiCompat(s)),
+            Self::Copilot(client) => stream_via_provider(client, request)
+                .await
+                .map(|s| MessageStream::OpenAiCompat(s)),
+            Self::Azure(client) => stream_via_provider(client, request)
+                .await
+                .map(|s| MessageStream::AzureStream(s)),
+            Self::Bedrock(client) => stream_via_provider(client, request)
+                .await
+                .map(|s| MessageStream::BedrockStream(s)),
         }
     }
 }
 
-// Ollama uses the same OpenAI-compatible stream type — no separate variant needed.
 #[derive(Debug)]
 pub enum MessageStream {
     AnvilApi(anvil_provider::MessageStream),
     OpenAiCompat(openai_compat::MessageStream),
+    AzureStream(crate::providers::azure::AzureMessageStream),
+    BedrockStream(crate::providers::bedrock::BedrockMessageStream),
 }
 
 impl MessageStream {
@@ -110,6 +186,8 @@ impl MessageStream {
         match self {
             Self::AnvilApi(stream) => stream.request_id(),
             Self::OpenAiCompat(stream) => stream.request_id(),
+            Self::AzureStream(stream) => stream.request_id(),
+            Self::BedrockStream(_) => None,
         }
     }
 
@@ -117,6 +195,8 @@ impl MessageStream {
         match self {
             Self::AnvilApi(stream) => stream.next_event().await,
             Self::OpenAiCompat(stream) => stream.next_event().await,
+            Self::AzureStream(stream) => stream.next_event().await,
+            Self::BedrockStream(stream) => stream.next_event().await,
         }
     }
 }
@@ -174,7 +254,6 @@ impl FailoverClient {
     /// The model string for the currently active provider in the chain.
     #[must_use]
     pub fn active_model(&self) -> Option<&str> {
-        // FailoverChain::active_model takes &self — safe.
         self.chain.active_model()
     }
 

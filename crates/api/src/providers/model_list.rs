@@ -110,17 +110,17 @@ pub enum ProviderCredentials {
     Anthropic,
     /// xAI bearer token.
     Xai,
-    /// OpenAI bearer token (raw API key only — OAuth-via-ChatGPT support is
-    /// not yet wired in `DefaultRuntimeClient`; when it is, this enum stays
-    /// the same and the resolver picks it up automatically).
+    /// OpenAI bearer token.
     OpenAi,
     /// Google Gemini API key.
     Gemini,
     /// Local Ollama daemon reachable on `OLLAMA_HOST` (or default).
     OllamaLocal,
-    /// Local Ollama daemon reachable AND authenticated against Ollama Cloud
-    /// (the daemon proxies via its signed device key).
+    /// Local Ollama daemon reachable AND authenticated against Ollama Cloud.
     OllamaCloud,
+    /// Any Group B or Group A provider with a slug for identification.
+    /// `slug` is the canonical `/provider` slug (e.g. `"groq"`, `"azure"`).
+    GroupB(&'static str),
 }
 
 impl ProviderCredentials {
@@ -128,13 +128,15 @@ impl ProviderCredentials {
     /// can share a kind (e.g. local + cloud Ollama both map to
     /// [`ProviderKind::Ollama`]).
     #[must_use]
-    pub const fn kind(&self) -> ProviderKind {
+    pub fn kind(&self) -> ProviderKind {
         match self {
             Self::Anthropic => ProviderKind::AnvilApi,
             Self::Xai => ProviderKind::Xai,
             Self::OpenAi => ProviderKind::OpenAi,
             Self::Gemini => ProviderKind::Gemini,
             Self::OllamaLocal | Self::OllamaCloud => ProviderKind::Ollama,
+            Self::GroupB(slug) => slug_to_provider_kind(slug)
+                .unwrap_or(ProviderKind::AnvilApi),
         }
     }
 }
@@ -183,15 +185,12 @@ async fn ollama_cloud_available() -> bool {
 ///
 /// Returns `Some(credentials)` if any of:
 /// - the matching env var is set (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`),
-/// - an OAuth token is saved on disk for that provider (currently Anthropic only),
+/// - an OAuth token is saved on disk for that provider (currently Anthropic + Copilot),
 /// - for Ollama, the local daemon is reachable.
+/// - for Azure, the required AZURE_OPENAI_ENDPOINT + credential vars are set.
+/// - for Bedrock, AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY are set.
 ///
 /// Returns `None` if no path resolves — the caller hides the provider.
-///
-/// **Critical**: this function MUST NOT introduce a new credential surface.
-/// If `DefaultRuntimeClient::new()` learns about a new credential path, this
-/// function picks it up automatically through the shared `has_*` helpers and
-/// the `OllamaClient::is_available()` probe.
 pub async fn is_provider_configured(kind: ProviderKind) -> Option<ProviderCredentials> {
     match kind {
         ProviderKind::AnvilApi => has_auth_from_env_or_saved()
@@ -201,8 +200,11 @@ pub async fn is_provider_configured(kind: ProviderKind) -> Option<ProviderCreden
         ProviderKind::OpenAi => {
             has_api_key("OPENAI_API_KEY").then_some(ProviderCredentials::OpenAi)
         }
-        ProviderKind::Gemini => {
-            if has_api_key("GEMINI_API_KEY") || has_api_key("GOOGLE_API_KEY") {
+        ProviderKind::Gemini | ProviderKind::Antigravity => {
+            if has_api_key("GEMINI_API_KEY")
+                || has_api_key("GOOGLE_API_KEY")
+                || has_api_key("ANTIGRAVITY_API_KEY")
+            {
                 Some(ProviderCredentials::Gemini)
             } else {
                 None
@@ -218,23 +220,162 @@ pub async fn is_provider_configured(kind: ProviderKind) -> Option<ProviderCreden
                 Some(ProviderCredentials::OllamaLocal)
             }
         }
+        // ── Group B: direct API-key providers ────────────────────────────────
+        ProviderKind::Fireworks => has_api_key("FIREWORKS_API_KEY").then_some(ProviderCredentials::GroupB("fireworks")),
+        ProviderKind::Groq => has_api_key("GROQ_API_KEY").then_some(ProviderCredentials::GroupB("groq")),
+        ProviderKind::Mistral => has_api_key("MISTRAL_API_KEY").then_some(ProviderCredentials::GroupB("mistral")),
+        ProviderKind::Perplexity => has_api_key("PERPLEXITY_API_KEY").then_some(ProviderCredentials::GroupB("perplexity")),
+        ProviderKind::DeepSeek => has_api_key("DEEPSEEK_API_KEY").then_some(ProviderCredentials::GroupB("deepseek")),
+        ProviderKind::TogetherAi => has_api_key("TOGETHER_API_KEY").then_some(ProviderCredentials::GroupB("togetherai")),
+        ProviderKind::DeepInfra => has_api_key("DEEPINFRA_API_KEY").then_some(ProviderCredentials::GroupB("deepinfra")),
+        ProviderKind::Cerebras => has_api_key("CEREBRAS_API_KEY").then_some(ProviderCredentials::GroupB("cerebras")),
+        ProviderKind::NvidiaNim => has_api_key("NVIDIA_API_KEY").then_some(ProviderCredentials::GroupB("nvidia-nim")),
+        ProviderKind::HuggingFace => has_api_key("HF_TOKEN").then_some(ProviderCredentials::GroupB("huggingface")),
+        ProviderKind::MoonshotAi => has_api_key("MOONSHOT_API_KEY").then_some(ProviderCredentials::GroupB("moonshotai")),
+        ProviderKind::Nebius => has_api_key("NEBIUS_API_KEY").then_some(ProviderCredentials::GroupB("nebius")),
+        ProviderKind::OpenRouter => has_api_key("OPENROUTER_API_KEY").then_some(ProviderCredentials::GroupB("openrouter")),
+        ProviderKind::LmStudio => {
+            // LM Studio is local with no auth; always report as configured.
+            Some(ProviderCredentials::GroupB("lmstudio"))
+        }
+        ProviderKind::Chutes => has_api_key("CHUTES_API_KEY").then_some(ProviderCredentials::GroupB("chutes")),
+        ProviderKind::Scaleway => has_api_key("SCALEWAY_API_KEY").then_some(ProviderCredentials::GroupB("scaleway")),
+        ProviderKind::Baseten => has_api_key("BASETEN_API_KEY").then_some(ProviderCredentials::GroupB("baseten")),
+        ProviderKind::MiniMax => has_api_key("MINIMAX_API_KEY").then_some(ProviderCredentials::GroupB("minimax")),
+        ProviderKind::StackIt => has_api_key("STACKIT_API_KEY").then_some(ProviderCredentials::GroupB("stackit")),
+        ProviderKind::Cortecs => has_api_key("CORTECS_API_KEY").then_some(ProviderCredentials::GroupB("cortecs")),
+        ProviderKind::Ai302 => has_api_key("AI302_API_KEY").then_some(ProviderCredentials::GroupB("302ai")),
+        ProviderKind::Zai => has_api_key("ZAI_API_KEY").then_some(ProviderCredentials::GroupB("zai")),
+        ProviderKind::OpenCode => has_api_key("OPENCODE_API_KEY").then_some(ProviderCredentials::GroupB("opencode")),
+        ProviderKind::OpenCodeGo => has_api_key("OPENCODE_API_KEY").then_some(ProviderCredentials::GroupB("opencode-go")),
+        ProviderKind::Alibaba => {
+            if has_api_key("DASHSCOPE_API_KEY") || has_api_key("ALIBABA_API_KEY") {
+                Some(ProviderCredentials::GroupB("alibaba"))
+            } else {
+                None
+            }
+        }
+        ProviderKind::Cursor => {
+            let from_env = has_api_key("CURSOR_API_KEY");
+            let from_file = super::copilot::load_cursor_auth_token()
+                .map(|t| t.is_some())
+                .unwrap_or(false);
+            (from_env || from_file).then_some(ProviderCredentials::GroupB("cursor"))
+        }
+        // ── Group A: specialised auth ─────────────────────────────────────────
+        ProviderKind::Copilot => {
+            let from_env = has_api_key("GITHUB_TOKEN");
+            let from_saved = super::copilot::load_copilot_token()
+                .map(|t| t.map(|tok| !tok.is_expired()).unwrap_or(false))
+                .unwrap_or(false);
+            (from_env || from_saved).then_some(ProviderCredentials::GroupB("copilot"))
+        }
+        ProviderKind::Azure => {
+            let endpoint_set = has_api_key("AZURE_OPENAI_ENDPOINT");
+            let auth_set = has_api_key("AZURE_OPENAI_API_KEY") || has_api_key("AZURE_AD_TOKEN");
+            (endpoint_set && auth_set).then_some(ProviderCredentials::GroupB("azure"))
+        }
+        ProviderKind::Bedrock => {
+            let key_set = has_api_key("AWS_ACCESS_KEY_ID") && has_api_key("AWS_SECRET_ACCESS_KEY");
+            key_set.then_some(ProviderCredentials::GroupB("bedrock"))
+        }
     }
 }
 
+/// Map a `/provider` slug to its [`ProviderKind`].
+#[must_use]
+pub fn slug_to_provider_kind(slug: &str) -> Option<ProviderKind> {
+    // This is the canonical slug table — must stay in sync with the slug
+    // parser in `crates/anvil-cli/src/providers.rs`.
+    match slug {
+        "anthropic" | "claude" | "anvil" => Some(ProviderKind::AnvilApi),
+        "xai" | "grok" => Some(ProviderKind::Xai),
+        "openai" => Some(ProviderKind::OpenAi),
+        "gemini" | "google" => Some(ProviderKind::Gemini),
+        "ollama" => Some(ProviderKind::Ollama),
+        "fireworks" => Some(ProviderKind::Fireworks),
+        "groq" => Some(ProviderKind::Groq),
+        "mistral" => Some(ProviderKind::Mistral),
+        "perplexity" => Some(ProviderKind::Perplexity),
+        "deepseek" => Some(ProviderKind::DeepSeek),
+        "togetherai" | "together" => Some(ProviderKind::TogetherAi),
+        "deepinfra" => Some(ProviderKind::DeepInfra),
+        "cerebras" => Some(ProviderKind::Cerebras),
+        "nvidia-nim" | "nvidia" => Some(ProviderKind::NvidiaNim),
+        "huggingface" | "hf" => Some(ProviderKind::HuggingFace),
+        "moonshotai" | "moonshot" => Some(ProviderKind::MoonshotAi),
+        "nebius" => Some(ProviderKind::Nebius),
+        "openrouter" => Some(ProviderKind::OpenRouter),
+        "lmstudio" | "lm-studio" => Some(ProviderKind::LmStudio),
+        "chutes" => Some(ProviderKind::Chutes),
+        "scaleway" => Some(ProviderKind::Scaleway),
+        "baseten" => Some(ProviderKind::Baseten),
+        "minimax" => Some(ProviderKind::MiniMax),
+        "stackit" => Some(ProviderKind::StackIt),
+        "cortecs" => Some(ProviderKind::Cortecs),
+        "302ai" | "ai302" => Some(ProviderKind::Ai302),
+        "zai" | "kimi" | "glm" => Some(ProviderKind::Zai),
+        "opencode" => Some(ProviderKind::OpenCode),
+        "opencode-go" => Some(ProviderKind::OpenCodeGo),
+        "copilot" | "github-copilot" => Some(ProviderKind::Copilot),
+        "azure" | "azure-openai" => Some(ProviderKind::Azure),
+        "bedrock" | "aws-bedrock" => Some(ProviderKind::Bedrock),
+        "alibaba" | "dashscope" | "alibaba-coding-plan" => Some(ProviderKind::Alibaba),
+        "antigravity" => Some(ProviderKind::Antigravity),
+        "cursor" => Some(ProviderKind::Cursor),
+        _ => None,
+    }
+}
+
+/// All provider kinds in the canonical display order.
+const ALL_PROVIDER_KINDS: &[ProviderKind] = &[
+    // Original five
+    ProviderKind::AnvilApi,
+    ProviderKind::Xai,
+    ProviderKind::OpenAi,
+    ProviderKind::Gemini,
+    ProviderKind::Ollama,
+    // Group B
+    ProviderKind::Fireworks,
+    ProviderKind::Groq,
+    ProviderKind::Mistral,
+    ProviderKind::Perplexity,
+    ProviderKind::DeepSeek,
+    ProviderKind::TogetherAi,
+    ProviderKind::DeepInfra,
+    ProviderKind::Cerebras,
+    ProviderKind::NvidiaNim,
+    ProviderKind::HuggingFace,
+    ProviderKind::MoonshotAi,
+    ProviderKind::Nebius,
+    ProviderKind::OpenRouter,
+    ProviderKind::LmStudio,
+    ProviderKind::Chutes,
+    ProviderKind::Scaleway,
+    ProviderKind::Baseten,
+    ProviderKind::MiniMax,
+    ProviderKind::StackIt,
+    ProviderKind::Cortecs,
+    ProviderKind::Ai302,
+    ProviderKind::Zai,
+    ProviderKind::OpenCode,
+    ProviderKind::OpenCodeGo,
+    // Group A
+    ProviderKind::Copilot,
+    ProviderKind::Azure,
+    ProviderKind::Bedrock,
+    ProviderKind::Alibaba,
+    ProviderKind::Antigravity,
+    ProviderKind::Cursor,
+];
+
 /// Enumerate every configured provider in a single pass.
 ///
-/// The returned set is small (≤ 5 entries), so the caller can iterate it
-/// freely. Order matches the [`ProviderKind`] enum declaration so the picker
-/// labels are stable across calls.
+/// Order matches the canonical provider kind declaration so labels are stable
+/// across calls.
 pub async fn enumerate_configured_providers() -> Vec<ProviderCredentials> {
     let mut out = Vec::new();
-    for kind in [
-        ProviderKind::AnvilApi,
-        ProviderKind::Xai,
-        ProviderKind::OpenAi,
-        ProviderKind::Gemini,
-        ProviderKind::Ollama,
-    ] {
+    for &kind in ALL_PROVIDER_KINDS {
         if let Some(credentials) = is_provider_configured(kind).await {
             out.push(credentials);
         }
@@ -461,6 +602,321 @@ pub async fn fetch_ollama_cloud_models() -> Result<Vec<ProviderModel>, ProviderM
     let mut all = fetch_ollama_local_models().await?;
     all.retain(|model| is_ollama_cloud_model(&model.id));
     Ok(all)
+}
+
+// ---------------------------------------------------------------------------
+// Group B model fetchers (all OpenAI-compat /v1/models)
+// ---------------------------------------------------------------------------
+
+/// Fetch live model list for any OpenAI-compatible Group B provider.
+///
+/// Falls back gracefully: if the provider's `/v1/models` returns a 404 or
+/// non-JSON body (some providers return an HTML error page), return `Transient`
+/// so the caller can fall back to the static registry.
+pub async fn fetch_group_b_models(
+    config: OpenAiCompatConfig,
+    provider: ProviderKind,
+) -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    // Local providers (LM Studio) skip the auth check.
+    if !config.api_key_env.is_empty() {
+        // For providers that fall back to a secondary env var (Alibaba, Antigravity)
+        // we accept any of them.
+        let secondary = match config.provider_name {
+            "Alibaba DashScope" => Some("ALIBABA_API_KEY"),
+            "Antigravity" => Some("GEMINI_API_KEY"),
+            _ => None,
+        };
+        let has_key = std::env::var(config.api_key_env)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .is_some()
+            || secondary
+                .and_then(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+                .is_some();
+        if !has_key {
+            return Err(ProviderModelsError::Unauthorized);
+        }
+    }
+    fetch_openai_compat_models(config, provider).await
+}
+
+macro_rules! group_b_fetcher {
+    ($fn_name:ident, $config_fn:ident, $kind:expr) => {
+        pub async fn $fn_name() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+            fetch_group_b_models(OpenAiCompatConfig::$config_fn(), $kind).await
+        }
+    };
+}
+
+group_b_fetcher!(fetch_fireworks_models, fireworks, ProviderKind::Fireworks);
+group_b_fetcher!(fetch_groq_models, groq, ProviderKind::Groq);
+group_b_fetcher!(fetch_mistral_models, mistral, ProviderKind::Mistral);
+group_b_fetcher!(fetch_perplexity_models, perplexity, ProviderKind::Perplexity);
+group_b_fetcher!(fetch_deepseek_models, deepseek, ProviderKind::DeepSeek);
+group_b_fetcher!(fetch_togetherai_models, togetherai, ProviderKind::TogetherAi);
+group_b_fetcher!(fetch_deepinfra_models, deepinfra, ProviderKind::DeepInfra);
+group_b_fetcher!(fetch_cerebras_models, cerebras, ProviderKind::Cerebras);
+group_b_fetcher!(fetch_nvidia_nim_models, nvidia_nim, ProviderKind::NvidiaNim);
+group_b_fetcher!(fetch_huggingface_models, huggingface, ProviderKind::HuggingFace);
+group_b_fetcher!(fetch_moonshotai_models, moonshotai, ProviderKind::MoonshotAi);
+group_b_fetcher!(fetch_nebius_models, nebius, ProviderKind::Nebius);
+group_b_fetcher!(fetch_openrouter_models, openrouter, ProviderKind::OpenRouter);
+group_b_fetcher!(fetch_lmstudio_models, lmstudio, ProviderKind::LmStudio);
+group_b_fetcher!(fetch_chutes_models, chutes, ProviderKind::Chutes);
+group_b_fetcher!(fetch_scaleway_models, scaleway, ProviderKind::Scaleway);
+group_b_fetcher!(fetch_baseten_models, baseten, ProviderKind::Baseten);
+group_b_fetcher!(fetch_minimax_models, minimax, ProviderKind::MiniMax);
+group_b_fetcher!(fetch_stackit_models, stackit, ProviderKind::StackIt);
+group_b_fetcher!(fetch_cortecs_models, cortecs, ProviderKind::Cortecs);
+group_b_fetcher!(fetch_ai302_models, ai302, ProviderKind::Ai302);
+group_b_fetcher!(fetch_zai_models, zai, ProviderKind::Zai);
+group_b_fetcher!(fetch_opencode_models, opencode, ProviderKind::OpenCode);
+group_b_fetcher!(fetch_opencode_go_models, opencode_go, ProviderKind::OpenCodeGo);
+group_b_fetcher!(fetch_alibaba_models, alibaba, ProviderKind::Alibaba);
+group_b_fetcher!(fetch_antigravity_models, antigravity, ProviderKind::Antigravity);
+group_b_fetcher!(fetch_cursor_models, cursor, ProviderKind::Cursor);
+
+/// Fetch models for GitHub Copilot.  Uses the same OpenAI-compat shape;
+/// tries `GITHUB_TOKEN` first then the saved device-flow token.
+pub async fn fetch_copilot_models() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    use super::copilot::load_copilot_token;
+    let token = std::env::var("GITHUB_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            load_copilot_token()
+                .ok()
+                .flatten()
+                .filter(|t| !t.is_expired())
+                .map(|t| t.access_token)
+        })
+        .ok_or(ProviderModelsError::Unauthorized)?;
+
+    let base = std::env::var("COPILOT_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| super::copilot::BASE_URL.to_string());
+    let url = format!("{}/models", base.trim_end_matches('/'));
+
+    let client = build_fetch_client();
+    let response = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| ProviderModelsError::Transient(e.to_string()))?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(ProviderModelsError::Unauthorized);
+    }
+    if !status.is_success() {
+        return Err(ProviderModelsError::Transient(format!(
+            "HTTP {} from Copilot /models",
+            status.as_u16()
+        )));
+    }
+    let envelope: OpenAiModelsEnvelope = response
+        .json()
+        .await
+        .map_err(|e| ProviderModelsError::InvalidResponse(e.to_string()))?;
+    Ok(envelope
+        .data
+        .into_iter()
+        .map(|e| ProviderModel {
+            id: e.id,
+            provider: ProviderKind::Copilot,
+            display_name: None,
+            context_window: None,
+            deprecated: false,
+        })
+        .collect())
+}
+
+/// Fetch Azure OpenAI model list.
+///
+/// Azure's `/openai/models` endpoint lists available deployments.
+/// The URL uses `AZURE_OPENAI_ENDPOINT` + `/openai/models?api-version={version}`.
+pub async fn fetch_azure_models() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    use super::azure::DEFAULT_API_VERSION;
+    let endpoint = std::env::var("AZURE_OPENAI_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .ok_or(ProviderModelsError::Unauthorized)?;
+    let api_version = std::env::var("AZURE_OPENAI_API_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| DEFAULT_API_VERSION.to_string());
+    let url = format!(
+        "{}/openai/models?api-version={api_version}",
+        endpoint.trim_end_matches('/')
+    );
+
+    let api_key = std::env::var("AZURE_OPENAI_API_KEY").ok().filter(|v| !v.is_empty());
+    let aad_token = std::env::var("AZURE_AD_TOKEN").ok().filter(|v| !v.is_empty());
+    if api_key.is_none() && aad_token.is_none() {
+        return Err(ProviderModelsError::Unauthorized);
+    }
+
+    let client = build_fetch_client();
+    let mut builder = client.get(&url);
+    if let Some(token) = aad_token {
+        builder = builder.bearer_auth(token);
+    } else if let Some(key) = api_key {
+        builder = builder.header("api-key", key);
+    }
+    let response = builder.send().await.map_err(|e| ProviderModelsError::Transient(e.to_string()))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(ProviderModelsError::Unauthorized);
+    }
+    if !status.is_success() {
+        return Err(ProviderModelsError::Transient(format!(
+            "HTTP {} from Azure /openai/models",
+            status.as_u16()
+        )));
+    }
+    let envelope: OpenAiModelsEnvelope = response
+        .json()
+        .await
+        .map_err(|e| ProviderModelsError::InvalidResponse(e.to_string()))?;
+    Ok(envelope
+        .data
+        .into_iter()
+        .map(|e| ProviderModel {
+            id: e.id,
+            provider: ProviderKind::Azure,
+            display_name: None,
+            context_window: None,
+            deprecated: false,
+        })
+        .collect())
+}
+
+/// Fetch AWS Bedrock foundation model list.
+///
+/// Uses `ListFoundationModels` — no streaming, returns a flat list.
+/// Endpoint: `GET {bedrock_base}/foundation-models`
+/// Auth: SigV4.
+pub async fn fetch_bedrock_models() -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    use super::bedrock::{BedrockClient};
+    // Delegate to the client which has SigV4 signing built in.
+    // We call the ListFoundationModels endpoint.
+    let creds_ok = std::env::var("AWS_ACCESS_KEY_ID").ok().filter(|v| !v.is_empty()).is_some()
+        && std::env::var("AWS_SECRET_ACCESS_KEY").ok().filter(|v| !v.is_empty()).is_some();
+    if !creds_ok {
+        return Err(ProviderModelsError::Unauthorized);
+    }
+
+    // Build a minimal request using the client's signing machinery.
+    // We reuse the client just for the SigV4 signing helper — the actual
+    // list endpoint doesn't use InvokeModel.
+    let client = BedrockClient::from_env()
+        .map_err(|e| ProviderModelsError::Other(e.to_string()))?;
+
+    let url = format!(
+        "https://bedrock.{}.amazonaws.com/foundation-models",
+        std::env::var("AWS_REGION")
+            .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|_| "us-east-1".to_string())
+    );
+
+    // Use the client's HTTP client with SigV4 headers for a GET request.
+    let http = reqwest::Client::builder()
+        .timeout(DEFAULT_FETCH_TIMEOUT)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    // Build signed GET request manually using the signing helper.
+    let sig = super::bedrock::sign_request_get(&client.credentials(), "GET", &url);
+    let mut builder = http.get(&url)
+        .header("Authorization", sig.authorization)
+        .header("x-amz-date", sig.x_amz_date)
+        .header("x-amz-content-sha256", sig.x_amz_content_sha256);
+    if let Some(token) = sig.x_amz_security_token {
+        builder = builder.header("x-amz-security-token", token);
+    }
+
+    let response = builder.send().await.map_err(|e| ProviderModelsError::Transient(e.to_string()))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(ProviderModelsError::Unauthorized);
+    }
+    if !status.is_success() {
+        return Err(ProviderModelsError::Transient(format!(
+            "HTTP {} from Bedrock /foundation-models",
+            status.as_u16()
+        )));
+    }
+    #[derive(Deserialize)]
+    struct BedrockModelsEnvelope {
+        #[serde(rename = "modelSummaries", default)]
+        model_summaries: Vec<BedrockModelEntry>,
+    }
+    #[derive(Deserialize)]
+    struct BedrockModelEntry {
+        #[serde(rename = "modelId")]
+        model_id: String,
+        #[serde(rename = "modelName", default)]
+        model_name: Option<String>,
+    }
+    let envelope: BedrockModelsEnvelope = response
+        .json()
+        .await
+        .map_err(|e| ProviderModelsError::InvalidResponse(e.to_string()))?;
+    Ok(envelope
+        .model_summaries
+        .into_iter()
+        .map(|e| ProviderModel {
+            id: e.model_id,
+            provider: ProviderKind::Bedrock,
+            display_name: e.model_name,
+            context_window: None,
+            deprecated: false,
+        })
+        .collect())
+}
+
+/// Dispatch a model-list fetch for any provider given its slug.
+///
+/// Returns the live model list from the provider's `/v1/models` (or equivalent)
+/// endpoint.  This is the single entry point used by the TAB-completion layer.
+pub async fn fetch_models_for_slug(
+    slug: &str,
+) -> Result<Vec<ProviderModel>, ProviderModelsError> {
+    match slug {
+        "fireworks" => fetch_fireworks_models().await,
+        "groq" => fetch_groq_models().await,
+        "mistral" => fetch_mistral_models().await,
+        "perplexity" => fetch_perplexity_models().await,
+        "deepseek" => fetch_deepseek_models().await,
+        "togetherai" | "together" => fetch_togetherai_models().await,
+        "deepinfra" => fetch_deepinfra_models().await,
+        "cerebras" => fetch_cerebras_models().await,
+        "nvidia-nim" | "nvidia" => fetch_nvidia_nim_models().await,
+        "huggingface" | "hf" => fetch_huggingface_models().await,
+        "moonshotai" | "moonshot" => fetch_moonshotai_models().await,
+        "nebius" => fetch_nebius_models().await,
+        "openrouter" => fetch_openrouter_models().await,
+        "lmstudio" | "lm-studio" => fetch_lmstudio_models().await,
+        "chutes" => fetch_chutes_models().await,
+        "scaleway" => fetch_scaleway_models().await,
+        "baseten" => fetch_baseten_models().await,
+        "minimax" => fetch_minimax_models().await,
+        "stackit" => fetch_stackit_models().await,
+        "cortecs" => fetch_cortecs_models().await,
+        "302ai" | "ai302" => fetch_ai302_models().await,
+        "zai" | "kimi" | "glm" => fetch_zai_models().await,
+        "opencode" => fetch_opencode_models().await,
+        "opencode-go" => fetch_opencode_go_models().await,
+        "alibaba" | "dashscope" | "alibaba-coding-plan" => fetch_alibaba_models().await,
+        "antigravity" => fetch_antigravity_models().await,
+        "cursor" => fetch_cursor_models().await,
+        "copilot" | "github-copilot" => fetch_copilot_models().await,
+        "azure" | "azure-openai" => fetch_azure_models().await,
+        "bedrock" | "aws-bedrock" => fetch_bedrock_models().await,
+        _ => Err(ProviderModelsError::Other(format!("unknown provider slug: {slug}"))),
+    }
 }
 
 // ---------------------------------------------------------------------------
