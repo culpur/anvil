@@ -743,6 +743,71 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
 }
 
 // ---------------------------------------------------------------------------
+// Public test accessor — allows `crates/api/tests/bedrock_sigv4_compliance.rs`
+// to call the private SigV4 primitives without exposing them in the main API.
+// ---------------------------------------------------------------------------
+
+/// Test-only accessors for the private SigV4 implementation.
+///
+/// Exposed so the external integration test in
+/// `crates/api/tests/bedrock_sigv4_compliance.rs` can drive the signing
+/// primitives against the AWS public test vectors without making the
+/// functions part of the main crate API.
+#[doc(hidden)]
+pub mod sigv4_testable {
+    use super::{
+        derive_signing_key, hex_encode, hmac_sha256, sha256_hex, AwsCredentials, sign_request,
+    };
+
+    /// Hash a payload the same way SigV4 does (hex-encoded SHA-256).
+    pub fn payload_hash(data: &[u8]) -> String {
+        sha256_hex(data)
+    }
+
+    /// Hex-encode arbitrary bytes — same helper used internally.
+    pub fn encode_hex(bytes: &[u8]) -> String {
+        hex_encode(bytes)
+    }
+
+    /// Compute HMAC-SHA256 for compliance test key derivation checks.
+    pub fn compute_hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+        hmac_sha256(key, data)
+    }
+
+    /// Derive a SigV4 signing key from the four-step HMAC chain.
+    pub fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
+        derive_signing_key(secret, date, region, service)
+    }
+
+    /// Full sign_request call, returning all four header values.
+    ///
+    /// Returns `(authorization, x_amz_date, x_amz_security_token, x_amz_content_sha256)`.
+    pub fn sign(
+        access_key_id: &str,
+        secret_access_key: &str,
+        session_token: Option<&str>,
+        region: &str,
+        method: &str,
+        url: &str,
+        payload: &[u8],
+    ) -> (String, String, Option<String>, String) {
+        let creds = AwsCredentials {
+            access_key_id: access_key_id.to_string(),
+            secret_access_key: secret_access_key.to_string(),
+            session_token: session_token.map(ToOwned::to_owned),
+            region: region.to_string(),
+        };
+        let sig = sign_request(&creds, method, url, payload);
+        (
+            sig.authorization,
+            sig.x_amz_date,
+            sig.x_amz_security_token,
+            sig.x_amz_content_sha256,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -43,6 +43,7 @@ pub use providers::ollama_tool_parser::{
     ParseSource, SilentWriteDetection,
 };
 pub use ollama_tune::{OllamaConfig, OllamaModelOverride};
+pub use providers::bedrock::sigv4_testable;
 pub use providers::copilot::{run_device_flow as copilot_run_device_flow, save_copilot_token, CopilotTokenSet};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
