@@ -206,11 +206,12 @@ Mirror SEVEN-LAYER-MEMORY.md / CAPABILITY-COHESION.md structure. Total scope **~
 - Confirmation TUI before commit
 - Final report markdown at `~/.anvil/.import-report.md`
 
-### Bucket 5 — Day-2 cleanup (separate command, requires user authorization to scope-in)
+### Bucket 5 — `anvil memory clean` (~1-2 days, **AUTHORIZED for v2.2.14 Phase 6**)
 
 - `anvil memory clean` — LLM rewrite over imported entries
-- Strips CC-specific references, normalizes vocabulary
-- Optional, user-triggered. NOT silently deferred — if user authorizes inclusion in this arc, it lands; otherwise it's flagged as an open follow-up at v2.2.14 tag time for explicit user decision.
+- Strips CC-specific references, normalizes vocabulary ("Claude Code" → "CC", `.claude/` → `.anvil/` where context appropriate, identity preamble strip)
+- User-triggered slash command (NOT automatic at import time — verbatim-with-flag at import remains the contract)
+- **Sequencing locked 2026-05-15:** lands as part of v2.2.14 Phase 6. Can land in parallel with 6.3 (sessions) once 6.0 manifest schema is stable, OR sequentially after 6.3 — whichever the foundation agent's report makes obvious.
 
 ---
 

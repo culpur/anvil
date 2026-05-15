@@ -162,8 +162,11 @@ pub use import::{
     ImportEntry, ImportEntryStatus, ImportManifest, ManifestError,
     StagingDir, StagingError, CommitReport, CommitResult,
     TriageDecision, TranslationResult,
-    generate_report,
+    generate_report, generate_full_report, write_full_report, ReportOptions,
     staging_dir, anvil_config_home,
+    otel_import_invoked, otel_import_discovered, otel_import_staged,
+    otel_import_conflict_detected, otel_import_committed, otel_import_skipped,
+    otel_import_completed,
 };
 pub use auto_mode::AutoModeConfig;
 pub use auto_promote::{
