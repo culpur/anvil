@@ -294,7 +294,6 @@ mod tests {
     use crate::memory_clean::progress::CleanProgress;
     use crate::memory_clean::rewriter::MockRewriter;
     use serial_test::serial;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn make_planned_entry(dir: &Path, name: &str, body: &str) -> PlannedEntry {

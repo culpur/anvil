@@ -150,6 +150,7 @@ Return ONLY the JSON object with no markdown code fences or preamble.";
 ///
 /// Provider detection follows the same order as `ProviderSummarizer::detect()`
 /// in `crates/runtime/src/import/sessions.rs`.
+#[derive(Debug)]
 pub struct ProviderRewriter {
     provider: RewriteProvider,
 }
