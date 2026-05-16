@@ -152,8 +152,8 @@ impl EgressConfig {
 /// v2.2.16: TUI layout selection. Persisted as `tui_layout` in
 /// `~/.anvil/config.json`. Each layout has an independent `tabs` flag
 /// because tabs are a layout-axis feature (NOT a global toggle) — the
-/// six visual variants A/B/C/D/E/F are the cross-product of `kind` and
-/// `tabs`.
+/// eight visual variants are the cross-product of `kind` (4 architectures) and
+/// `tabs` (bool).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TuiLayoutConfig {
     pub kind: TuiLayoutKind,
@@ -162,9 +162,12 @@ pub struct TuiLayoutConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TuiLayoutKind {
-    /// Layout A/D — persistent left rail + swappable right deck.
+    /// Layout A0/D0 — pre-v2.2.16 single-deck rendering (the "classic" layout).
+    /// Pixel-identical to what users had before v2.2.16.  Default for upgraders.
+    Classic,
+    /// Layout A/D — persistent left rail + swappable right deck (rail+deck design).
     VerticalSplit,
-    /// Layout B/E — FOCUS / LOG / CONTEXT three-pane vim-modal.
+    /// Layout B/E — FOCUS / LOG / CONTEXT three-pane, always-on input.
     ThreePane,
     /// Layout C/F — timestamped single-column journal with Ctrl-K palette.
     Journal,
@@ -172,9 +175,8 @@ pub enum TuiLayoutKind {
 
 impl Default for TuiLayoutConfig {
     fn default() -> Self {
-        // Migration: pre-v2.2.16 users had a single-deck + tab-strip UI
-        // closest to VerticalSplit{tabs:true}.
-        Self { kind: TuiLayoutKind::VerticalSplit, tabs: true }
+        // Upgrader default: classic + tabs is pixel-identical to pre-v2.2.16.
+        Self { kind: TuiLayoutKind::Classic, tabs: true }
     }
 }
 
@@ -184,9 +186,9 @@ impl Default for TuiLayoutConfig {
 /// config and `tui_layout_intro_seen` is false.  After displaying it, the
 /// caller writes `tui_layout_intro_seen: true` to suppress future displays.
 pub const TUI_LAYOUT_INTRO_TOAST: &str =
-    "◆ Anvil v2.2.16 introduces TUI layouts. You're on Vertical Split + Tabs \
-     (current behaviour). Try /layout list — six variants. \
-     /layout three-pane is a new vim-modal view worth trying.";
+    "◆ Anvil v2.2.16 introduces TUI layouts. You're on Classic + Tabs \
+     (current behaviour). Try /layout list — 8 variants. \
+     /layout vertical-split is the new rail+deck view worth trying.";
 
 /// Returns `true` when the one-time v2.2.16 layout toast should be shown.
 ///
@@ -208,9 +210,11 @@ pub fn should_show_tui_layout_intro(raw: &JsonValue, intro_seen: bool) -> bool {
         .unwrap_or(true)
 }
 
-/// Parse a short-form alias string into `(TuiLayoutKind, tabs)`.
+/// Parse a short-form alias string into `TuiLayoutConfig`.
 ///
-/// Alias table (spec §1):
+/// Alias table:
+///   classic              → (Classic,       tabs:false)
+///   classic-tabs         → (Classic,       tabs:true)
 ///   vertical-split       → (VerticalSplit, tabs:false)
 ///   vertical-split-tabs  → (VerticalSplit, tabs:true)
 ///   three-pane           → (ThreePane,     tabs:false)
@@ -222,6 +226,8 @@ pub fn should_show_tui_layout_intro(raw: &JsonValue, intro_seen: bool) -> bool {
 #[must_use]
 pub fn tui_layout_kind_from_alias(s: &str) -> Option<TuiLayoutConfig> {
     match s.trim() {
+        "classic" => Some(TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: false }),
+        "classic-tabs" => Some(TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: true }),
         "vertical-split" => Some(TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: false }),
         "vertical-split-tabs" => Some(TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: true }),
         "three-pane" => Some(TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false }),
@@ -232,10 +238,12 @@ pub fn tui_layout_kind_from_alias(s: &str) -> Option<TuiLayoutConfig> {
     }
 }
 
-/// Convert a `TuiLayoutKind` + tabs pair back to the canonical short-form alias.
+/// Convert a `TuiLayoutConfig` back to the canonical short-form alias.
 #[must_use]
 pub fn tui_layout_to_alias(cfg: &TuiLayoutConfig) -> &'static str {
     match (cfg.kind, cfg.tabs) {
+        (TuiLayoutKind::Classic, false) => "classic",
+        (TuiLayoutKind::Classic, true) => "classic-tabs",
         (TuiLayoutKind::VerticalSplit, false) => "vertical-split",
         (TuiLayoutKind::VerticalSplit, true) => "vertical-split-tabs",
         (TuiLayoutKind::ThreePane, false) => "three-pane",
@@ -932,10 +940,11 @@ fn parse_optional_tui_layout_config(root: &JsonValue) -> TuiLayoutConfig {
         // Build a canonical alias using the kind string (without tabs suffix)
         // to resolve the variant, then apply the explicit tabs field.
         let kind = match kind_str.trim() {
+            "classic" | "classic-tabs" => TuiLayoutKind::Classic,
             "vertical-split" | "vertical-split-tabs" => TuiLayoutKind::VerticalSplit,
             "three-pane" | "three-pane-tabs" => TuiLayoutKind::ThreePane,
             "journal" | "journal-tabs" => TuiLayoutKind::Journal,
-            _ => TuiLayoutKind::VerticalSplit, // unknown kind → default
+            _ => TuiLayoutKind::Classic, // unknown kind → default (classic)
         };
         let tabs = layout_obj
             .get("tabs")
@@ -2100,10 +2109,10 @@ mod tests {
     // ── TuiLayoutConfig tests (v2.2.16) ──────────────────────────────────────
 
     #[test]
-    fn tui_layout_default_is_vertical_split_tabs() {
+    fn tui_layout_default_is_classic_tabs() {
         use crate::config::{TuiLayoutConfig, TuiLayoutKind};
         let cfg = TuiLayoutConfig::default();
-        assert_eq!(cfg.kind, TuiLayoutKind::VerticalSplit);
+        assert_eq!(cfg.kind, TuiLayoutKind::Classic, "default kind must be Classic (upgrader compat)");
         assert!(cfg.tabs, "default should have tabs: true");
     }
 
@@ -2148,6 +2157,8 @@ mod tests {
         use crate::config::{TuiLayoutKind, tui_layout_kind_from_alias};
 
         let cases: &[(&str, TuiLayoutKind, bool)] = &[
+            ("classic",             TuiLayoutKind::Classic, false),
+            ("classic-tabs",        TuiLayoutKind::Classic, true),
             ("vertical-split",      TuiLayoutKind::VerticalSplit, false),
             ("vertical-split-tabs", TuiLayoutKind::VerticalSplit, true),
             ("three-pane",          TuiLayoutKind::ThreePane, false),
@@ -2169,7 +2180,7 @@ mod tests {
         let json = crate::json::JsonValue::Object(std::collections::BTreeMap::new());
         let cfg = super::parse_optional_tui_layout_config(&json);
         assert_eq!(cfg, TuiLayoutConfig::default());
-        assert_eq!(cfg.kind, TuiLayoutKind::VerticalSplit);
+        assert_eq!(cfg.kind, TuiLayoutKind::Classic, "absent tui_layout must default to Classic");
         assert!(cfg.tabs);
     }
 
@@ -2193,6 +2204,8 @@ mod tests {
         use crate::config::{TuiLayoutConfig, TuiLayoutKind, tui_layout_to_alias, tui_layout_kind_from_alias};
 
         let cases = [
+            TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: false },
+            TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: true },
             TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: false },
             TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: true },
             TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false },

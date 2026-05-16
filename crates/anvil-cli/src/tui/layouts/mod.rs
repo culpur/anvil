@@ -2,8 +2,9 @@
 ///
 /// File layout:
 ///   mod.rs            — `TuiLayoutRenderer` trait, `LayoutLocalState`, `dispatch_render`
-///   vertical_split.rs — A/D renderer  (existing drawing code, extracted)
-///   three_pane.rs     — B/E renderer
+///   classic.rs        — A0/D0 renderer (pre-v2.2.16 monolithic rendering, renamed)
+///   vertical_split.rs — A/D renderer (rail+deck design)
+///   three_pane.rs     — B/E renderer (always-on input, no vim modal)
 ///   journal.rs        — C/F renderer
 ///   common.rs         — shared sub-renderers (tab strip, model bar, completion popup)
 ///
@@ -11,6 +12,7 @@
 /// span-builders and cursor math. Our new module is the *plural* `layouts/`
 /// — distinct enough to avoid import confusion.
 
+pub(super) mod classic;
 pub(super) mod common;
 pub(super) mod journal;
 pub(super) mod three_pane;
@@ -31,23 +33,20 @@ use super::snapshot::LayoutSnapshot;
 /// rendering-specific modal/mode fields are reset here.
 ///
 /// Per spec §4 locked decisions:
+/// - `Classic`: no per-layout local state needed (stateless classic renderer)
 /// - `VerticalSplit`: right deck cycles Conversation → Transcript → ToolResults
-/// - `ThreePane`: vim Normal/Insert/Command modal; Esc from Insert DISCARDS draft
+/// - `ThreePane`: always-on input (no vim modal since v2.2.16 Correction 4)
 /// - `Journal`: Ctrl-K palette open/query/selection
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum LayoutLocalState {
+pub(crate) enum LayoutLocalState {
+    Classic,
     VerticalSplit {
         /// Which content view is displayed in the right deck.
         right_deck_mode: RightDeckMode,
         /// Index of the selected session in the left rail (future use).
         rail_selected: usize,
     },
-    ThreePane {
-        /// Current vim modal mode.
-        vim_mode: VimMode,
-        /// The `:` command line content (e.g. ":q", ":w", ":bd").
-        command_line: String,
-    },
+    ThreePane,
     Journal {
         /// Whether the Ctrl-K command palette is open.
         palette_open: bool,
@@ -62,7 +61,7 @@ pub(super) enum LayoutLocalState {
 ///
 /// Cycled by Ctrl+R. `Conversation` is the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum RightDeckMode {
+pub(crate) enum RightDeckMode {
     /// Show the conversation log (chat history + streaming text). Default.
     #[default]
     Conversation,
@@ -74,7 +73,7 @@ pub(super) enum RightDeckMode {
 
 impl RightDeckMode {
     /// Cycle to the next mode (Ctrl+R).
-    pub(super) fn next(self) -> Self {
+    pub(crate) fn next(self) -> Self {
         match self {
             Self::Conversation => Self::Transcript,
             Self::Transcript => Self::ToolResults,
@@ -82,7 +81,7 @@ impl RightDeckMode {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Conversation => "Conversation",
             Self::Transcript => "Transcript",
@@ -91,36 +90,17 @@ impl RightDeckMode {
     }
 }
 
-/// Vim modal mode for Layout B/E.
-///
-/// Per spec §11 locked decision #4:
-/// - `Esc` from Insert DISCARDS the draft (true vim semantics).
-/// - `i` enters Insert with a blank buffer.
-/// - `:w` in Command saves the draft to `Tab.input` without submitting.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(super) enum VimMode {
-    /// NORMAL — j/k scroll LOG, gt/gT tab, `i` to enter input.
-    #[default]
-    Normal,
-    /// INSERT — cursor active in input row; Enter submits; Esc discards draft.
-    Insert,
-    /// COMMAND — ex-command line at bottom; `:q` exit, `:w` save, `:bd` close.
-    Command,
-}
-
 impl LayoutLocalState {
     /// Construct the default local state for a given layout kind.
-    /// Called during `AnvilTui::set_layout()` to reset visual-only state.
-    pub(super) fn for_kind(kind: TuiLayoutKind) -> Self {
+    /// Called when constructing a `Tab` or switching layouts on the active tab.
+    pub(crate) fn for_kind(kind: TuiLayoutKind) -> Self {
         match kind {
+            TuiLayoutKind::Classic => Self::Classic,
             TuiLayoutKind::VerticalSplit => Self::VerticalSplit {
                 right_deck_mode: RightDeckMode::Conversation,
                 rail_selected: 0,
             },
-            TuiLayoutKind::ThreePane => Self::ThreePane {
-                vim_mode: VimMode::Normal,
-                command_line: String::new(),
-            },
+            TuiLayoutKind::ThreePane => Self::ThreePane,
             TuiLayoutKind::Journal => Self::Journal {
                 palette_open: false,
                 palette_query: String::new(),
@@ -168,6 +148,9 @@ pub(super) fn dispatch_render(
     tab_hits_out: &mut Vec<crate::tui::TabHit>,
 ) {
     match cfg.kind {
+        TuiLayoutKind::Classic => {
+            classic::Renderer { tabs: cfg.tabs }.render(frame, snap, local, tab_hits_out)
+        }
         TuiLayoutKind::VerticalSplit => {
             vertical_split::Renderer { tabs: cfg.tabs }.render(frame, snap, local, tab_hits_out)
         }
@@ -180,121 +163,151 @@ pub(super) fn dispatch_render(
     }
 }
 
-// ─── BUG-5 / BUG-6 unit tests ─────────────────────────────────────────────────
+// ─── Layout system tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ── BUG-5: three-pane VimMode state machine ───────────────────────────────
+    // ── Three-pane always-on input (Correction 4) ─────────────────────────────
 
-    /// `for_kind(ThreePane)` initialises in Normal mode, as required by the spec
-    /// (§11 locked decision #4).
+    /// `for_kind(ThreePane)` now returns the stateless `ThreePane` variant
+    /// (no vim_mode, no command_line — they were deleted in Correction 4).
     #[test]
-    fn three_pane_initial_state_is_normal() {
+    fn three_pane_initial_state_is_stateless() {
         let state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        assert!(
+            matches!(state, LayoutLocalState::ThreePane),
+            "ThreePane local state must be the stateless unit variant"
+        );
+    }
+
+    /// `for_kind(Classic)` returns the stateless `Classic` variant.
+    #[test]
+    fn classic_initial_state_is_stateless() {
+        let state = LayoutLocalState::for_kind(TuiLayoutKind::Classic);
+        assert!(matches!(state, LayoutLocalState::Classic));
+    }
+
+    /// `for_kind(VerticalSplit)` initialises rail + Conversation deck.
+    #[test]
+    fn vertical_split_initial_state() {
+        let state = LayoutLocalState::for_kind(TuiLayoutKind::VerticalSplit);
         match state {
-            LayoutLocalState::ThreePane { vim_mode, .. } => {
-                assert_eq!(vim_mode, VimMode::Normal, "initial three-pane mode must be Normal");
+            LayoutLocalState::VerticalSplit { right_deck_mode, rail_selected } => {
+                assert_eq!(right_deck_mode, RightDeckMode::Conversation);
+                assert_eq!(rail_selected, 0);
             }
-            _ => panic!("expected ThreePane variant"),
+            _ => panic!("expected VerticalSplit variant"),
         }
     }
 
-    /// Simulate `i` → Insert transition (mirrors handle_three_pane_key Normal arm).
+    /// RightDeckMode cycles Conversation → Transcript → ToolResults → Conversation.
     #[test]
-    fn three_pane_normal_to_insert_transition() {
-        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
-            *vim_mode = VimMode::Insert;
-        }
-        match state {
-            LayoutLocalState::ThreePane { vim_mode, .. } => {
-                assert_eq!(vim_mode, VimMode::Insert, "vim_mode must be Insert after i");
-            }
-            _ => panic!("expected ThreePane variant"),
-        }
-    }
-
-    /// Simulate `Esc` in Insert → Normal (discard draft path).
-    #[test]
-    fn three_pane_insert_esc_returns_to_normal() {
-        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
-            *vim_mode = VimMode::Insert;
-        }
-        // Esc: discard draft, back to Normal.
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
-            *vim_mode = VimMode::Normal;
-        }
-        match state {
-            LayoutLocalState::ThreePane { vim_mode, .. } => {
-                assert_eq!(vim_mode, VimMode::Normal, "Esc from Insert must return to Normal");
-            }
-            _ => panic!("expected ThreePane variant"),
-        }
-    }
-
-    /// Simulate `:` → Command mode transition.
-    #[test]
-    fn three_pane_normal_to_command_transition() {
-        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
-            *vim_mode = VimMode::Command;
-        }
-        match state {
-            LayoutLocalState::ThreePane { vim_mode, .. } => {
-                assert_eq!(vim_mode, VimMode::Command);
-            }
-            _ => panic!("expected ThreePane variant"),
-        }
-    }
-
-    /// Command mode `command_line` accumulates chars and is cleared on Esc.
-    #[test]
-    fn three_pane_command_line_accumulates_and_clears() {
-        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, ref mut command_line } = state {
-            *vim_mode = VimMode::Command;
-            command_line.push('q');
-        }
-        // Esc: clear and return to Normal.
-        if let LayoutLocalState::ThreePane { ref mut vim_mode, ref mut command_line } = state {
-            *vim_mode = VimMode::Normal;
-            command_line.clear();
-        }
-        match state {
-            LayoutLocalState::ThreePane { vim_mode, command_line } => {
-                assert_eq!(vim_mode, VimMode::Normal);
-                assert!(command_line.is_empty(), "command_line must clear on Esc");
-            }
-            _ => panic!("expected ThreePane variant"),
-        }
-    }
-
-    /// VimMode::default() is Normal.
-    #[test]
-    fn vim_mode_default_is_normal() {
-        assert_eq!(VimMode::default(), VimMode::Normal);
+    fn right_deck_mode_cycles() {
+        use RightDeckMode::*;
+        assert_eq!(Conversation.next(), Transcript);
+        assert_eq!(Transcript.next(), ToolResults);
+        assert_eq!(ToolResults.next(), Conversation);
     }
 
     // ── BUG-6: journal completion popup wiring ────────────────────────────────
 
-    /// `render_completion_popup` is re-exported via `common` and accessible to
-    /// the journal renderer.  Verify it is importable from `common`.
+    /// `render_completion_popup` is accessible from `common`.
     #[test]
     fn journal_can_call_render_completion_popup() {
-        // This is a compile-time test — if `render_completion_popup` is not
-        // accessible from the journal renderer's `use super::common::...` import
-        // the crate would fail to compile.  We verify the symbol resolves at
-        // runtime by asserting it is a function (via a trivially-true assertion
-        // on its address, which forces the linker to include it).
         let _fn_ptr: fn(
             &mut ratatui::Frame,
             ratatui::layout::Rect,
             &crate::tui::snapshot::LayoutSnapshot,
         ) = super::common::render_completion_popup;
-        // If we reach here the function is accessible — BUG-6 wiring compiles.
         assert!(true);
+    }
+
+    // ── Per-tab layout state tests (Correction 1) ─────────────────────────────
+
+    /// `set_active_tab_layout(new, global=false)` must not change other tabs.
+    #[test]
+    fn set_active_tab_layout_does_not_affect_other_tabs() {
+        use runtime::{TuiLayoutConfig, TuiLayoutKind};
+        use crate::tui::state::Tab;
+
+        let tab_a_layout = TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: true };
+        let tab_b_layout = TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: true };
+        let new_layout   = TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false };
+
+        let mut tab_a = Tab::new(1, "a", "model", "sess");
+        tab_a.tui_layout = tab_a_layout;
+        tab_a.layout_local = LayoutLocalState::for_kind(tab_a_layout.kind);
+
+        let mut tab_b = Tab::new(2, "b", "model", "sess");
+        tab_b.tui_layout = tab_b_layout;
+        tab_b.layout_local = LayoutLocalState::for_kind(tab_b_layout.kind);
+
+        // Simulate set_active_tab_layout(new, global=false) on tab_a.
+        tab_a.tui_layout = new_layout;
+        tab_a.layout_local = LayoutLocalState::for_kind(new_layout.kind);
+
+        // tab_b must be unchanged.
+        assert_eq!(tab_b.tui_layout, tab_b_layout, "tab_b layout must not change");
+        assert!(
+            matches!(tab_b.layout_local, LayoutLocalState::Classic),
+            "tab_b local state must remain Classic"
+        );
+    }
+
+    /// `set_active_tab_layout(new, global=true)` must update all tabs.
+    #[test]
+    fn set_active_tab_layout_with_global_updates_all_tabs() {
+        use runtime::{TuiLayoutConfig, TuiLayoutKind};
+        use crate::tui::state::Tab;
+
+        let initial = TuiLayoutConfig { kind: TuiLayoutKind::Classic, tabs: true };
+        let new_layout = TuiLayoutConfig { kind: TuiLayoutKind::Journal, tabs: true };
+
+        let mut tabs: Vec<Tab> = (1..=3)
+            .map(|i| {
+                let mut t = Tab::new(i, format!("t{i}"), "model", "sess");
+                t.tui_layout = initial;
+                t.layout_local = LayoutLocalState::for_kind(initial.kind);
+                t
+            })
+            .collect();
+
+        // Simulate global=true: update all tabs.
+        for t in &mut tabs {
+            t.tui_layout = new_layout;
+            t.layout_local = LayoutLocalState::for_kind(new_layout.kind);
+        }
+
+        for t in &tabs {
+            assert_eq!(t.tui_layout, new_layout, "all tabs must have the new layout");
+        }
+    }
+
+    /// New tab inherits config.json default, not active tab's layout.
+    #[test]
+    fn new_tab_inherits_global_default_not_active_tab_layout() {
+        use runtime::{TuiLayoutConfig, TuiLayoutKind};
+        use crate::tui::state::Tab;
+
+        // Simulate active tab on three-pane.
+        let _active_layout = TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false };
+
+        // New tab is constructed without copying from the active tab.
+        // Tab::new reads from config.json (or falls back to default).
+        // In a test environment there is no config.json, so it returns the default.
+        let new_tab = Tab::new(99, "new", "model", "sess");
+
+        // The new tab must have the config.json default (Classic + tabs), NOT
+        // the active tab's ThreePane layout. Since tests run without config.json,
+        // we just check that the new tab initializes from `load_default_layout()`
+        // (which returns TuiLayoutConfig::default() in test env = Classic + tabs).
+        let expected_default = Tab::load_default_layout();
+        assert_eq!(
+            new_tab.tui_layout,
+            expected_default,
+            "new tab must inherit config.json default, not active tab's layout"
+        );
     }
 }
