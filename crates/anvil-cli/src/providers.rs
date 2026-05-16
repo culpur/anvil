@@ -1358,6 +1358,18 @@ pub(crate) struct CliToolExecutor {
     agent_manager: Arc<Mutex<agents::AgentManager>>,
     /// Model name used to build provider clients inside agent threads.
     model: String,
+    /// Per-request MCP tool-call timeout in seconds (#559, CC-141-B).
+    /// Defaults to 60. Override via `ANVIL_MCP_TOOL_TIMEOUT` env var.
+    mcp_tool_timeout_secs: u64,
+}
+
+/// Read the `ANVIL_MCP_TOOL_TIMEOUT` env var (seconds, default 60).
+/// Returns 60 when the variable is unset or not parseable as u64.
+pub(crate) fn mcp_tool_timeout_secs() -> u64 {
+    std::env::var("ANVIL_MCP_TOOL_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(60)
 }
 
 impl CliToolExecutor {
@@ -1382,6 +1394,7 @@ impl CliToolExecutor {
             tui_slot,
             agent_manager,
             model,
+            mcp_tool_timeout_secs: mcp_tool_timeout_secs(),
         }
     }
 }
@@ -1572,9 +1585,18 @@ impl CliToolExecutor {
             .mcp_manager
             .lock()
             .map_err(|e| format!("MCP manager lock poisoned: {e}"))?;
+        let timeout_dur = Duration::from_secs(self.mcp_tool_timeout_secs);
         let response = self
             .tokio_rt
-            .block_on(manager.call_tool(qualified_name, args))
+            .block_on(async {
+                tokio::time::timeout(timeout_dur, manager.call_tool(qualified_name, args)).await
+            })
+            .map_err(|_| {
+                format!(
+                    "MCP tool call timed out after {}s (set ANVIL_MCP_TOOL_TIMEOUT to override)",
+                    self.mcp_tool_timeout_secs
+                )
+            })?
             .map_err(|e| e.to_string())?;
 
         if let Some(err) = response.error {
@@ -2157,4 +2179,41 @@ pub(crate) fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMes
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod mcp_timeout_tests {
+    use super::mcp_tool_timeout_secs;
+
+    // These tests manipulate env vars and must run serially to avoid races.
+    // The test binary is single-threaded by default for lib tests.
+
+    #[test]
+    fn mcp_tool_timeout_default_is_60s() {
+        // With no env override the default must be 60.
+        // Guard: if ANVIL_MCP_TOOL_TIMEOUT is set in the outer environment,
+        // this test would be wrong — skip gracefully.
+        if std::env::var("ANVIL_MCP_TOOL_TIMEOUT").is_ok() {
+            return;
+        }
+        assert_eq!(mcp_tool_timeout_secs(), 60);
+    }
+
+    #[test]
+    fn mcp_tool_timeout_reads_env_override() {
+        // Safety: test-only env mutation; tests run with --test-threads=1.
+        unsafe { std::env::set_var("ANVIL_MCP_TOOL_TIMEOUT", "120"); }
+        let result = mcp_tool_timeout_secs();
+        unsafe { std::env::remove_var("ANVIL_MCP_TOOL_TIMEOUT"); }
+        assert_eq!(result, 120);
+    }
+
+    #[test]
+    fn mcp_tool_timeout_falls_back_on_invalid_env() {
+        // Safety: test-only env mutation; tests run with --test-threads=1.
+        unsafe { std::env::set_var("ANVIL_MCP_TOOL_TIMEOUT", "not-a-number"); }
+        let result = mcp_tool_timeout_secs();
+        unsafe { std::env::remove_var("ANVIL_MCP_TOOL_TIMEOUT"); }
+        assert_eq!(result, 60);
+    }
 }
