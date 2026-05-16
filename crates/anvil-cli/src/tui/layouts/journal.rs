@@ -100,10 +100,12 @@ impl TuiLayoutRenderer for Renderer {
             version,
             snap.model,
         );
+        frame.render_widget(ratatui::widgets::Clear, header_area);
         frame.render_widget(
             Paragraph::new(header_text).style(
                 Style::default()
                     .fg(Color::DarkGray)
+                    .bg(rgb(theme.bg_primary))
                     .add_modifier(Modifier::ITALIC),
             ),
             header_area,
@@ -125,6 +127,7 @@ impl TuiLayoutRenderer for Renderer {
                 Span::styled("█", Style::default().fg(Color::White)),
             ])
         };
+        frame.render_widget(ratatui::widgets::Clear, input_area);
         frame.render_widget(
             Paragraph::new(input_line).style(Style::default().bg(rgb(theme.bg_primary))),
             input_area,
