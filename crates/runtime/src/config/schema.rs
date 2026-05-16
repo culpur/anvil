@@ -367,6 +367,29 @@ fn build_root_schema() -> RootSchema {
         true,
     );
 
+    // --- hub (F3 / v2.2.16) ---------------------------------------------
+    let mut hub_props = PropMap::new();
+    hub_props.insert(
+        "require_verified".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "When true, refuses to install unverified packages from AnvilHub. \
+                 Override per-install with --allow-unverified. Default: false.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Boolean))),
+            ..Default::default()
+        }),
+    );
+    let hub_schema = object_schema(
+        desc(
+            "AnvilHub marketplace settings. Controls verification enforcement for \
+             hub install. Default: permissive (all packages installable).",
+        ),
+        hub_props,
+        vec![],
+        true,
+    );
+
     // --- sandbox ---------------------------------------------------------
     let sandbox_value = serde_json::to_value(&sandbox_schema).expect("sandbox schema to value");
     let sandbox_resolved = serde_json::from_value::<Schema>(
@@ -520,6 +543,7 @@ fn build_root_schema() -> RootSchema {
     top_props.insert("permissionMode".to_string(), permission_mode_enum);
     top_props.insert("permissions".to_string(), permissions_schema);
     top_props.insert("egress".to_string(), egress_schema);
+    top_props.insert("hub".to_string(), hub_schema);
     top_props.insert("sandbox".to_string(), sandbox_resolved);
     top_props.insert("output_style".to_string(), output_style_resolved);
     top_props.insert("profiles".to_string(), profiles_schema);
@@ -612,6 +636,7 @@ mod tests {
             "output_style",
             "profiles",
             "env",
+            "hub",
         ];
         for key in &required_keys {
             assert!(

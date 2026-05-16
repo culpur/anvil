@@ -149,6 +149,34 @@ impl EgressConfig {
     }
 }
 
+/// AnvilHub marketplace settings loaded from settings.json.
+///
+/// Controls verification enforcement for `hub install` and `/hub install`.
+/// All fields default to their permissive values so existing users are not
+/// broken by upgrading to v2.2.16.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HubConfig {
+    /// When `true`, `hub install` refuses packages that lack a verified
+    /// publisher or a `highest_verified_version`.  Override per-install with
+    /// `--allow-unverified`.  Default: `false`.
+    require_verified: bool,
+}
+
+impl HubConfig {
+    /// Whether the verification gate is enabled.
+    #[must_use]
+    pub const fn require_verified(&self) -> bool {
+        self.require_verified
+    }
+
+    /// Builder: set `require_verified`.
+    #[must_use]
+    pub fn with_require_verified(mut self, v: bool) -> Self {
+        self.require_verified = v;
+        self
+    }
+}
+
 /// L6 memory: settings for the permission-memory store.
 ///
 /// Off by default. When `use_permission_memory` is true, the runtime loads
@@ -209,6 +237,9 @@ pub struct RuntimeFeatureConfig {
     /// Default: disabled (all outbound URLs pass). When enabled, only the combined
     /// default + user-supplied allowlist is permitted.
     egress: EgressConfig,
+    /// AnvilHub marketplace settings (`hub.*` in settings.json).
+    /// Default: permissive (all packages installable).
+    hub: HubConfig,
 }
 
 #[derive(Debug)]
@@ -346,6 +377,7 @@ impl ConfigLoader {
                 parse_optional_permissions_config(&merged_value),
             ),
             egress: tolerate_section("egress", parse_optional_egress_config(&merged_value)),
+            hub: parse_optional_hub_config(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -629,6 +661,12 @@ impl RuntimeConfig {
     pub const fn egress(&self) -> &EgressConfig {
         &self.feature_config.egress
     }
+
+    /// AnvilHub marketplace settings (`hub` block in settings.json).
+    #[must_use]
+    pub const fn hub(&self) -> &HubConfig {
+        &self.feature_config.hub
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -732,6 +770,36 @@ impl RuntimeFeatureConfig {
     pub const fn egress(&self) -> &EgressConfig {
         &self.egress
     }
+
+    /// AnvilHub marketplace settings (`hub` block in settings.json).
+    #[must_use]
+    pub const fn hub(&self) -> &HubConfig {
+        &self.hub
+    }
+}
+
+/// Parse the `hub` block from the merged config JSON (F3 / v2.2.16).
+///
+/// Recognised shape:
+/// ```json
+/// {
+///   "hub": {
+///     "require_verified": true
+///   }
+/// }
+/// ```
+///
+/// All keys default to their permissive values when absent, so existing
+/// configs are not broken by this new block.
+fn parse_optional_hub_config(root: &JsonValue) -> HubConfig {
+    let require_verified = root
+        .as_object()
+        .and_then(|o| o.get("hub"))
+        .and_then(JsonValue::as_object)
+        .and_then(|h| h.get("require_verified").or_else(|| h.get("requireVerified")))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    HubConfig { require_verified }
 }
 
 #[must_use]

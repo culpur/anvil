@@ -70,13 +70,13 @@ pub use compact::{
 };
 pub use config::{
     default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, EgressConfig,
-    LspConfig, LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection, McpOAuthConfig,
-    McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig, McpStdioServerConfig,
-    McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
-    BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir, output_style_from_str_builtin_only,
-    PermissionsConfig, PolicyCheckError, ResolvedPermissionMode, RuntimeConfig,
-    RuntimeFeatureConfig, RuntimeHookConfig, RuntimePluginConfig, ScopedMcpServerConfig,
-    WorktreeConfig, ANVIL_SETTINGS_SCHEMA_NAME,
+    HubConfig, LspConfig, LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection,
+    McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig,
+    McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
+    BuiltInStyle, CustomStyle, OutputStyle, OutputStyleRegistry, default_output_styles_dir,
+    output_style_from_str_builtin_only, PermissionsConfig, PolicyCheckError,
+    ResolvedPermissionMode, RuntimeConfig, RuntimeFeatureConfig, RuntimeHookConfig,
+    RuntimePluginConfig, ScopedMcpServerConfig, WorktreeConfig, ANVIL_SETTINGS_SCHEMA_NAME,
 };
 pub use effort::{resolve_effort, resolve_effort_from_env, EffortLevel};
 pub use prompt_section::{

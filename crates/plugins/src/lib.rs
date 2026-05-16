@@ -28,6 +28,7 @@ pub use manifest::{
 pub use manager::{InstallOutcome, PluginManager, PluginManagerConfig, UpdateOutcome};
 pub use registry::{
     describe_install_source, InstalledPluginRecord, InstalledPluginRegistry, PluginInstallSource,
+    PluginTrustLevel,
 };
 pub use session_plugins::{
     prepare_plugin_dir_source, prepare_plugin_url_source, register_session_source,
@@ -82,6 +83,9 @@ pub struct PluginMetadata {
     pub source: String,
     pub default_enabled: bool,
     pub root: Option<PathBuf>,
+    /// Publisher trust level recorded at install time (F3 / v2.2.16).
+    /// `None` for plugins installed before v2.2.16 (treated as Unverified).
+    pub hub_trust_level: Option<crate::registry::PluginTrustLevel>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1066,7 @@ mod tests {
                 },
                 installed_at_unix_ms: 1,
                 updated_at_unix_ms: 1,
+                hub_trust_level: None,
             },
         );
         manager.store_registry(&registry).expect("store registry");
@@ -1122,6 +1127,7 @@ mod tests {
                 },
                 installed_at_unix_ms: 1,
                 updated_at_unix_ms: 1,
+                hub_trust_level: None,
             },
         );
         manager.store_registry(&registry).expect("store registry");
@@ -1168,6 +1174,7 @@ mod tests {
                 },
                 installed_at_unix_ms: 1,
                 updated_at_unix_ms: 1,
+                hub_trust_level: None,
             },
         );
         manager.store_registry(&registry).expect("store registry");

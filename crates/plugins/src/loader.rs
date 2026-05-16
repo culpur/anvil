@@ -38,6 +38,7 @@ pub fn builtin_plugins() -> Vec<PluginDefinition> {
             source: BUILTIN_MARKETPLACE.to_string(),
             default_enabled: false,
             root: None,
+            hub_trust_level: None,
         },
         hooks: PluginHooks::default(),
         lifecycle: PluginLifecycle::default(),
@@ -67,6 +68,7 @@ pub(crate) fn load_plugin_definition_with_diagnostics(
         source,
         default_enabled: manifest.default_enabled,
         root: Some(root.to_path_buf()),
+        hub_trust_level: None,
     };
     let hooks = resolve_hooks(root, &manifest.hooks);
     let lifecycle = resolve_lifecycle(root, &manifest.lifecycle);

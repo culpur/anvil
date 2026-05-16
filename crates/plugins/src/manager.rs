@@ -265,6 +265,9 @@ impl PluginManager {
             source: install_source,
             installed_at_unix_ms: now,
             updated_at_unix_ms: now,
+            // Trust level is populated by the caller (hub install) after
+            // verifying the AnvilHub badge.  Local-path installs default to None.
+            hub_trust_level: None,
         };
 
         let mut registry = self.load_registry()?;
@@ -578,6 +581,7 @@ impl PluginManager {
                     source: PluginInstallSource::LocalPath { path: source_root },
                     installed_at_unix_ms,
                     updated_at_unix_ms: now,
+                    hub_trust_level: None,
                 },
             );
             changed = true;
