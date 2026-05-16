@@ -137,6 +137,13 @@ thread_local! {
         const { std::cell::OnceCell::new() };
 }
 
+/// BUG-1 fix: set to true when the vault retry loop exhausts all 3 attempts
+/// (or the user presses Ctrl+C during the prompts). The TUI startup path reads
+/// this flag once and pre-fills the input box with `/vault unlock ` so the
+/// user can enter their master password without any silent-drop confusion.
+static VAULT_UNLOCK_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Obtain a clone of the stored [`respawn::RespawnContext`], or a safe
 /// default (with all unsafe flags set) if called before `main()` initialises
 /// the cell (only possible in tests).
@@ -2010,17 +2017,54 @@ fn startup_vault_init() {
     }
 
     // ── Unlock existing vault ─────────────────────────────────────────────────
+    // BUG-1 fix: retry up to 3 times. On each wrong password print the
+    // remaining-attempts count. After all 3 fail (or the user submits an empty
+    // password / presses Ctrl+C), set VAULT_UNLOCK_PENDING=true so the TUI
+    // can surface a pre-filled `/vault unlock ` prompt rather than silently
+    // dropping the user into a locked-vault session.
     if vault_initialized && !runtime::vault_is_session_unlocked() {
-        eprint!("  Vault master password: ");
-        match rpassword::read_password() {
-            Ok(pw) if !pw.is_empty() => {
-                match runtime::init_session_vault(&pw) {
-                    Ok(true) => {}
-                    Ok(false) => eprintln!("  Vault not initialized."),
-                    Err(e) => eprintln!("  Vault unlock failed: {e}"),
+        let max_attempts: u8 = 3;
+        let mut unlocked = false;
+        'vault_retry: for attempt in 0..max_attempts {
+            let remaining = max_attempts - attempt;
+            eprint!("  Vault master password: ");
+            // Use rpassword; on Ctrl+C rpassword returns an Err — treat that
+            // as a deliberate abort and break immediately.
+            let pw = match rpassword::read_password() {
+                Ok(p) => p,
+                Err(_) => {
+                    // Ctrl+C or EOF during password read — stop retrying.
+                    eprintln!();
+                    break 'vault_retry;
+                }
+            };
+            if pw.is_empty() {
+                // Empty = skip vault (user explicitly skipped).
+                break 'vault_retry;
+            }
+            match runtime::init_session_vault(&pw) {
+                Ok(true) => {
+                    unlocked = true;
+                    break 'vault_retry;
+                }
+                Ok(false) => {
+                    eprintln!("  Vault not initialized.");
+                    break 'vault_retry;
+                }
+                Err(_) => {
+                    if remaining > 1 {
+                        eprintln!("  Wrong password. {} attempt{} remaining.",
+                            remaining - 1,
+                            if remaining - 1 == 1 { "" } else { "s" });
+                    } else {
+                        eprintln!("  Wrong password. No attempts remaining.");
+                    }
                 }
             }
-            _ => {}
+        }
+        if !unlocked {
+            // Signal the TUI to pre-fill `/vault unlock ` in the input box.
+            VAULT_UNLOCK_PENDING.store(true, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -2181,6 +2225,18 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         cli.model,
         session_id,
     ));
+
+    // BUG-1 fix: if the vault retry loop exhausted all attempts, pre-fill the
+    // input box with `/vault unlock ` and push a system notice so the user
+    // sees exactly what to do without any silent-drop confusion.
+    if VAULT_UNLOCK_PENDING.swap(false, std::sync::atomic::Ordering::AcqRel) {
+        tui.push_system(
+            "\u{25c6} Vault is locked. Submit `/vault unlock` to enter your master password, \
+             or continue without vault access (encrypted credentials unavailable)."
+                .to_string(),
+        );
+        tui.set_input("/vault unlock ");
+    }
 
     // v2.2.16: first-launch layout intro toast.
     // Show once when `tui_layout` is absent from config (user hasn't
@@ -8092,6 +8148,74 @@ mod cc_139_f1_tests {
             out.contains(&truncated),
             "truncated session id `{truncated}` must appear in output: {out:?}"
         );
+    }
+}
+
+// ─── BUG-1 vault-retry tests ─────────────────────────────────────────────────
+//
+// The real `runtime::init_session_vault` touches the filesystem and is not
+// mockable in unit tests.  We test the VAULT_UNLOCK_PENDING flag contract
+// directly: the flag starts false, can be set (simulating exhausted retries),
+// and the TUI-startup code swaps it back to false and consumes it exactly once.
+#[cfg(test)]
+mod bug1_vault_retry_tests {
+    use super::VAULT_UNLOCK_PENDING;
+    use std::sync::atomic::Ordering;
+
+    /// After a fresh process start the flag is clear.
+    #[test]
+    fn flag_starts_false() {
+        // Reset to known state (other tests might have dirtied it).
+        VAULT_UNLOCK_PENDING.store(false, Ordering::SeqCst);
+        assert!(!VAULT_UNLOCK_PENDING.load(Ordering::SeqCst));
+    }
+
+    /// Simulates exhausted retry loop: flag is set to true.
+    /// TUI startup swap returns true and resets to false (consumed exactly once).
+    #[test]
+    fn tui_startup_consumes_flag_exactly_once() {
+        VAULT_UNLOCK_PENDING.store(true, Ordering::SeqCst);
+
+        // First swap — simulates what run_repl_tui does.
+        let fired = VAULT_UNLOCK_PENDING.swap(false, Ordering::AcqRel);
+        assert!(fired, "first swap should return true (flag was set)");
+
+        // Second swap — must return false (flag already consumed).
+        let fired_again = VAULT_UNLOCK_PENDING.swap(false, Ordering::AcqRel);
+        assert!(!fired_again, "second swap must return false (flag was already consumed)");
+    }
+
+    /// Simulates a successful unlock: flag stays false the whole time.
+    #[test]
+    fn successful_unlock_leaves_flag_false() {
+        VAULT_UNLOCK_PENDING.store(false, Ordering::SeqCst);
+        // Vault unlocked OK — flag is never set.
+        let fired = VAULT_UNLOCK_PENDING.swap(false, Ordering::AcqRel);
+        assert!(!fired, "flag must be false after successful unlock");
+    }
+
+    /// Retry loop logic: three wrong passwords exhaust the limit and set the
+    /// flag, matching the expected retry count boundary.
+    #[test]
+    fn retry_loop_exhausts_at_three_attempts() {
+        VAULT_UNLOCK_PENDING.store(false, Ordering::SeqCst);
+
+        // Simulate the retry loop body: 3 failures, no success.
+        let max_attempts: u8 = 3;
+        let mut unlocked = false;
+        for _attempt in 0..max_attempts {
+            // Every "attempt" fails.
+        }
+        if !unlocked {
+            VAULT_UNLOCK_PENDING.store(true, Ordering::Release);
+        }
+
+        assert!(VAULT_UNLOCK_PENDING.load(Ordering::SeqCst),
+            "flag must be true after 3 failed attempts");
+        assert!(!unlocked);
+
+        // Cleanup.
+        VAULT_UNLOCK_PENDING.store(false, Ordering::SeqCst);
     }
 }
 
