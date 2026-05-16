@@ -10,6 +10,11 @@
 # Requires: cargo, docker, gh (GitHub CLI), rustup
 set -euo pipefail
 
+# Ensure rustup's rustc takes precedence over any system Rust (brew, distro pkgs).
+# Without this, multi-target cross-compile fails with "can't find crate for 'core'"
+# because brew's rustc has no cross-compile std libs. (v2.2.15 incident.)
+export PATH="$HOME/.cargo/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
