@@ -1176,16 +1176,28 @@ impl LiveCli {
             };
         }
 
-        if let Some(name) = args.strip_prefix("install ").map(str::trim) {
-            if name.is_empty() {
-                return "Usage: /hub install <name>".to_string();
+        if let Some(rest) = args.strip_prefix("install ").map(str::trim) {
+            if rest.is_empty() {
+                return "Usage: /hub install <name> [--allow-unverified]".to_string();
             }
-            let pkg = match client.get_package(name) {
+            // Parse --allow-unverified flag from the remainder.
+            let allow_unverified = rest.contains("--allow-unverified");
+            let name = rest.replace("--allow-unverified", "").trim().to_string();
+            if name.is_empty() {
+                return "Usage: /hub install <name> [--allow-unverified]".to_string();
+            }
+            let require_verified = runtime::ConfigLoader::default_for(
+                std::env::current_dir().unwrap_or_default()
+            )
+            .load()
+            .map(|cfg| cfg.hub().require_verified())
+            .unwrap_or(false);
+            let pkg = match client.get_package(&name) {
                 Ok(p) => p,
                 Err(e) => return format!("hub install: {e}"),
             };
             let install_dir = anvil_home_dir();
-            return match client.install(&pkg, &install_dir) {
+            return match client.install(&pkg, &install_dir, require_verified, allow_unverified) {
                 Ok(dest) => format!(
                     "Installed {} v{} to {}",
                     pkg.name,
@@ -1193,6 +1205,16 @@ impl LiveCli {
                     dest.display()
                 ),
                 Err(e) => format!("hub install: {e}"),
+            };
+        }
+
+        if let Some(name) = args.strip_prefix("status ").map(str::trim) {
+            if name.is_empty() {
+                return "Usage: /hub status <name>".to_string();
+            }
+            return match client.get_package(name) {
+                Ok(pkg) => runtime::hub::format_package_status(&pkg),
+                Err(e) => format!("hub status: {e}"),
             };
         }
 

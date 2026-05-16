@@ -507,6 +507,12 @@ pub const HUB_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[ArgSpec::FreeText { hint: "<name>" }],
         subcommands: &[],
     },
+    SubcommandSpec {
+        name: "status",
+        summary: "Show verification badge and publisher info for a package",
+        args: &[ArgSpec::FreeText { hint: "<name>" }],
+        subcommands: &[],
+    },
 ];
 
 pub const PROVIDER_SUBCOMMANDS: &[SubcommandSpec] = &[

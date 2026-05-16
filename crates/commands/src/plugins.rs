@@ -88,6 +88,32 @@ pub fn handle_plugins_slash_command(
                     reload_runtime: false,
                 });
             };
+            // ── Verified Badge System guard (F3 / v2.2.16) ───────────────────
+            // If the installed record's hub_trust_level is REVOKED, abort the
+            // update immediately and surface a loud warning.  The user must
+            // download from the AnvilHub web UI if they still want this package.
+            {
+                let installed = manager.list_installed_plugins()?;
+                if let Some(record) = installed
+                    .iter()
+                    .find(|p| p.metadata.id == target || p.metadata.name == target)
+                {
+                    if let Some(ref trust) = record.metadata.hub_trust_level {
+                        if trust.is_revoked() {
+                            return Ok(PluginsCommandResult {
+                                message: format!(
+                                    "WARNING: '{}' publisher has been REVOKED since install.\n\
+                                     Update aborted. Run `anvil hub status {}` for details.\n\
+                                     Download directly from AnvilHub if you still need this package.",
+                                    record.metadata.name,
+                                    record.metadata.name,
+                                ),
+                                reload_runtime: false,
+                            });
+                        }
+                    }
+                }
+            }
             let update = manager.update(target)?;
             let plugin = manager
                 .list_installed_plugins()?

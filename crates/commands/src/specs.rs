@@ -1232,7 +1232,7 @@ Examples:
         name: "hub",
         aliases: &[],
         summary: "Browse and install packages from the AnvilHub marketplace",
-        argument_hint: Some("[search <q>|skills|plugins|agents|themes|install <name>|info <name>]"),
+        argument_hint: Some("[search <q>|skills|plugins|agents|themes|install <name>|info <name>|status <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "\
@@ -1244,13 +1244,16 @@ Subcommands:
   /hub plugins            Browse available plugins
   /hub agents             Browse available agent definitions
   /hub themes             Browse available TUI themes
-  /hub install <name>     Install a package by name
+  /hub install <name>     Install a package by name (adds --allow-unverified to bypass gate)
   /hub info <name>        Show details and README for a package
+  /hub status <name>      Show verification badge, publisher info, highest verified version
 
 Examples:
   /hub search rust-review
   /hub skills
   /hub install devops-expert
+  /hub install devops-expert --allow-unverified
+  /hub status devops-expert
   /hub info security-scanner",
         subcommands: crate::subcommands::HUB_SUBCOMMANDS,
         tui_available: true,
@@ -1258,6 +1261,38 @@ Examples:
         requires_vault: true, // install action requires unlocked vault
         requires_restart: RestartRequirement::Full, // installing plugins/MCP servers needs restart
         requires_arguments: false,
+    },
+    // AnvilHub verified-badge status query (F3 / v2.2.16)
+    SlashCommandSpec {
+        name: "hub-status",
+        aliases: &[],
+        summary: "Show verification badge and publisher info for an AnvilHub package",
+        argument_hint: Some("<package-name>"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/hub-status <package> — AnvilHub verified-badge status
+
+Shows verification state, publisher info, highest verified version, and
+install guidance for the named package.  Equivalent to `/hub status <name>`.
+
+Fields:
+  Verified publisher    Whether the publisher currently holds a valid badge
+  Highest verified      The highest package version published under a valid badge
+  Trust level           VERIFIED | CULPUR_OFFICIAL | UNVERIFIED | REVOKED
+  Verified at           Timestamp when the badge was granted
+
+REVOKED packages are blocked from CLI install.  Download directly from
+the AnvilHub web UI if you require a revoked package.
+
+Example:
+  /hub-status devops-expert",
+        subcommands: &[],
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: true,
     },
     // i18n language switcher
     SlashCommandSpec {

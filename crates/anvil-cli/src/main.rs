@@ -1807,6 +1807,7 @@ fn run_resume_command(
         | SlashCommand::Import { .. }
         | SlashCommand::Profile { .. }
         | SlashCommand::Cursor { .. }
+        | SlashCommand::HubStatus { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2586,7 +2587,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                     Ok(p) => {
                                         let v = p.version.clone();
                                         let ptype = p.pkg_type.clone();
-                                        let result = client.install(&p, &install_dir);
+                                        // Web viewer installs: gate is not applied here —
+                                        // the AnvilHub web UI surfaces verification state
+                                        // before the user clicks install.  REVOKED check
+                                        // still runs inside install() unconditionally.
+                                        let result = client.install(&p, &install_dir, false, true);
                                         (Ok((v, ptype)), result)
                                     }
                                     Err(e) => (Err(e), Err(runtime::hub::HubError::Install("no pkg".into()))),
@@ -2600,7 +2605,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                         Ok(p) => {
                                             let v = p.version.clone();
                                             let ptype = p.pkg_type.clone();
-                                            let result = client.install(&p, &install_dir);
+                                            let result = client.install(&p, &install_dir, false, true);
                                             (Ok((v, ptype)), result)
                                         }
                                         Err(e) => (Err(e), Err(runtime::hub::HubError::Install("no pkg".into()))),
@@ -5733,6 +5738,12 @@ impl LiveCli {
                 // subcommands that need a live response (launch, stream, etc.).
                 // For now, dispatch to the guidance handler.
                 let msg = commands::handlers::handle_cursor_command(&subcommand);
+                (msg, false)
+            }
+            SlashCommand::HubStatus { package } => {
+                // /hub-status <pkg> — delegate to the hub command handler
+                // which already supports `status <pkg>` as a sub-action.
+                let msg = self.run_hub_command(Some(&format!("status {package}")));
                 (msg, false)
             }
             SlashCommand::Unknown(name) => {

@@ -407,7 +407,21 @@ pub fn handle_slash_command(
             session: session.clone(),
         }),
         SlashCommand::Hub { .. } => Some(SlashCommandResult {
-            message: "/hub requires an active session. Run `anvil` and use /hub [search|skills|plugins|install|info] to browse and install content from AnvilHub.".to_string(),
+            message: "/hub requires an active session. Run `anvil` and use /hub [search|skills|plugins|install|info|status] to browse and install content from AnvilHub.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::HubStatus { package } => Some(SlashCommandResult {
+            message: if package.is_empty() {
+                "Usage: /hub-status <package-name>\n\
+                 Shows the verification state, publisher info, and highest verified version for a package.\n\
+                 Example: /hub-status devops-expert".to_string()
+            } else {
+                format!(
+                    "/hub-status requires an active session. Run `anvil` and use \
+                     `/hub-status {package}` or `/hub status {package}` to query the AnvilHub \
+                     verification badge for package '{package}'."
+                )
+            },
             session: session.clone(),
         }),
         SlashCommand::Language { lang } => Some(SlashCommandResult {

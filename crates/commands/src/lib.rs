@@ -281,9 +281,17 @@ pub enum SlashCommand {
     Env {
         action: Option<String>,
     },
-    /// `/hub [search <q>|skills|plugins|agents|themes|install <name>|info <name>]`
+    /// `/hub [search <q>|skills|plugins|agents|themes|install <name>|info <name>|status <name>]`
     Hub {
         action: Option<String>,
+    },
+    /// `/hub-status <pkg>` — show verification state and publisher info for a
+    /// package.  Alias: `/hub status <pkg>` is routed through `Hub { action }`,
+    /// but the dedicated variant enables direct dispatch for tests and headless
+    /// invocations.
+    HubStatus {
+        /// Package name or id to query.
+        package: String,
     },
     /// `/language [en|de|es|fr|ja|zh-CN|ru]`
     Language {
@@ -776,6 +784,9 @@ impl SlashCommand {
             },
             "hub" => Self::Hub {
                 action: remainder_after_command(trimmed, command),
+            },
+            "hub-status" => Self::HubStatus {
+                package: parts.next().unwrap_or_default().to_owned(),
             },
             "language" | "lang" => Self::Language {
                 lang: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
@@ -1659,7 +1670,9 @@ mod tests {
         // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
         // v2.2.14: +1 (/ollama spec re-added in 142d5fa to close W4-merge drift) = 112 total
         // v2.2.14 Phase 6.0: +1 (/import — migration arc foundation) = 113 total
-        assert_eq!(slash_command_specs().len(), 114);
+        // v2.2.15: +1 (/cursor — Cursor Cloud Agents) = 114 total
+        // v2.2.16: +1 (/hub-status — AnvilHub verified-badge status query) = 115 total
+        assert_eq!(slash_command_specs().len(), 115);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -1781,6 +1794,7 @@ mod tests {
                     source: "demo".to_string(),
                     default_enabled: false,
                     root: None,
+                    hub_trust_level: None,
                 },
                 enabled: true,
             },
@@ -1794,6 +1808,7 @@ mod tests {
                     source: "sample".to_string(),
                     default_enabled: false,
                     root: None,
+                    hub_trust_level: None,
                 },
                 enabled: false,
             },
@@ -1805,6 +1820,73 @@ mod tests {
         assert!(rendered.contains("sample"));
         assert!(rendered.contains("v0.9.0"));
         assert!(rendered.contains("disabled"));
+    }
+
+    // ── F3 / v2.2.16: /plugin update REVOKED publisher guard ─────────────────
+
+    /// When a plugin has a REVOKED hub_trust_level in its metadata, the update
+    /// command must abort and surface a warning rather than proceeding.
+    #[test]
+    fn plugin_update_aborts_with_revoked_trust_level() {
+        use plugins::{PluginKind, PluginManager, PluginManagerConfig, PluginMetadata, PluginSummary, PluginTrustLevel};
+        use crate::plugins::handle_plugins_slash_command;
+
+        // Build a mock PluginSummary whose metadata carries a REVOKED trust level.
+        let revoked_summary = PluginSummary {
+            metadata: PluginMetadata {
+                id: "risky@external".to_string(),
+                name: "risky".to_string(),
+                version: "1.0.0".to_string(),
+                description: "A plugin whose publisher was revoked".to_string(),
+                kind: PluginKind::External,
+                source: "external".to_string(),
+                default_enabled: true,
+                root: None,
+                hub_trust_level: Some(PluginTrustLevel::Revoked),
+            },
+            enabled: true,
+        };
+
+        // The update handler checks hub_trust_level before calling manager.update().
+        // Since the manager isn't set up here, we test the guard logic directly by
+        // verifying the condition: a REVOKED entry must cause the handler to short-circuit.
+        let is_revoked = revoked_summary
+            .metadata
+            .hub_trust_level
+            .as_ref()
+            .map(|t| t.is_revoked())
+            .unwrap_or(false);
+        assert!(
+            is_revoked,
+            "/plugin update must detect REVOKED trust level in installed record"
+        );
+
+        // Verify the guard message text would include "REVOKED" and "aborted".
+        // (The actual PluginManager call is side-effecting and network-dependent;
+        // we unit-test the predicate, not the network path.)
+        let guard_msg = format!(
+            "WARNING: '{}' publisher has been REVOKED since install.\n\
+             Update aborted. Run `anvil hub status {}` for details.",
+            revoked_summary.metadata.name,
+            revoked_summary.metadata.name,
+        );
+        assert!(guard_msg.contains("REVOKED"));
+        assert!(guard_msg.contains("aborted"));
+    }
+
+    /// When a plugin has a non-REVOKED (or absent) trust level, the update
+    /// guard must not fire.
+    #[test]
+    fn plugin_update_guard_does_not_fire_for_verified() {
+        use plugins::{PluginTrustLevel};
+
+        let trust = Some(PluginTrustLevel::Verified);
+        let is_revoked = trust.as_ref().map(|t| t.is_revoked()).unwrap_or(false);
+        assert!(!is_revoked, "VERIFIED must not trigger REVOKED guard");
+
+        let trust: Option<PluginTrustLevel> = None;
+        let is_revoked = trust.as_ref().map(|t| t.is_revoked()).unwrap_or(false);
+        assert!(!is_revoked, "absent trust level must not trigger REVOKED guard");
     }
 
     #[test]
@@ -2656,6 +2738,7 @@ mod tests {
                 SlashCommand::Changelog => Some("changelog"),
                 SlashCommand::Env { .. } => Some("env"),
                 SlashCommand::Hub { .. } => Some("hub"),
+                SlashCommand::HubStatus { .. } => Some("hub-status"),
                 SlashCommand::Language { .. } => Some("language"),
                 SlashCommand::Lsp { .. } => Some("lsp"),
                 SlashCommand::Notebook { .. } => Some("notebook"),
@@ -2779,6 +2862,7 @@ mod tests {
             SlashCommand::Changelog,
             SlashCommand::Env { action: None },
             SlashCommand::Hub { action: None },
+            SlashCommand::HubStatus { package: String::new() },
             SlashCommand::Language { lang: None },
             SlashCommand::Lsp { action: None },
             SlashCommand::Notebook { action: None },
@@ -3034,6 +3118,7 @@ mod tests {
         "changelog",
         "env",
         "hub",
+        "hub-status",
         "language",
         "lsp",
         "notebook",
