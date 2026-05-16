@@ -42,6 +42,10 @@ impl TuiLayoutRenderer for Renderer {
         let size = frame.area();
         let theme = &snap.theme;
 
+        // BUG-3 fix (Option B): clear the entire frame so cells from a prior
+        // layout do not survive ratatui's frame-diff into this layout's first frame.
+        frame.render_widget(ratatui::widgets::Clear, size);
+
         // Extract local state.
         let (palette_open, palette_query, palette_selected) = match local {
             LayoutLocalState::Journal {

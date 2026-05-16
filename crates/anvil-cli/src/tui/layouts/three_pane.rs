@@ -42,6 +42,10 @@ impl TuiLayoutRenderer for Renderer {
     ) {
         let size = frame.area();
 
+        // BUG-3 fix (Option B): wipe all cells before drawing so stale content
+        // from a previous layout cannot survive through ratatui's frame diff.
+        frame.render_widget(ratatui::widgets::Clear, size);
+
         // Extract local state safely.
         let (vim_mode, command_line) = match local {
             LayoutLocalState::ThreePane { vim_mode, command_line } => {

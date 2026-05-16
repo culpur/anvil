@@ -46,6 +46,13 @@ impl TuiLayoutRenderer for Renderer {
         let size = frame.area();
         let width = size.width as usize;
 
+        // BUG-3 fix (Option B): clear the entire frame area before drawing so
+        // stale cells from a previous layout do not bleed through.  The `Clear`
+        // widget writes blank cells over every position in `size`, which forces
+        // ratatui to treat them as "changed" on the very next diff and re-emit
+        // them — regardless of what the backing buffer thought was there.
+        frame.render_widget(ratatui::widgets::Clear, size);
+
         // ── Zone layout ─────────────────────────────────────────────────────────
         // Layout D (tabs: true):  header(2) + content + [agent] + footer
         // Layout A (tabs: false): header(1) + content + [agent] + footer
