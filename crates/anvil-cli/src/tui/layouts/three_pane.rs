@@ -78,14 +78,16 @@ impl TuiLayoutRenderer for Renderer {
         let third = remaining.height / 3;
         let focus_h = third.max(3);
         let log_h = third.max(3);
-        let context_h = remaining.height.saturating_sub(focus_h + log_h).max(2);
+        // CONTEXT pane: Constraint::Fill(1) absorbs all leftover rows regardless of
+        // rounding, eliminating the dark gap that Constraint::Min(context_h) left
+        // unpainted on small terminals (#BUG-4).
 
         let bands = RLayout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(focus_h),
                 Constraint::Length(log_h),
-                Constraint::Min(context_h),
+                Constraint::Fill(1),
             ])
             .split(remaining);
 

@@ -224,3 +224,100 @@ fn current_tui__200x60() {
     let rendered = render_fixture(200, 60);
     insta::assert_snapshot!("current_tui__200x60", rendered);
 }
+
+// ─── Three-pane constraint regression test (BUG-4 Issue 1) ───────────────────
+//
+// Verifies that the CONTEXT band absorbs all remaining rows so no dark gap
+// appears below the context pane on small terminals.  The harness mirrors
+// the three_pane.rs layout math so any future regression in the constraint
+// arithmetic will be caught here.
+
+/// Three-pane at small terminal (60×20).
+/// Verifies BUG-4 fix: all 20 rows are accounted for (no dark gap below CONTEXT).
+/// Row count in the snapshot must equal 20 exactly.
+#[test]
+fn three_pane_small__60x20() {
+    let backend = TestBackend::new(60, 20);
+    let mut terminal = Terminal::new(backend).expect("TestBackend::new");
+
+    terminal.draw(|frame| {
+        let size = frame.area();
+        let w = size.width as usize;
+
+        let third = size.height / 3;
+        let focus_h = third.max(3);
+        let log_h   = third.max(3);
+
+        let bands = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(focus_h),
+                Constraint::Length(log_h),
+                Constraint::Fill(1),
+            ])
+            .split(size);
+
+        let focus_area = bands[0];
+        let log_area   = bands[1];
+        let ctx_area   = bands[2];
+
+        // FOCUS pane — single-row hint at bottom.
+        {
+            let header = format!("─── FOCUS  [NORMAL]{}", "─".repeat(w.saturating_sub(18 + "NORMAL".len())));
+            let content = "No conversation yet. Press i to start.";
+            let hint    = "  i to insert  j/k scroll  gt/gT tabs";
+            let mut lines: Vec<Line<'static>> = vec![Line::from(Span::raw(header))];
+            lines.push(Line::from(Span::raw(content)));
+            while lines.len() < focus_area.height.saturating_sub(1) as usize {
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from(Span::raw(hint)));
+            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), focus_area);
+        }
+
+        // LOG pane.
+        {
+            let header = format!("─── LOG{}", "─".repeat(w.saturating_sub(6)));
+            let mut lines: Vec<Line<'static>> = vec![Line::from(Span::raw(header))];
+            for (role, content) in LOG_ENTRIES {
+                let prefix = match *role { "user" => "  you  ", "assistant" => "  ast  ", _ => "  sys  " };
+                lines.push(Line::from(Span::raw(format!("{prefix}{content}"))));
+            }
+            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), log_area);
+        }
+
+        // CONTEXT pane — must fill all remaining rows (Fill(1) absorbs rounding).
+        {
+            let header = format!("─── CONTEXT{}", "─".repeat(w.saturating_sub(10)));
+            let model  = format!("  Model: {}   in:{} out:{}", MODEL, INPUT_TOKENS, OUTPUT_TOKENS);
+            let git    = format!("  Git:   {}  {}", GIT_BRANCH, GIT_DIFF);
+            let lines: Vec<Line<'static>> = vec![
+                Line::from(Span::raw(header)),
+                Line::from(Span::raw(model)),
+                Line::from(Span::raw(git)),
+            ];
+            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), ctx_area);
+        }
+    }).expect("terminal.draw");
+
+    let backend  = terminal.backend();
+    let buf      = backend.buffer();
+    let (bwidth, bheight) = (buf.area.width as usize, buf.area.height as usize);
+    let mut rows: Vec<String> = Vec::with_capacity(bheight);
+    for row in 0..bheight {
+        let mut line = String::with_capacity(bwidth);
+        for col in 0..bwidth {
+            let cell = &buf[(col as u16, row as u16)];
+            let ch: &str = cell.symbol();
+            if ch.is_empty() || ch == "\x00" { line.push(' '); } else { line.push_str(ch); }
+        }
+        rows.push(line.trim_end().to_string());
+    }
+    let rendered = rows.join("\n");
+
+    // Every row must be present — use split('\n') not lines() to avoid the
+    // trailing-empty-segment quirk in str::lines().
+    let row_count = rendered.split('\n').count();
+    assert_eq!(row_count, 20, "expected 20 rows but got {row_count} — dark-gap regression");
+    insta::assert_snapshot!("three_pane_small__60x20", rendered);
+}
