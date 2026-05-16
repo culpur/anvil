@@ -14,6 +14,7 @@ pub(super) mod layout;
 pub(super) mod list_viewport;
 pub(super) mod redraw;
 pub(super) mod scrollback;
+pub(super) mod snapshot;
 pub(super) mod ssh_bridge;
 pub(super) mod ssh_form;
 pub(super) mod ssh_tab;
@@ -38,6 +39,7 @@ use configure_types::{
 };
 use helpers::{strip_ansi, truncate_str, permission_mode_display, prev_char_boundary, next_char_boundary};
 use layout::{compute_input_lines, cursor_visual_position, render_status_lines, StatusLineData};
+use snapshot::LayoutSnapshot;
 use state::{Tab, LogEntry, THINK_FRAMES};
 
 
@@ -792,6 +794,316 @@ impl AnvilTui {
         self.draw()
     }
 
+    // ─── Snapshot collection ─────────────────────────────────────────────────
+
+    /// Collect a `LayoutSnapshot` from the current `AnvilTui` state.
+    ///
+    /// Called by `draw()` to freeze all the data the draw closure needs before
+    /// `terminal.draw()` takes the mutable terminal borrow. The snapshot is a
+    /// pure value — the draw closure becomes a function of its inputs and no
+    /// longer accesses `self` (except for fields that are mutated after the
+    /// closure returns, like `tab_hits`).
+    ///
+    /// v2.2.16: This method is the seam between shared TUI state and the
+    /// per-layout renderers. When the draw function is later split into
+    /// `layouts/{vertical_split,three_pane,journal}.rs`, each renderer will
+    /// receive a `&LayoutSnapshot` instead of accessing `&AnvilTui` directly.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    pub(super) fn collect_snapshot(&mut self) -> LayoutSnapshot {
+        let tab = self.active_tab();
+        let log_snapshot = tab.log.clone();
+        let transcript_verbose = tab.transcript_verbose;
+        let pending = tab.pending_text.clone();
+        let think = tab.think_label.clone();
+        let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
+        let input_text = tab.input.clone();
+
+        let queued_count = tab.message_queue.len()
+            + usize::from(self.pending_submit.is_some());
+        let queued_preview: Vec<String> = {
+            let preview_iter = self.pending_submit.iter()
+                .chain(tab.message_queue.iter());
+            preview_iter
+                .take(3)
+                .map(|s| {
+                    let cap = 40;
+                    if s.chars().count() > cap {
+                        let trimmed: String = s.chars().take(cap).collect();
+                        format!("{trimmed}…")
+                    } else {
+                        s.clone()
+                    }
+                })
+                .collect()
+        };
+        let cursor_pos = tab.cursor;
+        let scroll = tab.scroll;
+        let scrollback_state = tab.scrollback_state;
+        let scrollback_is_live = scrollback_state.is_live();
+        let model = tab.model.clone();
+        let session_id = tab.session_id.clone();
+        let input_tokens = tab.input_tokens;
+        let output_tokens = tab.output_tokens;
+        let elapsed = tab.session_start.elapsed();
+        let completion_visible = tab.completion.visible;
+        let completion_selected = tab.completion.selected;
+        let completion_matches: Vec<(String, String, bool, bool)> = tab
+            .completion
+            .matches
+            .iter()
+            .map(|c| (c.insert.clone(), c.hint.clone(), c.is_header, c.is_free_text))
+            .collect();
+
+        // Run selection-follow on the completion popup viewport so the
+        // highlighted row is always on-screen.
+        if completion_visible {
+            const POPUP_BODY_HEIGHT: usize = 12;
+            let total = completion_matches.len();
+            let mut vp = list_viewport::ListViewport::new();
+            let prior = tab.completion.view_offset;
+            vp = vp.scroll_down(prior, total, POPUP_BODY_HEIGHT);
+            vp = vp.follow_selection(completion_selected, total, POPUP_BODY_HEIGHT);
+            self.active_tab_mut().completion.view_offset =
+                vp.offset(total, POPUP_BODY_HEIGHT);
+        }
+        let completion_view_offset = self.active_tab().completion.view_offset;
+
+        let tab_infos: Vec<(usize, String, bool, bool, bool)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let has_perm = self.pending_permissions.contains_key(&t.id);
+                (t.id, t.name.clone(), i == self.active_tab, t.has_unread, has_perm)
+            })
+            .collect();
+
+        let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
+        let active_permission_modal: Option<(String, String, String, String)> =
+            self.pending_permissions.get(&active_tab_id).map(|p| {
+                (p.tool_name.clone(), p.required_mode.clone(), p.current_mode.clone(), p.input_summary.clone())
+            });
+
+        let git_branch = self.git_branch.clone();
+        let git_diff_stats = self.git_diff_stats.clone();
+        let permission_mode = self.permission_mode.clone();
+        let context_max_tokens = self.context_max_tokens;
+        let qmd_status = self.qmd_status.clone();
+        let last_archive_status = self.last_archive_status.clone();
+        let update_available = self.update_available.clone();
+        let configure_state = self.configure_state.clone();
+        let configure_data = self.configure_data.clone();
+
+        // Reset configure viewport when the active screen changes.
+        let new_screen_tag = configure_screen_tag(&configure_state);
+        if new_screen_tag != self.configure_screen_tag {
+            self.configure_viewport.reset();
+            self.configure_screen_tag = new_screen_tag;
+        }
+
+        // Estimate content height for viewport-follow calculations.
+        let approx_content_height =
+            self.terminal.size().map(|s| s.height.saturating_sub(6) as usize).unwrap_or(18);
+
+        if configure_state != ConfigureState::Inactive {
+            let total_items = configure_item_count(&configure_state, &configure_data);
+            let total_lines_est = total_items.saturating_add(4);
+            let sel = configure_selected(&configure_state);
+            let sel_line = sel.saturating_add(4);
+            self.configure_viewport = self
+                .configure_viewport
+                .follow_selection(sel_line, total_lines_est, approx_content_height);
+        }
+        let configure_viewport = self.configure_viewport;
+
+        let theme = self.theme.clone();
+        let agent_panel_visible = self.agent_panel_visible;
+        let agent_rows = self.agent_rows.clone();
+        let remote_url = self.remote_url.clone();
+        let remote_code = self.remote_code.clone();
+        let sl_config = self.status_line_config.clone();
+        let thinking_enabled = self.thinking_enabled;
+        let lines_added = self.lines_added;
+        let lines_removed = self.lines_removed;
+        let effort_level = self.effort_level.clone();
+
+        // Pre-fetch scrollback lines for historical view.
+        let scrollback_view_lines: Option<Vec<String>> = if scrollback_is_live {
+            None
+        } else {
+            let tab = self.active_tab();
+            let anchor = scrollback_state.effective_anchor(&tab.scrollback, approx_content_height);
+            let (lines, _) = tab.scrollback.lines_in_range(anchor, approx_content_height + 4);
+            Some(lines)
+        };
+
+        // T5-Ssh-D: pre-snapshot the active SSH tab's vt100 screen.
+        let ssh_screen: Option<(Vec<ratatui::text::Line<'static>>, Vec<ratatui::text::Line<'static>>)> = {
+            let tab = self.active_tab();
+            if let Some(ref ssh) = tab.ssh {
+                let screen = ssh.parser.screen();
+                let (rows, cols) = screen.size();
+                let map_color = |c: Vt100Color| -> Color {
+                    match c {
+                        Vt100Color::Default => Color::Reset,
+                        Vt100Color::Idx(n) => Color::Indexed(n),
+                        Vt100Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+                    }
+                };
+                let mut grid_lines: Vec<ratatui::text::Line<'static>> = Vec::with_capacity(rows as usize);
+                for row in 0..rows {
+                    let mut spans: Vec<Span<'static>> = Vec::new();
+                    let mut run = String::new();
+                    let mut run_style = Style::default();
+                    let flush_run = |run: &mut String, style: Style, spans: &mut Vec<Span<'static>>| {
+                        if !run.is_empty() {
+                            spans.push(Span::styled(std::mem::take(run), style));
+                        }
+                    };
+                    for col in 0..cols {
+                        if let Some(cell) = screen.cell(row, col) {
+                            if cell.is_wide_continuation() {
+                                continue;
+                            }
+                            let fg = map_color(cell.fgcolor());
+                            let bg = map_color(cell.bgcolor());
+                            let mut style = Style::default().fg(fg).bg(bg);
+                            if cell.bold() { style = style.add_modifier(Modifier::BOLD); }
+                            if cell.italic() { style = style.add_modifier(Modifier::ITALIC); }
+                            if cell.underline() { style = style.add_modifier(Modifier::UNDERLINED); }
+                            if cell.inverse() { style = style.add_modifier(Modifier::REVERSED); }
+                            if style != run_style {
+                                flush_run(&mut run, run_style, &mut spans);
+                                run_style = style;
+                            }
+                            let ch = cell.contents();
+                            if ch.is_empty() { run.push(' '); } else { run.push_str(ch); }
+                        } else {
+                            if run_style != Style::default() {
+                                flush_run(&mut run, run_style, &mut spans);
+                                run_style = Style::default();
+                            }
+                            run.push(' ');
+                        }
+                    }
+                    flush_run(&mut run, run_style, &mut spans);
+                    grid_lines.push(ratatui::text::Line::from(spans));
+                }
+                let elapsed_ssh = ssh.opened_at.elapsed();
+                let elapsed_str = if elapsed_ssh.as_secs() >= 3600 {
+                    format!("{}h {}m", elapsed_ssh.as_secs() / 3600, (elapsed_ssh.as_secs() % 3600) / 60)
+                } else {
+                    format!("{}m {}s", elapsed_ssh.as_secs() / 60, elapsed_ssh.as_secs() % 60)
+                };
+                let dest = ssh.destination.clone();
+                let state_label = ssh.state.label();
+                let footer_primary = ratatui::text::Line::from(vec![
+                    Span::styled(
+                        format!(" [{state_label}] {dest}  {elapsed_str} "),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                    ),
+                    Span::styled(
+                        " Ctrl+B 0-9=switch  Ctrl+B q=close ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]);
+                let mut footer_lines: Vec<ratatui::text::Line<'static>> = vec![footer_primary];
+                match &ssh.state {
+                    crate::tui::ssh_tab::SshConnState::AuthFailed(reason) => {
+                        footer_lines.push(ratatui::text::Line::from(Span::styled(
+                            format!(" auth failed: {reason}"),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                    crate::tui::ssh_tab::SshConnState::Error(msg) => {
+                        footer_lines.push(ratatui::text::Line::from(Span::styled(
+                            format!(" error: {msg}"),
+                            Style::default().fg(Color::Red),
+                        )));
+                    }
+                    crate::tui::ssh_tab::SshConnState::Disconnected(Some(reason)) => {
+                        footer_lines.push(ratatui::text::Line::from(Span::styled(
+                            format!(" disconnected: {reason}"),
+                            Style::default().fg(Color::Yellow),
+                        )));
+                    }
+                    _ => {}
+                }
+                Some((grid_lines, footer_lines))
+            } else {
+                None
+            }
+        };
+        let is_ssh_tab = ssh_screen.is_some();
+
+        let can_close_tab = self.tabs.len() > 1;
+        let ssh_form_snapshot: Option<ssh_form::SshFormState> = self.ssh_form.as_ref().map(|f| {
+            let mut copy = ssh_form::SshFormState::new();
+            copy.host = f.host.clone();
+            copy.port_str = f.port_str.clone();
+            copy.user = f.user.clone();
+            copy.auth_index = f.auth_index;
+            copy.key_path = f.key_path.clone();
+            copy.secret = f.secret.clone();
+            copy.alias = f.alias.clone();
+            copy.focused = f.focused;
+            copy.error = f.error.clone();
+            copy.picker = f.picker.clone();
+            copy
+        });
+
+        LayoutSnapshot {
+            log_snapshot,
+            transcript_verbose,
+            pending,
+            think,
+            think_frame,
+            input_text,
+            queued_count,
+            queued_preview,
+            cursor_pos,
+            scroll,
+            scrollback_state,
+            scrollback_is_live,
+            model,
+            session_id,
+            input_tokens,
+            output_tokens,
+            elapsed,
+            completion_visible,
+            completion_selected,
+            completion_matches,
+            completion_view_offset,
+            tab_infos,
+            active_permission_modal,
+            git_branch,
+            git_diff_stats,
+            permission_mode,
+            context_max_tokens,
+            qmd_status,
+            last_archive_status,
+            update_available,
+            configure_state,
+            configure_data,
+            configure_viewport,
+            theme,
+            agent_panel_visible,
+            agent_rows,
+            remote_url,
+            remote_code,
+            sl_config,
+            thinking_enabled,
+            lines_added,
+            lines_removed,
+            effort_level,
+            ssh_screen,
+            is_ssh_tab,
+            ssh_form_snapshot,
+            scrollback_view_lines,
+            can_close_tab,
+        }
+    }
+
     // ─── Draw ────────────────────────────────────────────────────────────────
 
     /// Draw the current state.
@@ -875,286 +1187,77 @@ impl AnvilTui {
             }
         }
 
-        // Snapshot per-tab data from the active tab.
-        let tab = self.active_tab();
-        let log_snapshot = tab.log.clone();
-        let transcript_verbose = tab.transcript_verbose;
-        let pending = tab.pending_text.clone();
-        let think = tab.think_label.clone();
-        let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
-        let input_text = tab.input.clone();
+        // v2.2.16: Layout system landing. This entire function will be split into
+        // crates/anvil-cli/src/tui/layouts/{vertical_split,three_pane,journal}.rs.
+        // Golden snapshots in tests/layout_snapshots.rs lock the current rendering
+        // as the Layout D (vertical-split + tabs) regression baseline.
 
-        // v2.2.14 TUI-3: snapshot for the queued-messages indicator. The
-        // visible count is `pending_submit + queue` so the user sees the
-        // total drafts waiting to fire after the current turn.
-        let queued_count = tab.message_queue.len()
-            + usize::from(self.pending_submit.is_some());
-        let queued_preview: Vec<String> = {
-            let preview_iter = self.pending_submit.iter()
-                .chain(tab.message_queue.iter());
-            preview_iter
-                .take(3)
-                .map(|s| {
-                    let cap = 40;
-                    if s.chars().count() > cap {
-                        let trimmed: String = s.chars().take(cap).collect();
-                        format!("{trimmed}…")
-                    } else {
-                        s.clone()
-                    }
-                })
-                .collect()
-        };
-        let cursor_pos = tab.cursor;
-        let scroll = tab.scroll;
-        let scrollback_state = tab.scrollback_state;
-        let scrollback_is_live = scrollback_state.is_live();
-        let model = tab.model.clone();
-        let session_id = tab.session_id.clone();
-        let input_tokens = tab.input_tokens;
-        let output_tokens = tab.output_tokens;
-        let elapsed = tab.session_start.elapsed();
-        let completion_visible = tab.completion.visible;
-        let completion_selected = tab.completion.selected;
-        // Snapshot: (insert_text, hint, is_header, is_free_text)
-        let completion_matches: Vec<(String, String, bool, bool)> = tab
-            .completion
-            .matches
-            .iter()
-            .map(|c| (c.insert.clone(), c.hint.clone(), c.is_header, c.is_free_text))
-            .collect();
-        // Run selection-follow on the completion popup viewport so the
-        // highlighted row is always on-screen even when the match list is
-        // longer than the popup's render cap.
-        if completion_visible {
-            // Popup body fits at most 12 rows (height ceiling preserved
-            // below); selection-follow against that constant.
-            const POPUP_BODY_HEIGHT: usize = 12;
-            let total = completion_matches.len();
-            let mut vp = list_viewport::ListViewport::new();
-            // Restore the prior offset by scrolling down — we don't keep a
-            // dedicated `ListViewport` field on `CompletionPopup` to avoid
-            // serializing it; the raw offset round-trips fine.
-            let prior = tab.completion.view_offset;
-            vp = vp.scroll_down(prior, total, POPUP_BODY_HEIGHT);
-            vp = vp.follow_selection(completion_selected, total, POPUP_BODY_HEIGHT);
-            self.active_tab_mut().completion.view_offset =
-                vp.offset(total, POPUP_BODY_HEIGHT);
-        }
-        let completion_view_offset = self.active_tab().completion.view_offset;
-        // Snapshot tab bar state.  The 5th bool is `has_pending_permission`
-        // (Bug-3 Commit 4) — true when a worker on that tab is blocked
-        // waiting for the user to approve/deny a tool.
-        let tab_infos: Vec<(usize, String, bool, bool, bool)> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let has_perm = self.pending_permissions.contains_key(&t.id);
-                (t.id, t.name.clone(), i == self.active_tab, t.has_unread, has_perm)
-            })
-            .collect();
-        // Snapshot the active tab's pending permission modal data (if any).
-        let active_tab_id = self.tabs.get(self.active_tab).map(|t| t.id).unwrap_or(0);
-        let active_permission_modal: Option<(String, String, String, String)> =
-            self.pending_permissions.get(&active_tab_id).map(|p| {
-                (p.tool_name.clone(), p.required_mode.clone(), p.current_mode.clone(), p.input_summary.clone())
-            });
-        let git_branch = self.git_branch.clone();
-        let git_diff_stats = self.git_diff_stats.clone();
-        let permission_mode = self.permission_mode.clone();
-        let context_max_tokens = self.context_max_tokens;
-        let qmd_status = self.qmd_status.clone();
-        let last_archive_status = self.last_archive_status.clone();
-        let update_available = self.update_available.clone();
-        let configure_state = self.configure_state.clone();
-        let configure_data = self.configure_data.clone();
-        // Reset configure viewport when the active screen changes (e.g.
-        // navigating from MainMenu → Models picker, or PresetPicker →
-        // WidgetPicker).  Comparing screen tag avoids re-running on every
-        // keystroke.
-        let new_screen_tag = configure_screen_tag(&configure_state);
-        if new_screen_tag != self.configure_screen_tag {
-            self.configure_viewport.reset();
-            self.configure_screen_tag = new_screen_tag;
-        }
-        let theme = self.theme.clone();
-        let agent_panel_visible = self.agent_panel_visible;
-        let agent_rows = self.agent_rows.clone();
-        let remote_url = self.remote_url.clone();
-        let remote_code = self.remote_code.clone();
-        let sl_config = self.status_line_config.clone();
+        // Collect a frozen snapshot of all state the draw closure needs.
+        // `collect_snapshot()` performs all the side-effecting pre-draw work
+        // (scrollback viewport follow, configure viewport follow, completion
+        // viewport follow) and returns a heap-owned value. The draw closure
+        // then has no reason to access `self`.
+        let snap = self.collect_snapshot();
 
-        // Pre-fetch scrollback lines for historical view before terminal.draw()
-        // takes ownership.  Estimate content height conservatively.
-        let approx_content_height =
-            self.terminal.size().map(|s| s.height.saturating_sub(6) as usize).unwrap_or(18);
-        let scrollback_view_lines: Option<Vec<String>> = if scrollback_is_live {
-            None
-        } else {
-            let tab = self.active_tab();
-            let anchor = scrollback_state.effective_anchor(&tab.scrollback, approx_content_height);
-            let (lines, _) = tab.scrollback.lines_in_range(anchor, approx_content_height + 4);
-            Some(lines)
-        };
+        // Destructure the snapshot so the closure body below can use the same
+        // bare variable names that existed before this refactor.  This keeps
+        // the diff to the closure body zero — no behavior change.
+        let LayoutSnapshot {
+            log_snapshot,
+            transcript_verbose,
+            pending,
+            think,
+            think_frame,
+            input_text,
+            queued_count,
+            queued_preview,
+            cursor_pos,
+            scroll,
+            scrollback_state,
+            scrollback_is_live,
+            model,
+            session_id,
+            input_tokens,
+            output_tokens,
+            elapsed,
+            completion_visible,
+            completion_selected,
+            completion_matches,
+            completion_view_offset,
+            tab_infos,
+            active_permission_modal,
+            git_branch,
+            git_diff_stats,
+            permission_mode,
+            context_max_tokens,
+            qmd_status,
+            last_archive_status,
+            update_available,
+            configure_state,
+            configure_data,
+            configure_viewport,
+            theme,
+            agent_panel_visible,
+            agent_rows,
+            remote_url,
+            remote_code,
+            sl_config,
+            thinking_enabled,
+            lines_added,
+            lines_removed,
+            effort_level,
+            ssh_screen,
+            is_ssh_tab,
+            ssh_form_snapshot,
+            scrollback_view_lines,
+            can_close_tab,
+        } = snap;
 
-        // For the configure overlay, run selection-follow against the
-        // estimated viewport so the highlighted item is on-screen, and
-        // persist the resulting offset back to `self.configure_viewport`.
-        // The closure below borrows `self` immutably via `configure_viewport`.
-        if configure_state != ConfigureState::Inactive {
-            let total_items = configure_item_count(&configure_state, &configure_data);
-            // Header ≈ 4 lines (blank, breadcrumb, separator, blank).
-            let total_lines_est = total_items.saturating_add(4);
-            let sel = configure_selected(&configure_state);
-            // Selection lives at line `sel + 4` in the rendered output.
-            let sel_line = sel.saturating_add(4);
-            self.configure_viewport = self
-                .configure_viewport
-                .follow_selection(sel_line, total_lines_est, approx_content_height);
-        }
-        let configure_viewport = self.configure_viewport;
-
-        // T5-Ssh-D: pre-snapshot the active SSH tab's vt100 screen so the draw
-        // closure (which takes &mut Terminal) can render it without borrowing self.
-        // We build the grid as Vec<Line<'static>> here; color mapping is:
-        //   vt100::Color::Default → Color::Reset
-        //   vt100::Color::Idx(n)  → Color::Indexed(n)
-        //   vt100::Color::Rgb(r,g,b) → Color::Rgb(r,g,b)
-        let ssh_screen: Option<(Vec<Line<'static>>, Vec<Line<'static>>)> = {
-            let tab = self.active_tab();
-            if let Some(ref ssh) = tab.ssh {
-                let screen = ssh.parser.screen();
-                let (rows, cols) = screen.size();
-                let map_color = |c: Vt100Color| -> Color {
-                    match c {
-                        Vt100Color::Default => Color::Reset,
-                        Vt100Color::Idx(n) => Color::Indexed(n),
-                        Vt100Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
-                    }
-                };
-                let mut grid_lines: Vec<Line<'static>> = Vec::with_capacity(rows as usize);
-                for row in 0..rows {
-                    let mut spans: Vec<Span<'static>> = Vec::new();
-                    let mut run = String::new();
-                    let mut run_style = Style::default();
-                    let flush_run = |run: &mut String, style: Style, spans: &mut Vec<Span<'static>>| {
-                        if !run.is_empty() {
-                            spans.push(Span::styled(std::mem::take(run), style));
-                        }
-                    };
-                    for col in 0..cols {
-                        if let Some(cell) = screen.cell(row, col) {
-                            if cell.is_wide_continuation() {
-                                continue;
-                            }
-                            let fg = map_color(cell.fgcolor());
-                            let bg = map_color(cell.bgcolor());
-                            let mut style = Style::default().fg(fg).bg(bg);
-                            if cell.bold() {
-                                style = style.add_modifier(Modifier::BOLD);
-                            }
-                            if cell.italic() {
-                                style = style.add_modifier(Modifier::ITALIC);
-                            }
-                            if cell.underline() {
-                                style = style.add_modifier(Modifier::UNDERLINED);
-                            }
-                            if cell.inverse() {
-                                style = style.add_modifier(Modifier::REVERSED);
-                            }
-                            if style != run_style {
-                                flush_run(&mut run, run_style, &mut spans);
-                                run_style = style;
-                            }
-                            let ch = cell.contents();
-                            if ch.is_empty() {
-                                run.push(' ');
-                            } else {
-                                run.push_str(ch);
-                            }
-                        } else {
-                            if run_style != Style::default() {
-                                flush_run(&mut run, run_style, &mut spans);
-                                run_style = Style::default();
-                            }
-                            run.push(' ');
-                        }
-                    }
-                    flush_run(&mut run, run_style, &mut spans);
-                    grid_lines.push(Line::from(spans));
-                }
-                // Build the footer lines for this SSH tab.
-                let elapsed = ssh.opened_at.elapsed();
-                let elapsed_str = if elapsed.as_secs() >= 3600 {
-                    format!("{}h {}m", elapsed.as_secs() / 3600, (elapsed.as_secs() % 3600) / 60)
-                } else {
-                    format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
-                };
-                let dest = ssh.destination.clone();
-                let state_label = ssh.state.label();
-                let footer_primary = Line::from(vec![
-                    Span::styled(
-                        format!(" [{state_label}] {dest}  {elapsed_str} "),
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-                    ),
-                    Span::styled(
-                        " Ctrl+B 0-9=switch  Ctrl+B q=close ",
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]);
-                let mut footer_lines: Vec<Line<'static>> = vec![footer_primary];
-                match &ssh.state {
-                    crate::tui::ssh_tab::SshConnState::AuthFailed(reason) => {
-                        footer_lines.push(Line::from(Span::styled(
-                            format!(" auth failed: {reason}"),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                    crate::tui::ssh_tab::SshConnState::Error(msg) => {
-                        footer_lines.push(Line::from(Span::styled(
-                            format!(" error: {msg}"),
-                            Style::default().fg(Color::Red),
-                        )));
-                    }
-                    crate::tui::ssh_tab::SshConnState::Disconnected(Some(reason)) => {
-                        footer_lines.push(Line::from(Span::styled(
-                            format!(" disconnected: {reason}"),
-                            Style::default().fg(Color::Yellow),
-                        )));
-                    }
-                    _ => {}
-                }
-                Some((grid_lines, footer_lines))
-            } else {
-                None
-            }
-        };
-        let is_ssh_tab = ssh_screen.is_some();
         // Click-to-switch tab geometry — populated by the draw closure as it
         // builds the tab-bar spans, then copied back to self.tab_hits after
-        // the closure returns. We can't borrow self mutably inside draw() so
-        // we collect into a local first.
+        // the closure returns.
         let mut new_tab_hits: Vec<TabHit> = Vec::new();
         let mut new_tab_bar_row: u16 = 0;
-        let can_close_tab = self.tabs.len() > 1;
-        // T5-Ssh-E: pre-snapshot the SSH form state so the draw closure can
-        // render it without borrowing self. SshFormState is cloned here;
-        // mutations (from handle_key) happen on self.ssh_form, not on this copy.
-        let ssh_form_snapshot: Option<ssh_form::SshFormState> = self.ssh_form.as_ref().map(|f| {
-            let mut copy = ssh_form::SshFormState::new();
-            copy.host = f.host.clone();
-            copy.port_str = f.port_str.clone();
-            copy.user = f.user.clone();
-            copy.auth_index = f.auth_index;
-            copy.key_path = f.key_path.clone();
-            copy.secret = f.secret.clone();
-            copy.alias = f.alias.clone();
-            copy.focused = f.focused;
-            copy.error = f.error.clone();
-            copy.picker = f.picker.clone();
-            copy
-        });
 
         self.terminal.draw(|frame| {
             let size = frame.area();
@@ -1686,7 +1789,7 @@ impl AnvilTui {
             };
             let sl_data = StatusLineData {
                 model: model.clone(),
-                thinking_enabled: self.thinking_enabled,
+                thinking_enabled,
                 input_tokens,
                 output_tokens,
                 cost_usd,
@@ -1711,8 +1814,8 @@ impl AnvilTui {
                 cost_weekly: 0.0,
                 cost_monthly: 0.0,
                 cache_hit_pct: 0.0,
-                lines_added: self.lines_added,
-                lines_removed: self.lines_removed,
+                lines_added,
+                lines_removed,
                 mcp_server_count: {
                     // Count MCP servers from settings.json
                     std::env::var_os("HOME")
@@ -1722,7 +1825,7 @@ impl AnvilTui {
                         .and_then(|v| v.get("mcpServers").and_then(|m| m.as_object()).map(|o| o.len() as u32))
                         .unwrap_or(0)
                 },
-                effort_level: self.effort_level.clone(),
+                effort_level: effort_level.clone(),
                 accent: theme.accent,
                 warning: theme.warning,
                 success: theme.success,

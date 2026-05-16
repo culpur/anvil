@@ -1,0 +1,44 @@
+---
+source: crates/anvil-cli/tests/layout_snapshots.rs
+expression: rendered
+---
+ [1: main]  [2: aegis-fix]  [3: deploy-prep]                                                    Ctrl+T new  Ctrl+W close
+ claude-sonnet-4-6 │ in:42 out:17 │ git:main +12,-5
+> do the thing
+A ok
+T [bash] done
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> next prompt
+ branch:main +12,-5 │ in:42 out:17 │ claude-sonnet-4-6
