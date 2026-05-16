@@ -34,8 +34,12 @@
 use std::time::{Duration, Instant};
 
 /// Bitset of regions that have changed and need repainting.
+///
+/// v2.2.16: Widened from `u8` to `u16` to accommodate new layout-specific
+/// regions (RAIL, FOCUS, CONTEXT). Existing callers (`request(DirtyRegions::INPUT)`
+/// etc.) are API-stable — no changes required at call sites.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DirtyRegions(u8);
+pub struct DirtyRegions(u16);
 
 impl DirtyRegions {
     /// Input box (current prompt + cursor + composing draft).
@@ -46,15 +50,25 @@ impl DirtyRegions {
     pub const SCROLLBACK: Self = Self(1 << 2);
     /// Agent panel (subagent tree, task list).
     pub const AGENT_PANEL: Self = Self(1 << 3);
-    /// Tab strip across the top.
+    /// Tab strip across the top (also reused as buffer-line / thread-switcher region).
     pub const TAB_STRIP: Self = Self(1 << 4);
     /// Configure overlay (when active).
     pub const OVERLAY: Self = Self(1 << 5);
     /// Anything not covered above (think spinner, completion popup).
     pub const MISC: Self = Self(1 << 6);
 
-    /// All regions.
-    pub const ALL: Self = Self(0b0111_1111);
+    // ── v2.2.16 Layout-specific regions ────────────────────────────────────
+    /// Layout A/D left rail (session list). Scoped repaint target.
+    pub const RAIL: Self = Self(1 << 7);
+    /// Layout B/E FOCUS pane (current assistant action). Scoped repaint target.
+    pub const FOCUS: Self = Self(1 << 8);
+    /// Layout B/E CONTEXT strip (model/tokens/cost/git). Scoped repaint target.
+    pub const CONTEXT: Self = Self(1 << 9);
+    // Note: JOURNAL_BODY reuses SCROLLBACK (single-column → same region).
+    // BUFFER_LINE / THREAD_SWITCHER reuse TAB_STRIP (same role).
+
+    /// All regions (updated for v2.2.16 with the three new bits).
+    pub const ALL: Self = Self(0b0000_0011_1111_1111);
 
     /// No regions dirty.
     pub const NONE: Self = Self(0);
@@ -240,6 +254,10 @@ mod tests {
             DirtyRegions::TAB_STRIP,
             DirtyRegions::OVERLAY,
             DirtyRegions::MISC,
+            // v2.2.16 layout-specific regions
+            DirtyRegions::RAIL,
+            DirtyRegions::FOCUS,
+            DirtyRegions::CONTEXT,
         ] {
             assert!(all.contains(region));
         }

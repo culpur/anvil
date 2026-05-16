@@ -11,6 +11,7 @@ pub mod configure_types;
 pub(super) mod completion;
 pub(super) mod helpers;
 pub(super) mod layout;
+pub(super) mod layouts;
 pub(super) mod list_viewport;
 pub(super) mod redraw;
 pub(super) mod scrollback;
@@ -37,8 +38,7 @@ use configure_types::{
     configure_item_count, configure_screen_tag, section_state_from_name,
     configure_action_for, configure_data_notify_value, mask_sensitive,
 };
-use helpers::{strip_ansi, truncate_str, permission_mode_display, prev_char_boundary, next_char_boundary};
-use layout::{compute_input_lines, cursor_visual_position, render_status_lines, StatusLineData};
+use helpers::{strip_ansi, truncate_str, prev_char_boundary, next_char_boundary};
 use snapshot::LayoutSnapshot;
 use state::{Tab, LogEntry, THINK_FRAMES};
 
@@ -47,16 +47,15 @@ use std::io::{self, Stdout};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use runtime::{format_usd, pricing_for_model, Rgb, Theme};
+use runtime::{Rgb, Theme};
 use runtime::theme::StatusLineConfig;
 
 use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use vt100::Color as Vt100Color;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 
@@ -213,6 +212,17 @@ pub struct AnvilTui {
     /// Most recent reason the gate was set; recorded so the instrumentation
     /// log can attribute each commit to a specific cause.
     pub(super) redraw_reason: Option<RedrawReason>,
+
+    // ── v2.2.16 Layout system ────────────────────────────────────────────────
+
+    /// Active TUI layout configuration. Persisted in `~/.anvil/config.json`
+    /// as `tui_layout`. Defaults to `VerticalSplit { tabs: true }` (Layout D)
+    /// which matches the pre-v2.2.16 rendering exactly.
+    pub(super) tui_layout: runtime::TuiLayoutConfig,
+    /// Layout-local visual state. Reset to `LayoutLocalState::for_kind(kind)`
+    /// on every live switch. Shared `AnvilTui`/`Tab` state (log, input,
+    /// cursor, message_queue, pending_permissions) is never touched here.
+    pub(super) layout_local: layouts::LayoutLocalState,
 }
 
 /// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
@@ -421,6 +431,8 @@ impl AnvilTui {
                 pending_permissions: std::collections::HashMap::new(),
                 redraw_pending: false,
                 redraw_reason: None,
+                tui_layout: runtime::TuiLayoutConfig::default(),
+                layout_local: layouts::LayoutLocalState::for_kind(runtime::TuiLayoutKind::VerticalSplit),
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -1199,795 +1211,38 @@ impl AnvilTui {
         // then has no reason to access `self`.
         let snap = self.collect_snapshot();
 
-        // Destructure the snapshot so the closure body below can use the same
-        // bare variable names that existed before this refactor.  This keeps
-        // the diff to the closure body zero — no behavior change.
-        let LayoutSnapshot {
-            log_snapshot,
-            transcript_verbose,
-            pending,
-            think,
-            think_frame,
-            input_text,
-            queued_count,
-            queued_preview,
-            cursor_pos,
-            scroll,
-            scrollback_state,
-            scrollback_is_live,
-            model,
-            session_id,
-            input_tokens,
-            output_tokens,
-            elapsed,
-            completion_visible,
-            completion_selected,
-            completion_matches,
-            completion_view_offset,
-            tab_infos,
-            active_permission_modal,
-            git_branch,
-            git_diff_stats,
-            permission_mode,
-            context_max_tokens,
-            qmd_status,
-            last_archive_status,
-            update_available,
-            configure_state,
-            configure_data,
-            configure_viewport,
-            theme,
-            agent_panel_visible,
-            agent_rows,
-            remote_url,
-            remote_code,
-            sl_config,
-            thinking_enabled,
-            lines_added,
-            lines_removed,
-            effort_level,
-            ssh_screen,
-            is_ssh_tab,
-            ssh_form_snapshot,
-            scrollback_view_lines,
-            can_close_tab,
-        } = snap;
+        // v2.2.16: Route to the active layout renderer via dispatch_render.
+        // The snapshot is passed by reference; layout-local state is cloned
+        // out of self, mutated inside the closure (cursor follow, etc.), then
+        // written back after terminal.draw returns.
+        let cfg = self.tui_layout;
+        let mut layout_local = self.layout_local.clone();
 
         // Click-to-switch tab geometry — populated by the draw closure as it
         // builds the tab-bar spans, then copied back to self.tab_hits after
         // the closure returns.
         let mut new_tab_hits: Vec<TabHit> = Vec::new();
-        let mut new_tab_bar_row: u16 = 0;
+        let new_tab_bar_row: u16 = snap.tab_infos.first().map(|_| 0u16).unwrap_or(0);
 
         self.terminal.draw(|frame| {
             let size = frame.area();
-            let width = size.width as usize;
 
-            // ── layout ──────────────────────────────────────────────────────
-            // header=2 (tab bar + model/session line), content=fill,
-            // [agent panel = 2+N lines when visible and agents exist],
-            // footer = separator + input rows + blank + N status lines
+            // v2.2.16: dispatch to the active layout renderer.
+            // `dispatch_render` handles all layout-specific content (tab bar,
+            // content area, input/footer, etc.). Modals are rendered on top.
+            layouts::dispatch_render(cfg, frame, &snap, &mut layout_local, &mut new_tab_hits);
 
-            // How many visual rows does the current input occupy? (1–5)
-            let input_line_count = compute_input_lines(&input_text, width);
-            // Total footer height: separator(1) + queued indicator(0|1) +
-            // input rows + blank(1) + N status lines.
-            let status_line_count = sl_config.line_count();
-            let queued_indicator_height: usize = usize::from(queued_count > 0);
-            let footer_height: u16 =
-                (2 + queued_indicator_height + input_line_count + status_line_count) as u16;
+            // ── Modals rendered on top of any layout ─────────────────────────
 
-            // Agent panel height: 2 lines for border + 1 per agent row (max 6).
-            let agent_panel_height: u16 = if agent_panel_visible && !agent_rows.is_empty() {
-                (agent_rows.len().min(6) as u16) + 2
-            } else {
-                0
-            };
-
-            let chunks = if agent_panel_height > 0 {
-                Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(2),
-                        Constraint::Min(4),
-                        Constraint::Length(agent_panel_height),
-                        Constraint::Length(footer_height),
-                    ])
-                    .split(size)
-            } else {
-                // No agent panel — use the 3-zone layout.
-                let base = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(2),
-                        Constraint::Min(4),
-                        Constraint::Length(footer_height),
-                    ])
-                    .split(size);
-                // Return a 4-element slice by padding (agent area = zero-height at footer y).
-                let mut v = base.to_vec();
-                v.push(v[2]);  // duplicate footer slot as placeholder
-                v.into()
-            };
-
-            let header_area = chunks[0];
-            let content_area = chunks[1];
-            let (agent_panel_area, footer_area) = if agent_panel_height > 0 {
-                (Some(chunks[2]), chunks[3])
-            } else {
-                (None, chunks[2])
-            };
-
-            // Split header into two rows: tab bar (row 0) + model/session (row 1).
-            let header_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Length(1)])
-                .split(header_area);
-            let tab_bar_area = header_rows[0];
-            let model_bar_area = header_rows[1];
-            new_tab_bar_row = tab_bar_area.y;
-
-            // ── tab bar (row 0) ──────────────────────────────────────────────
-            // Layout: " [id: name]  ×  [id: name]  ×  …   <right-aligned hint>"
-            // We record the column ranges as we go so the input handler can
-            // dispatch clicks to switch_tab / close_active_tab(idx).
-            let mut tab_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-            let mut cursor_col: u16 = tab_bar_area.x + 1; // matches the leading space
-            for (idx, (tab_id, tab_name, is_active, has_unread, has_perm)) in tab_infos.iter().enumerate() {
-                let label = if *has_unread && *has_perm {
-                    format!("[{tab_id}: {tab_name}*⚠]")
-                } else if *has_unread {
-                    format!("[{tab_id}: {tab_name}*]")
-                } else if *has_perm {
-                    format!("[{tab_id}: {tab_name}⚠]")
-                } else {
-                    format!("[{tab_id}: {tab_name}]")
-                };
-                let label_len = label.chars().count() as u16;
-                let label_start = cursor_col;
-                let label_end = cursor_col + label_len;
-                let style = if *is_active {
-                    Style::default()
-                        .fg(rgb(theme.accent))
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                        .fg(rgb(theme.text_secondary))
-                        .add_modifier(Modifier::DIM)
-                };
-                tab_spans.push(Span::styled(label, style));
-                cursor_col = label_end;
-                // Close glyph " × " (only when more than one tab is open).
-                let close_col = if can_close_tab {
-                    let col = cursor_col + 1; // after one space
-                    tab_spans.push(Span::raw(" "));
-                    tab_spans.push(Span::styled(
-                        "×",
-                        Style::default()
-                            .fg(rgb(theme.border))
-                            .add_modifier(Modifier::DIM),
-                    ));
-                    tab_spans.push(Span::raw(" "));
-                    cursor_col += 3; // " × "
-                    Some(col)
-                } else {
-                    tab_spans.push(Span::raw(" "));
-                    cursor_col += 1;
-                    None
-                };
-                new_tab_hits.push(TabHit {
-                    idx,
-                    label_start,
-                    label_end,
-                    close_col,
-                });
-            }
-            // Hint on the right side of the tab bar
-            let hint = Span::styled(
-                "F2/F3 switch  Ctrl+T new  Ctrl+W close  /help nav",
-                Style::default().fg(rgb(theme.border)),
-            );
-            let tab_bar_left_len: usize = tab_spans.iter().map(|s| s.content.chars().count()).sum();
-            let hint_len = hint.content.chars().count();
-            let pad = width.saturating_sub(tab_bar_left_len + hint_len);
-            tab_spans.push(Span::raw(" ".repeat(pad)));
-            tab_spans.push(hint);
-            let tab_bar_widget = Paragraph::new(Line::from(tab_spans))
-                .style(Style::default().bg(rgb(theme.bg_primary)));
-            frame.render_widget(tab_bar_widget, tab_bar_area);
-
-            // ── model/session bar (row 1) ────────────────────────────────────
-            let short_session = if session_id.len() > 20 {
-                format!("…{}", &session_id[session_id.len() - 18..])
-            } else {
-                session_id.clone()
-            };
-            let model_bar_text = format!(
-                " ⚒ Anvil v{}  │  {}  │  {}",
-                env!("CARGO_PKG_VERSION"),
-                model,
-                short_session
-            );
-            let model_bar = Paragraph::new(model_bar_text).style(
-                Style::default()
-                    .fg(rgb(theme.accent))
-                    .bg(rgb(theme.header_bg))
-                    .add_modifier(Modifier::BOLD),
-            );
-            frame.render_widget(model_bar, model_bar_area);
-
-            // ── content ─────────────────────────────────────────────────────
-            let content_width = content_area.width;
-
-            // T5-Ssh-D: SSH tabs render the vt100 grid + a status footer
-            // instead of the normal chat log.  The grid was pre-snapshotted
-            // above to avoid borrowing self inside this closure.
-            if is_ssh_tab {
-                if let Some((grid_lines, footer_lines)) = ssh_screen {
-                    frame.render_widget(ratatui::widgets::Clear, content_area);
-                    // Reserve the last N rows of content_area for the footer.
-                    let footer_height = footer_lines.len() as u16;
-                    let grid_height = content_area.height.saturating_sub(footer_height);
-                    let grid_area = ratatui::layout::Rect {
-                        x: content_area.x,
-                        y: content_area.y,
-                        width: content_area.width,
-                        height: grid_height,
-                    };
-                    let status_area = ratatui::layout::Rect {
-                        x: content_area.x,
-                        y: content_area.y + grid_height,
-                        width: content_area.width,
-                        height: footer_height,
-                    };
-                    let grid_widget = Paragraph::new(Text::from(grid_lines));
-                    frame.render_widget(grid_widget, grid_area);
-                    let footer_widget = Paragraph::new(Text::from(footer_lines));
-                    frame.render_widget(footer_widget, status_area);
-                }
-                // Skip the rest of the content+footer section — the SSH tab
-                // renders its own status line; the normal input box and status
-                // widgets below still render so the tab bar stays visible.
-            } else {
-
-            let all_lines: Vec<Line<'static>> = if configure_state == ConfigureState::Inactive {
-                let mut lines: Vec<Line<'static>> = Vec::new();
-
-                for entry in &log_snapshot {
-                    lines.extend(entry.to_lines_with(content_width, &theme, transcript_verbose));
-                }
-
-                // Streaming assistant text in progress
-                if !pending.is_empty() {
-                    let clean = strip_ansi(&pending);
-                    lines.extend(
-                        clean
-                            .lines()
-                            .map(|l| Line::from(Span::raw(l.to_string()))),
-                    );
-                }
-
-                // Thinking spinner
-                if !think.is_empty() {
-                    let elapsed_think = format!("{:.1}s", {
-                        think_frame.len() as f64 * 0.25
-                    });
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("{think_frame} "),
-                            Style::default().fg(rgb(theme.thinking)),
-                        ),
-                        Span::styled(
-                            think.clone(),
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                        Span::styled(
-                            format!("  ({elapsed_think})"),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                    ]));
-                }
-
-                lines
-            } else {
-                // Configure mode — render the menu instead of the conversation log.
-                render_configure_menu(&configure_state, &configure_data, content_width as usize)
-            };
-
-            let total_lines = all_lines.len();
-            let visible_height = content_area.height as usize;
-            let effective_scroll = if configure_state == ConfigureState::Inactive {
-                let max_scroll = total_lines.saturating_sub(visible_height);
-                scroll.min(max_scroll)
-            } else {
-                // Configure overlay: long screens (MainMenu, PresetPicker,
-                // WidgetPicker, etc.) used to silently truncate.  We now scroll
-                // the rendered output using `configure_viewport`, which the
-                // outer code has already aligned to keep the selected item
-                // on-screen.  We re-clamp here against the *real* viewport
-                // size (the pre-render estimate may have been off by a row).
-                configure_viewport.offset(total_lines, visible_height)
-            };
-
-            // ── Scrollback / live view selection ─────────────────────────────
-            // When in historical view, replace content lines with the
-            // pre-fetched scrollback buffer lines and prepend the status banner.
-            let visible_lines: Vec<Line<'static>> =
-                if let Some(ref hist_lines) = scrollback_view_lines {
-                    let banner_pad = "─".repeat(width.saturating_sub(50));
-                    let banner_text = format!(
-                        "─── HISTORICAL VIEW  (Press End to return to live) {banner_pad}"
-                    );
-                    let banner = Line::from(Span::styled(
-                        banner_text,
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                    let content_height = visible_height.saturating_sub(1);
-                    let mut lines: Vec<Line<'static>> = vec![banner];
-                    lines.extend(
-                        hist_lines
-                            .iter()
-                            .take(content_height)
-                            .map(|s| Line::from(Span::raw(s.clone()))),
-                    );
-                    while lines.len() < visible_height {
-                        lines.push(Line::from(""));
-                    }
-                    lines
-                } else {
-                    all_lines
-                        .into_iter()
-                        .skip(effective_scroll)
-                        .take(visible_height)
-                        .collect()
-                };
-
-            // Clear the content area first.
-            frame.render_widget(ratatui::widgets::Clear, content_area);
-
-            // Soft-wrap chat lines at content_area.width instead of right-
-            // truncating with `…`. Right-truncation lost the tail of every
-            // long prompt and assistant response — the user couldn't see
-            // their own message past column N. trim:false keeps explicit
-            // leading whitespace (indentation in tool output, code blocks).
-            let content_widget = Paragraph::new(Text::from(visible_lines))
-                .style(Style::default().fg(Color::White))
-                .wrap(ratatui::widgets::Wrap { trim: false });
-            frame.render_widget(content_widget, content_area);
-
-            } // end else (non-SSH tab content path)
-
-            // ── agent panel ──────────────────────────────────────────────────
-            if let Some(panel_area) = agent_panel_area {
-                frame.render_widget(ratatui::widgets::Clear, panel_area);
-                let panel_width = panel_area.width as usize;
-
-                let running = agent_rows.iter().filter(|r| r.4 == "⟳").count();
-                let done = agent_rows.iter().filter(|r| r.4 == "✓").count();
-                let failed = agent_rows.iter().filter(|r| r.4 == "✗").count();
-                let mut status_parts = Vec::new();
-                if running > 0 { status_parts.push(format!("{running} running")); }
-                if done > 0 { status_parts.push(format!("{done} completed")); }
-                if failed > 0 { status_parts.push(format!("{failed} failed")); }
-                let status_str = status_parts.join(", ");
-                let header_label = format!(" Agents ({status_str}) ");
-                let dashes_after = "─".repeat(
-                    panel_width.saturating_sub(header_label.len() + 2)
-                );
-                let header_line = Line::from(vec![
-                    Span::styled("─", Style::default().fg(rgb(theme.border))),
-                    Span::styled(
-                        header_label,
-                        Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(dashes_after, Style::default().fg(rgb(theme.border))),
-                ]);
-
-                let mut panel_lines: Vec<Line<'static>> = vec![header_line];
-                for (id, type_label, task, elapsed, icon) in agent_rows.iter().take(6) {
-                    let icon_style = match *icon {
-                        "⟳" => Style::default().fg(rgb(theme.accent)),
-                        "✓" => Style::default().fg(rgb(theme.success)),
-                        "✗" => Style::default().fg(rgb(theme.error)),
-                        _ => Style::default().fg(Color::DarkGray),
-                    };
-                    let id_str = format!("#{id:02}");
-                    let type_str = format!("{type_label:<10}");
-                    let elapsed_str = format!("{elapsed:>6}");
-                    let fixed_width = 2 + 4 + 2 + 10 + 2 + elapsed_str.len() + 2;
-                    let task_width = panel_width.saturating_sub(fixed_width);
-                    let task_truncated = if task.chars().count() > task_width {
-                        let t: String = task.chars().take(task_width.saturating_sub(1)).collect();
-                        format!("{t}…")
-                    } else {
-                        format!("{task:<task_width$}")
-                    };
-                    panel_lines.push(Line::from(vec![
-                        Span::styled(format!(" {icon} "), icon_style),
-                        Span::styled(
-                            format!("{id_str}  "),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::styled(
-                            type_str,
-                            Style::default().fg(rgb(theme.text_secondary)),
-                        ),
-                        Span::styled(
-                            format!("  {task_truncated}"),
-                            Style::default().fg(rgb(theme.text_primary)),
-                        ),
-                        Span::styled(
-                            format!("  {elapsed_str} "),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                    ]));
-                }
-
-                panel_lines.push(Line::from(Span::styled(
-                    "─".repeat(panel_width),
-                    Style::default().fg(rgb(theme.border)),
-                )));
-
-                let panel_widget = Paragraph::new(Text::from(panel_lines))
-                    .style(Style::default().bg(rgb(theme.bg_primary)));
-                frame.render_widget(panel_widget, panel_area);
-            }
-
-            // ── footer (dynamic height: 5 + input_line_count lines) ──────────
-
-            // Line 0: separator
-            let separator = "─".repeat(width);
-            let line0 = Line::from(Span::styled(
-                separator,
-                Style::default().fg(rgb(theme.border)),
-            ));
-
-            // Lines 1..N: input area
-            let input_lines_rendered: Vec<Line<'static>> =
-                if configure_state == ConfigureState::Inactive {
-                    // Render multi-line input with inline block cursor.
-                    let prompt_style = Style::default()
-                        .fg(rgb(theme.accent))
-                        .add_modifier(Modifier::BOLD);
-                    let text_style = Style::default().fg(Color::White);
-                    let cursor_fg = Color::Rgb(0x1a, 0x1a, 0x1a);
-                    let cursor_bg = Color::White;
-
-                    let prompt_width: usize = 2;
-                    let first_col = width.saturating_sub(prompt_width).max(1);
-                    let rest_col = width.max(1);
-
-                    // Collect visual rows.
-                    let mut visual_rows: Vec<Vec<(usize, char)>> = Vec::new();
-                    let mut current_row_chars: Vec<(usize, char)> = Vec::new();
-                    let mut byte_off: usize = 0;
-                    let logical_segs: Vec<&str> = input_text.split('\n').collect();
-                    let n_segs = logical_segs.len();
-
-                    for (seg_idx, seg) in logical_segs.iter().enumerate() {
-                        if seg_idx > 0 {
-                            visual_rows.push(std::mem::take(&mut current_row_chars));
-                        }
-                        let mut col_in_row: usize = 0;
-
-                        for ch in seg.chars() {
-                            let avail_now = if visual_rows.is_empty() { first_col } else { rest_col };
-                            if col_in_row >= avail_now {
-                                visual_rows.push(std::mem::take(&mut current_row_chars));
-                                col_in_row = 0;
-                            }
-                            current_row_chars.push((byte_off, ch));
-                            byte_off += ch.len_utf8();
-                            col_in_row += 1;
-                        }
-                        if seg_idx + 1 < n_segs {
-                            byte_off += 1; // '\n'
-                        }
-                    }
-                    visual_rows.push(current_row_chars); // push the last row
-
-                    // Cap at 5 rows.
-                    visual_rows.truncate(5);
-                    let n_rows = visual_rows.len();
-
-                    let mut lines: Vec<Line<'static>> = Vec::with_capacity(n_rows);
-                    for (row_idx, row_chars) in visual_rows.iter().enumerate() {
-                        let is_last_row = row_idx + 1 == n_rows;
-                        let mut before = String::new();
-                        let mut cur_str = String::new();
-                        let mut after = String::new();
-                        let mut cursor_placed = false;
-
-                        for &(boff, ch) in row_chars {
-                            if !cursor_placed && boff == cursor_pos {
-                                cur_str.push(ch);
-                                cursor_placed = true;
-                            } else if boff < cursor_pos {
-                                before.push(ch);
-                            } else {
-                                after.push(ch);
-                            }
-                        }
-
-                        let trailing_cursor = !cursor_placed
-                            && is_last_row
-                            && cursor_pos >= input_text.len();
-
-                        let mut spans: Vec<Span<'static>> = Vec::new();
-                        if row_idx == 0 {
-                            spans.push(Span::styled("❯ ", prompt_style));
-                        }
-                        if !before.is_empty() {
-                            spans.push(Span::styled(before, text_style));
-                        }
-                        if cursor_placed {
-                            spans.push(Span::styled(
-                                cur_str,
-                                Style::default().fg(cursor_fg).bg(cursor_bg),
-                            ));
-                            if !after.is_empty() {
-                                spans.push(Span::styled(after, text_style));
-                            }
-                        } else if trailing_cursor {
-                            spans.push(Span::styled(
-                                " ",
-                                Style::default().fg(cursor_fg).bg(cursor_bg),
-                            ));
-                        } else {
-                            if !after.is_empty() {
-                                spans.push(Span::styled(after, text_style));
-                            }
-                            if spans.iter().all(|s| s.content.is_empty()) {
-                                spans.push(Span::raw(" "));
-                            }
-                        }
-                        lines.push(Line::from(spans));
-                    }
-                    lines
-                } else {
-                    let breadcrumb = configure_breadcrumb(&configure_state);
-                    vec![Line::from(vec![
-                        Span::styled(
-                            "⚒ ",
-                            Style::default()
-                                .fg(rgb(theme.accent))
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            breadcrumb,
-                            Style::default()
-                                .fg(rgb(theme.accent))
-                                .add_modifier(Modifier::DIM),
-                        ),
-                        Span::styled(
-                            "   ↑↓ Navigate  Enter Select  Esc Back",
-                            Style::default().fg(rgb(theme.border)),
-                        ),
-                    ])]
-                };
-
-            // Blank line after input.
-            let line_blank = Line::from("");
-
-            // Dynamic status lines from widget configuration.
-            let cost_usd = {
-                if model.contains(':') && !model.contains(":cloud") {
-                    "local".to_string()
-                } else if let Some(p) = pricing_for_model(&model) {
-                    let cost = (f64::from(input_tokens) / 1_000_000.0) * p.input_cost_per_million
-                        + (f64::from(output_tokens) / 1_000_000.0) * p.output_cost_per_million;
-                    format_usd(cost)
-                } else if model.contains(':') {
-                    "cloud".to_string()
-                } else {
-                    format_usd(0.0)
-                }
-            };
-            let sl_data = StatusLineData {
-                model: model.clone(),
-                thinking_enabled,
-                input_tokens,
-                output_tokens,
-                cost_usd,
-                context_used: input_tokens,
-                context_max: context_max_tokens,
-                elapsed_secs: elapsed.as_secs(),
-                git_branch: git_branch.clone(),
-                git_diff: git_diff_stats.clone(),
-                git_clean: git_diff_stats.is_empty(),
-                permission_mode: permission_mode_display(&permission_mode),
-                qmd_status: qmd_status.clone(),
-                archive_status: last_archive_status.clone(),
-                update_available: update_available.clone(),
-                remote_url: remote_url.clone(),
-                remote_code: remote_code.clone(),
-                vim_mode: false, // TODO: wire from config
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                provider: String::new(),
-                token_speed: 0.0,
-                burn_rate_hr: 0.0,
-                cost_daily: 0.0,
-                cost_weekly: 0.0,
-                cost_monthly: 0.0,
-                cache_hit_pct: 0.0,
-                lines_added,
-                lines_removed,
-                mcp_server_count: {
-                    // Count MCP servers from settings.json
-                    std::env::var_os("HOME")
-                        .map(std::path::PathBuf::from)
-                        .and_then(|h| std::fs::read_to_string(h.join(".anvil").join("settings.json")).ok())
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                        .and_then(|v| v.get("mcpServers").and_then(|m| m.as_object()).map(|o| o.len() as u32))
-                        .unwrap_or(0)
-                },
-                effort_level: effort_level.clone(),
-                accent: theme.accent,
-                warning: theme.warning,
-                success: theme.success,
-                error: theme.error,
-            };
-            let status_lines = render_status_lines(&sl_config, &sl_data, width);
-
-            // v2.2.14 TUI-3: optional `[N queued]` indicator above the
-            // input line. Shows when the user has stacked submissions while
-            // a turn is streaming. We render the count plus up to 3 short
-            // previews so the user remembers what's waiting.
-            let queued_indicator: Option<Line<'static>> = if queued_count > 0 {
-                let mut spans: Vec<Span<'static>> = Vec::new();
-                spans.push(Span::styled(
-                    format!("[{queued_count} queued]"),
-                    Style::default()
-                        .fg(rgb(theme.warning))
-                        .add_modifier(Modifier::BOLD),
-                ));
-                for preview in &queued_preview {
-                    spans.push(Span::styled(
-                        format!(" • {preview}"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                if queued_count > queued_preview.len() {
-                    spans.push(Span::styled(
-                        format!(" • +{} more", queued_count - queued_preview.len()),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                Some(Line::from(spans))
-            } else {
-                None
-            };
-
-            // Assemble footer.
-            let mut footer_lines: Vec<Line<'static>> = Vec::new();
-            footer_lines.push(line0);
-            if let Some(indicator) = queued_indicator {
-                footer_lines.push(indicator);
-            }
-            footer_lines.extend(input_lines_rendered);
-            footer_lines.push(line_blank);
-            footer_lines.extend(status_lines);
-            let footer_widget = Paragraph::new(Text::from(footer_lines));
-            frame.render_widget(footer_widget, footer_area);
-
-            // ─── Completion popup overlay ────────────────────────────────
-            if completion_visible && !completion_matches.is_empty() {
-                // Body capped at 12 visible rows; longer match lists scroll
-                // with `view_offset` (FEAT-36).
-                const POPUP_BODY_HEIGHT: usize = 12;
-                let visible = completion_matches.len().min(POPUP_BODY_HEIGHT);
-                let popup_height = visible as u16 + 2;
-                let popup_width = (width as u16).min(60);
-                let popup_y = footer_area.y.saturating_sub(popup_height);
-                let popup_area = ratatui::layout::Rect {
-                    x: footer_area.x + 1,
-                    y: popup_y,
-                    width: popup_width,
-                    height: popup_height,
-                };
-
-                // Slice the visible window using the persisted offset.
-                let start = completion_view_offset.min(
-                    completion_matches.len().saturating_sub(visible),
-                );
-                let end = (start + visible).min(completion_matches.len());
-                let items: Vec<Line<'static>> = completion_matches[start..end]
-                    .iter()
-                    .enumerate()
-                    .map(|(rel_i, item)| {
-                        let i = start + rel_i;
-                        let insert: &str = item.0.as_str();
-                        let hint: &str = item.1.as_str();
-                        let is_header: bool = item.2;
-                        let is_free_text: bool = item.3;
-
-                        // Non-selectable category header rows — rendered in
-                        // accent color with a subtle separator style.
-                        if is_header {
-                            return Line::from(Span::styled(
-                                format!(" {insert}"),
-                                Style::default()
-                                    .fg(rgb(theme.accent))
-                                    .add_modifier(Modifier::BOLD)
-                                    .bg(rgb(theme.bg_card)),
-                            ));
-                        }
-
-                        let is_selected = i == completion_selected;
-                        let (fg, bg) = if is_selected {
-                            (rgb(theme.bg_primary), rgb(theme.accent))
-                        } else {
-                            (rgb(theme.text_primary), rgb(theme.bg_card))
-                        };
-                        let cmd_width = 24.min(popup_width as usize - 4);
-                        let padded_cmd = format!("{:<width$}", insert, width = cmd_width);
-
-                        // Free-text placeholder items (e.g. `<query>`) are
-                        // rendered with DIM styling to signal they are hints,
-                        // not insertable completions.
-                        let insert_style = if is_free_text {
-                            Style::default()
-                                .fg(rgb(theme.text_secondary))
-                                .bg(bg)
-                                .add_modifier(Modifier::DIM | Modifier::ITALIC)
-                        } else {
-                            Style::default().fg(fg).bg(bg)
-                        };
-
-                        Line::from(vec![
-                            Span::styled(format!(" {padded_cmd}"), insert_style),
-                            Span::styled(
-                                format!(" {hint}"),
-                                Style::default()
-                                    .fg(if is_selected { rgb(theme.bg_primary) } else { rgb(theme.text_secondary) })
-                                    .bg(bg)
-                                    .add_modifier(Modifier::DIM),
-                            ),
-                        ])
-                    })
-                    .collect();
-
-                let popup_widget = Paragraph::new(Text::from(items))
-                    .block(
-                        ratatui::widgets::Block::default()
-                            .borders(ratatui::widgets::Borders::ALL)
-                            .border_style(Style::default().fg(rgb(theme.border)))
-                            .style(Style::default().bg(rgb(theme.bg_card))),
-                    );
-                frame.render_widget(ratatui::widgets::Clear, popup_area);
-                frame.render_widget(popup_widget, popup_area);
-            }
-
-            // Position the terminal cursor within the (possibly multi-row) input area.
-            // v2.2.14 TUI-3: shift one row down when the queued-messages
-            // indicator is rendered above the input box.
-            let (cursor_row_offset, cursor_col) =
-                cursor_visual_position(&input_text, cursor_pos, width);
-            let cursor_x = footer_area.x + cursor_col as u16;
-            let cursor_y = footer_area.y
-                + 1
-                + queued_indicator_height as u16
-                + cursor_row_offset as u16;
-            let max_x = footer_area.x + footer_area.width.saturating_sub(1);
-            frame.set_cursor_position(Position {
-                x: cursor_x.min(max_x),
-                y: cursor_y,
-            });
-
-            // T5-Ssh-E: render SSH form modal on top of everything else if open.
-            if let Some(ref form) = ssh_form_snapshot {
+            // T5-Ssh-E: SSH form modal.
+            if let Some(ref form) = snap.ssh_form_snapshot {
                 form.render(frame, size);
             }
 
-            // Bug-3 Commit 4: render permission approval modal when the
-            // active tab has a pending request.  The modal sits on top of
-            // everything else (including the SSH form, though in practice
-            // both can't be open simultaneously on the same tab).
-            if let Some((ref tool_name, ref req_mode, ref cur_mode, ref input_summary)) = active_permission_modal {
+            // Bug-3 Commit 4: permission approval modal.
+            if let Some((ref tool_name, ref req_mode, ref cur_mode, ref input_summary)) =
+                snap.active_permission_modal
+            {
                 use ratatui::widgets::{Block, Borders, Clear};
                 use ratatui::text::Text as RatText;
 
@@ -2005,9 +1260,11 @@ impl AnvilTui {
                 frame.render_widget(Clear, modal_area);
 
                 let inner_w = modal_w.saturating_sub(4) as usize;
-                // Truncate the input summary to fit the modal width.
                 let summary_display = if input_summary.chars().count() > inner_w {
-                    let mut s: String = input_summary.chars().take(inner_w.saturating_sub(1)).collect();
+                    let mut s: String = input_summary
+                        .chars()
+                        .take(inner_w.saturating_sub(1))
+                        .collect();
                     s.push('…');
                     s
                 } else {
@@ -2017,20 +1274,35 @@ impl AnvilTui {
                 let lines = vec![
                     ratatui::text::Line::from(""),
                     ratatui::text::Line::from(vec![
-                        Span::styled("  Tool:     ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "  Tool:     ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(tool_name.clone()),
                     ]),
                     ratatui::text::Line::from(vec![
-                        Span::styled("  Requires: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "  Requires: ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(req_mode.clone(), Style::default().fg(Color::Yellow)),
                     ]),
                     ratatui::text::Line::from(vec![
-                        Span::styled("  Current:  ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "  Current:  ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(cur_mode.clone()),
                     ]),
                     ratatui::text::Line::from(vec![
-                        Span::styled("  Input:    ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::styled(summary_display, Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            "  Input:    ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            summary_display,
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]),
                     ratatui::text::Line::from(""),
                     ratatui::text::Line::from(Span::styled(
@@ -2045,10 +1317,10 @@ impl AnvilTui {
                 let block = Block::default()
                     .title(" Permission Required ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-
-                let paragraph = Paragraph::new(RatText::from(lines))
-                    .block(block);
+                    .border_style(
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    );
+                let paragraph = Paragraph::new(RatText::from(lines)).block(block);
                 frame.render_widget(paragraph, modal_area);
             }
         })?;
@@ -2057,7 +1329,51 @@ impl AnvilTui {
         self.tab_hits = new_tab_hits;
         self.tab_bar_row = new_tab_bar_row;
 
+        // Write back any in-draw mutations to layout_local (cursor follow, etc.).
+        self.layout_local = layout_local;
+
         Ok(())
+    }
+
+    // ─── Layout system (v2.2.16) ─────────────────────────────────────────────
+
+    /// Switch the active TUI layout live, mid-session.
+    ///
+    /// Per spec §4 switch protocol:
+    /// 1. No-op when new == self.tui_layout (avoids wasted redraw).
+    /// 2. Persist to `~/.anvil/config.json` (best-effort; logs on IO error).
+    /// 3. Replace `self.tui_layout`.
+    /// 4. Replace `self.layout_local` (resets layout-local visual state only).
+    /// 5. Request full-region redraw.
+    ///
+    /// Shared state (`tabs`, `pending_permissions`, `agent_rows`, etc.) is
+    /// never touched — the switch is paint-only.
+    pub fn set_layout(&mut self, new: runtime::TuiLayoutConfig) {
+        if new == self.tui_layout {
+            return; // no-op
+        }
+        // Persist to ~/.anvil/config.json (best-effort).
+        if let Some(home) = dirs_next::home_dir() {
+            let path = home.join(".anvil").join("config.json");
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(obj) = val.as_object_mut() {
+                        let alias = runtime::tui_layout_to_alias(&new);
+                        obj.insert(
+                            "tui_layout".to_string(),
+                            serde_json::json!({ "kind": alias.trim_end_matches("-tabs"), "tabs": new.tabs }),
+                        );
+                        if let Ok(out) = serde_json::to_string_pretty(&val) {
+                            let _ = std::fs::write(&path, out);
+                        }
+                    }
+                }
+            }
+        }
+        self.tui_layout = new;
+        self.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
+        self.redraw.request_full();
+        self.request_redraw_reason(RedrawReason::Other);
     }
 
     // ─── Event processing ────────────────────────────────────────────────────
@@ -4296,7 +3612,7 @@ impl Drop for AnvilTui {
 // ─── Configure menu renderer ─────────────────────────────────────────────────
 
 /// Render the configure menu for the current state as a Vec of ratatui Lines.
-fn render_configure_menu(
+pub(super) fn render_configure_menu(
     state: &ConfigureState,
     data: &ConfigureData,
     width: usize,
