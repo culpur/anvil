@@ -268,6 +268,53 @@ pub(crate) fn resolve_reference_extended(
     Err(format!("session not found (tried path, ID, and name): {reference}").into())
 }
 
+// ─── Title heuristic ─────────────────────────────────────────────────────────
+
+/// Derive a short session title from the user's first message.
+///
+/// Rules (#563, CC-142-B):
+/// 1. If the first message is a bare URL (all tokens start with `http://`
+///    or `https://`, no surrounding text) → return `None` (caller should use
+///    a generic fallback like `"Session <date>"`).
+/// 2. If the message contains a URL but also surrounding text → strip the URL
+///    tokens and use the remaining text.
+/// 3. Otherwise use the first 60 characters of the message, trimmed.
+///
+/// Returns `None` when no usable title can be extracted (bare URL or empty).
+#[must_use]
+pub(crate) fn derive_title_from_first_message(message: &str) -> Option<String> {
+    let trimmed = message.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Detect bare URL: entire message is a single http/https URL token.
+    let is_bare_url = trimmed
+        .split_ascii_whitespace()
+        .all(|token| token.starts_with("http://") || token.starts_with("https://"));
+
+    if is_bare_url {
+        return None;
+    }
+
+    // Strip URL tokens; collect the rest.
+    let without_urls: String = trimmed
+        .split_ascii_whitespace()
+        .filter(|token| !token.starts_with("http://") && !token.starts_with("https://"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let candidate = without_urls.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+
+    // Truncate to 60 chars (whole characters, not bytes).
+    const MAX_CHARS: usize = 60;
+    let title: String = candidate.chars().take(MAX_CHARS).collect();
+    Some(title.trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +429,58 @@ mod tests {
         // since otherwise users would be locked out of the shortest
         // session-name convention.
         assert!(is_valid_name("_"));
+    }
+
+    // ── derive_title_from_first_message tests (#563, CC-142-B) ─────────────
+
+    use super::derive_title_from_first_message;
+
+    #[test]
+    fn title_skips_bare_url() {
+        assert_eq!(
+            derive_title_from_first_message("https://example.com/some/path"),
+            None
+        );
+        assert_eq!(
+            derive_title_from_first_message("http://localhost:3000"),
+            None
+        );
+    }
+
+    #[test]
+    fn title_uses_text_around_url() {
+        let msg = "Please review this page https://example.com/pr/123 and tell me what's wrong";
+        let title = derive_title_from_first_message(msg);
+        assert!(
+            title.is_some(),
+            "expected a title from text + URL, got None"
+        );
+        let t = title.unwrap();
+        assert!(
+            !t.contains("https://"),
+            "title should not contain the URL: {t}"
+        );
+        assert!(
+            t.contains("review") || t.contains("page"),
+            "title should contain surrounding text: {t}"
+        );
+    }
+
+    #[test]
+    fn title_falls_back_to_generic_when_only_url() {
+        // A message that is only a URL (possibly with query params) → None
+        assert_eq!(
+            derive_title_from_first_message(
+                "https://github.com/org/repo/pull/42?tab=files"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn title_works_normally_for_regular_text() {
+        let msg = "Refactor the database connection pool to use async/await";
+        let title = derive_title_from_first_message(msg);
+        assert_eq!(title.as_deref(), Some(msg));
     }
 }
