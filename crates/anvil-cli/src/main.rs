@@ -7673,9 +7673,9 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         action: Option<&str>,
         tui: &mut crate::tui::AnvilTui,
     ) -> String {
-        use runtime::{TuiLayoutConfig, TuiLayoutKind, tui_layout_kind_from_alias, tui_layout_to_alias};
+        use runtime::{TuiLayoutConfig, tui_layout_kind_from_alias, tui_layout_to_alias};
 
-        let current = tui.tui_layout;
+        let current = tui.tabs[tui.active_tab].tui_layout;
         let current_alias = tui_layout_to_alias(&current);
 
         let action = action.unwrap_or("").trim();
@@ -7684,7 +7684,8 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
             // Bare /layout — show current + hint.
             return format!(
                 "Current layout: {} ({}).\n\
-                 Use /layout list for all variants, or /layout <kind> to switch.",
+                 Use /layout list for all variants, or /layout <kind> to switch.\n\
+                 Use /layout <kind> --global to also set as default for new tabs.",
                 current_alias,
                 if current.tabs { "tabs on" } else { "tabs off" }
             );
@@ -7692,14 +7693,16 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
 
         if action == "list" {
             return "\
-/layout variants:\n  \
-vertical-split       Layout A: rail + swappable right deck (tabs: off)\n  \
-vertical-split-tabs  Layout D: A + workspace tabs\n  \
-three-pane           Layout B: FOCUS/LOG/CONTEXT, vim modal (tabs: off)\n  \
-three-pane-tabs      Layout E: B + vim buffer line\n  \
-journal              Layout C: timestamped journal, Ctrl-K palette (tabs: off)\n  \
-journal-tabs         Layout F: C + thread switcher\n\n\
-Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --no-tabs"
+/layout variants (8 total):\n  \
+classic              Layout A0: classic single-deck (default, no tabs)\n  \
+classic-tabs         Layout D0: classic + workspace tabs             (upgrader default)\n  \
+vertical-split       Layout A:  rail + swappable right deck (no tabs)\n  \
+vertical-split-tabs  Layout D:  A + workspace tabs\n  \
+three-pane           Layout B:  FOCUS / LOG / CONTEXT, always-on input\n  \
+three-pane-tabs      Layout E:  B + tab strip\n  \
+journal              Layout C:  timestamped journal, Ctrl-K palette\n  \
+journal-tabs         Layout F:  C + thread switcher\n\n\
+Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --global"
                 .to_string();
         }
 
@@ -7707,20 +7710,24 @@ Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --no-tabs"
             let default = TuiLayoutConfig::default();
             let to_alias = tui_layout_to_alias(&default);
             tui.set_layout(default);
-            return format!("Layout reset to {to_alias} (vertical-split + tabs).");
+            return format!("Layout reset to {to_alias} (classic + tabs).");
         }
 
-        // Parse `<kind> [--tabs | --no-tabs]`.
-        let (kind_part, flag_part) = if let Some((k, f)) = action.split_once(' ') {
-            (k.trim(), f.trim())
-        } else {
-            (action, "")
-        };
+        // Parse `<kind> [--tabs | --no-tabs] [--global]`.
+        // Split on spaces and collect flags.
+        let parts: Vec<&str> = action.split_whitespace().collect();
+        let kind_part = parts.first().copied().unwrap_or("");
+        let flag_part = parts.get(1..).unwrap_or(&[]).join(" ");
+
+        // Determine --global flag.
+        let is_global = flag_part.contains("--global");
+        // Strip --global from flag_part for tabs parsing.
+        let tabs_flags = flag_part.replace("--global", "");
 
         // Determine tabs override from flag.
-        let tabs_override: Option<bool> = if flag_part.contains("--no-tabs") {
+        let tabs_override: Option<bool> = if tabs_flags.contains("--no-tabs") {
             Some(false)
-        } else if flag_part.contains("--tabs") {
+        } else if tabs_flags.contains("--tabs") {
             Some(true)
         } else {
             None
@@ -7732,7 +7739,7 @@ Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --no-tabs"
 
         let Some(mut new_cfg) = resolved else {
             return format!(
-                "Unknown layout: {kind_part:?}. Use /layout list for all variants."
+                "Unknown layout: {kind_part:?}. Use /layout list for all 8 variants."
             );
         };
 
@@ -7746,17 +7753,25 @@ Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --no-tabs"
 
         let to_alias = tui_layout_to_alias(&new_cfg);
 
-        if new_cfg == current {
+        if new_cfg == current && !is_global {
             return format!("Already on layout {to_alias}. No change.");
         }
 
-        tui.set_layout(new_cfg);
+        tui.set_active_tab_layout(new_cfg, is_global);
 
-        format!(
-            "Layout switched to {} ({}).",
-            to_alias,
-            if new_cfg.tabs { "tabs on" } else { "tabs off" }
-        )
+        if is_global {
+            format!(
+                "Layout switched to {} ({}) — applied to all tabs + saved as default.",
+                to_alias,
+                if new_cfg.tabs { "tabs on" } else { "tabs off" }
+            )
+        } else {
+            format!(
+                "Layout switched to {} ({}) for this tab. Use --global to apply everywhere.",
+                to_alias,
+                if new_cfg.tabs { "tabs on" } else { "tabs off" }
+            )
+        }
     }
 
     ///

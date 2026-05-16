@@ -2099,14 +2099,19 @@ pub const CURSOR_SUBCOMMANDS: &[SubcommandSpec] = &[
 pub const CURSOR_SUBCOMMAND_NAMES: &[&str] =
     &["launch", "list", "get", "cancel", "artifacts", "stream"];
 
-/// Subcommands for `/layout` (v2.2.16 TUI layout selector).
+/// Subcommands for `/layout` (v2.2.16 TUI layout selector, 8 variants).
+///
+/// Flag: `--global` applies the layout to ALL tabs and writes config.json.
+/// Without `--global`, the layout change is active-tab-only (no config change).
 pub const LAYOUT_SUBCOMMANDS: &[SubcommandSpec] = &[
-    SubcommandSpec { name: "list",  summary: "List all six layout variants", args: &[], subcommands: &[] },
-    SubcommandSpec { name: "reset", summary: "Reset to default (vertical-split + tabs)", args: &[], subcommands: &[] },
-    SubcommandSpec { name: "vertical-split",      summary: "Layout A: rail + deck",                 args: &[], subcommands: &[] },
-    SubcommandSpec { name: "vertical-split-tabs", summary: "Layout D: A + tabs",                    args: &[], subcommands: &[] },
-    SubcommandSpec { name: "three-pane",          summary: "Layout B: FOCUS/LOG/CONTEXT (vim)",     args: &[], subcommands: &[] },
-    SubcommandSpec { name: "three-pane-tabs",     summary: "Layout E: B + buffer line",             args: &[], subcommands: &[] },
-    SubcommandSpec { name: "journal",             summary: "Layout C: journal + Ctrl-K palette",    args: &[], subcommands: &[] },
-    SubcommandSpec { name: "journal-tabs",        summary: "Layout F: C + thread switcher",         args: &[], subcommands: &[] },
+    SubcommandSpec { name: "list",  summary: "List all 8 layout variants", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "reset", summary: "Reset to default (classic + tabs)", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "classic",             summary: "Layout A0: classic single-deck (no tabs)",    args: &[], subcommands: &[] },
+    SubcommandSpec { name: "classic-tabs",        summary: "Layout D0: classic + workspace tabs (default)", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "vertical-split",      summary: "Layout A: rail+deck (no tabs)",              args: &[], subcommands: &[] },
+    SubcommandSpec { name: "vertical-split-tabs", summary: "Layout D: rail+deck + workspace tabs",        args: &[], subcommands: &[] },
+    SubcommandSpec { name: "three-pane",          summary: "Layout B: FOCUS/LOG/CONTEXT, always-on input", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "three-pane-tabs",     summary: "Layout E: B + tab strip",                    args: &[], subcommands: &[] },
+    SubcommandSpec { name: "journal",             summary: "Layout C: journal + Ctrl-K palette",          args: &[], subcommands: &[] },
+    SubcommandSpec { name: "journal-tabs",        summary: "Layout F: C + thread switcher",               args: &[], subcommands: &[] },
 ];

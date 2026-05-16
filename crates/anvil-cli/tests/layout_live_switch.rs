@@ -35,6 +35,8 @@ use runtime::{
 #[test]
 fn alias_round_trip_all_variants() {
     let aliases = [
+        "classic",
+        "classic-tabs",
         "vertical-split",
         "vertical-split-tabs",
         "three-pane",
@@ -95,14 +97,14 @@ fn different_kinds_are_not_equal() {
 
 // ─── 3. Default config ───────────────────────────────────────────────────────
 
-/// The default layout must be `vertical-split-tabs` per spec §4 and the
-/// `TuiLayoutConfig::default()` impl.
+/// The default layout must be `classic-tabs` (v2.2.16 Correction 2).
+/// Fresh installs default to the Classic renderer with tabs enabled.
 #[test]
 fn default_config_is_vertical_split_tabs() {
     let def = TuiLayoutConfig::default();
-    assert_eq!(def.kind, TuiLayoutKind::VerticalSplit);
+    assert_eq!(def.kind, TuiLayoutKind::Classic);
     assert!(def.tabs, "default must have tabs enabled");
-    assert_eq!(tui_layout_to_alias(&def), "vertical-split-tabs");
+    assert_eq!(tui_layout_to_alias(&def), "classic-tabs");
 }
 
 // ─── 4. should_show_tui_layout_intro gate ────────────────────────────────────
@@ -117,7 +119,7 @@ fn default_config_is_vertical_split_tabs() {
 
 /// Simulate the state transitions that `AnvilTui::set_layout()` performs:
 ///
-///   current  →  switch to B (ThreePane)  →  switch to C (Journal)  →  reset
+///   current  →  switch to VerticalSplit  →  switch to Journal  →  reset
 ///
 /// After each transition, assert:
 ///   (a) `tui_layout` reflects the new config.
@@ -125,21 +127,21 @@ fn default_config_is_vertical_split_tabs() {
 ///   (c) A hypothetical re-switch to the same config is equal (no-op guard).
 #[test]
 fn layout_state_machine_transitions() {
-    // Start: default (vertical-split-tabs / Layout D).
+    // Start: default (classic-tabs / Layout D0 per v2.2.16 Correction 2).
     let mut current = TuiLayoutConfig::default();
-    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
+    assert_eq!(current.kind, TuiLayoutKind::Classic);
     assert!(current.tabs);
 
-    // Switch to Layout B (three-pane, no tabs).
-    let b = tui_layout_kind_from_alias("three-pane").unwrap();
-    assert_ne!(current, b);
-    current = b;
-    assert_eq!(current.kind, TuiLayoutKind::ThreePane);
+    // Switch to Layout A (vertical-split, no tabs).
+    let a = tui_layout_kind_from_alias("vertical-split").unwrap();
+    assert_ne!(current, a);
+    current = a;
+    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
     assert!(!current.tabs);
 
     // Re-switch to same config → no-op (equal).
-    let b_again = tui_layout_kind_from_alias("three-pane").unwrap();
-    assert_eq!(current, b_again, "re-switch same config must be no-op (equal)");
+    let a_again = tui_layout_kind_from_alias("vertical-split").unwrap();
+    assert_eq!(current, a_again, "re-switch same config must be no-op (equal)");
 
     // Switch to Layout F (journal-tabs).
     let f = tui_layout_kind_from_alias("journal-tabs").unwrap();
@@ -148,13 +150,13 @@ fn layout_state_machine_transitions() {
     assert_eq!(current.kind, TuiLayoutKind::Journal);
     assert!(current.tabs);
 
-    // Reset to default.
+    // Reset to default (classic-tabs).
     let default = TuiLayoutConfig::default();
     assert_ne!(current, default);
     current = default;
-    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
+    assert_eq!(current.kind, TuiLayoutKind::Classic);
     assert!(current.tabs);
-    assert_eq!(tui_layout_to_alias(&current), "vertical-split-tabs");
+    assert_eq!(tui_layout_to_alias(&current), "classic-tabs");
 }
 
 /// Tabs flag can be toggled on any kind independently of kind switching.
@@ -177,14 +179,14 @@ fn tabs_flag_override_independent_of_kind() {
 }
 
 /// `/layout reset` produces the canonical default, which is
-/// `vertical-split-tabs` — not just `vertical-split`.
+/// `classic-tabs` (v2.2.16 Correction 2 — Classic is now the upgrader default).
 #[test]
 fn reset_alias_is_vertical_split_tabs() {
     let default = TuiLayoutConfig::default();
     assert_eq!(
         tui_layout_to_alias(&default),
-        "vertical-split-tabs",
-        "/layout reset message must say 'vertical-split-tabs'"
+        "classic-tabs",
+        "/layout reset message must say 'classic-tabs'"
     );
 }
 
@@ -197,6 +199,7 @@ fn reset_alias_is_vertical_split_tabs() {
 fn all_layout_kinds_have_alias_entries() {
     // Both tabs=false and tabs=true must round-trip for every kind.
     for (kind, no_tabs_alias, tabs_alias) in [
+        (TuiLayoutKind::Classic, "classic", "classic-tabs"),
         (TuiLayoutKind::VerticalSplit, "vertical-split", "vertical-split-tabs"),
         (TuiLayoutKind::ThreePane, "three-pane", "three-pane-tabs"),
         (TuiLayoutKind::Journal, "journal", "journal-tabs"),

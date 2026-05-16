@@ -714,18 +714,20 @@ pub(crate) fn run_first_run_wizard() {
     // ── Step 7: TUI Layout (v2.2.16) ─────────────────────────────────────────
     wizard_step_header(7, 8, "TUI Layout");
     println!();
-    println!("  Anvil offers three layouts. Live previews:");
+    println!("  Anvil offers four layouts (8 variants with/without tabs). Live previews:");
     println!("    https://anvilhub.culpur.net/tui-preview");
     println!();
-    println!("    [1] Vertical Split  — sessions rail + swappable right deck     (recommended)");
-    println!("    [2] Three-Pane      — FOCUS / LOG / CONTEXT, vim-style modal");
-    println!("    [3] Journal         — single-column, timestamped, Ctrl-K palette");
+    println!("    [1] Classic         — single-deck, minimal, identical to pre-v2.2.16    (default)");
+    println!("    [2] Vertical Split  — persistent sessions rail + swappable right deck  (recommended)");
+    println!("    [3] Three-Pane      — FOCUS / LOG / CONTEXT, always-on input");
+    println!("    [4] Journal         — single-column, timestamped, Ctrl-K palette");
     println!();
     let layout_arch_choice = wizard_read_line("  Choice [1]: ");
     let layout_kind_str = match layout_arch_choice.trim() {
-        "2" => "three-pane",
-        "3" => "journal",
-        _   => "vertical-split",
+        "2" => "vertical-split",
+        "3" => "three-pane",
+        "4" => "journal",
+        _   => "classic",
     };
     println!();
     println!("  Show workspace tabs?");
