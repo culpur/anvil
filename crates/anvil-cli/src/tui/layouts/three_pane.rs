@@ -75,12 +75,12 @@ impl TuiLayoutRenderer for Renderer {
         };
 
         // Split remaining into three equal horizontal bands.
+        // focus_h reserves: 1 header + content rows + 1 separator + 1 hint + 1 ghost input = 4 fixed rows.
         let third = remaining.height / 3;
-        let focus_h = third.max(3);
+        let focus_h = third.max(4);
         let log_h = third.max(3);
-        // CONTEXT pane: Constraint::Fill(1) absorbs all leftover rows regardless of
-        // rounding, eliminating the dark gap that Constraint::Min(context_h) left
-        // unpainted on small terminals (#BUG-4).
+        // CONTEXT pane: Constraint::Fill(1) absorbs all leftover rows regardless of rounding,
+        // eliminating the dark gap that Constraint::Min(context_h) caused on small terminals.
 
         let bands = RLayout::default()
             .direction(Direction::Vertical)
@@ -166,35 +166,69 @@ fn render_focus_pane(
         vec![Line::from(Span::styled("No conversation yet. Press i to start.", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)))]
     };
 
-    // Reserve last row for input (Insert mode) or hint (Normal).
-    let content_height = area.height.saturating_sub(2) as usize;
+    // Reserve bottom rows depending on mode:
+    //   Normal/Command: header(1) + content + separator(1) + hint(1) + ghost-input(1) = 4 fixed
+    //   Insert:         header(1) + content + separator(1) + hint(1) + input(1)       = 4 fixed
+    let content_height = area.height.saturating_sub(4) as usize;
     let visible: Vec<Line<'static>> = content_lines
         .into_iter()
         .take(content_height)
         .collect();
 
-    // Input row at bottom.
-    let input_row = if *vim_mode == VimMode::Insert {
-        Line::from(vec![
+    // Separator line above the hint band (dim border color).
+    let sep_line = Line::from(Span::styled(
+        "─".repeat(area.width as usize),
+        Style::default().fg(rgb(theme.border)),
+    ));
+
+    // Hint row + bottom input row.
+    let (hint_line, input_row) = if *vim_mode == VimMode::Insert {
+        let hint = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[ Insert Mode ]", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
+            Span::styled("  Esc to cancel · Enter to submit", Style::default().fg(Color::DarkGray)),
+        ]);
+        let input = Line::from(vec![
             Span::styled("❯ ", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
             Span::raw(snap.input_text.clone()),
             Span::styled("█", Style::default().fg(Color::White)),
-        ])
+        ]);
+        (hint, input)
     } else if *vim_mode == VimMode::Command {
-        Line::from(Span::raw(format!(":{command_line}")))
+        let hint = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[ Command Mode ]", Style::default().fg(rgb(theme.warning)).add_modifier(Modifier::BOLD)),
+            Span::styled("  Enter to run · Esc to cancel", Style::default().fg(Color::DarkGray)),
+        ]);
+        let input = Line::from(Span::raw(format!(":{command_line}")));
+        (hint, input)
     } else {
-        Line::from(Span::styled(
-            "  i to insert  j/k scroll  gt/gT tabs  Ctrl+R deck",
-            Style::default().fg(Color::DarkGray),
-        ))
+        // Normal mode: framed CTA + ghost input row.
+        let hint = Line::from(vec![
+            Span::raw("  "),
+            Span::styled("[ Normal Mode ]", Style::default().fg(rgb(theme.accent))),
+            Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
+            Span::styled("i", Style::default().fg(rgb(theme.success)).add_modifier(Modifier::BOLD)),
+            Span::styled(" to type", Style::default().fg(rgb(theme.success))),
+            Span::styled("  ·  j/k scroll  ·  gt/gT tabs  ·  Ctrl+R deck", Style::default().fg(Color::DarkGray)),
+        ]);
+        let ghost = Line::from(vec![
+            Span::styled("❯ ", Style::default().fg(Color::DarkGray)),
+            Span::styled("░", Style::default().fg(Color::DarkGray)),
+            Span::styled("  (locked — press i)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+        ]);
+        (hint, ghost)
     };
 
     let mut all_lines: Vec<Line<'static>> = vec![header_line];
     all_lines.extend(visible);
-    // Pad to content_height rows.
-    while all_lines.len() < area.height.saturating_sub(1) as usize {
+    // Pad content area to ensure separator lands at the right row.
+    // Total rows = 1 (header) + content_height + 1 (sep) + 1 (hint) + 1 (input) = area.height
+    while all_lines.len() < area.height.saturating_sub(3) as usize {
         all_lines.push(Line::from(""));
     }
+    all_lines.push(sep_line);
+    all_lines.push(hint_line);
     all_lines.push(input_row);
 
     frame.render_widget(ratatui::widgets::Clear, area);

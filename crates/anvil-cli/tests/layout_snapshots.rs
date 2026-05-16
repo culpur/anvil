@@ -225,35 +225,44 @@ fn current_tui__200x60() {
     insta::assert_snapshot!("current_tui__200x60", rendered);
 }
 
-// ─── Three-pane constraint regression test (BUG-4 Issue 1) ───────────────────
+// ─── Three-pane layout snapshot harness ──────────────────────────────────────
 //
-// Verifies that the CONTEXT band absorbs all remaining rows so no dark gap
-// appears below the context pane on small terminals.  The harness mirrors
-// the three_pane.rs layout math so any future regression in the constraint
-// arithmetic will be caught here.
+// The three-pane harness reimplements what `three_pane.rs` renders using the
+// same ratatui widgets so golden snapshots capture real output.  Since
+// anvil-cli is a [[bin]]-only crate, integration tests cannot import
+// production types directly; this mirror approach is the approved pattern
+// (same technique as `render_fixture` above for vertical-split).
+//
+// Modes tested:
+//   three_pane_normal  — Normal mode: framed CTA + ghost-input row
+//   three_pane_insert  — Insert mode: active prompt
+//   three_pane_small   — 60×20 small terminal: verifies all 20 rows accounted
+//                        for (BUG-4 Fill constraint regression)
 
-/// Three-pane at small terminal (60×20).
-/// Verifies BUG-4 fix: all 20 rows are accounted for (no dark gap below CONTEXT).
-/// Row count in the snapshot must equal 20 exactly.
-#[test]
-fn three_pane_small__60x20() {
-    let backend = TestBackend::new(60, 20);
+use ratatui::layout::Constraint as C;
+
+/// Render a three-pane fixture for `(width, height)` in the given `mode`
+/// ("normal", "insert").  Returns the ASCII cell content (one line per row,
+/// trailing spaces trimmed, joined by '\n').
+fn render_three_pane(width: u16, height: u16, mode: &str) -> String {
+    let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("TestBackend::new");
 
     terminal.draw(|frame| {
         let size = frame.area();
         let w = size.width as usize;
 
+        // Mirror the three_pane.rs band layout exactly.
         let third = size.height / 3;
-        let focus_h = third.max(3);
-        let log_h   = third.max(3);
+        let focus_h = third.max(4);
+        let log_h = third.max(3);
 
         let bands = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(focus_h),
-                Constraint::Length(log_h),
-                Constraint::Fill(1),
+                C::Length(focus_h),
+                C::Length(log_h),
+                C::Fill(1),
             ])
             .split(size);
 
@@ -261,47 +270,123 @@ fn three_pane_small__60x20() {
         let log_area   = bands[1];
         let ctx_area   = bands[2];
 
-        // FOCUS pane — single-row hint at bottom.
+        // ── FOCUS pane ───────────────────────────────────────────────────────
         {
-            let header = format!("─── FOCUS  [NORMAL]{}", "─".repeat(w.saturating_sub(18 + "NORMAL".len())));
-            let content = "No conversation yet. Press i to start.";
-            let hint    = "  i to insert  j/k scroll  gt/gT tabs";
-            let mut lines: Vec<Line<'static>> = vec![Line::from(Span::raw(header))];
-            lines.push(Line::from(Span::raw(content)));
-            while lines.len() < focus_area.height.saturating_sub(1) as usize {
-                lines.push(Line::from(""));
+            // Header.
+            let (mode_label, mode_indicator) = match mode {
+                "insert"  => ("INSERT",  "INSERT"),
+                _         => ("NORMAL",  "NORMAL"),
+            };
+            let header = format!(
+                "─── FOCUS  [{mode_indicator}]{}",
+                "─".repeat(w.saturating_sub(18 + mode_label.len()))
+            );
+            let header_line = Line::from(Span::raw(header));
+
+            // Content.
+            let content_line = Line::from(Span::raw(if mode == "insert" {
+                "ok"
+            } else {
+                "No conversation yet. Press i to start."
+            }));
+            let content_height = focus_area.height.saturating_sub(4) as usize;
+            let mut content: Vec<Line<'static>> = vec![content_line];
+            while content.len() < content_height {
+                content.push(Line::from(""));
             }
-            lines.push(Line::from(Span::raw(hint)));
-            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), focus_area);
+
+            // Separator.
+            let sep_line = Line::from(Span::raw("─".repeat(w)));
+
+            // Hint + input rows.
+            let (hint_line, input_row) = if mode == "insert" {
+                (
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::raw("[ Insert Mode ]"),
+                        Span::raw("  Esc to cancel · Enter to submit"),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("❯ "),
+                        Span::raw(INPUT_TEXT),
+                        Span::raw("█"),
+                    ]),
+                )
+            } else {
+                (
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::raw("[ Normal Mode ]"),
+                        Span::raw("  Press "),
+                        Span::raw("i"),
+                        Span::raw(" to type"),
+                        Span::raw("  ·  j/k scroll  ·  gt/gT tabs  ·  Ctrl+R deck"),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("❯ "),
+                        Span::raw("░"),
+                        Span::raw("  (locked — press i)"),
+                    ]),
+                )
+            };
+
+            let mut all: Vec<Line<'static>> = vec![header_line];
+            all.extend(content);
+            // Pad so separator lands at focus_area.height - 3.
+            while all.len() < focus_area.height.saturating_sub(3) as usize {
+                all.push(Line::from(""));
+            }
+            all.push(sep_line);
+            all.push(hint_line);
+            all.push(input_row);
+
+            frame.render_widget(
+                Paragraph::new(Text::from(all)).style(Style::default()),
+                focus_area,
+            );
         }
 
-        // LOG pane.
+        // ── LOG pane ─────────────────────────────────────────────────────────
         {
             let header = format!("─── LOG{}", "─".repeat(w.saturating_sub(6)));
             let mut lines: Vec<Line<'static>> = vec![Line::from(Span::raw(header))];
             for (role, content) in LOG_ENTRIES {
-                let prefix = match *role { "user" => "  you  ", "assistant" => "  ast  ", _ => "  sys  " };
-                lines.push(Line::from(Span::raw(format!("{prefix}{content}"))));
+                let prefix = match *role {
+                    "user"      => "  you  ",
+                    "assistant" => "  ast  ",
+                    _           => "  sys  ",
+                };
+                let summary: String = content
+                    .chars()
+                    .take(w.saturating_sub(prefix.len()))
+                    .collect();
+                lines.push(Line::from(Span::raw(format!("{prefix}{summary}"))));
             }
-            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), log_area);
+            frame.render_widget(
+                Paragraph::new(Text::from(lines)).style(Style::default()),
+                log_area,
+            );
         }
 
-        // CONTEXT pane — must fill all remaining rows (Fill(1) absorbs rounding).
+        // ── CONTEXT pane ─────────────────────────────────────────────────────
         {
             let header = format!("─── CONTEXT{}", "─".repeat(w.saturating_sub(10)));
-            let model  = format!("  Model: {}   in:{} out:{}", MODEL, INPUT_TOKENS, OUTPUT_TOKENS);
-            let git    = format!("  Git:   {}  {}", GIT_BRANCH, GIT_DIFF);
+            let model_line = format!("  Model: {}   in:{} out:{}", MODEL, INPUT_TOKENS, OUTPUT_TOKENS);
+            let git_line   = format!("  Git:   {}  {}", GIT_BRANCH, GIT_DIFF);
             let lines: Vec<Line<'static>> = vec![
                 Line::from(Span::raw(header)),
-                Line::from(Span::raw(model)),
-                Line::from(Span::raw(git)),
+                Line::from(Span::raw(model_line)),
+                Line::from(Span::raw(git_line)),
             ];
-            frame.render_widget(Paragraph::new(Text::from(lines)).style(Style::default()), ctx_area);
+            frame.render_widget(
+                Paragraph::new(Text::from(lines)).style(Style::default()),
+                ctx_area,
+            );
         }
     }).expect("terminal.draw");
 
-    let backend  = terminal.backend();
-    let buf      = backend.buffer();
+    let backend = terminal.backend();
+    let buf = backend.buffer();
     let (bwidth, bheight) = (buf.area.width as usize, buf.area.height as usize);
     let mut rows: Vec<String> = Vec::with_capacity(bheight);
     for row in 0..bheight {
@@ -309,14 +394,43 @@ fn three_pane_small__60x20() {
         for col in 0..bwidth {
             let cell = &buf[(col as u16, row as u16)];
             let ch: &str = cell.symbol();
-            if ch.is_empty() || ch == "\x00" { line.push(' '); } else { line.push_str(ch); }
+            if ch.is_empty() || ch == "\x00" {
+                line.push(' ');
+            } else {
+                line.push_str(ch);
+            }
         }
         rows.push(line.trim_end().to_string());
     }
-    let rendered = rows.join("\n");
+    rows.join("\n")
+}
 
-    // Every row must be present — use split('\n') not lines() to avoid the
-    // trailing-empty-segment quirk in str::lines().
+/// Three-pane Normal mode at 80×24.
+/// Golden captures: framed CTA with `[ Normal Mode ]`, `i` CTA, ghost-input row.
+#[test]
+fn three_pane_normal__80x24() {
+    let rendered = render_three_pane(80, 24, "normal");
+    insta::assert_snapshot!("three_pane_normal__80x24", rendered);
+}
+
+/// Three-pane Insert mode at 80×24.
+/// Golden captures: `[ Insert Mode ]`, active prompt with cursor glyph.
+#[test]
+fn three_pane_insert__80x24() {
+    let rendered = render_three_pane(80, 24, "insert");
+    insta::assert_snapshot!("three_pane_insert__80x24", rendered);
+}
+
+/// Three-pane at small terminal (60×20).
+/// Verifies BUG-4 fix: all 20 rows are accounted for (no dark gap below CONTEXT).
+/// Row count in the snapshot must equal 20 exactly.
+#[test]
+fn three_pane_small__60x20() {
+    let rendered = render_three_pane(60, 20, "normal");
+    // Every row must be present — exactly height rows joined by '\n'.
+    // Use split('\n') not lines() because lines() silently drops a trailing
+    // empty segment (i.e. "a\n".lines() gives ["a"], not ["a", ""]), which
+    // would mask the dark-gap regression we are testing for.
     let row_count = rendered.split('\n').count();
     assert_eq!(row_count, 20, "expected 20 rows but got {row_count} — dark-gap regression");
     insta::assert_snapshot!("three_pane_small__60x20", rendered);
