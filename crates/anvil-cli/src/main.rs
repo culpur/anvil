@@ -5108,6 +5108,21 @@ impl LiveCli {
                 tui.push_system(msg);
                 return Ok(false);
             }
+            // v2.2.16 task #578: /login and /provider <name> login open the
+            // in-TUI modal overlay instead of dropping to the CLI.
+            SlashCommand::Login { provider } => {
+                let kind = resolve_provider_for_login(provider.as_deref(), &self.model);
+                tui.open_provider_login_modal(kind);
+                return Ok(false);
+            }
+            SlashCommand::Provider { action: Some(action_str) }
+                if is_login_action(action_str) =>
+            {
+                let name = extract_provider_from_login_action(action_str);
+                let kind = resolve_provider_for_login(name.as_deref(), &self.model);
+                tui.open_provider_login_modal(kind);
+                return Ok(false);
+            }
             _ => {}
         }
 
@@ -8026,6 +8041,55 @@ fn format_elapsed(secs: u64) -> String {
         format!("{}m{:02}s", secs / 60, secs % 60)
     } else {
         format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+// ── Provider-login TUI helpers (#578) ────────────────────────────────────────
+
+/// True when a `/provider <action>` string contains the word "login",
+/// meaning the user invoked `/provider login` or `/provider anthropic login`.
+fn is_login_action(action: &str) -> bool {
+    let s = action.trim().to_lowercase();
+    s == "login" || s.starts_with("login ") || s.ends_with(" login") || s.contains(" login ")
+}
+
+/// Extract the provider name from an action string that contains "login".
+/// Examples: "anthropic login" → Some("anthropic"), "login anthropic" → Some("anthropic"),
+/// "login" → None (use current provider).
+fn extract_provider_from_login_action(action: &str) -> Option<String> {
+    let parts: Vec<&str> = action
+        .split_whitespace()
+        .filter(|w| w.to_lowercase() != "login")
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts[0].to_string())
+    }
+}
+
+/// Resolve a provider display name / slug to a `ProviderKind`.
+/// Falls back to the current model's provider when `name` is None or unrecognised.
+fn resolve_provider_for_login(name: Option<&str>, current_model: &str) -> api::ProviderKind {
+    let name = match name {
+        None | Some("") => return api::detect_provider_kind(current_model),
+        Some(n) => n.to_lowercase(),
+    };
+    // Try the slug_to_provider_kind helper first (covers all 35 providers).
+    if let Some(kind) = api::slug_to_provider_kind(&name) {
+        return kind;
+    }
+    // Fallback aliases used in run_inline_login.
+    match name.as_str() {
+        "anthropic" | "claude" | "ant" => api::ProviderKind::AnvilApi,
+        "openai" | "gpt" | "oai" => api::ProviderKind::OpenAi,
+        "gemini" | "google" => api::ProviderKind::Gemini,
+        "ollama" | "local" => api::ProviderKind::Ollama,
+        "xai" | "grok" => api::ProviderKind::Xai,
+        "copilot" | "github-copilot" => api::ProviderKind::Copilot,
+        "azure" => api::ProviderKind::Azure,
+        "bedrock" | "aws" | "aws-bedrock" => api::ProviderKind::Bedrock,
+        _ => api::detect_provider_kind(current_model),
     }
 }
 
