@@ -17,6 +17,7 @@ use runtime::theme::StatusLineConfig;
 
 use super::configure_types::{ConfigureState, ConfigureData};
 use super::list_viewport::ListViewport;
+use super::provider_login::ProviderLoginRenderSnapshot;
 use super::scrollback::ScrollbackState;
 use super::ssh_form::SshFormState;
 use super::state::LogEntry;
@@ -129,6 +130,15 @@ pub(crate) struct LayoutSnapshot {
     // ── SSH connection form ────────────────────────────────────────────────
     /// Cloned SSH form state when the modal is open; `None` otherwise.
     pub ssh_form_snapshot: Option<SshFormState>,
+
+    // ── Provider-login modal (#578) ────────────────────────────────────────
+    /// Snapshot of the provider-login modal when it is open.
+    /// Stored as a `Box` to avoid cloning large `mpsc::Receiver` (which is
+    /// not `Clone`); we use `Option<Box<ProviderLoginModal>>` and the draw
+    /// closure borrows it.  The actual `Receiver` inside `OAuthWaiting` stays
+    /// in `AnvilTui.provider_login_modal` — the snapshot carries a shallow
+    /// copy of every renderable field via `ProviderLoginModal::render_snapshot`.
+    pub provider_login_modal_snapshot: Option<ProviderLoginRenderSnapshot>,
 
     // ── Pre-fetched scrollback view (for historical view mode) ────────────
     /// Lines to display when the user has scrolled back in history.

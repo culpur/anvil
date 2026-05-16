@@ -17,6 +17,7 @@ pub(super) mod redraw;
 pub(super) mod scrollback;
 pub(super) mod snapshot;
 pub(super) mod ssh_bridge;
+pub(super) mod provider_login;
 pub(super) mod ssh_form;
 pub(super) mod ssh_tab;
 pub(super) mod state;
@@ -182,6 +183,9 @@ pub struct AnvilTui {
     /// T5-Ssh-E: active SSH connection form overlay. `Some` while the modal
     /// is open; `None` otherwise.
     pub(super) ssh_form: Option<ssh_form::SshFormState>,
+    /// #578: in-TUI provider login modal. `Some` while the overlay is open;
+    /// `None` otherwise.  Replaces the drop-to-CLI pattern in `run_inline_login`.
+    pub(super) provider_login_modal: Option<provider_login::ProviderLoginModal>,
     /// Clickable-tab geometry recorded by the draw loop. The input handler
     /// looks this up on a mouse Down(Left) event to decide whether the click
     /// landed on a tab label (switch) or its close glyph (close).
@@ -436,6 +440,7 @@ impl AnvilTui {
                 pending_submit: None,
                 ssh_escape_pending: false,
                 ssh_form: None,
+                provider_login_modal: None,
                 pending_auto_submit: None,
                 tab_hits: Vec::new(),
                 tab_bar_row: 0,
@@ -1077,6 +1082,10 @@ impl AnvilTui {
         let is_ssh_tab = ssh_screen.is_some();
 
         let can_close_tab = self.tabs.len() > 1;
+        let provider_login_modal_snapshot = self
+            .provider_login_modal
+            .as_ref()
+            .map(|m| m.render_snapshot());
         let ssh_form_snapshot: Option<ssh_form::SshFormState> = self.ssh_form.as_ref().map(|f| {
             let mut copy = ssh_form::SshFormState::new();
             copy.host = f.host.clone();
@@ -1139,6 +1148,7 @@ impl AnvilTui {
             ssh_screen,
             is_ssh_tab,
             ssh_form_snapshot,
+            provider_login_modal_snapshot,
             scrollback_view_lines,
             can_close_tab,
         }
@@ -1265,6 +1275,21 @@ impl AnvilTui {
             // T5-Ssh-E: SSH form modal.
             if let Some(ref form) = snap.ssh_form_snapshot {
                 form.render(frame, size);
+            }
+
+            // #578: provider-login modal.
+            if let Some(ref login_snap) = snap.provider_login_modal_snapshot {
+                let accent = Color::Rgb(
+                    snap.theme.accent.0,
+                    snap.theme.accent.1,
+                    snap.theme.accent.2,
+                );
+                let error_c = Color::Rgb(
+                    snap.theme.error.0,
+                    snap.theme.error.1,
+                    snap.theme.error.2,
+                );
+                login_snap.render(frame, size, accent, error_c);
             }
 
             // Bug-3 Commit 4: permission approval modal.
@@ -2657,7 +2682,24 @@ impl AnvilTui {
     /// handler can't operate modals, so the caller must break out and return
     /// to `read_input` so the user can interact with the overlay.
     pub fn has_active_modal(&self) -> bool {
-        self.ssh_form.is_some() || self.configure_state != ConfigureState::Inactive
+        self.ssh_form.is_some()
+            || self.configure_state != ConfigureState::Inactive
+            || self.provider_login_modal.is_some()
+    }
+
+    /// Open the provider-login modal for the given provider (#578).
+    ///
+    /// No-op when stdout is not a terminal (headless/`--print` mode) — the
+    /// caller must fall back to the existing CLI flow in that case.
+    pub fn open_provider_login_modal(&mut self, provider: api::ProviderKind) {
+        self.provider_login_modal = Some(provider_login::ProviderLoginModal::open(provider));
+        self.redraw.request_full();
+    }
+
+    /// Close the provider-login modal if it is open.
+    pub fn close_provider_login_modal(&mut self) {
+        self.provider_login_modal = None;
+        self.redraw.request_full();
     }
 
     pub fn enter_configure_mode(&mut self, data: ConfigureData) {
