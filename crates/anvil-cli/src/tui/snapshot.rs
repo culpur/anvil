@@ -39,6 +39,16 @@ pub(crate) struct LayoutSnapshot {
     pub think: String,
     /// Which spinner glyph to show for the thinking indicator.
     pub think_frame: &'static str,
+    /// Elapsed seconds since the active tab's spinner started.
+    /// `0.0` when no spinner is active (i.e. `think` is empty).
+    /// Used by the spinner color-warm logic (#558, CC-141-F).
+    pub think_elapsed_secs: f64,
+    /// Seconds before the spinner shifts from green to amber (default 10).
+    /// Sourced from `ANVIL_SPINNER_WARN_SECS` at startup.
+    pub spinner_warn_secs: u64,
+    /// Seconds before the spinner shifts from amber to red (default 30).
+    /// Sourced from `ANVIL_SPINNER_ERROR_SECS` at startup.
+    pub spinner_error_secs: u64,
     /// Content of the text input box.
     pub input_text: String,
     /// Total number of queued messages (pending_submit + message_queue length).

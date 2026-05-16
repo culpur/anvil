@@ -227,6 +227,15 @@ pub struct AnvilTui {
     /// on every live switch. Shared `AnvilTui`/`Tab` state (log, input,
     /// cursor, message_queue, pending_permissions) is never touched here.
     pub(super) layout_local: layouts::LayoutLocalState,
+
+    // ── v2.2.16 Spinner color-warm (#558, CC-141-F) ─────────────────────────
+
+    /// Elapsed seconds before the spinner shifts from green to amber.
+    /// Defaults to 10. Override via `ANVIL_SPINNER_WARN_SECS`.
+    pub(super) spinner_warn_secs: u64,
+    /// Elapsed seconds before the spinner shifts from amber to red.
+    /// Defaults to 30. Override via `ANVIL_SPINNER_ERROR_SECS`.
+    pub(super) spinner_error_secs: u64,
 }
 
 /// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
@@ -449,6 +458,14 @@ impl AnvilTui {
                 redraw_reason: None,
                 tui_layout: runtime::TuiLayoutConfig::default(),
                 layout_local: layouts::LayoutLocalState::for_kind(runtime::TuiLayoutKind::VerticalSplit),
+                spinner_warn_secs: std::env::var("ANVIL_SPINNER_WARN_SECS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .unwrap_or(10),
+                spinner_error_secs: std::env::var("ANVIL_SPINNER_ERROR_SECS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .unwrap_or(30),
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -861,6 +878,10 @@ impl AnvilTui {
         let pending = tab.pending_text.clone();
         let think = tab.think_label.clone();
         let think_frame = THINK_FRAMES[tab.think_frame % THINK_FRAMES.len()];
+        let think_elapsed_secs = tab
+            .think_start
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
         let input_text = tab.input.clone();
 
         let queued_count = tab.message_queue.len()
@@ -971,6 +992,8 @@ impl AnvilTui {
         let lines_added = self.lines_added;
         let lines_removed = self.lines_removed;
         let effort_level = self.effort_level.clone();
+        let spinner_warn_secs = self.spinner_warn_secs;
+        let spinner_error_secs = self.spinner_error_secs;
 
         // Pre-fetch scrollback lines for historical view.
         let scrollback_view_lines: Option<Vec<String>> = if scrollback_is_live {
@@ -1107,6 +1130,7 @@ impl AnvilTui {
             pending,
             think,
             think_frame,
+            think_elapsed_secs,
             input_text,
             queued_count,
             queued_preview,
@@ -1145,6 +1169,8 @@ impl AnvilTui {
             lines_added,
             lines_removed,
             effort_level,
+            spinner_warn_secs,
+            spinner_error_secs,
             ssh_screen,
             is_ssh_tab,
             ssh_form_snapshot,

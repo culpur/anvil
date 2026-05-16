@@ -163,14 +163,20 @@ impl TuiLayoutRenderer for Renderer {
                     let clean = strip_ansi(&snap.pending);
                     lines.extend(clean.lines().map(|l| Line::from(Span::raw(l.to_string()))));
                 }
-                // Thinking spinner.
+                // Thinking spinner with elapsed-time color warm (#558, CC-141-F).
                 if !snap.think.is_empty() {
-                    let elapsed_think =
-                        format!("{:.1}s", snap.think_frame.len() as f64 * 0.25);
+                    let elapsed_secs = snap.think_elapsed_secs;
+                    let elapsed_think = format!("{elapsed_secs:.1}s");
+                    let spinner_color = spinner_elapsed_color(
+                        elapsed_secs,
+                        snap.spinner_warn_secs,
+                        snap.spinner_error_secs,
+                        rgb(theme.thinking),
+                    );
                     lines.push(Line::from(vec![
                         Span::styled(
                             format!("{} ", snap.think_frame),
-                            Style::default().fg(rgb(theme.thinking)),
+                            Style::default().fg(spinner_color),
                         ),
                         Span::styled(
                             snap.think.clone(),
@@ -573,4 +579,65 @@ fn build_sl_data(snap: &LayoutSnapshot, cost_usd: String) -> StatusLineData {
 #[allow(dead_code)]
 fn _use_think_frames(idx: usize) -> &'static str {
     THINK_FRAMES[idx % THINK_FRAMES.len()]
+}
+
+/// Return the spinner foreground color based on elapsed thinking seconds.
+///
+/// - 0 .. warn_secs      → `default_color` (typically theme.thinking = green)
+/// - warn_secs .. error_secs → amber (yellow)
+/// - error_secs+         → red
+///
+/// Thresholds are read at startup from `ANVIL_SPINNER_WARN_SECS` (default 10)
+/// and `ANVIL_SPINNER_ERROR_SECS` (default 30). Both are stored in
+/// `AnvilTui.spinner_warn_secs` / `spinner_error_secs` and forwarded through
+/// the `LayoutSnapshot` so the renderer is a pure function of its inputs.
+pub(crate) fn spinner_elapsed_color(
+    elapsed_secs: f64,
+    warn_secs: u64,
+    error_secs: u64,
+    default_color: Color,
+) -> Color {
+    let secs = elapsed_secs as u64;
+    if secs >= error_secs {
+        Color::Red
+    } else if secs >= warn_secs {
+        Color::Yellow
+    } else {
+        default_color
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::Color;
+    use super::spinner_elapsed_color;
+
+    const GREEN: Color = Color::Green;
+
+    #[test]
+    fn spinner_color_green_under_warn_threshold() {
+        // 9 seconds, warn=10, error=30 → still green
+        assert_eq!(spinner_elapsed_color(9.0, 10, 30, GREEN), GREEN);
+    }
+
+    #[test]
+    fn spinner_color_amber_between_warn_and_error() {
+        // 15 seconds, warn=10, error=30 → amber (yellow)
+        assert_eq!(spinner_elapsed_color(15.0, 10, 30, GREEN), Color::Yellow);
+    }
+
+    #[test]
+    fn spinner_color_red_above_error() {
+        // 30+ seconds → red
+        assert_eq!(spinner_elapsed_color(30.0, 10, 30, GREEN), Color::Red);
+        assert_eq!(spinner_elapsed_color(60.0, 10, 30, GREEN), Color::Red);
+    }
+
+    #[test]
+    fn spinner_color_respects_env_override() {
+        // Custom thresholds: warn=5, error=15
+        assert_eq!(spinner_elapsed_color(4.9, 5, 15, GREEN), GREEN);
+        assert_eq!(spinner_elapsed_color(5.0, 5, 15, GREEN), Color::Yellow);
+        assert_eq!(spinner_elapsed_color(15.0, 5, 15, GREEN), Color::Red);
+    }
 }
