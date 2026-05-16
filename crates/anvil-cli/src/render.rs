@@ -1056,6 +1056,14 @@ pub struct BannerInfo<'a> {
     pub session_id: &'a str,
     pub permission_mode: &'a str,
     pub has_anvil_md: bool,
+    /// Active provider display name for the billing/cost info row (#562, CC-141-B).
+    ///
+    /// When `None`, the banner omits the provider row (legacy behaviour for
+    /// callers that don't supply a provider).  When `Some`:
+    /// - `"Anthropic"` → shows "API usage billed to your Anthropic account"
+    /// - Any other string → shows "<provider> — billed via your provider account"
+    ///   except Ollama which gets a no-cost message.
+    pub provider_display: Option<&'a str>,
 }
 
 /// Render the styled welcome banner and return it as a `String`.
@@ -1076,6 +1084,12 @@ pub fn render_welcome_banner(info: &BannerInfo<'_>) -> String {
     } else {
         "/init · /help · /status"
     };
+
+    // Build the provider billing/cost row (#562, CC-141-B).
+    // Shown only when the caller supplies a provider_display name.
+    let provider_billing_row: Option<String> = info.provider_display.map(|p| {
+        banner_provider_billing_copy(p)
+    });
 
     let rows: &[(&str, &str)] = &[
         ("Workspace", &workspace_line),
@@ -1106,6 +1120,20 @@ pub fn render_welcome_banner(info: &BannerInfo<'_>) -> String {
         );
     }
 
+    // Provider billing row — gated on provider detection so 3P users never
+    // see Anthropic billing copy and Anthropic users see the correct copy.
+    if let Some(ref billing) = provider_billing_row {
+        let row = format!("{:<16} {billing}", "Provider");
+        let _ = writeln!(
+            buf,
+            "{} {:<width$} {}",
+            "│".with(color),
+            row,
+            "│".with(color),
+            width = inner_width,
+        );
+    }
+
     if !info.has_anvil_md {
         let hint = "First run       /init scaffolds ANVIL.md, .anvil.json, and local session files";
         let _ = writeln!(
@@ -1120,6 +1148,25 @@ pub fn render_welcome_banner(info: &BannerInfo<'_>) -> String {
 
     let _ = writeln!(buf, "{}", box_bottom(width, color));
     buf
+}
+
+/// Return provider-appropriate billing / cost copy for the welcome banner.
+///
+/// Used by `render_welcome_banner` — call through that function; do not call
+/// directly from rendering code.
+pub fn banner_provider_billing_copy(provider_display: &str) -> String {
+    let lower = provider_display.to_lowercase();
+    if lower.contains("anthropic") {
+        "Anthropic — billed to your Anthropic account".to_string()
+    } else if lower.contains("ollama") {
+        format!("{provider_display} — local inference, no cloud cost")
+    } else if lower.contains("aws") || lower.contains("bedrock") {
+        format!("{provider_display} — billed to your AWS account")
+    } else if lower.contains("openai") {
+        format!("{provider_display} — billed to your OpenAI account")
+    } else {
+        format!("{provider_display} — billed via your provider account")
+    }
 }
 
 // ─── StatusLine ───────────────────────────────────────────────────────────────
@@ -1311,5 +1358,42 @@ mod tests {
 
         let output = String::from_utf8_lossy(&out);
         assert!(output.contains("Working"));
+    }
+
+    // ── #562 banner provider copy tests ────────────────────────────────────────
+
+    use super::banner_provider_billing_copy;
+
+    #[test]
+    fn banner_says_ollama_for_ollama_provider() {
+        let copy = banner_provider_billing_copy("Ollama (local)");
+        assert!(
+            copy.contains("local inference") && copy.contains("no cloud cost"),
+            "expected local-inference copy, got: {copy}"
+        );
+        assert!(
+            !copy.to_lowercase().contains("anthropic"),
+            "Ollama banner must not mention Anthropic: {copy}"
+        );
+    }
+
+    #[test]
+    fn banner_says_anthropic_for_anthropic_provider() {
+        let copy = banner_provider_billing_copy("Anthropic (via Anvil API)");
+        assert!(
+            copy.to_lowercase().contains("anthropic"),
+            "expected Anthropic copy, got: {copy}"
+        );
+    }
+
+    #[test]
+    fn banner_does_not_say_anthropic_billing_for_3p() {
+        for provider in &["OpenAI", "xAI", "Groq", "Mistral", "Gemini"] {
+            let copy = banner_provider_billing_copy(provider);
+            assert!(
+                !copy.to_lowercase().contains("anthropic"),
+                "3P provider {provider} banner must not mention Anthropic: {copy}"
+            );
+        }
     }
 }

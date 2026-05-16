@@ -4537,6 +4537,7 @@ impl LiveCli {
             .is_some_and(|path| path.join("ANVIL.md").is_file());
 
         if io::stdout().is_terminal() {
+            let provider_label = friendly_provider_label(&self.model);
             render_welcome_banner(&BannerInfo {
                 version: VERSION,
                 model: &self.model,
@@ -4546,6 +4547,7 @@ impl LiveCli {
                 session_id: &self.session.id,
                 permission_mode: self.permission_mode.as_str(),
                 has_anvil_md,
+                provider_display: provider_label.as_deref(),
             })
         } else {
             // Non-TTY: plain text fallback
