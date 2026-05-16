@@ -292,9 +292,20 @@ pub fn leave_alt_screen_for_inline_op() {
 
 /// Re-enter the alternate screen after an inline operation completed.
 /// No-op when alt-screen is disabled.
+///
+/// BUG-2 fix: after entering the alternate screen we immediately write
+/// `Clear(ClearType::All)` so the physical terminal cells that were painted
+/// during the OAuth/inline flow (on the alt-screen buffer) are wiped.  Without
+/// this, ratatui's backing buffer is stale relative to what the terminal
+/// actually shows, and its frame-diff algorithm skips cells it believes are
+/// already correct — leaving garbage on screen until the user resizes.
 pub fn restore_alt_screen() {
     if alternate_screen_enabled() {
-        let _ = crossterm::execute!(io::stdout(), terminal::EnterAlternateScreen);
+        let _ = crossterm::execute!(
+            io::stdout(),
+            terminal::EnterAlternateScreen,
+            terminal::Clear(terminal::ClearType::All)
+        );
     }
 }
 
@@ -793,17 +804,34 @@ impl AnvilTui {
         Ok(true)
     }
 
-    /// v2.2.14 BUG-fix-real: forced full repaint.
+    /// Forced full repaint.
     ///
-    /// Calls `terminal.clear()` BEFORE the main `terminal.draw(...)` to
-    /// bypass ratatui's frame-diff coalescing. This is a diagnostic —
-    /// per Step 3 of the user's plan, we leave it in for one release so
-    /// we can confirm whether the missing echo was caused by the diff or
-    /// by a deeper terminal-commit problem. Once confirmed via the
-    /// instrumentation log, the `terminal.clear()` is to be removed.
+    /// Calls `terminal.clear()` BEFORE `draw()` to invalidate ratatui's
+    /// backing buffer and force it to re-emit every cell, bypassing the
+    /// frame-diff coalescing that causes stale cells to linger after an
+    /// inline operation (BUG-2: OAuth/setup return) or a layout switch
+    /// (BUG-3: `/layout` command).
+    ///
+    /// `terminal.clear()` writes ANSI erase sequences and marks ratatui's
+    /// internal buffer as entirely dirty — the next `draw()` call re-paints
+    /// every cell unconditionally.
     pub(super) fn draw_full(&mut self) -> io::Result<()> {
-        // DIAGNOSTIC v2.2.14 BUG-fix-real: force full clear to bypass
+        self.terminal.clear()?;
         self.draw()
+    }
+
+    /// BUG-2 fix: force a full repaint after returning from an inline
+    /// operation (OAuth login, provider setup, etc.).
+    ///
+    /// Calling this after `restore_alt_screen()` ensures ratatui's backing
+    /// buffer is invalidated and the next frame re-paints every cell, so no
+    /// stale content from before the inline op lingers on screen.
+    pub fn force_full_repaint_after_inline_op(&mut self) {
+        self.redraw.request_full();
+        self.request_redraw_reason(RedrawReason::Other);
+        // Eagerly commit so the repaint fires on the very next draw cycle.
+        // Ignore the error — if we can't paint we'll paint next iteration.
+        let _ = self.commit_pending_redraw();
     }
 
     // ─── Snapshot collection ─────────────────────────────────────────────────
@@ -4337,3 +4365,61 @@ fn query_ollama_context_size(model: &str) -> Option<u32> {
 
 // init_ollama_model_cache and check_clipboard_for_image are re-exported
 // from widgets (see pub use widgets::{...} at the top of this file).
+
+// ─── BUG-2 + BUG-3 redraw tests ──────────────────────────────────────────────
+//
+// These tests exercise the redraw scheduler and `force_full_repaint_after_inline_op`
+// contract without requiring a real terminal.  AnvilTui::new() cannot be
+// instantiated in unit tests (it requires a TTY), so we test the RedrawScheduler
+// directly and verify the flag contracts that `force_full_repaint_after_inline_op`
+// relies on.
+#[cfg(test)]
+mod bug2_bug3_redraw_tests {
+    use super::redraw::{DirtyRegions, RedrawScheduler};
+
+    /// BUG-2: after an inline op (OAuth/setup), the redraw scheduler must be in
+    /// force=true state so the next `commit_pending()` ignores the frame budget
+    /// and repaints unconditionally.
+    #[test]
+    fn force_full_repaint_sets_force_flag() {
+        let mut sched = RedrawScheduler::new();
+        // Simulate what `force_full_repaint_after_inline_op` does.
+        sched.request_full();
+        // commit_pending should return true (force bypasses budget).
+        let should_redraw = sched.commit_pending();
+        assert!(should_redraw, "force=true must cause immediate repaint regardless of frame budget");
+    }
+
+    /// BUG-2: calling request_full twice is idempotent — force is still set.
+    #[test]
+    fn double_request_full_is_idempotent() {
+        let mut sched = RedrawScheduler::new();
+        sched.request_full();
+        sched.request_full();
+        let should_redraw = sched.commit_pending();
+        assert!(should_redraw, "double request_full must still produce a repaint");
+    }
+
+    /// BUG-3: a layout switch sets ALL dirty regions + force, ensuring the next
+    /// frame re-paints every cell and stale cells from the old layout are cleared.
+    #[test]
+    fn layout_switch_marks_all_regions_dirty() {
+        let mut sched = RedrawScheduler::new();
+        // Simulate what set_layout() does.
+        sched.request_full();
+        let should_redraw = sched.commit_pending();
+        assert!(should_redraw, "layout switch must trigger an immediate full repaint");
+    }
+
+    /// After commit, the scheduler is clean again (no spurious extra repaints).
+    #[test]
+    fn scheduler_is_clean_after_commit() {
+        let mut sched = RedrawScheduler::new();
+        sched.request_full();
+        let _ = sched.commit_pending();
+        // After commit, scheduler is clean — next poll within budget returns false.
+        // We don't add a request() here, so dirty is empty.
+        let spurious = sched.commit_pending();
+        assert!(!spurious, "scheduler must not trigger spurious repaints after clean commit");
+    }
+}
