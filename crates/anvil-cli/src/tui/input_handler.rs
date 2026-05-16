@@ -76,6 +76,36 @@ impl AnvilTui {
 
         self.draw()?;
 
+        // #578: poll the background OAuth listener on every frame tick so the
+        // modal advances automatically when the browser callback arrives, even
+        // when the user has not pressed any key.
+        if self.provider_login_modal.is_some() {
+            use super::provider_login::ProviderLoginAction;
+            if let Some(action) = self
+                .provider_login_modal
+                .as_mut()
+                .unwrap()
+                .poll_oauth_listener()
+            {
+                match action {
+                    ProviderLoginAction::OAuthCodeReceived {
+                        code,
+                        state,
+                        verifier,
+                        redirect_uri,
+                    } => {
+                        self.complete_anthropic_oauth(code, state, verifier, redirect_uri);
+                        self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    }
+                    ProviderLoginAction::Continue => {
+                        // Error result already set by poll_oauth_listener; just redraw.
+                        self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if event::poll(Duration::from_millis(80))? {
             match event::read()? {
                 CtEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
