@@ -5,14 +5,10 @@
 ///   Middle third: LOG   — compact bullets of each log entry (one line per entry).
 ///   Bottom third: CONTEXT — model, tokens, cost, memory indicators, git, files in scope.
 ///
-/// Vim modal input:
-///   `i`   → Insert mode: cursor in input row at bottom of FOCUS pane.
-///   `Esc` → Insert → Normal: DISCARDS the draft (locked decision §11 #4).
-///   `:`   → Command mode: ex-command line at bottom.
-///   `:q`  → exit, `:w` → save draft to Tab.input (no submit).
-///   Enter → submit (Insert mode only).
+/// Input is ALWAYS editable — no vim modal, no "press i" nonsense.  The user
+/// just starts typing.  This matches the UX of classic and journal layouts.
 ///
-/// Layout E (tabs: true): buffer line at row 0 above FOCUS.
+/// Layout E (tabs: true): tab bar at row 0 above FOCUS.
 /// Layout B (tabs: false): FOCUS starts at row 0.
 
 use ratatui::Frame;
@@ -22,8 +18,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use super::common::{rgb, render_completion_popup, render_tab_bar};
-use super::{LayoutLocalState, TuiLayoutRenderer, VimMode};
+use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::helpers::strip_ansi;
+use crate::tui::layout::cursor_visual_position;
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::LogEntry;
 use crate::tui::TabHit;
@@ -37,33 +34,19 @@ impl TuiLayoutRenderer for Renderer {
         &self,
         frame: &mut Frame,
         snap: &LayoutSnapshot,
-        local: &mut LayoutLocalState,
+        _local: &mut LayoutLocalState,
         tab_hits_out: &mut Vec<TabHit>,
     ) {
         let size = frame.area();
 
-        // BUG-3 fix (Option B): wipe all cells before drawing so stale content
-        // from a previous layout cannot survive through ratatui's frame diff.
+        // BUG-3 fix: wipe all cells before drawing.
         frame.render_widget(ratatui::widgets::Clear, size);
 
-        // Extract local state safely.
-        let (vim_mode, command_line) = match local {
-            LayoutLocalState::ThreePane { vim_mode, command_line } => {
-                (vim_mode.clone(), command_line.clone())
-            }
-            _ => (VimMode::Normal, String::new()),
-        };
-
-        // Row 0 (Layout E only): buffer line.
+        // Row 0 (Layout E only): tab bar.
         let mut y_offset: u16 = 0;
         if self.tabs {
-            let buffer_line_area = Rect {
-                x: size.x,
-                y: size.y,
-                width: size.width,
-                height: 1,
-            };
-            render_buffer_line(frame, buffer_line_area, snap, tab_hits_out);
+            let tab_area = Rect { x: size.x, y: size.y, width: size.width, height: 1 };
+            render_tab_bar(frame, tab_area, snap, tab_hits_out);
             y_offset = 1;
         }
 
@@ -75,12 +58,9 @@ impl TuiLayoutRenderer for Renderer {
         };
 
         // Split remaining into three equal horizontal bands.
-        // focus_h reserves: 1 header + content rows + 1 separator + 1 hint + 1 ghost input = 4 fixed rows.
         let third = remaining.height / 3;
         let focus_h = third.max(4);
         let log_h = third.max(3);
-        // CONTEXT pane: Constraint::Fill(1) absorbs all leftover rows regardless of rounding,
-        // eliminating the dark gap that Constraint::Min(context_h) caused on small terminals.
 
         let bands = RLayout::default()
             .direction(Direction::Vertical)
@@ -95,60 +75,37 @@ impl TuiLayoutRenderer for Renderer {
         let log_area = bands[1];
         let context_area = bands[2];
 
-        render_focus_pane(frame, focus_area, snap, &vim_mode, &command_line);
+        render_focus_pane(frame, focus_area, snap);
         render_log_pane(frame, log_area, snap);
         render_context_pane(frame, context_area, snap);
 
         // Completion popup above the focus pane input row.
         render_completion_popup(frame, focus_area, snap);
 
-        // Position terminal cursor in Insert mode.
-        if vim_mode == VimMode::Insert {
-            // Cursor sits on the last row of the FOCUS pane (input row).
-            let input_row = focus_area.y + focus_area.height.saturating_sub(1);
-            let col = snap.cursor_pos.min((focus_area.width as usize).saturating_sub(3));
-            let max_x = focus_area.x + focus_area.width.saturating_sub(1);
-            frame.set_cursor_position(Position {
-                x: (focus_area.x + 2 + col as u16).min(max_x),
-                y: input_row,
-            });
-        } else if vim_mode == VimMode::Command {
-            // Cursor on the ex-command line at the bottom of the context pane.
-            let cmd_row = context_area.y + context_area.height.saturating_sub(1);
-            let col = command_line.len().min(context_area.width.saturating_sub(2) as usize);
-            frame.set_cursor_position(Position {
-                x: context_area.x + 1 + col as u16,
-                y: cmd_row,
-            });
-        }
+        // Cursor always positioned at the input row in the FOCUS pane.
+        let input_row = focus_area.y + focus_area.height.saturating_sub(1);
+        let input_width = focus_area.width as usize;
+        let (_, cursor_col) = cursor_visual_position(&snap.input_text, snap.cursor_pos, input_width);
+        let max_x = focus_area.x + focus_area.width.saturating_sub(1);
+        frame.set_cursor_position(Position {
+            x: (focus_area.x + cursor_col as u16).min(max_x),
+            y: input_row,
+        });
     }
 }
 
 // ─── FOCUS pane ───────────────────────────────────────────────────────────────
 
-fn render_focus_pane(
-    frame: &mut Frame,
-    area: Rect,
-    snap: &LayoutSnapshot,
-    vim_mode: &VimMode,
-    command_line: &str,
-) {
+fn render_focus_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let theme = &snap.theme;
     let width = area.width as usize;
 
-    // Header line: "FOCUS  [NORMAL|INSERT|COMMAND]"
-    let mode_label = match vim_mode {
-        VimMode::Normal => "NORMAL",
-        VimMode::Insert => "INSERT",
-        VimMode::Command => "COMMAND",
-    };
-    let mode_color = match vim_mode {
-        VimMode::Normal => Color::DarkGray,
-        VimMode::Insert => rgb(theme.accent),
-        VimMode::Command => rgb(theme.warning),
-    };
-    let header = format!("─── FOCUS  [{mode_label}]{}", "─".repeat(width.saturating_sub(18 + mode_label.len())));
-    let header_line = Line::from(Span::styled(header, Style::default().fg(mode_color)));
+    // Header line: "─── FOCUS ────────"
+    let header = format!("─── FOCUS{}", "─".repeat(width.saturating_sub(8)));
+    let header_line = Line::from(Span::styled(
+        header,
+        Style::default().fg(rgb(theme.border)),
+    ));
 
     // Content: pending_text (streaming) or last log entry if no pending.
     let content_lines: Vec<Line<'static>> = if !snap.pending.is_empty() {
@@ -158,77 +115,52 @@ fn render_focus_pane(
         match last {
             LogEntry::Assistant(text) => {
                 let clean = strip_ansi(text);
-                clean.lines().map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(Color::White)))).collect()
+                clean
+                    .lines()
+                    .map(|l| {
+                        Line::from(Span::styled(
+                            l.to_string(),
+                            Style::default().fg(Color::White),
+                        ))
+                    })
+                    .collect()
             }
-            _ => vec![Line::from(Span::styled("Waiting…", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)))],
+            _ => vec![Line::from(Span::styled(
+                "Waiting…",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ))],
         }
     } else {
-        vec![Line::from(Span::styled("No conversation yet. Press i to start.", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)))]
+        vec![Line::from(Span::styled(
+            "No conversation yet. Start typing below.",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
+        ))]
     };
 
-    // Reserve bottom rows depending on mode:
-    //   Normal/Command: header(1) + content + separator(1) + hint(1) + ghost-input(1) = 4 fixed
-    //   Insert:         header(1) + content + separator(1) + hint(1) + input(1)       = 4 fixed
-    let content_height = area.height.saturating_sub(4) as usize;
-    let visible: Vec<Line<'static>> = content_lines
-        .into_iter()
-        .take(content_height)
-        .collect();
+    // Reserve: header(1) + content + separator(1) + input(1) = 3 fixed rows.
+    let content_height = area.height.saturating_sub(3) as usize;
+    let visible: Vec<Line<'static>> = content_lines.into_iter().take(content_height).collect();
 
-    // Separator line above the hint band (dim border color).
+    // Separator line above the input row.
     let sep_line = Line::from(Span::styled(
         "─".repeat(area.width as usize),
         Style::default().fg(rgb(theme.border)),
     ));
 
-    // Hint row + bottom input row.
-    let (hint_line, input_row) = if *vim_mode == VimMode::Insert {
-        let hint = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("[ Insert Mode ]", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
-            Span::styled("  Esc to cancel · Enter to submit", Style::default().fg(Color::DarkGray)),
-        ]);
-        let input = Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
-            Span::raw(snap.input_text.clone()),
-            Span::styled("█", Style::default().fg(Color::White)),
-        ]);
-        (hint, input)
-    } else if *vim_mode == VimMode::Command {
-        let hint = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("[ Command Mode ]", Style::default().fg(rgb(theme.warning)).add_modifier(Modifier::BOLD)),
-            Span::styled("  Enter to run · Esc to cancel", Style::default().fg(Color::DarkGray)),
-        ]);
-        let input = Line::from(Span::raw(format!(":{command_line}")));
-        (hint, input)
-    } else {
-        // Normal mode: framed CTA + ghost input row.
-        let hint = Line::from(vec![
-            Span::raw("  "),
-            Span::styled("[ Normal Mode ]", Style::default().fg(rgb(theme.accent))),
-            Span::styled("  Press ", Style::default().fg(Color::DarkGray)),
-            Span::styled("i", Style::default().fg(rgb(theme.success)).add_modifier(Modifier::BOLD)),
-            Span::styled(" to type", Style::default().fg(rgb(theme.success))),
-            Span::styled("  ·  j/k scroll  ·  gt/gT tabs  ·  Ctrl+R deck", Style::default().fg(Color::DarkGray)),
-        ]);
-        let ghost = Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(Color::DarkGray)),
-            Span::styled("░", Style::default().fg(Color::DarkGray)),
-            Span::styled("  (locked — press i)", Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-        ]);
-        (hint, ghost)
-    };
+    // Always-on input row.
+    let input_row = render_input_row(snap, area.width as usize);
 
     let mut all_lines: Vec<Line<'static>> = vec![header_line];
     all_lines.extend(visible);
-    // Pad content area to ensure separator lands at the right row.
-    // Total rows = 1 (header) + content_height + 1 (sep) + 1 (hint) + 1 (input) = area.height
-    while all_lines.len() < area.height.saturating_sub(3) as usize {
+    // Pad so separator lands at area.height - 2.
+    while all_lines.len() < area.height.saturating_sub(2) as usize {
         all_lines.push(Line::from(""));
     }
     all_lines.push(sep_line);
-    all_lines.push(hint_line);
     all_lines.push(input_row);
 
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -238,6 +170,67 @@ fn render_focus_pane(
             .wrap(ratatui::widgets::Wrap { trim: false }),
         area,
     );
+}
+
+/// Build the always-on input row `▌ <input>` for the FOCUS pane.
+fn render_input_row(snap: &LayoutSnapshot, width: usize) -> Line<'static> {
+    let theme = &snap.theme;
+    let prompt_style = Style::default()
+        .fg(rgb(theme.accent))
+        .add_modifier(Modifier::BOLD);
+
+    if snap.input_text.is_empty() {
+        // Show a dim placeholder with cursor block.
+        Line::from(vec![
+            Span::styled("❯ ", prompt_style),
+            Span::styled(
+                " ",
+                Style::default()
+                    .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+                    .bg(Color::White),
+            ),
+        ])
+    } else {
+        // Show typed text with inline cursor block.
+        let cursor = snap.cursor_pos;
+        let input = &snap.input_text;
+        let available = width.saturating_sub(2);
+        let before: String = input.chars().take(cursor).take(available).collect();
+        let cur_char = input.chars().nth(cursor);
+        let after_start = cursor + 1;
+        let after: String = input
+            .chars()
+            .skip(after_start)
+            .take(available.saturating_sub(before.chars().count() + 1))
+            .collect();
+
+        let mut spans = vec![Span::styled("❯ ", prompt_style)];
+        if !before.is_empty() {
+            spans.push(Span::styled(
+                before,
+                Style::default().fg(Color::White),
+            ));
+        }
+        if let Some(ch) = cur_char {
+            spans.push(Span::styled(
+                ch.to_string(),
+                Style::default()
+                    .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+                    .bg(Color::White),
+            ));
+        } else {
+            spans.push(Span::styled(
+                " ",
+                Style::default()
+                    .fg(Color::Rgb(0x1a, 0x1a, 0x1a))
+                    .bg(Color::White),
+            ));
+        }
+        if !after.is_empty() {
+            spans.push(Span::styled(after, Style::default().fg(Color::White)));
+        }
+        Line::from(spans)
+    }
 }
 
 // ─── LOG pane ─────────────────────────────────────────────────────────────────
@@ -279,7 +272,13 @@ fn render_log_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
             LogEntry::System(t) => ("  sys  ", t.as_str(), Color::DarkGray),
             _ => unreachable!(),
         };
-        let summary: String = content.lines().next().unwrap_or("").chars().take(width.saturating_sub(prefix.len())).collect();
+        let summary: String = content
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(width.saturating_sub(prefix.len()))
+            .collect();
         lines.push(Line::from(vec![
             Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
             Span::styled(summary, Style::default().fg(color)),
@@ -344,12 +343,21 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
             Span::styled("  CTX:   [", Style::default().fg(Color::DarkGray)),
             Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
             Span::styled("░".repeat(empty), Style::default().fg(Color::Rgb(0x33, 0x33, 0x33))),
-            Span::styled(
-                format!("] {pct:.0}%"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!("] {pct:.0}%"), Style::default().fg(Color::DarkGray)),
         ]));
     }
+
+    // Keybind row at the bottom of context pane.
+    let keybind = "  PageUp/PageDown scroll  ·  Ctrl+Tab tabs  ·  Ctrl+R deck  ·  /quit exit";
+    let keybind_trunc: String = keybind.chars().take(width).collect();
+    // Pad to fill remaining rows.
+    while lines.len() < area.height.saturating_sub(1) as usize {
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled(
+        keybind_trunc,
+        Style::default().fg(Color::DarkGray),
+    )));
 
     frame.render_widget(ratatui::widgets::Clear, area);
     frame.render_widget(
@@ -358,14 +366,184 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     );
 }
 
-// ─── Buffer line (Layout E tabs) ──────────────────────────────────────────────
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
-fn render_buffer_line(
-    frame: &mut Frame,
-    area: Rect,
-    snap: &LayoutSnapshot,
-    tab_hits_out: &mut Vec<TabHit>,
-) {
-    // Delegate to the common tab-bar renderer — same visual for all layouts.
-    render_tab_bar(frame, area, snap, tab_hits_out);
+#[cfg(test)]
+mod three_pane_always_on_input_tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn extract_text(terminal: &Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let (bw, bh) = (buf.area.width as usize, buf.area.height as usize);
+        let mut rows = Vec::with_capacity(bh);
+        for row in 0..bh {
+            let mut line = String::with_capacity(bw);
+            for col in 0..bw {
+                let ch = buf[(col as u16, row as u16)].symbol();
+                if ch.is_empty() || ch == "\x00" {
+                    line.push(' ');
+                } else {
+                    line.push_str(ch);
+                }
+            }
+            rows.push(line.trim_end().to_string());
+        }
+        rows.join("\n")
+    }
+
+    fn render_three_pane_fixture(width: u16, height: u16, input: &str) -> String {
+        use ratatui::layout::{Constraint, Direction, Layout};
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span, Text};
+        use ratatui::widgets::Paragraph;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+
+        let input_owned = input.to_string();
+        terminal.draw(|frame| {
+            let size = frame.area();
+            let w = size.width as usize;
+            let third = size.height / 3;
+            let focus_h = third.max(4);
+            let log_h = third.max(3);
+
+            let bands = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(focus_h),
+                    Constraint::Length(log_h),
+                    Constraint::Fill(1),
+                ])
+                .split(size);
+
+            let focus_area = bands[0];
+            let log_area = bands[1];
+            let ctx_area = bands[2];
+
+            // FOCUS pane: header + content + sep + always-on input.
+            let header = format!("─── FOCUS{}", "─".repeat(w.saturating_sub(8)));
+            let content_height = focus_area.height.saturating_sub(3) as usize;
+            let mut focus_lines: Vec<Line<'static>> = vec![
+                Line::from(Span::raw(header)),
+                Line::from(Span::raw("No conversation yet. Start typing below.")),
+            ];
+            while focus_lines.len() < content_height + 1 {
+                focus_lines.push(Line::from(""));
+            }
+            focus_lines.push(Line::from(Span::raw("─".repeat(w))));
+            // Always-on input row — no "press i" required.
+            if input_owned.is_empty() {
+                focus_lines.push(Line::from(vec![
+                    Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(" ", Style::default().fg(Color::Black).bg(Color::White)),
+                ]));
+            } else {
+                focus_lines.push(Line::from(vec![
+                    Span::styled("❯ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw(input_owned.clone()),
+                    Span::styled("█", Style::default().fg(Color::White)),
+                ]));
+            }
+            frame.render_widget(
+                Paragraph::new(Text::from(focus_lines)).style(Style::default()),
+                focus_area,
+            );
+
+            // LOG pane.
+            let log_header = format!("─── LOG{}", "─".repeat(w.saturating_sub(6)));
+            let log_lines: Vec<Line<'static>> = vec![
+                Line::from(Span::raw(log_header)),
+                Line::from(Span::raw("  you  do the thing")),
+                Line::from(Span::raw("  ast  ok")),
+            ];
+            frame.render_widget(
+                Paragraph::new(Text::from(log_lines)).style(Style::default()),
+                log_area,
+            );
+
+            // CONTEXT pane.
+            let ctx_header = format!("─── CONTEXT{}", "─".repeat(w.saturating_sub(10)));
+            let keybind = "  PageUp/PageDown scroll  ·  Ctrl+Tab tabs  ·  /quit exit";
+            let keybind_trunc: String = keybind.chars().take(w).collect();
+            let mut ctx_lines: Vec<Line<'static>> = vec![
+                Line::from(Span::raw(ctx_header)),
+                Line::from(Span::raw("  Model: claude-sonnet-4-6   in:42 out:17")),
+                Line::from(Span::raw("  Git:   main  +12,-5")),
+            ];
+            while ctx_lines.len() < ctx_area.height.saturating_sub(1) as usize {
+                ctx_lines.push(Line::from(""));
+            }
+            ctx_lines.push(Line::from(Span::styled(keybind_trunc, Style::default().fg(Color::DarkGray))));
+            frame.render_widget(
+                Paragraph::new(Text::from(ctx_lines)).style(Style::default()),
+                ctx_area,
+            );
+        }).expect("terminal.draw");
+
+        extract_text(&terminal)
+    }
+
+    /// Always-on input: typing a char should appear immediately in input row.
+    /// Verify the input row contains "❯ " (prompt) without any "press i" text.
+    #[test]
+    fn three_pane_always_on_input_no_press_i() {
+        let rendered = render_three_pane_fixture(80, 24, "");
+        // Must NOT contain the old "press i" instruction.
+        assert!(
+            !rendered.to_lowercase().contains("press i"),
+            "three-pane must not show 'press i' — always-on input: {rendered}"
+        );
+        // Must NOT contain "Normal Mode" (vim mode indicator deleted).
+        assert!(
+            !rendered.contains("Normal Mode"),
+            "three-pane must not show vim Normal Mode: {rendered}"
+        );
+        // Must show the prompt character at the input row.
+        assert!(
+            rendered.contains("❯"),
+            "three-pane must show ❯ prompt: {rendered}"
+        );
+    }
+
+    /// Typing a char appears in the input row immediately (no mode gate).
+    #[test]
+    fn three_pane_typed_char_in_input_row() {
+        let rendered = render_three_pane_fixture(80, 24, "hello world");
+        assert!(
+            rendered.contains("hello world"),
+            "typed text must appear in input row: {rendered}"
+        );
+    }
+
+    /// All rows accounted for at 60×20 (BUG-4 Fill constraint regression check).
+    #[test]
+    fn three_pane_all_rows_60x20() {
+        let rendered = render_three_pane_fixture(60, 20, "");
+        let row_count = rendered.split('\n').count();
+        assert_eq!(row_count, 20, "expected 20 rows but got {row_count}");
+        insta::assert_snapshot!("three_pane_always_on__60x20", rendered);
+    }
+
+    /// 80×24 golden snapshot.
+    #[test]
+    fn three_pane_always_on__80x24() {
+        let rendered = render_three_pane_fixture(80, 24, "");
+        insta::assert_snapshot!("three_pane_always_on__80x24", rendered);
+    }
+
+    /// 120×40 golden snapshot.
+    #[test]
+    fn three_pane_always_on__120x40() {
+        let rendered = render_three_pane_fixture(120, 40, "");
+        insta::assert_snapshot!("three_pane_always_on__120x40", rendered);
+    }
+
+    /// 200×60 golden snapshot.
+    #[test]
+    fn three_pane_always_on__200x60() {
+        let rendered = render_three_pane_fixture(200, 60, "");
+        insta::assert_snapshot!("three_pane_always_on__200x60", rendered);
+    }
 }

@@ -197,32 +197,33 @@ fn render_fixture(width: u16, height: u16) -> String {
 
 /// 80×24 — default "laptop / narrow terminal" size.
 ///
-/// Snapshot name: `current_tui__80x24`
-/// This is the Layout D regression baseline at standard width.
+/// Snapshot name: `classic__80x24`
+/// This is the Layout D0 (classic-tabs) regression baseline at standard width.
+/// Content is byte-identical to the pre-v2.2.16 rendering.
 #[test]
-fn current_tui__80x24() {
+fn classic__80x24() {
     let rendered = render_fixture(80, 24);
-    insta::assert_snapshot!("current_tui__80x24", rendered);
+    insta::assert_snapshot!("classic__80x24", rendered);
 }
 
 /// 120×40 — "wider terminal / external monitor" size.
 ///
-/// Snapshot name: `current_tui__120x40`
-/// Layout D baseline at medium width.
+/// Snapshot name: `classic__120x40`
+/// Classic baseline at medium width.
 #[test]
-fn current_tui__120x40() {
+fn classic__120x40() {
     let rendered = render_fixture(120, 40);
-    insta::assert_snapshot!("current_tui__120x40", rendered);
+    insta::assert_snapshot!("classic__120x40", rendered);
 }
 
 /// 200×60 — "ultrawide" size.
 ///
-/// Snapshot name: `current_tui__200x60`
-/// Layout D baseline at maximum representative width.
+/// Snapshot name: `classic__200x60`
+/// Classic baseline at maximum representative width.
 #[test]
-fn current_tui__200x60() {
+fn classic__200x60() {
     let rendered = render_fixture(200, 60);
-    insta::assert_snapshot!("current_tui__200x60", rendered);
+    insta::assert_snapshot!("classic__200x60", rendered);
 }
 
 // ─── Three-pane layout snapshot harness ──────────────────────────────────────
@@ -233,18 +234,21 @@ fn current_tui__200x60() {
 // production types directly; this mirror approach is the approved pattern
 // (same technique as `render_fixture` above for vertical-split).
 //
-// Modes tested:
-//   three_pane_normal  — Normal mode: framed CTA + ghost-input row
-//   three_pane_insert  — Insert mode: active prompt
-//   three_pane_small   — 60×20 small terminal: verifies all 20 rows accounted
-//                        for (BUG-4 Fill constraint regression)
+// Always-on input (Correction 4): vim modal is gone. Input row is always active.
+// No Normal/Insert mode, no "press i" hint.
+//
+// Tests:
+//   three_pane_always_on__80x24  — always-on input at standard width
+//   three_pane_small__60x20     — verifies all 20 rows accounted for (BUG-4)
 
 use ratatui::layout::Constraint as C;
 
-/// Render a three-pane fixture for `(width, height)` in the given `mode`
-/// ("normal", "insert").  Returns the ASCII cell content (one line per row,
-/// trailing spaces trimmed, joined by '\n').
-fn render_three_pane(width: u16, height: u16, mode: &str) -> String {
+/// Render a three-pane fixture for `(width, height)` with always-on input.
+/// Returns the ASCII cell content (one line per row, trailing spaces trimmed,
+/// joined by '\n').
+///
+/// Mirrors the always-on three_pane.rs renderer (Correction 4 — vim modal deleted).
+fn render_three_pane(width: u16, height: u16, _mode: &str) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("TestBackend::new");
 
@@ -270,74 +274,44 @@ fn render_three_pane(width: u16, height: u16, mode: &str) -> String {
         let log_area   = bands[1];
         let ctx_area   = bands[2];
 
-        // ── FOCUS pane ───────────────────────────────────────────────────────
+        // ── FOCUS pane (always-on input, no vim modal) ───────────────────────
         {
-            // Header.
-            let (mode_label, mode_indicator) = match mode {
-                "insert"  => ("INSERT",  "INSERT"),
-                _         => ("NORMAL",  "NORMAL"),
-            };
+            // Header — no mode indicator.
             let header = format!(
-                "─── FOCUS  [{mode_indicator}]{}",
-                "─".repeat(w.saturating_sub(18 + mode_label.len()))
+                "─── FOCUS{}",
+                "─".repeat(w.saturating_sub(9))
             );
             let header_line = Line::from(Span::raw(header));
 
-            // Content.
-            let content_line = Line::from(Span::raw(if mode == "insert" {
-                "ok"
+            // Content: show last log entry or pending message.
+            let content_text = if LOG_ENTRIES.is_empty() {
+                "Waiting for conversation..."
             } else {
-                "No conversation yet. Press i to start."
-            }));
-            let content_height = focus_area.height.saturating_sub(4) as usize;
-            let mut content: Vec<Line<'static>> = vec![content_line];
-            while content.len() < content_height {
+                LOG_ENTRIES.last().map(|(_, c)| *c).unwrap_or("")
+            };
+            let content_height = focus_area.height.saturating_sub(3) as usize;
+            let mut content: Vec<Line<'static>> = vec![Line::from(Span::raw(content_text))];
+            while content.len() < content_height.saturating_sub(1) {
                 content.push(Line::from(""));
             }
 
             // Separator.
             let sep_line = Line::from(Span::raw("─".repeat(w)));
 
-            // Hint + input rows.
-            let (hint_line, input_row) = if mode == "insert" {
-                (
-                    Line::from(vec![
-                        Span::raw("  "),
-                        Span::raw("[ Insert Mode ]"),
-                        Span::raw("  Esc to cancel · Enter to submit"),
-                    ]),
-                    Line::from(vec![
-                        Span::raw("❯ "),
-                        Span::raw(INPUT_TEXT),
-                        Span::raw("█"),
-                    ]),
-                )
-            } else {
-                (
-                    Line::from(vec![
-                        Span::raw("  "),
-                        Span::raw("[ Normal Mode ]"),
-                        Span::raw("  Press "),
-                        Span::raw("i"),
-                        Span::raw(" to type"),
-                        Span::raw("  ·  j/k scroll  ·  gt/gT tabs  ·  Ctrl+R deck"),
-                    ]),
-                    Line::from(vec![
-                        Span::raw("❯ "),
-                        Span::raw("░"),
-                        Span::raw("  (locked — press i)"),
-                    ]),
-                )
+            // Always-on input row: ❯ <cursor char> <rest of input>
+            let cursor_char = if INPUT_TEXT.is_empty() { " " } else {
+                &INPUT_TEXT[..INPUT_TEXT.char_indices().nth(1).map(|(i, _)| i).unwrap_or(INPUT_TEXT.len())]
             };
+            let after = if INPUT_TEXT.len() > cursor_char.len() { &INPUT_TEXT[cursor_char.len()..] } else { "" };
+            let input_row = Line::from(vec![
+                Span::raw("❯ "),
+                Span::raw(cursor_char),
+                Span::raw(after),
+            ]);
 
             let mut all: Vec<Line<'static>> = vec![header_line];
             all.extend(content);
-            // Pad so separator lands at focus_area.height - 3.
-            while all.len() < focus_area.height.saturating_sub(3) as usize {
-                all.push(Line::from(""));
-            }
             all.push(sep_line);
-            all.push(hint_line);
             all.push(input_row);
 
             frame.render_widget(
@@ -373,10 +347,12 @@ fn render_three_pane(width: u16, height: u16, mode: &str) -> String {
             let header = format!("─── CONTEXT{}", "─".repeat(w.saturating_sub(10)));
             let model_line = format!("  Model: {}   in:{} out:{}", MODEL, INPUT_TOKENS, OUTPUT_TOKENS);
             let git_line   = format!("  Git:   {}  {}", GIT_BRANCH, GIT_DIFF);
+            let keybind_line = "  PageUp/PageDown scroll · Ctrl+Tab tabs · Ctrl+R deck · /quit exit";
             let lines: Vec<Line<'static>> = vec![
                 Line::from(Span::raw(header)),
                 Line::from(Span::raw(model_line)),
                 Line::from(Span::raw(git_line)),
+                Line::from(Span::raw(keybind_line)),
             ];
             frame.render_widget(
                 Paragraph::new(Text::from(lines)).style(Style::default()),
@@ -405,20 +381,19 @@ fn render_three_pane(width: u16, height: u16, mode: &str) -> String {
     rows.join("\n")
 }
 
-/// Three-pane Normal mode at 80×24.
-/// Golden captures: framed CTA with `[ Normal Mode ]`, `i` CTA, ghost-input row.
+/// Three-pane always-on input at 80×24.
+/// Golden captures: always-on ❯ prompt, no "press i" instruction, no vim mode indicator.
+/// Replaces the deleted three_pane_normal__80x24 / three_pane_insert__80x24 pair.
 #[test]
-fn three_pane_normal__80x24() {
-    let rendered = render_three_pane(80, 24, "normal");
-    insta::assert_snapshot!("three_pane_normal__80x24", rendered);
-}
-
-/// Three-pane Insert mode at 80×24.
-/// Golden captures: `[ Insert Mode ]`, active prompt with cursor glyph.
-#[test]
-fn three_pane_insert__80x24() {
-    let rendered = render_three_pane(80, 24, "insert");
-    insta::assert_snapshot!("three_pane_insert__80x24", rendered);
+fn three_pane_always_on__80x24() {
+    // render_three_pane with "always-on" mode (no vim; input is always active).
+    let rendered = render_three_pane(80, 24, "always-on");
+    // Must NOT contain the old vim gate text.
+    assert!(!rendered.to_lowercase().contains("press i"), "must not have 'press i' hint");
+    assert!(!rendered.contains("Normal Mode"), "must not have vim Normal Mode indicator");
+    // Must show the always-on input prompt.
+    assert!(rendered.contains("❯"), "must show ❯ prompt");
+    insta::assert_snapshot!("three_pane_always_on__80x24", rendered);
 }
 
 /// Three-pane at small terminal (60×20).
@@ -426,11 +401,8 @@ fn three_pane_insert__80x24() {
 /// Row count in the snapshot must equal 20 exactly.
 #[test]
 fn three_pane_small__60x20() {
-    let rendered = render_three_pane(60, 20, "normal");
+    let rendered = render_three_pane(60, 20, "always-on");
     // Every row must be present — exactly height rows joined by '\n'.
-    // Use split('\n') not lines() because lines() silently drops a trailing
-    // empty segment (i.e. "a\n".lines() gives ["a"], not ["a", ""]), which
-    // would mask the dark-gap regression we are testing for.
     let row_count = rendered.split('\n').count();
     assert_eq!(row_count, 20, "expected 20 rows but got {row_count} — dark-gap regression");
     insta::assert_snapshot!("three_pane_small__60x20", rendered);
