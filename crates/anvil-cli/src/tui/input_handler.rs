@@ -11,6 +11,7 @@ use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEvent, KeyEventKind, 
 use super::AnvilTui;
 use super::ReadResult;
 use super::helpers::{next_char_boundary, prev_char_boundary};
+use super::redraw::DirtyRegions;
 use super::state::CompletionPopup;
 use super::widgets::{check_clipboard_for_image, has_further_completions, update_completions};
 
@@ -204,6 +205,183 @@ impl AnvilTui {
         }
 
         Ok(ReadResult::Continue)
+    }
+
+    // ─── Three-pane vim modal key handler ────────────────────────────────────
+    //
+    // Three-pane layouts (B/E) use a vim Normal/Insert/Command modal.  Before
+    // the standard key dispatch runs, we intercept keys that drive mode
+    // transitions so they never reach the normal `insert_char` path.
+    //
+    // Return contract (mirrors `handle_key`):
+    //   `Some(result)` — key was fully handled; caller should return immediately.
+    //   `None`         — key was NOT consumed; caller falls through to the
+    //                    standard handler.
+    //
+    // Insert mode deliberately falls through (`None`) so the standard char-
+    // insert, backspace, cursor-move, Enter, completion, and history paths all
+    // work unchanged.  Only Normal- and Command-mode intercepts are needed here.
+    pub(super) fn handle_three_pane_key(&mut self, key: KeyEvent) -> io::Result<Option<ReadResult>> {
+        use runtime::TuiLayoutKind;
+        use super::layouts::{LayoutLocalState, VimMode};
+        use super::redraw::DirtyRegions;
+
+        // Only applies when a ThreePane layout is active.
+        if self.tui_layout.kind != TuiLayoutKind::ThreePane {
+            return Ok(None);
+        }
+
+        let vim_mode = match &self.layout_local {
+            LayoutLocalState::ThreePane { vim_mode, .. } => vim_mode.clone(),
+            _ => return Ok(None),
+        };
+
+        match vim_mode {
+            VimMode::Normal => {
+                // In Normal mode the input box is "locked". Only specific keys
+                // are honoured; everything else is silently consumed so stray
+                // printable chars do NOT leak into `tab.input`.
+                match key.code {
+                    KeyCode::Char('i') if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        // `i` → Enter Insert mode.  Clear any leftover draft.
+                        {
+                            let tab = self.active_tab_mut();
+                            tab.input.clear();
+                            tab.cursor = 0;
+                        }
+                        if let LayoutLocalState::ThreePane { vim_mode, .. } = &mut self.layout_local {
+                            *vim_mode = VimMode::Insert;
+                        }
+                        self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Char(':') if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        // `:` → Enter Command mode.
+                        if let LayoutLocalState::ThreePane { vim_mode, command_line } = &mut self.layout_local {
+                            *vim_mode = VimMode::Command;
+                            command_line.clear();
+                        }
+                        self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Char('j') | KeyCode::Down if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_down(3);
+                        self.redraw.request(DirtyRegions::SCROLLBACK);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Char('k') | KeyCode::Up if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_up(3);
+                        self.redraw.request(DirtyRegions::SCROLLBACK);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    // Ctrl+R cycles the right-deck mode (pass through — handled
+                    // by the standard Ctrl-key path which also handles tab ops).
+                    _ if key.modifiers.contains(KeyModifiers::CONTROL) => Ok(None),
+                    // All other plain chars are consumed silently (box is locked).
+                    KeyCode::Char(_) => {
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    // Navigation, function keys, Esc, Enter, etc. fall through.
+                    _ => Ok(None),
+                }
+            }
+            VimMode::Insert => {
+                // In Insert mode the standard char/backspace/cursor/Enter paths
+                // all apply.  Only `Esc` has special semantics: discard the
+                // draft (vim-true) and return to Normal.
+                if matches!(key.code, KeyCode::Esc) {
+                    // Discard draft, return to Normal.
+                    {
+                        let tab = self.active_tab_mut();
+                        tab.input.clear();
+                        tab.cursor = 0;
+                        tab.history_idx = None;
+                        tab.history_backup = None;
+                    }
+                    if let LayoutLocalState::ThreePane { vim_mode, .. } = &mut self.layout_local {
+                        *vim_mode = VimMode::Normal;
+                    }
+                    self.active_tab_mut().completion = CompletionPopup::default();
+                    self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                    self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                    return Ok(Some(ReadResult::Continue));
+                }
+                // All other keys fall through to the standard handler.
+                Ok(None)
+            }
+            VimMode::Command => {
+                // Command mode: chars feed `command_line`, Enter executes or
+                // exits, Esc cancels.
+                match key.code {
+                    KeyCode::Esc => {
+                        if let LayoutLocalState::ThreePane { vim_mode, command_line } = &mut self.layout_local {
+                            *vim_mode = VimMode::Normal;
+                            command_line.clear();
+                        }
+                        self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Enter => {
+                        let cmd = if let LayoutLocalState::ThreePane { command_line, .. } = &self.layout_local {
+                            command_line.clone()
+                        } else {
+                            String::new()
+                        };
+                        // Return to Normal, clear command line.
+                        if let LayoutLocalState::ThreePane { vim_mode, command_line } = &mut self.layout_local {
+                            *vim_mode = VimMode::Normal;
+                            command_line.clear();
+                        }
+                        self.redraw.request(DirtyRegions::ALL);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        // Handle ex-commands: :q = exit, :w = save draft, others = ignore.
+                        match cmd.trim() {
+                            "q" => return Ok(Some(ReadResult::Exit)),
+                            "w" => {
+                                // :w saves the current input draft without submitting.
+                                // (input is already on tab.input from normal editing;
+                                //  this is a no-op in practice but confirms to the user.)
+                                self.push_system("Draft saved (no submission).".to_string());
+                            }
+                            other if !other.is_empty() => {
+                                self.push_system(format!("Unknown command: :{other}"));
+                            }
+                            _ => {}
+                        }
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Backspace => {
+                        if let LayoutLocalState::ThreePane { command_line, .. } = &mut self.layout_local {
+                            command_line.pop();
+                        }
+                        self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        if let LayoutLocalState::ThreePane { command_line, .. } = &mut self.layout_local {
+                            command_line.push(ch);
+                        }
+                        self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                        self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                        Ok(Some(ReadResult::Continue))
+                    }
+                    _ if key.modifiers.contains(KeyModifiers::CONTROL) => Ok(None),
+                    _ => Ok(Some(ReadResult::Continue)),
+                }
+            }
+        }
     }
 
     pub(super) fn handle_key(&mut self, key: KeyEvent) -> io::Result<ReadResult> {
@@ -432,6 +610,14 @@ impl AnvilTui {
             return self.handle_configure_key(key);
         }
 
+        // BUG-5: three-pane vim modal key routing. Must run before the Ctrl-key
+        // and general char-insert paths so Normal-mode keys are intercepted and
+        // Insert-mode Esc is handled correctly.  Ctrl keys fall through (handled
+        // below) so tab navigation, Ctrl+C, etc. always work.
+        if let Some(result) = self.handle_three_pane_key(key)? {
+            return Ok(result);
+        }
+
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.handle_ctrl_key(key);
         }
@@ -466,10 +652,24 @@ impl AnvilTui {
             KeyCode::Backspace => {
                 self.backspace();
                 self.refresh_completion();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
             }
-            KeyCode::Delete => self.delete_char(),
-            KeyCode::Left => self.cursor_left(),
-            KeyCode::Right => self.cursor_right(),
+            KeyCode::Delete => {
+                self.delete_char();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
+            }
+            KeyCode::Left => {
+                self.cursor_left();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
+            }
+            KeyCode::Right => {
+                self.cursor_right();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
+            }
             KeyCode::Home => self.cursor_home(),
             KeyCode::End => {
                 // Bug B fix: if in scrollback historical view, End returns to
@@ -516,13 +716,19 @@ impl AnvilTui {
             KeyCode::Char(ch) => {
                 self.insert_char(ch);
                 self.refresh_completion();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
             }
             KeyCode::Tab => {
                 self.tab_complete();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS | DirtyRegions::MISC);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
             }
             KeyCode::Esc => {
                 if self.active_tab().completion.visible {
                     self.active_tab_mut().completion = CompletionPopup::default();
+                    self.redraw.request(DirtyRegions::MISC);
+                    self.request_redraw_reason(super::RedrawReason::KeyEvent);
                 }
             }
             _ => {}

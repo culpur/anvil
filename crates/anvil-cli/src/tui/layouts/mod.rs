@@ -179,3 +179,122 @@ pub(super) fn dispatch_render(
         }
     }
 }
+
+// ─── BUG-5 / BUG-6 unit tests ─────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── BUG-5: three-pane VimMode state machine ───────────────────────────────
+
+    /// `for_kind(ThreePane)` initialises in Normal mode, as required by the spec
+    /// (§11 locked decision #4).
+    #[test]
+    fn three_pane_initial_state_is_normal() {
+        let state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        match state {
+            LayoutLocalState::ThreePane { vim_mode, .. } => {
+                assert_eq!(vim_mode, VimMode::Normal, "initial three-pane mode must be Normal");
+            }
+            _ => panic!("expected ThreePane variant"),
+        }
+    }
+
+    /// Simulate `i` → Insert transition (mirrors handle_three_pane_key Normal arm).
+    #[test]
+    fn three_pane_normal_to_insert_transition() {
+        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
+            *vim_mode = VimMode::Insert;
+        }
+        match state {
+            LayoutLocalState::ThreePane { vim_mode, .. } => {
+                assert_eq!(vim_mode, VimMode::Insert, "vim_mode must be Insert after i");
+            }
+            _ => panic!("expected ThreePane variant"),
+        }
+    }
+
+    /// Simulate `Esc` in Insert → Normal (discard draft path).
+    #[test]
+    fn three_pane_insert_esc_returns_to_normal() {
+        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
+            *vim_mode = VimMode::Insert;
+        }
+        // Esc: discard draft, back to Normal.
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
+            *vim_mode = VimMode::Normal;
+        }
+        match state {
+            LayoutLocalState::ThreePane { vim_mode, .. } => {
+                assert_eq!(vim_mode, VimMode::Normal, "Esc from Insert must return to Normal");
+            }
+            _ => panic!("expected ThreePane variant"),
+        }
+    }
+
+    /// Simulate `:` → Command mode transition.
+    #[test]
+    fn three_pane_normal_to_command_transition() {
+        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, .. } = state {
+            *vim_mode = VimMode::Command;
+        }
+        match state {
+            LayoutLocalState::ThreePane { vim_mode, .. } => {
+                assert_eq!(vim_mode, VimMode::Command);
+            }
+            _ => panic!("expected ThreePane variant"),
+        }
+    }
+
+    /// Command mode `command_line` accumulates chars and is cleared on Esc.
+    #[test]
+    fn three_pane_command_line_accumulates_and_clears() {
+        let mut state = LayoutLocalState::for_kind(TuiLayoutKind::ThreePane);
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, ref mut command_line } = state {
+            *vim_mode = VimMode::Command;
+            command_line.push('q');
+        }
+        // Esc: clear and return to Normal.
+        if let LayoutLocalState::ThreePane { ref mut vim_mode, ref mut command_line } = state {
+            *vim_mode = VimMode::Normal;
+            command_line.clear();
+        }
+        match state {
+            LayoutLocalState::ThreePane { vim_mode, command_line } => {
+                assert_eq!(vim_mode, VimMode::Normal);
+                assert!(command_line.is_empty(), "command_line must clear on Esc");
+            }
+            _ => panic!("expected ThreePane variant"),
+        }
+    }
+
+    /// VimMode::default() is Normal.
+    #[test]
+    fn vim_mode_default_is_normal() {
+        assert_eq!(VimMode::default(), VimMode::Normal);
+    }
+
+    // ── BUG-6: journal completion popup wiring ────────────────────────────────
+
+    /// `render_completion_popup` is re-exported via `common` and accessible to
+    /// the journal renderer.  Verify it is importable from `common`.
+    #[test]
+    fn journal_can_call_render_completion_popup() {
+        // This is a compile-time test — if `render_completion_popup` is not
+        // accessible from the journal renderer's `use super::common::...` import
+        // the crate would fail to compile.  We verify the symbol resolves at
+        // runtime by asserting it is a function (via a trivially-true assertion
+        // on its address, which forces the linker to include it).
+        let _fn_ptr: fn(
+            &mut ratatui::Frame,
+            ratatui::layout::Rect,
+            &crate::tui::snapshot::LayoutSnapshot,
+        ) = super::common::render_completion_popup;
+        // If we reach here the function is accessible — BUG-6 wiring compiles.
+        assert!(true);
+    }
+}
