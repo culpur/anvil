@@ -330,6 +330,7 @@ impl CursorClient {
                 body,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
         resp.json::<CursorMeResponse>().await.map_err(ApiError::Http)
@@ -359,6 +360,7 @@ impl CursorClient {
                 body,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -406,6 +408,7 @@ impl CursorClient {
                 body: body_text,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -467,6 +470,7 @@ impl CursorClient {
                 body,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -497,6 +501,7 @@ impl CursorClient {
                 body,
                 retryable: false,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
         Ok(())

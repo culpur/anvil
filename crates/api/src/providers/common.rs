@@ -198,6 +198,7 @@ pub async fn expect_success(response: reqwest::Response) -> Result<reqwest::Resp
         body,
         retryable,
         retry_after_secs,
+        provider_hint: None,
     })
 }
 

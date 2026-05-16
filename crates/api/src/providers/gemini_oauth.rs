@@ -563,6 +563,7 @@ impl GeminiOAuthClient {
                 body: body_text,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -597,6 +598,7 @@ impl GeminiOAuthClient {
                 body: body_text,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -642,6 +644,7 @@ impl Provider for GeminiOAuthClient {
                     body: body_text,
                     retryable: status.as_u16() >= 500,
                     retry_after_secs: None,
+                    provider_hint: None,
                 });
             }
             let raw: Value = resp.json().await.map_err(ApiError::Http)?;
@@ -675,6 +678,7 @@ impl Provider for GeminiOAuthClient {
                     body: body_text,
                     retryable: status.as_u16() >= 500,
                     retry_after_secs: None,
+                    provider_hint: None,
                 });
             }
             Ok(GeminiOAuthStream::new(resp, model))

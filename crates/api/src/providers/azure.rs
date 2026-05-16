@@ -143,6 +143,7 @@ impl AzureOpenAiClient {
                 body,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -177,6 +178,7 @@ impl AzureOpenAiClient {
                 body,
                 retryable: status.as_u16() >= 500,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 

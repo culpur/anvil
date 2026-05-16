@@ -335,6 +335,13 @@ impl AnvilApiClient {
             || self.send_raw_request(request),
         )
         .await
+        .map_err(|err| {
+            // #568, CC-143-B: enrich 5xx errors with Anthropic-specific hint.
+            err.with_provider_hint(ApiError::provider_hint_for(
+                "Anthropic",
+                "api.anthropic.com",
+            ))
+        })
     }
 
     async fn send_raw_request(

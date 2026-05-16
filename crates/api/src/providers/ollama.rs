@@ -74,6 +74,7 @@ impl OllamaClient {
                 body,
                 retryable: false,
                 retry_after_secs: None,
+                provider_hint: None,
             });
         }
 
@@ -85,14 +86,20 @@ impl OllamaClient {
         &self,
         request: &MessageRequest,
     ) -> Result<MessageResponse, ApiError> {
-        self.inner.send_message(request).await
+        self.inner.send_message(request).await.map_err(|err| {
+            let base_url = self.inner.base_url().to_string();
+            err.with_provider_hint(ApiError::provider_hint_for("Ollama", &base_url))
+        })
     }
 
     pub async fn stream_message(
         &self,
         request: &MessageRequest,
     ) -> Result<MessageStream, ApiError> {
-        self.inner.stream_message(request).await
+        self.inner.stream_message(request).await.map_err(|err| {
+            let base_url = self.inner.base_url().to_string();
+            err.with_provider_hint(ApiError::provider_hint_for("Ollama", &base_url))
+        })
     }
 }
 
