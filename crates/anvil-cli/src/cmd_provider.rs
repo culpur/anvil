@@ -1048,6 +1048,8 @@ impl LiveCli {
                     cancel_token: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     message_queue: std::collections::VecDeque::new(),
                     in_flight: false,
+                    tui_layout: crate::tui::state::Tab::load_default_layout(),
+                    layout_local: crate::tui::layouts::LayoutLocalState::Classic,
                 };
                 self.share_manager.stop_share(&synthetic)
             }

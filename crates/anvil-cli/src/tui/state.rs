@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use runtime::{Rgb, Theme};
+use runtime::{Rgb, Theme, TuiLayoutConfig, TuiLayoutKind};
 
 use super::helpers::strip_ansi;
 use super::scrollback::{ScrollbackBuffer, ScrollbackState};
@@ -457,6 +457,13 @@ pub(crate) struct Tab {
     pub session_id: String,
     pub completion: CompletionPopup,
     pub has_unread: bool,
+    /// Per-tab TUI layout configuration.  Initialized from the config.json
+    /// default when the tab is constructed.  `/layout <kind>` changes only
+    /// this field on the active tab; `/layout <kind> --global` also updates
+    /// config.json so new tabs inherit the new default.
+    pub tui_layout: runtime::TuiLayoutConfig,
+    /// Per-tab layout-local visual state (resets on layout switch for this tab).
+    pub layout_local: crate::tui::layouts::LayoutLocalState,
     /// Conversation branches — each is an Arc-shared snapshot of log at branch
     /// point. Using Arc lets `/fork` create a branch in O(1) (refcount bump,
     /// no element clone). The actual log only diverges on the next push, at
@@ -522,6 +529,10 @@ pub(crate) struct Tab {
 
 impl Tab {
     pub fn new(id: usize, name: impl Into<String>, model: impl Into<String>, session_id: impl Into<String>) -> Self {
+        // Initialize layout from config.json default so new tabs always inherit
+        // whatever the user last set as their global default.
+        let default_layout = Self::load_default_layout();
+        let default_local = crate::tui::layouts::LayoutLocalState::for_kind(default_layout.kind);
         Self {
             id,
             name: name.into(),
@@ -556,7 +567,31 @@ impl Tab {
             cancel_token: Arc::new(AtomicBool::new(false)),
             message_queue: std::collections::VecDeque::new(),
             in_flight: false,
+            tui_layout: default_layout,
+            layout_local: default_local,
         }
+    }
+
+    /// Load the TUI layout default from `~/.anvil/config.json`.
+    /// Falls back to `TuiLayoutConfig::default()` on any read/parse error.
+    pub fn load_default_layout() -> TuiLayoutConfig {
+        dirs_next::home_dir()
+            .map(|h| h.join(".anvil").join("config.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| {
+                let kind_str = v.pointer("/tui_layout/kind")?.as_str()?.to_owned();
+                let tabs = v.pointer("/tui_layout/tabs").and_then(|b| b.as_bool()).unwrap_or(true);
+                let kind = match kind_str.trim_end_matches("-tabs") {
+                    "classic" => TuiLayoutKind::Classic,
+                    "vertical-split" => TuiLayoutKind::VerticalSplit,
+                    "three-pane" => TuiLayoutKind::ThreePane,
+                    "journal" => TuiLayoutKind::Journal,
+                    _ => return None,
+                };
+                Some(TuiLayoutConfig { kind, tabs })
+            })
+            .unwrap_or_default()
     }
 
     /// Create a new conversation branch from the current log state.

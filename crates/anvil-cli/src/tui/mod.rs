@@ -1276,11 +1276,9 @@ impl AnvilTui {
         let snap = self.collect_snapshot();
 
         // v2.2.16: Route to the active layout renderer via dispatch_render.
-        // The snapshot is passed by reference; layout-local state is cloned
-        // out of self, mutated inside the closure (cursor follow, etc.), then
-        // written back after terminal.draw returns.
-        let cfg = self.tui_layout;
-        let mut layout_local = self.layout_local.clone();
+        // Per-tab layout: read cfg and layout_local from the active tab.
+        let cfg = self.tabs[self.active_tab].tui_layout;
+        let mut layout_local = self.tabs[self.active_tab].layout_local.clone();
 
         // Click-to-switch tab geometry — populated by the draw closure as it
         // builds the tab-bar spans, then copied back to self.tab_hits after
@@ -1409,35 +1407,74 @@ impl AnvilTui {
         self.tab_bar_row = new_tab_bar_row;
 
         // Write back any in-draw mutations to layout_local (cursor follow, etc.).
-        self.layout_local = layout_local;
+        // Per-tab: write back to the active tab's local state.
+        self.tabs[self.active_tab].layout_local = layout_local;
 
         Ok(())
     }
 
     // ─── Layout system (v2.2.16) ─────────────────────────────────────────────
 
-    /// Switch the active TUI layout live, mid-session.
+    /// Switch the TUI layout for the active tab, and optionally all tabs.
     ///
-    /// Per spec §4 switch protocol:
-    /// 1. No-op when new == self.tui_layout (avoids wasted redraw).
-    /// 2. Persist to `~/.anvil/config.json` (best-effort; logs on IO error).
-    /// 3. Replace `self.tui_layout`.
-    /// 4. Replace `self.layout_local` (resets layout-local visual state only).
-    /// 5. Request full-region redraw.
+    /// - `global = false`: changes only the active tab's layout. Does NOT persist
+    ///   to config.json. Other tabs are untouched.
+    /// - `global = true`: changes ALL tabs' layouts AND persists to config.json so
+    ///   new tabs inherit the new default.
     ///
-    /// Shared state (`tabs`, `pending_permissions`, `agent_rows`, etc.) is
-    /// never touched — the switch is paint-only.
-    pub fn set_layout(&mut self, new: runtime::TuiLayoutConfig) {
-        if new == self.tui_layout {
+    /// Per-tab switch is a no-op when `new == active_tab.tui_layout`.
+    ///
+    /// Shared conversation state (`log`, `input`, `cursor`, etc.) is never
+    /// touched — the switch is paint-only for each tab.
+    pub fn set_active_tab_layout(&mut self, new: runtime::TuiLayoutConfig, global: bool) {
+        let current = self.tabs[self.active_tab].tui_layout;
+        if new == current && !global {
             return; // no-op
         }
-        // Persist to ~/.anvil/config.json (best-effort).
+
+        if global {
+            // Persist new default to config.json.
+            Self::persist_layout_to_config(&new);
+            // Apply to ALL tabs.
+            for tab in &mut self.tabs {
+                tab.tui_layout = new;
+                tab.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
+            }
+        } else {
+            // Apply to active tab only.
+            let tab = &mut self.tabs[self.active_tab];
+            if new == tab.tui_layout {
+                return;
+            }
+            tab.tui_layout = new;
+            tab.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
+        }
+
+        // Also update the AnvilTui-level fields for backward compat with any
+        // code that still reads self.tui_layout / self.layout_local.
+        self.tui_layout = new;
+        self.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
+
+        self.redraw.request_full();
+        self.request_redraw_reason(RedrawReason::Other);
+    }
+
+    /// Backward-compat alias: `set_layout(new)` → `set_active_tab_layout(new, global=true)`.
+    ///
+    /// Pre-v2.2.16 callers (e.g. the `/layout reset` handler) used `set_layout`.
+    /// This ensures they still work and write config.json.
+    pub fn set_layout(&mut self, new: runtime::TuiLayoutConfig) {
+        self.set_active_tab_layout(new, true);
+    }
+
+    /// Write the layout config to `~/.anvil/config.json` (best-effort).
+    fn persist_layout_to_config(new: &runtime::TuiLayoutConfig) {
         if let Some(home) = dirs_next::home_dir() {
             let path = home.join(".anvil").join("config.json");
             if let Ok(raw) = std::fs::read_to_string(&path) {
                 if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&raw) {
                     if let Some(obj) = val.as_object_mut() {
-                        let alias = runtime::tui_layout_to_alias(&new);
+                        let alias = runtime::tui_layout_to_alias(new);
                         obj.insert(
                             "tui_layout".to_string(),
                             serde_json::json!({ "kind": alias.trim_end_matches("-tabs"), "tabs": new.tabs }),
@@ -1449,10 +1486,6 @@ impl AnvilTui {
                 }
             }
         }
-        self.tui_layout = new;
-        self.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
-        self.redraw.request_full();
-        self.request_redraw_reason(RedrawReason::Other);
     }
 
     // ─── Event processing ────────────────────────────────────────────────────
