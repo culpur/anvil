@@ -78,6 +78,51 @@ pub fn invalidate_model_choices_cache() {
     }
 }
 
+// ─── BUG-7 background-fetch gate ─────────────────────────────────────────────
+//
+// `model_choices()` used to call `live_provider_models()` inline on the TUI
+// keystroke thread. After OAuth the Anthropic creds are fresh and the cache
+// was invalidated, so the first `/model ` TAB triggered a blocking network
+// call (up to 4 s per provider) which froze the entire UI.
+//
+// Fix: when the cache is stale and no background fetch is running, immediately
+// return the static fallback list and spawn a `std::thread` that does the real
+// fetch and writes the result into the shared cache slot. On the NEXT TAB press
+// the cache is warm and the full live list is returned. The gate prevents
+// multiple concurrent fetches from piling up.
+static MODEL_FETCH_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Kick off a background fetch of the live model list if one is not already
+/// running. Returns immediately; the fetch result is written to the shared
+/// cache so subsequent `model_choices()` calls find it warm.
+///
+/// The `ollama_cache` slice is cheaply cloned into the background thread so
+/// the caller can drop its borrow immediately.
+fn spawn_background_model_fetch(ollama_cache: Vec<(String, String)>) {
+    use std::sync::atomic::Ordering;
+    // CAS: only one fetch at a time.
+    if MODEL_FETCH_IN_PROGRESS.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("anvil-model-fetch".to_string())
+        .spawn(move || {
+            let (models, warnings) = live_provider_models(&ollama_cache);
+            for w in &warnings {
+                eprintln!("{w}");
+            }
+            if let Ok(mut cache) = model_choices_cache().lock() {
+                *cache = ModelChoicesCache {
+                    fetched_at: Some(Instant::now()),
+                    models,
+                };
+            }
+            MODEL_FETCH_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        })
+        .ok(); // spawn failure is non-fatal — fallback list remains active
+}
+
 /// Hook used by tests to control the live-fetch path. When set, the live
 /// fetch routine returns these models instead of hitting the network.
 #[cfg(test)]
@@ -520,8 +565,20 @@ impl CompletionContext for TuiCompletionContext {
     /// never blank.
     ///
     /// See `feedback-model-list-is-live-not-registry.md` for the user contract.
+    ///
+    /// BUG-7 fix: in production mode this method no longer blocks the TUI
+    /// thread. When the cache is stale a background thread is spawned to
+    /// refresh it, and the static fallback list (`api::known_models`) is
+    /// returned immediately. The next TAB press finds the cache warm. A single
+    /// `AtomicBool` gate prevents concurrent spawns. Ctrl+C remains
+    /// responsive throughout.
+    ///
+    /// In `#[cfg(test)]` mode the original synchronous path is preserved so
+    /// the `MODEL_FETCH_OVERRIDE` hook tests remain deterministic.
     fn model_choices(&self) -> Vec<(String, String)> {
         let cache_slot = model_choices_cache();
+
+        // Fast path: cache is warm (both prod and test).
         if let Ok(cache) = cache_slot.lock() {
             if let Some(fetched_at) = cache.fetched_at {
                 if fetched_at.elapsed() < MODEL_CHOICES_CACHE_TTL && !cache.models.is_empty() {
@@ -530,25 +587,32 @@ impl CompletionContext for TuiCompletionContext {
             }
         }
 
-        let (models, warnings) = live_provider_models(&self.ollama_models);
-
-        // Surface warnings to TUI scrollback so the user knows a provider
-        // dropped out. We can't reach the TUI sender from here (this runs on
-        // the keystroke thread), so we write to stderr — the TuiTracingLayer
-        // will pick it up if active; otherwise the message lands in the
-        // terminal scrollback above the popup.
-        for warning in &warnings {
-            eprintln!("{warning}");
+        // ── Test path: synchronous (keeps MODEL_FETCH_OVERRIDE deterministic) ─
+        #[cfg(test)]
+        {
+            let (models, warnings) = live_provider_models(&self.ollama_models);
+            for w in &warnings { eprintln!("{w}"); }
+            if let Ok(mut cache) = cache_slot.lock() {
+                *cache = ModelChoicesCache {
+                    fetched_at: Some(Instant::now()),
+                    models: models.clone(),
+                };
+            }
+            return models;
         }
 
-        if let Ok(mut cache) = cache_slot.lock() {
-            *cache = ModelChoicesCache {
-                fetched_at: Some(Instant::now()),
-                models: models.clone(),
-            };
-        }
+        // ── Production path: non-blocking background fetch (BUG-7) ────────────
+        // Cache is stale. Kick off a background refresh; return the static
+        // fallback list immediately so the TUI stays responsive.
+        #[allow(unreachable_code)]
+        {
+            spawn_background_model_fetch(self.ollama_models.clone());
 
-        models
+            api::known_models()
+                .into_iter()
+                .map(|(name, kind)| (name.to_string(), api::provider_display_name(kind).to_string()))
+                .collect()
+        }
     }
 }
 
