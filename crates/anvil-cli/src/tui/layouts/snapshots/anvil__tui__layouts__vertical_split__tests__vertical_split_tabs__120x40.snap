@@ -1,0 +1,44 @@
+---
+source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
+expression: rendered
+---
+ ⊢ sessions             [1: main]   DECK: Conversation
+ ● main
+                        You  do the thing
+ ⊢ agents
+ │ none active          Anvil  ok
+
+ ⊢ status
+ • anthropic
+   sonnet-4-6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                        ────────────────────────────────────────────────────────────────────────────────────────────────
+                        > next prompt
+                        g switch deck │ d tools │ ? help
