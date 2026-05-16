@@ -2182,6 +2182,48 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         session_id,
     ));
 
+    // v2.2.16: first-launch layout intro toast.
+    // Show once when `tui_layout` is absent from config (user hasn't
+    // configured it yet) AND `tui_layout_intro_seen` is not set.
+    // After emitting, stamp `tui_layout_intro_seen: true` so it never repeats.
+    {
+        let config_path = anvil_home_dir().join("config.json");
+        let (has_layout_key, intro_seen) = if let Ok(data) = fs::read_to_string(&config_path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
+                let has_key = val.get("tui_layout").is_some();
+                let seen = val
+                    .get("tui_layout_intro_seen")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                (has_key, seen)
+            } else {
+                (false, false)
+            }
+        } else {
+            (false, false)
+        };
+        if !has_layout_key && !intro_seen {
+            tui.push_system(
+                "New in v2.2.16: 6 TUI layouts (A–F). \
+                 Try /layout list to see them, /layout <name> to switch. \
+                 Your current layout (vertical-split-tabs) is the default."
+                    .to_string(),
+            );
+            // Stamp intro seen so this never fires again.
+            if let Ok(data) = fs::read_to_string(&config_path) {
+                if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.insert(
+                            "tui_layout_intro_seen".to_string(),
+                            serde_json::Value::Bool(true),
+                        );
+                        let _ = fs::write(&config_path, serde_json::to_string_pretty(&val).unwrap_or_default());
+                    }
+                }
+            }
+        }
+    }
+
     // Set initial QMD status in footer
     if cli.qmd.is_enabled() {
         if let Some(status) = cli.qmd.status() {
@@ -4980,6 +5022,12 @@ impl LiveCli {
                 ));
                 return Ok(false);
             }
+            // v2.2.16: live layout switch — needs tui access, so handled here.
+            SlashCommand::Layout { action } => {
+                let msg = self.handle_layout_command(action.as_deref(), tui);
+                tui.push_system(msg);
+                return Ok(false);
+            }
             SlashCommand::Share { action } => {
                 // Vault gate — sharing requires an unlocked vault (anti-abuse).
                 if !runtime::vault_is_session_unlocked() {
@@ -5751,10 +5799,24 @@ impl LiveCli {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
             }
-            // v2.2.16 placeholder — full implementation lands in step 2.
+            // v2.2.16: Layout is intercepted in handle_repl_command_tui (needs tui ref).
+            // This arm is unreachable in TUI mode; in non-TUI mode, return a brief note.
             SlashCommand::Layout { action } => {
-                let _ = action;
-                ("Layout switching not yet implemented. Coming in v2.2.16.".to_string(), false)
+                let alias = action.as_deref().unwrap_or("").trim();
+                if alias.is_empty() || alias == "list" {
+                    let help = "\
+/layout list — six variants:\n  \
+vertical-split       A: rail + deck\n  \
+vertical-split-tabs  D: A + workspace tabs\n  \
+three-pane           B: FOCUS/LOG/CONTEXT (vim modal)\n  \
+three-pane-tabs      E: B + buffer line\n  \
+journal              C: journal + Ctrl-K palette\n  \
+journal-tabs         F: C + thread switcher\n\
+Requires TUI mode. Use /layout <variant> inside the TUI.";
+                    (help.to_string(), false)
+                } else {
+                    (format!("Layout commands require TUI mode. Start anvil without --non-interactive to use /layout."), false)
+                }
             }
         })
     }
@@ -7522,6 +7584,108 @@ impl LiveCli {
     // ─── T5-Ssh-F: /ssh TUI dispatch ─────────────────────────────────────────
 
     /// Handle the `/ssh` slash command in TUI mode.
+    // ─── /layout command (v2.2.16) ───────────────────────────────────────────
+
+    /// Handle the `/layout` slash command.
+    ///
+    /// Grammar (per spec §3):
+    ///   /layout                       → prints current layout + list hint
+    ///   /layout list                  → list all 6 variants with descriptions
+    ///   /layout <kind> [--tabs|--no-tabs]  → switch live
+    ///   /layout reset                 → restore default (vertical-split-tabs)
+    ///
+    /// Emits an OTel event `layout_switched { from_alias, to_alias }` on change.
+    fn handle_layout_command(
+        &mut self,
+        action: Option<&str>,
+        tui: &mut crate::tui::AnvilTui,
+    ) -> String {
+        use runtime::{TuiLayoutConfig, TuiLayoutKind, tui_layout_kind_from_alias, tui_layout_to_alias};
+
+        let current = tui.tui_layout;
+        let current_alias = tui_layout_to_alias(&current);
+
+        let action = action.unwrap_or("").trim();
+
+        if action.is_empty() {
+            // Bare /layout — show current + hint.
+            return format!(
+                "Current layout: {} ({}).\n\
+                 Use /layout list for all variants, or /layout <kind> to switch.",
+                current_alias,
+                if current.tabs { "tabs on" } else { "tabs off" }
+            );
+        }
+
+        if action == "list" {
+            return "\
+/layout variants:\n  \
+vertical-split       Layout A: rail + swappable right deck (tabs: off)\n  \
+vertical-split-tabs  Layout D: A + workspace tabs\n  \
+three-pane           Layout B: FOCUS/LOG/CONTEXT, vim modal (tabs: off)\n  \
+three-pane-tabs      Layout E: B + vim buffer line\n  \
+journal              Layout C: timestamped journal, Ctrl-K palette (tabs: off)\n  \
+journal-tabs         Layout F: C + thread switcher\n\n\
+Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --no-tabs"
+                .to_string();
+        }
+
+        if action == "reset" {
+            let default = TuiLayoutConfig::default();
+            let to_alias = tui_layout_to_alias(&default);
+            tui.set_layout(default);
+            return format!("Layout reset to {to_alias} (vertical-split + tabs).");
+        }
+
+        // Parse `<kind> [--tabs | --no-tabs]`.
+        let (kind_part, flag_part) = if let Some((k, f)) = action.split_once(' ') {
+            (k.trim(), f.trim())
+        } else {
+            (action, "")
+        };
+
+        // Determine tabs override from flag.
+        let tabs_override: Option<bool> = if flag_part.contains("--no-tabs") {
+            Some(false)
+        } else if flag_part.contains("--tabs") {
+            Some(true)
+        } else {
+            None
+        };
+
+        // Resolve the kind. Try with `-tabs` suffix appended (alias table includes it).
+        let resolved = tui_layout_kind_from_alias(kind_part)
+            .or_else(|| tui_layout_kind_from_alias(&format!("{kind_part}-tabs")));
+
+        let Some(mut new_cfg) = resolved else {
+            return format!(
+                "Unknown layout: {kind_part:?}. Use /layout list for all variants."
+            );
+        };
+
+        // Apply tabs flag if specified, overriding alias-embedded default.
+        if let Some(tabs) = tabs_override {
+            new_cfg.tabs = tabs;
+        } else if tabs_override.is_none() && !kind_part.ends_with("-tabs") {
+            // No explicit flag, no -tabs suffix → keep current tabs setting.
+            new_cfg.tabs = current.tabs;
+        }
+
+        let to_alias = tui_layout_to_alias(&new_cfg);
+
+        if new_cfg == current {
+            return format!("Already on layout {to_alias}. No change.");
+        }
+
+        tui.set_layout(new_cfg);
+
+        format!(
+            "Layout switched to {} ({}).",
+            to_alias,
+            if new_cfg.tabs { "tabs on" } else { "tabs off" }
+        )
+    }
+
     ///
     /// - bare `/ssh`                → open the SSH form modal
     /// - `/ssh <alias>`             → load alias from vault and prefill form
