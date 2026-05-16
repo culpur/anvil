@@ -20,7 +20,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
-use super::common::rgb;
+use super::common::{render_completion_popup, rgb};
 use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::helpers::strip_ansi;
 use crate::tui::snapshot::LayoutSnapshot;
@@ -144,6 +144,14 @@ impl TuiLayoutRenderer for Renderer {
         if palette_open {
             render_palette(frame, size, snap, &palette_query, palette_selected);
         }
+
+        // BUG-6: render the slash-command completion popup anchored to the
+        // input row so `/` completions appear in journal layout the same way
+        // they do in vertical-split (line 263) and three-pane (line 103).
+        // Only renders when `snap.completion_visible` is true (gated inside
+        // `render_completion_popup`), so it is a no-op when the palette is
+        // also open.
+        render_completion_popup(frame, input_area, snap);
     }
 }
 
