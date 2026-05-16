@@ -6,7 +6,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -79,6 +79,55 @@ pub struct OAuthCallbackParams {
     pub error_description: Option<String>,
 }
 
+/// Lenient deserializer for the `scopes` field in persisted credentials.
+///
+/// On-disk credentials files may arrive with `scopes` in several shapes
+/// depending on which version wrote them or whether the file was hand-edited:
+///
+/// - JSON `null`  → treat as empty scope list
+/// - JSON string  → split on spaces (standard OAuth wire format); single
+///   scope strings without spaces produce a one-element vec
+/// - JSON array   → normal path, pass through as-is
+/// - Anything else (object, number, bool) → log a warning and return an
+///   empty scope list rather than propagating a parse error that would lock
+///   the user out of a still-valid token
+fn deserialize_scopes_lenient<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(s) => {
+            if s.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(s.split_whitespace()
+                    .map(|scope| scope.to_string())
+                    .collect())
+            }
+        }
+        Value::Array(arr) => arr
+            .into_iter()
+            .map(|item| match item {
+                Value::String(s) => Ok(s),
+                other => Err(serde::de::Error::custom(format!(
+                    "scopes array element is not a string: {other}"
+                ))),
+            })
+            .collect(),
+        other => {
+            // Corrupt but non-fatal: warn and fall back to empty scopes so
+            // the caller can still use the access/refresh tokens.
+            eprintln!(
+                "[anvil] warning: unexpected type for 'scopes' in credentials ({other}); \
+                 treating as empty scope list"
+            );
+            Ok(Vec::new())
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredOAuthCredentials {
@@ -87,7 +136,7 @@ struct StoredOAuthCredentials {
     refresh_token: Option<String>,
     #[serde(default)]
     expires_at: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_scopes_lenient")]
     scopes: Vec<String>,
 }
 
@@ -561,7 +610,7 @@ mod tests {
         generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
         parse_oauth_callback_request_target, parse_pasted_oauth_code, save_oauth_credentials,
         OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest,
-        OAuthTokenSet,
+        OAuthTokenSet, StoredOAuthCredentials,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -775,5 +824,84 @@ mod tests {
         .expect("URL parses");
         let expected = "we-generated-this";
         assert_ne!(state.as_deref(), Some(expected));
+    }
+
+    // --- scopes lenient deserializer tests (security fix #565, CC-143-B) ---
+
+    #[test]
+    fn scopes_deserializes_from_null() {
+        let json = r#"{"accessToken":"tok","scopes":null}"#;
+        let stored: StoredOAuthCredentials =
+            serde_json::from_str(json).expect("null scopes should deserialize");
+        assert_eq!(stored.scopes, Vec::<String>::new());
+    }
+
+    #[test]
+    fn scopes_deserializes_from_string() {
+        let json = r#"{"accessToken":"tok","scopes":"openid"}"#;
+        let stored: StoredOAuthCredentials =
+            serde_json::from_str(json).expect("string scopes should deserialize");
+        assert_eq!(stored.scopes, vec!["openid".to_string()]);
+    }
+
+    #[test]
+    fn scopes_deserializes_from_space_separated_string() {
+        let json = r#"{"accessToken":"tok","scopes":"openid profile email"}"#;
+        let stored: StoredOAuthCredentials =
+            serde_json::from_str(json).expect("space-separated scopes should deserialize");
+        assert_eq!(
+            stored.scopes,
+            vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn scopes_deserializes_from_array() {
+        let json = r#"{"accessToken":"tok","scopes":["openid","profile"]}"#;
+        let stored: StoredOAuthCredentials =
+            serde_json::from_str(json).expect("array scopes should deserialize");
+        assert_eq!(
+            stored.scopes,
+            vec!["openid".to_string(), "profile".to_string()]
+        );
+    }
+
+    #[test]
+    fn scopes_deserializes_from_object_falls_back_to_empty() {
+        // Corrupt value — lenient path must not panic or return Err.
+        let json = r#"{"accessToken":"tok","scopes":{"bad":"type"}}"#;
+        let stored: StoredOAuthCredentials =
+            serde_json::from_str(json).expect("object scopes should fall back gracefully");
+        assert_eq!(stored.scopes, Vec::<String>::new());
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn load_oauth_credentials_handles_corrupt_scopes_gracefully() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        let path = credentials_path().expect("credentials path");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+
+        // Write credentials.json with scopes as JSON null — the corrupt-but-
+        // recoverable shape that previously caused an io::Error + auth lockout.
+        std::fs::write(
+            &path,
+            r#"{"oauth":{"accessToken":"live-token","scopes":null}}"#,
+        )
+        .expect("write corrupt credentials");
+
+        let result = load_oauth_credentials().expect("load should succeed despite null scopes");
+        let token_set = result.expect("should return Some token set");
+        assert_eq!(token_set.access_token, "live-token");
+        assert_eq!(token_set.scopes, Vec::<String>::new());
+
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
+        std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
     }
 }
