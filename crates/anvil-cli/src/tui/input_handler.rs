@@ -208,6 +208,71 @@ impl AnvilTui {
             }
         }
 
+        // #578: when the provider-login modal is open, route all keys to it.
+        if self.provider_login_modal.is_some() {
+            use super::provider_login::ProviderLoginAction;
+            let action = self
+                .provider_login_modal
+                .as_mut()
+                .unwrap()
+                .handle_key(key);
+            match action {
+                ProviderLoginAction::Continue | ProviderLoginAction::PollOAuth => {
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::Cancel | ProviderLoginAction::Dismiss => {
+                    self.provider_login_modal = None;
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::CancelOAuth => {
+                    // Drop the modal — the background thread sees the dropped
+                    // receiver and exits on its own.
+                    self.provider_login_modal = None;
+                    self.push_system("OAuth login cancelled.".to_string());
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::StartAnthropicOAuth => {
+                    // Spawn the background OAuth listener and transition the
+                    // modal to OAuthWaiting.
+                    self.start_anthropic_oauth_in_modal();
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::OAuthCodeReceived {
+                    code,
+                    state,
+                    verifier,
+                    redirect_uri,
+                } => {
+                    self.complete_anthropic_oauth(code, state, verifier, redirect_uri);
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::SaveApiKey { provider, vault_key, key } => {
+                    let msg = save_api_key_credential(vault_key, &key);
+                    let ok = !msg.starts_with("Error");
+                    if let Some(ref mut modal) = self.provider_login_modal {
+                        modal.set_result(ok, msg);
+                    }
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    let _ = provider;
+                    return Ok(super::ReadResult::Continue);
+                }
+                ProviderLoginAction::SaveMultiField { provider, values } => {
+                    let msg = save_multi_field_credential(provider, values);
+                    let ok = !msg.starts_with("Error");
+                    if let Some(ref mut modal) = self.provider_login_modal {
+                        modal.set_result(ok, msg);
+                    }
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+            }
+        }
+
         // T5-Ssh-E: when the SSH form modal is open, all keys go to the form.
         // Submit closes the modal and (in Commit F) kicks off the connection.
         // Cancel closes the modal silently.
@@ -941,5 +1006,294 @@ impl AnvilTui {
                 self.redraw.request(super::redraw::DirtyRegions::SCROLLBACK);
             }
         }
+    }
+
+    // ─── Provider-login modal helpers (#578) ─────────────────────────────────
+
+    /// Spawn the Anthropic OAuth background thread and transition the modal
+    /// from `AuthMethodPicker` to `OAuthWaiting`.
+    pub(super) fn start_anthropic_oauth_in_modal(&mut self) {
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let Ok(config) = runtime::ConfigLoader::default_for(&cwd).load() else {
+            if let Some(ref mut modal) = self.provider_login_modal {
+                modal.set_result(false, "Failed to load config.".to_string());
+            }
+            return;
+        };
+        let default_oauth = crate::auth::default_oauth_config();
+        let oauth_cfg = config.oauth().cloned().unwrap_or(default_oauth);
+        let callback_port = oauth_cfg.callback_port.unwrap_or(crate::DEFAULT_OAUTH_CALLBACK_PORT);
+
+        let listener = TcpListener::bind(("127.0.0.1", callback_port)).ok();
+        let redirect_uri = if listener.is_some() {
+            runtime::loopback_redirect_uri(callback_port)
+        } else {
+            oauth_cfg
+                .manual_redirect_url
+                .clone()
+                .unwrap_or_else(|| runtime::loopback_redirect_uri(callback_port))
+        };
+
+        let pkce = match runtime::generate_pkce_pair() {
+            Ok(p) => p,
+            Err(e) => {
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    modal.set_result(false, format!("PKCE generation failed: {e}"));
+                }
+                return;
+            }
+        };
+        let state = match runtime::generate_state() {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    modal.set_result(false, format!("State generation failed: {e}"));
+                }
+                return;
+            }
+        };
+
+        let authorize_url =
+            runtime::OAuthAuthorizationRequest::from_config(&oauth_cfg, redirect_uri.clone(), state.clone(), &pkce)
+                .build_url();
+
+        // Open the browser — this is an OS operation, not the TUI leaving.
+        let _ = crate::auth::open_browser(&authorize_url);
+
+        let port = listener.as_ref().map(|_| callback_port);
+        let (tx, rx) = mpsc::channel::<Result<(String, String), String>>();
+
+        // Listener thread (only when we bound a port).
+        if let Some(lst) = listener {
+            let tx_l = tx.clone();
+            let expected = state.clone();
+            std::thread::spawn(move || {
+                use runtime::parse_oauth_callback_request_target;
+                let outcome = match lst.accept() {
+                    Ok((mut stream, _)) => {
+                        use std::io::Read as _;
+                        use std::io::Write as _;
+                        let mut buf = [0u8; 4096];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let req = String::from_utf8_lossy(&buf[..n]);
+                        let target = req.lines()
+                            .next()
+                            .and_then(|l| l.split_whitespace().nth(1))
+                            .unwrap_or("");
+                        match parse_oauth_callback_request_target(target) {
+                            Ok(params) => {
+                                let body = if params.error.is_some() {
+                                    "OAuth failed. You can close this tab."
+                                } else {
+                                    "OAuth succeeded. You can close this tab."
+                                };
+                                let resp = format!(
+                                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                                    body.len(), body
+                                );
+                                let _ = stream.write_all(resp.as_bytes());
+                                if let Some(err) = params.error {
+                                    Err(format!("{}: {}", err, params.error_description.unwrap_or_default()))
+                                } else if let (Some(code), Some(ret_state)) = (params.code, params.state) {
+                                    if ret_state == expected {
+                                        Ok((code, ret_state))
+                                    } else {
+                                        Err("OAuth state mismatch.".to_string())
+                                    }
+                                } else {
+                                    Err("Callback did not include code/state.".to_string())
+                                }
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Err(e) => Err(format!("Listener accept error: {e}")),
+                };
+                let _ = tx_l.send(outcome);
+            });
+        }
+
+        if let Some(ref mut modal) = self.provider_login_modal {
+            modal.set_oauth_waiting(
+                port,
+                authorize_url,
+                state,
+                pkce.verifier,
+                redirect_uri,
+                rx,
+            );
+        }
+    }
+
+    /// Exchange the OAuth code for tokens and store the result in the modal.
+    pub(super) fn complete_anthropic_oauth(
+        &mut self,
+        code: String,
+        state: String,
+        verifier: String,
+        redirect_uri: String,
+    ) {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let config = match runtime::ConfigLoader::default_for(&cwd).load() {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    modal.set_result(false, format!("Config load failed: {e}"));
+                }
+                return;
+            }
+        };
+        let default_oauth = crate::auth::default_oauth_config();
+        let oauth_cfg = config.oauth().cloned().unwrap_or(default_oauth);
+
+        let exchange = runtime::OAuthTokenExchangeRequest::from_config(
+            &oauth_cfg,
+            code,
+            state,
+            verifier,
+            redirect_uri,
+        );
+
+        // Block on the token exchange in a fresh one-shot tokio runtime.
+        // This is a quick HTTPS request (<1s on a normal network) and
+        // happens in the key-handler context, not the draw loop, so a
+        // brief block is acceptable.
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    modal.set_result(false, format!("Runtime error: {e}"));
+                }
+                return;
+            }
+        };
+
+        let client = api::AnvilApiClient::from_auth(api::AuthSource::None)
+            .with_base_url(api::read_base_url());
+
+        match rt.block_on(client.exchange_oauth_code(&oauth_cfg, &exchange)) {
+            Ok(token_set) => {
+                let save_result = runtime::save_oauth_credentials(&runtime::OAuthTokenSet {
+                    access_token: token_set.access_token,
+                    refresh_token: token_set.refresh_token,
+                    expires_at: token_set.expires_at,
+                    scopes: token_set.scopes,
+                });
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    match save_result {
+                        Ok(()) => modal.set_result(true, "Token saved. You are now logged in.".to_string()),
+                        Err(e) => modal.set_result(false, format!("Failed to save token: {e}")),
+                    }
+                }
+            }
+            Err(e) => {
+                if let Some(ref mut modal) = self.provider_login_modal {
+                    modal.set_result(false, format!("Token exchange failed: {e}"));
+                }
+            }
+        }
+    }
+}
+
+// ─── Free helpers for credential persistence ─────────────────────────────────
+
+/// Save a single API key to the vault or credentials.json.
+/// Returns a human-readable status message.
+fn save_api_key_credential(vault_key: &'static str, key: &str) -> String {
+    // Prefer vault when unlocked.
+    if runtime::vault_is_session_unlocked() {
+        match runtime::vault_session_upsert(vault_key, key) {
+            Ok(()) => return format!("Key saved to encrypted vault (key: {vault_key})."),
+            Err(e) => {
+                // Fall through to plaintext fallback.
+                eprintln!("[provider-login] vault upsert failed: {e}");
+            }
+        }
+    }
+    // Plaintext credentials.json fallback.
+    match runtime::credentials_path() {
+        Ok(path) => {
+            let mut root = if path.exists() {
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&s).ok())
+                    .unwrap_or_default()
+            } else {
+                serde_json::Map::new()
+            };
+            root.insert(
+                vault_key.to_string(),
+                serde_json::Value::String(key.to_string()),
+            );
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match serde_json::to_string_pretty(&root) {
+                Ok(json) => match std::fs::write(&path, json) {
+                    Ok(()) => format!("Key saved to {}", path.display()),
+                    Err(e) => format!("Error writing credentials: {e}"),
+                },
+                Err(e) => format!("Error serializing credentials: {e}"),
+            }
+        }
+        Err(e) => format!("Error: cannot find credentials path: {e}"),
+    }
+}
+
+/// Save multi-field credentials (Ollama host/key, etc.).
+fn save_multi_field_credential(provider: api::ProviderKind, values: Vec<String>) -> String {
+    match provider {
+        api::ProviderKind::Ollama => {
+            let host = values.first().map(|s| s.trim()).filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
+            let api_key = values.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
+
+            let host_ok = if runtime::vault_is_session_unlocked() {
+                runtime::vault_session_upsert("ollama_host", &host).is_ok()
+            } else {
+                false
+            };
+            let key_ok = if !api_key.is_empty() && runtime::vault_is_session_unlocked() {
+                runtime::vault_session_upsert("ollama_api_key", &api_key).is_ok()
+            } else {
+                api_key.is_empty()
+            };
+
+            if host_ok && key_ok {
+                return format!("Ollama endpoint saved to vault: {host}");
+            }
+
+            // Plaintext fallback.
+            if let Ok(path) = runtime::credentials_path() {
+                let mut root = if path.exists() {
+                    std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&s).ok())
+                        .unwrap_or_default()
+                } else {
+                    serde_json::Map::new()
+                };
+                root.insert("ollama_host".to_string(), serde_json::json!(host));
+                if !api_key.is_empty() {
+                    root.insert("ollama_api_key".to_string(), serde_json::json!(api_key));
+                }
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(json) = serde_json::to_string_pretty(&root) {
+                    let _ = std::fs::write(&path, json);
+                }
+                return format!("Ollama endpoint saved: {host}");
+            }
+            format!("Ollama endpoint: {host} (not persisted — credentials path unavailable)")
+        }
+        _ => format!("Multi-field save not implemented for {provider:?}"),
     }
 }
