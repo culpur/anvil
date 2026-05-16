@@ -38,7 +38,7 @@ pub use subcommands::{
     ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
     RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
     MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES, CONFIG_SUBCOMMAND_NAMES,
-    IMPORT_SUBCOMMAND_NAMES, CURSOR_SUBCOMMAND_NAMES,
+    IMPORT_SUBCOMMAND_NAMES, CURSOR_SUBCOMMAND_NAMES, LAYOUT_SUBCOMMANDS,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -292,6 +292,16 @@ pub enum SlashCommand {
     HubStatus {
         /// Package name or id to query.
         package: String,
+    },
+    /// `/layout [list | <kind> [--tabs|--no-tabs] | reset]` — show, list, or
+    /// switch the TUI layout (v2.2.16).
+    ///
+    /// Six variants: vertical-split, vertical-split-tabs, three-pane,
+    /// three-pane-tabs, journal, journal-tabs.  Live-switch with no restart.
+    Layout {
+        /// Raw action string, e.g. `Some("three-pane --no-tabs")`, or `None`
+        /// to open the Configure > Layout sub-screen.
+        action: Option<String>,
     },
     /// `/language [en|de|es|fr|ja|zh-CN|ru]`
     Language {
@@ -787,6 +797,9 @@ impl SlashCommand {
             },
             "hub-status" => Self::HubStatus {
                 package: parts.next().unwrap_or_default().to_owned(),
+            },
+            "layout" => Self::Layout {
+                action: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
             "language" | "lang" => Self::Language {
                 lang: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
@@ -1672,9 +1685,11 @@ mod tests {
         // v2.2.14 Phase 6.0: +1 (/import — migration arc foundation) = 113 total
         // v2.2.15: +1 (/cursor — Cursor Cloud Agents) = 114 total
         // v2.2.16: +1 (/hub-status — AnvilHub verified-badge status query) = 115 total
-        assert_eq!(slash_command_specs().len(), 115);
+        // v2.2.16: +1 (/layout — TUI layout selector, 8-axis contract) = 116 total
+        assert_eq!(slash_command_specs().len(), 116);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
-        assert_eq!(resume_supported_slash_commands().len(), 24);
+        // v2.2.16: +1 (/layout resume_supported=true) = 25
+        assert_eq!(resume_supported_slash_commands().len(), 25);
     }
 
     #[test]
@@ -2638,6 +2653,56 @@ mod tests {
         );
     }
 
+    // ─── /layout parser tests (v2.2.16) ──────────────────────────────────────
+
+    #[test]
+    fn layout_bare_parses_to_none_action() {
+        assert_eq!(
+            SlashCommand::parse("/layout"),
+            Some(SlashCommand::Layout { action: None }),
+        );
+    }
+
+    #[test]
+    fn layout_list_parses_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/layout list"),
+            Some(SlashCommand::Layout { action: Some("list".to_string()) }),
+        );
+    }
+
+    #[test]
+    fn layout_three_pane_parses_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/layout three-pane"),
+            Some(SlashCommand::Layout { action: Some("three-pane".to_string()) }),
+        );
+    }
+
+    #[test]
+    fn layout_three_pane_no_tabs_parses_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/layout three-pane --no-tabs"),
+            Some(SlashCommand::Layout { action: Some("three-pane --no-tabs".to_string()) }),
+        );
+    }
+
+    #[test]
+    fn layout_reset_parses_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/layout reset"),
+            Some(SlashCommand::Layout { action: Some("reset".to_string()) }),
+        );
+    }
+
+    #[test]
+    fn layout_vertical_split_tabs_flag_parses_correctly() {
+        assert_eq!(
+            SlashCommand::parse("/layout vertical-split --tabs"),
+            Some(SlashCommand::Layout { action: Some("vertical-split --tabs".to_string()) }),
+        );
+    }
+
     // ─── Drift prevention: parser variants ↔ slash_command_specs() ───────────
     //
     // RECURRING BUG: a new SlashCommand variant + parser arm + dispatch arm
@@ -2739,6 +2804,7 @@ mod tests {
                 SlashCommand::Env { .. } => Some("env"),
                 SlashCommand::Hub { .. } => Some("hub"),
                 SlashCommand::HubStatus { .. } => Some("hub-status"),
+                SlashCommand::Layout { .. } => Some("layout"),
                 SlashCommand::Language { .. } => Some("language"),
                 SlashCommand::Lsp { .. } => Some("lsp"),
                 SlashCommand::Notebook { .. } => Some("notebook"),
@@ -2863,6 +2929,7 @@ mod tests {
             SlashCommand::Env { action: None },
             SlashCommand::Hub { action: None },
             SlashCommand::HubStatus { package: String::new() },
+            SlashCommand::Layout { action: None },
             SlashCommand::Language { lang: None },
             SlashCommand::Lsp { action: None },
             SlashCommand::Notebook { action: None },
@@ -3119,6 +3186,7 @@ mod tests {
         "env",
         "hub",
         "hub-status",
+        "layout",
         "language",
         "lsp",
         "notebook",

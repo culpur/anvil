@@ -2456,6 +2456,40 @@ Examples:
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // ── /layout — v2.2.16 TUI layout selector ─────────────────────────────
+    SlashCommandSpec {
+        name: "layout",
+        aliases: &[],
+        summary: "Show, list, or switch the TUI layout (vertical-split | three-pane | journal)",
+        argument_hint: Some("[list | <kind> [--tabs|--no-tabs] | reset]"),
+        resume_supported: true,
+        category: SlashCommandCategory::Core,
+        detailed_help: "\
+/layout — switch the TUI layout
+
+Six variants:
+  vertical-split          A: left rail + swappable right deck
+  vertical-split-tabs     D: A + workspace tabs in the right deck
+  three-pane              B: FOCUS / LOG / CONTEXT (vim modal input)
+  three-pane-tabs         E: B + vim-buffer line above FOCUS
+  journal                 C: single-column timestamped, Ctrl-K palette
+  journal-tabs            F: C + thread-switcher anchor line
+
+Tabs are a layout-axis. `--no-tabs` hides the tab strip but keeps
+multi-tab state internally (so a single-tab fallback renders).
+
+Examples:
+  /layout
+  /layout list
+  /layout three-pane --no-tabs
+  /layout reset",
+        subcommands: crate::subcommands::LAYOUT_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
 ];
 
 #[must_use]

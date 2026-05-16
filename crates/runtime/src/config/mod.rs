@@ -149,6 +149,102 @@ impl EgressConfig {
     }
 }
 
+/// v2.2.16: TUI layout selection. Persisted as `tui_layout` in
+/// `~/.anvil/config.json`. Each layout has an independent `tabs` flag
+/// because tabs are a layout-axis feature (NOT a global toggle) — the
+/// six visual variants A/B/C/D/E/F are the cross-product of `kind` and
+/// `tabs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuiLayoutConfig {
+    pub kind: TuiLayoutKind,
+    pub tabs: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuiLayoutKind {
+    /// Layout A/D — persistent left rail + swappable right deck.
+    VerticalSplit,
+    /// Layout B/E — FOCUS / LOG / CONTEXT three-pane vim-modal.
+    ThreePane,
+    /// Layout C/F — timestamped single-column journal with Ctrl-K palette.
+    Journal,
+}
+
+impl Default for TuiLayoutConfig {
+    fn default() -> Self {
+        // Migration: pre-v2.2.16 users had a single-deck + tab-strip UI
+        // closest to VerticalSplit{tabs:true}.
+        Self { kind: TuiLayoutKind::VerticalSplit, tabs: true }
+    }
+}
+
+/// v2.2.16 first-launch toast message.
+///
+/// Returned by callers (TUI init path) when `tui_layout` is absent from
+/// config and `tui_layout_intro_seen` is false.  After displaying it, the
+/// caller writes `tui_layout_intro_seen: true` to suppress future displays.
+pub const TUI_LAYOUT_INTRO_TOAST: &str =
+    "◆ Anvil v2.2.16 introduces TUI layouts. You're on Vertical Split + Tabs \
+     (current behaviour). Try /layout list — six variants. \
+     /layout three-pane is a new vim-modal view worth trying.";
+
+/// Returns `true` when the one-time v2.2.16 layout toast should be shown.
+///
+/// Conditions:
+///   1. `tui_layout` key is absent from the raw merged config (upgrader, not a fresh
+///      wizard install).
+///   2. `tui_layout_intro_seen` is false (toast not yet shown this installation).
+///
+/// The caller (TUI init) must write `tui_layout_intro_seen: true` to config
+/// after emitting the toast.
+#[must_use]
+pub fn should_show_tui_layout_intro(raw: &JsonValue, intro_seen: bool) -> bool {
+    if intro_seen {
+        return false;
+    }
+    // If tui_layout is already set the user configured it explicitly → no toast.
+    raw.as_object()
+        .map(|o| !o.contains_key("tui_layout"))
+        .unwrap_or(true)
+}
+
+/// Parse a short-form alias string into `(TuiLayoutKind, tabs)`.
+///
+/// Alias table (spec §1):
+///   vertical-split       → (VerticalSplit, tabs:false)
+///   vertical-split-tabs  → (VerticalSplit, tabs:true)
+///   three-pane           → (ThreePane,     tabs:false)
+///   three-pane-tabs      → (ThreePane,     tabs:true)
+///   journal              → (Journal,       tabs:false)
+///   journal-tabs         → (Journal,       tabs:true)
+///
+/// Returns `None` for unrecognised strings so callers can fall back to default.
+#[must_use]
+pub fn tui_layout_kind_from_alias(s: &str) -> Option<TuiLayoutConfig> {
+    match s.trim() {
+        "vertical-split" => Some(TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: false }),
+        "vertical-split-tabs" => Some(TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: true }),
+        "three-pane" => Some(TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false }),
+        "three-pane-tabs" => Some(TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: true }),
+        "journal" => Some(TuiLayoutConfig { kind: TuiLayoutKind::Journal, tabs: false }),
+        "journal-tabs" => Some(TuiLayoutConfig { kind: TuiLayoutKind::Journal, tabs: true }),
+        _ => None,
+    }
+}
+
+/// Convert a `TuiLayoutKind` + tabs pair back to the canonical short-form alias.
+#[must_use]
+pub fn tui_layout_to_alias(cfg: &TuiLayoutConfig) -> &'static str {
+    match (cfg.kind, cfg.tabs) {
+        (TuiLayoutKind::VerticalSplit, false) => "vertical-split",
+        (TuiLayoutKind::VerticalSplit, true) => "vertical-split-tabs",
+        (TuiLayoutKind::ThreePane, false) => "three-pane",
+        (TuiLayoutKind::ThreePane, true) => "three-pane-tabs",
+        (TuiLayoutKind::Journal, false) => "journal",
+        (TuiLayoutKind::Journal, true) => "journal-tabs",
+    }
+}
+
 /// AnvilHub marketplace settings loaded from settings.json.
 ///
 /// Controls verification enforcement for `hub install` and `/hub install`.
@@ -240,6 +336,12 @@ pub struct RuntimeFeatureConfig {
     /// AnvilHub marketplace settings (`hub.*` in settings.json).
     /// Default: permissive (all packages installable).
     hub: HubConfig,
+    /// v2.2.16 TUI layout selection (`tui_layout` in config.json).
+    /// Default: vertical-split + tabs (matches pre-v2.2.16 behaviour).
+    tui_layout: TuiLayoutConfig,
+    /// v2.2.16 first-launch toast suppression flag.
+    /// When `true`, the one-time upgrade toast has already been shown.
+    tui_layout_intro_seen: bool,
 }
 
 #[derive(Debug)]
@@ -378,6 +480,8 @@ impl ConfigLoader {
             ),
             egress: tolerate_section("egress", parse_optional_egress_config(&merged_value)),
             hub: parse_optional_hub_config(&merged_value),
+            tui_layout: parse_optional_tui_layout_config(&merged_value),
+            tui_layout_intro_seen: parse_tui_layout_intro_seen(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -667,6 +771,18 @@ impl RuntimeConfig {
     pub const fn hub(&self) -> &HubConfig {
         &self.feature_config.hub
     }
+
+    /// v2.2.16 TUI layout selection (`tui_layout` in config.json).
+    #[must_use]
+    pub const fn tui_layout(&self) -> TuiLayoutConfig {
+        self.feature_config.tui_layout
+    }
+
+    /// Whether the v2.2.16 first-launch layout toast has already been shown.
+    #[must_use]
+    pub const fn tui_layout_intro_seen(&self) -> bool {
+        self.feature_config.tui_layout_intro_seen
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -776,6 +892,69 @@ impl RuntimeFeatureConfig {
     pub const fn hub(&self) -> &HubConfig {
         &self.hub
     }
+}
+
+/// Parse `tui_layout` from the merged config JSON (v2.2.16).
+///
+/// Accepts two forms:
+///
+/// Tagged-object form (canonical):
+/// ```json
+/// { "tui_layout": { "kind": "vertical-split", "tabs": true } }
+/// ```
+///
+/// Short-form string alias (ergonomic):
+/// ```json
+/// { "tui_layout": "vertical-split-tabs" }
+/// ```
+///
+/// When `tui_layout` is absent → `TuiLayoutConfig::default()` (vertical-split + tabs).
+/// When an unknown string is supplied → `TuiLayoutConfig::default()` (forward-compat).
+fn parse_optional_tui_layout_config(root: &JsonValue) -> TuiLayoutConfig {
+    let Some(obj) = root.as_object() else {
+        return TuiLayoutConfig::default();
+    };
+    let Some(raw) = obj.get("tui_layout") else {
+        return TuiLayoutConfig::default();
+    };
+
+    // Short-form string alias
+    if let Some(alias) = raw.as_str() {
+        return tui_layout_kind_from_alias(alias).unwrap_or_default();
+    }
+
+    // Tagged-object form { "kind": "...", "tabs": bool }
+    if let Some(layout_obj) = raw.as_object() {
+        let kind_str = layout_obj
+            .get("kind")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("vertical-split");
+        // Build a canonical alias using the kind string (without tabs suffix)
+        // to resolve the variant, then apply the explicit tabs field.
+        let kind = match kind_str.trim() {
+            "vertical-split" | "vertical-split-tabs" => TuiLayoutKind::VerticalSplit,
+            "three-pane" | "three-pane-tabs" => TuiLayoutKind::ThreePane,
+            "journal" | "journal-tabs" => TuiLayoutKind::Journal,
+            _ => TuiLayoutKind::VerticalSplit, // unknown kind → default
+        };
+        let tabs = layout_obj
+            .get("tabs")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(true); // default tabs: true when key absent
+        return TuiLayoutConfig { kind, tabs };
+    }
+
+    TuiLayoutConfig::default()
+}
+
+/// Parse `tui_layout_intro_seen` from the merged config JSON.
+///
+/// This flag suppresses the one-time v2.2.16 upgrade toast after first display.
+fn parse_tui_layout_intro_seen(root: &JsonValue) -> bool {
+    root.as_object()
+        .and_then(|o| o.get("tui_layout_intro_seen"))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
 }
 
 /// Parse the `hub` block from the merged config JSON (F3 / v2.2.16).
@@ -1914,6 +2093,158 @@ mod tests {
         assert!(loaded.egress().enabled());
         assert_eq!(loaded.egress().extra_allowlist(), &["corp.internal".to_string()]);
         assert!(loaded.permissions().use_permission_memory());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    // ── TuiLayoutConfig tests (v2.2.16) ──────────────────────────────────────
+
+    #[test]
+    fn tui_layout_default_is_vertical_split_tabs() {
+        use crate::config::{TuiLayoutConfig, TuiLayoutKind};
+        let cfg = TuiLayoutConfig::default();
+        assert_eq!(cfg.kind, TuiLayoutKind::VerticalSplit);
+        assert!(cfg.tabs, "default should have tabs: true");
+    }
+
+    #[test]
+    fn tui_layout_parses_tagged_object_form() {
+        use crate::config::{TuiLayoutKind};
+        let json = crate::json::JsonValue::Object({
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("tui_layout".to_string(), crate::json::JsonValue::Object({
+                let mut inner = std::collections::BTreeMap::new();
+                inner.insert("kind".to_string(), crate::json::JsonValue::String("three-pane".to_string()));
+                inner.insert("tabs".to_string(), crate::json::JsonValue::Bool(false));
+                inner
+            }));
+            m
+        });
+        let cfg = super::parse_optional_tui_layout_config(&json);
+        assert_eq!(cfg.kind, TuiLayoutKind::ThreePane);
+        assert!(!cfg.tabs);
+    }
+
+    #[test]
+    fn tui_layout_parses_tagged_object_form_with_tabs_true() {
+        use crate::config::{TuiLayoutKind};
+        let json = crate::json::JsonValue::Object({
+            let mut m = std::collections::BTreeMap::new();
+            m.insert("tui_layout".to_string(), crate::json::JsonValue::Object({
+                let mut inner = std::collections::BTreeMap::new();
+                inner.insert("kind".to_string(), crate::json::JsonValue::String("journal".to_string()));
+                inner.insert("tabs".to_string(), crate::json::JsonValue::Bool(true));
+                inner
+            }));
+            m
+        });
+        let cfg = super::parse_optional_tui_layout_config(&json);
+        assert_eq!(cfg.kind, TuiLayoutKind::Journal);
+        assert!(cfg.tabs);
+    }
+
+    #[test]
+    fn tui_layout_parses_short_string_form() {
+        use crate::config::{TuiLayoutKind, tui_layout_kind_from_alias};
+
+        let cases: &[(&str, TuiLayoutKind, bool)] = &[
+            ("vertical-split",      TuiLayoutKind::VerticalSplit, false),
+            ("vertical-split-tabs", TuiLayoutKind::VerticalSplit, true),
+            ("three-pane",          TuiLayoutKind::ThreePane, false),
+            ("three-pane-tabs",     TuiLayoutKind::ThreePane, true),
+            ("journal",             TuiLayoutKind::Journal, false),
+            ("journal-tabs",        TuiLayoutKind::Journal, true),
+        ];
+        for (alias, expected_kind, expected_tabs) in cases {
+            let cfg = tui_layout_kind_from_alias(alias)
+                .unwrap_or_else(|| panic!("alias {alias:?} should parse"));
+            assert_eq!(cfg.kind, *expected_kind, "alias={alias}");
+            assert_eq!(cfg.tabs, *expected_tabs, "alias={alias}");
+        }
+    }
+
+    #[test]
+    fn tui_layout_falls_back_to_default_when_absent() {
+        use crate::config::{TuiLayoutConfig, TuiLayoutKind};
+        let json = crate::json::JsonValue::Object(std::collections::BTreeMap::new());
+        let cfg = super::parse_optional_tui_layout_config(&json);
+        assert_eq!(cfg, TuiLayoutConfig::default());
+        assert_eq!(cfg.kind, TuiLayoutKind::VerticalSplit);
+        assert!(cfg.tabs);
+    }
+
+    #[test]
+    fn tui_layout_falls_back_to_default_on_unknown_string() {
+        use crate::config::TuiLayoutConfig;
+        let json = crate::json::JsonValue::Object({
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "tui_layout".to_string(),
+                crate::json::JsonValue::String("unknown-layout-xyz".to_string()),
+            );
+            m
+        });
+        let cfg = super::parse_optional_tui_layout_config(&json);
+        assert_eq!(cfg, TuiLayoutConfig::default());
+    }
+
+    #[test]
+    fn tui_layout_roundtrips_through_serde() {
+        use crate::config::{TuiLayoutConfig, TuiLayoutKind, tui_layout_to_alias, tui_layout_kind_from_alias};
+
+        let cases = [
+            TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: false },
+            TuiLayoutConfig { kind: TuiLayoutKind::VerticalSplit, tabs: true },
+            TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: false },
+            TuiLayoutConfig { kind: TuiLayoutKind::ThreePane, tabs: true },
+            TuiLayoutConfig { kind: TuiLayoutKind::Journal, tabs: false },
+            TuiLayoutConfig { kind: TuiLayoutKind::Journal, tabs: true },
+        ];
+        for cfg in cases {
+            let alias = tui_layout_to_alias(&cfg);
+            let recovered = tui_layout_kind_from_alias(alias)
+                .unwrap_or_else(|| panic!("roundtrip failed for alias={alias:?}"));
+            assert_eq!(recovered, cfg, "roundtrip failed for alias={alias:?}");
+        }
+    }
+
+    #[test]
+    fn tui_layout_config_loaded_from_settings_file() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"tui_layout": {"kind": "three-pane", "tabs": false}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        use crate::config::TuiLayoutKind;
+        assert_eq!(loaded.tui_layout().kind, TuiLayoutKind::ThreePane);
+        assert!(!loaded.tui_layout().tabs);
+        assert!(!loaded.tui_layout_intro_seen());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn tui_layout_intro_seen_flag_parses() {
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"tui_layout_intro_seen": true}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(loaded.tui_layout_intro_seen());
 
         fs::remove_dir_all(root).expect("cleanup");
     }

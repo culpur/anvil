@@ -1808,6 +1808,7 @@ fn run_resume_command(
         | SlashCommand::Profile { .. }
         | SlashCommand::Cursor { .. }
         | SlashCommand::HubStatus { .. }
+        | SlashCommand::Layout { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -5749,6 +5750,11 @@ impl LiveCli {
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
+            }
+            // v2.2.16 placeholder — full implementation lands in step 2.
+            SlashCommand::Layout { action } => {
+                let _ = action;
+                ("Layout switching not yet implemented. Coming in v2.2.16.".to_string(), false)
             }
         })
     }

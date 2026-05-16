@@ -1384,6 +1384,7 @@ pub const CONFIGURE_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec { name: "plugins-cron", summary: "Configure plugins & cron", args: &[], subcommands: &[] },
     SubcommandSpec { name: "status-line", summary: "Configure status line widgets", args: &[], subcommands: &[] },
     SubcommandSpec { name: "mcp", summary: "Configure MCP servers", args: &[], subcommands: MCP_SUBCOMMANDS },
+    SubcommandSpec { name: "layout", summary: "Configure TUI layout", args: &[], subcommands: LAYOUT_SUBCOMMANDS },
 ];
 
 /// Ghost command: /tab — tab management
@@ -2097,3 +2098,15 @@ pub const CURSOR_SUBCOMMANDS: &[SubcommandSpec] = &[
 /// validates them.
 pub const CURSOR_SUBCOMMAND_NAMES: &[&str] =
     &["launch", "list", "get", "cancel", "artifacts", "stream"];
+
+/// Subcommands for `/layout` (v2.2.16 TUI layout selector).
+pub const LAYOUT_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec { name: "list",  summary: "List all six layout variants", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "reset", summary: "Reset to default (vertical-split + tabs)", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "vertical-split",      summary: "Layout A: rail + deck",                 args: &[], subcommands: &[] },
+    SubcommandSpec { name: "vertical-split-tabs", summary: "Layout D: A + tabs",                    args: &[], subcommands: &[] },
+    SubcommandSpec { name: "three-pane",          summary: "Layout B: FOCUS/LOG/CONTEXT (vim)",     args: &[], subcommands: &[] },
+    SubcommandSpec { name: "three-pane-tabs",     summary: "Layout E: B + buffer line",             args: &[], subcommands: &[] },
+    SubcommandSpec { name: "journal",             summary: "Layout C: journal + Ctrl-K palette",    args: &[], subcommands: &[] },
+    SubcommandSpec { name: "journal-tabs",        summary: "Layout F: C + thread switcher",         args: &[], subcommands: &[] },
+];

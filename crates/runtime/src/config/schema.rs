@@ -544,6 +544,87 @@ fn build_root_schema() -> RootSchema {
     top_props.insert("permissions".to_string(), permissions_schema);
     top_props.insert("egress".to_string(), egress_schema);
     top_props.insert("hub".to_string(), hub_schema);
+
+    // --- tui_layout (v2.2.16) -------------------------------------------
+    // Accepted as either a short-form string alias OR a {kind, tabs} object.
+    let tui_layout_string_schema = Schema::Object(SchemaObject {
+        metadata: desc(
+            "Short-form alias: vertical-split | vertical-split-tabs | \
+             three-pane | three-pane-tabs | journal | journal-tabs.",
+        ),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+        enum_values: Some(vec![
+            Value::String("vertical-split".to_string()),
+            Value::String("vertical-split-tabs".to_string()),
+            Value::String("three-pane".to_string()),
+            Value::String("three-pane-tabs".to_string()),
+            Value::String("journal".to_string()),
+            Value::String("journal-tabs".to_string()),
+        ]),
+        ..Default::default()
+    });
+
+    let mut tui_layout_obj_props = PropMap::new();
+    tui_layout_obj_props.insert(
+        "kind".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc("Layout family: vertical-split | three-pane | journal"),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::String))),
+            enum_values: Some(vec![
+                Value::String("vertical-split".to_string()),
+                Value::String("three-pane".to_string()),
+                Value::String("journal".to_string()),
+            ]),
+            ..Default::default()
+        }),
+    );
+    tui_layout_obj_props.insert(
+        "tabs".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "Whether to show the workspace tab strip. \
+                 Default: true. Multi-tab state is preserved when false.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Boolean))),
+            ..Default::default()
+        }),
+    );
+    let tui_layout_object_schema = object_schema(
+        desc("Tagged-object form of tui_layout."),
+        tui_layout_obj_props,
+        vec![],
+        false,
+    );
+
+    let tui_layout_schema = Schema::Object(SchemaObject {
+        metadata: desc(
+            "v2.2.16 TUI layout selection. Persisted as `tui_layout` in \
+             ~/.anvil/config.json. Six variants: vertical-split (A), \
+             vertical-split-tabs (D), three-pane (B), three-pane-tabs (E), \
+             journal (C), journal-tabs (F). \
+             Default: vertical-split-tabs (closest to pre-v2.2.16 behaviour). \
+             Set via /layout or /configure layout.",
+        ),
+        subschemas: Some(Box::new(SubschemaValidation {
+            any_of: Some(vec![tui_layout_string_schema, tui_layout_object_schema]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    top_props.insert("tui_layout".to_string(), tui_layout_schema);
+
+    top_props.insert(
+        "tui_layout_intro_seen".to_string(),
+        Schema::Object(SchemaObject {
+            metadata: desc(
+                "v2.2.16: when true, the one-time layout upgrade toast has been \
+                 shown and will not appear again. Written automatically by Anvil on \
+                 first display; do not edit by hand.",
+            ),
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Boolean))),
+            ..Default::default()
+        }),
+    );
     top_props.insert("sandbox".to_string(), sandbox_resolved);
     top_props.insert("output_style".to_string(), output_style_resolved);
     top_props.insert("profiles".to_string(), profiles_schema);

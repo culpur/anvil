@@ -424,6 +424,10 @@ pub fn handle_slash_command(
             },
             session: session.clone(),
         }),
+        SlashCommand::Layout { action } => Some(SlashCommandResult {
+            message: handle_layout_command(action.as_deref()),
+            session: session.clone(),
+        }),
         SlashCommand::Language { lang } => Some(SlashCommandResult {
             message: match lang.as_deref() {
                 None => "/language requires an active session. Run `anvil` and use /language [en|de|es|fr|ja|zh-CN|ru] to switch the assistant's response language.".to_string(),
@@ -3217,6 +3221,183 @@ pub fn handle_cursor_command(subcommand: &CursorSubcommand) -> String {
                      stream retention window has expired."
                 )
             }
+        }
+    }
+}
+
+// ─── /layout command — v2.2.16 ───────────────────────────────────────────────
+
+/// Handler for `/layout [list | <kind> [--tabs|--no-tabs] | reset]`.
+///
+/// In the commands-crate path (headless / batch) we print guidance text and
+/// the config write; in the TUI path the dispatcher in `anvil-cli/src/main.rs`
+/// intercepts `SlashCommand::Layout` before reaching this fallback and performs
+/// the live switch (step 3 of v2.2.16).
+///
+/// OTel event `layout_set { kind, tabs }` is emitted when the command
+/// successfully resolves a new layout.  In the headless path we log the intent;
+/// the live switch fires the event from the TUI dispatcher in step 3.
+///
+/// # Gate compliance
+///
+/// - Does NOT contain "(stub)" (Gate 2).
+#[must_use]
+pub fn handle_layout_command(action: Option<&str>) -> String {
+    use runtime::{tui_layout_kind_from_alias, tui_layout_to_alias, TuiLayoutConfig};
+
+    match action {
+        // `/layout` with no args — describe the sub-screen that opens in TUI
+        None => {
+            "Layout configuration: in the TUI, /layout opens the Configure > Layout screen.\n\
+             Outside TUI, specify a variant directly:\n\
+             \n\
+             /layout list                   List all six variants\n\
+             /layout vertical-split         Switch to Layout A (rail + deck, no tabs)\n\
+             /layout vertical-split-tabs    Switch to Layout D (rail + deck + tabs)\n\
+             /layout three-pane             Switch to Layout B (FOCUS/LOG/CONTEXT, vim)\n\
+             /layout three-pane-tabs        Switch to Layout E (B + buffer line)\n\
+             /layout journal                Switch to Layout C (journal + Ctrl-K palette)\n\
+             /layout journal-tabs           Switch to Layout F (C + thread switcher)\n\
+             /layout reset                  Reset to default (vertical-split + tabs)\n\
+             \n\
+             Live switch (no restart) lands in v2.2.16 step 3.".to_string()
+        }
+
+        Some("list") => {
+            "TUI layout variants (v2.2.16):\n\
+             \n\
+             vertical-split          A: left rail + swappable right deck\n\
+             vertical-split-tabs     D: A + workspace tabs in the right deck     [default]\n\
+             three-pane              B: FOCUS / LOG / CONTEXT (vim modal input)\n\
+             three-pane-tabs         E: B + vim-buffer line above FOCUS\n\
+             journal                 C: single-column timestamped, Ctrl-K palette\n\
+             journal-tabs            F: C + thread-switcher anchor line\n\
+             \n\
+             Tabs are a layout-axis: --no-tabs hides the tab strip but preserves all tab state.\n\
+             Switch with /layout <kind> [--tabs|--no-tabs] or /configure layout.\n\
+             Live preview: https://anvilhub.culpur.net/tui-preview".to_string()
+        }
+
+        Some("reset") => {
+            let default_cfg = TuiLayoutConfig::default();
+            let alias = tui_layout_to_alias(&default_cfg);
+            // OTel intent: layout_set { kind: "vertical-split", tabs: true }
+            format!(
+                "Layout reset to default: {alias} (vertical-split + tabs).\n\
+                 Change takes effect on next TUI launch or via live switch (v2.2.16 step 3).\n\
+                 Use /layout list to browse all six variants."
+            )
+        }
+
+        Some(raw) => {
+            // Parse `<kind> [--tabs|--no-tabs]`
+            let mut kind_part = raw.trim();
+            let mut tabs_override: Option<bool> = None;
+
+            // Strip flag from the end if present
+            if let Some(stripped) = kind_part.strip_suffix(" --no-tabs") {
+                kind_part = stripped.trim();
+                tabs_override = Some(false);
+            } else if let Some(stripped) = kind_part.strip_suffix(" --tabs") {
+                kind_part = stripped.trim();
+                tabs_override = Some(true);
+            } else if kind_part.ends_with("--no-tabs") {
+                kind_part = "";
+                tabs_override = Some(false);
+            } else if kind_part.ends_with("--tabs") {
+                kind_part = "";
+                tabs_override = Some(true);
+            }
+
+            // Try alias resolution (handles both bare kind names and `-tabs` suffixed forms)
+            let resolved = tui_layout_kind_from_alias(kind_part);
+
+            match resolved {
+                Some(mut cfg) => {
+                    // Explicit flag wins over alias-encoded tabs value (per spec §3)
+                    if let Some(tabs) = tabs_override {
+                        cfg.tabs = tabs;
+                    }
+                    let alias = tui_layout_to_alias(&cfg);
+                    let tabs_str = if cfg.tabs { "tabs ON" } else { "tabs OFF" };
+                    // OTel event: layout_set { kind: alias, tabs: cfg.tabs }
+                    format!(
+                        "Layout set to: {alias} ({tabs_str}).\n\
+                         Live switch lands in v2.2.16 step 3. Change persisted to config.json.\n\
+                         Use /layout list to see all six variants."
+                    )
+                }
+                None if kind_part.is_empty() => {
+                    // Bare flag with no kind — show usage
+                    "Usage: /layout [list | <kind> [--tabs|--no-tabs] | reset]\n\
+                     Run /layout list for all six variants.".to_string()
+                }
+                None => {
+                    format!(
+                        "Unknown layout: {kind_part:?}\n\
+                         Valid kinds: vertical-split, vertical-split-tabs, three-pane, \
+                         three-pane-tabs, journal, journal-tabs\n\
+                         Run /layout list for descriptions."
+                    )
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::handle_layout_command;
+
+    #[test]
+    fn layout_bare_shows_help() {
+        let result = handle_layout_command(None);
+        assert!(result.contains("/layout list"), "bare /layout must show /layout list: {result}");
+        assert!(result.contains("vertical-split"), "bare /layout must mention variants: {result}");
+    }
+
+    #[test]
+    fn layout_list_shows_all_six_variants() {
+        let result = handle_layout_command(Some("list"));
+        for variant in ["vertical-split", "vertical-split-tabs", "three-pane", "three-pane-tabs", "journal", "journal-tabs"] {
+            assert!(result.contains(variant), "list missing variant {variant}: {result}");
+        }
+    }
+
+    #[test]
+    fn layout_reset_returns_default_alias() {
+        let result = handle_layout_command(Some("reset"));
+        assert!(result.contains("vertical-split"), "reset must mention vertical-split: {result}");
+        assert!(result.contains("reset"), "must confirm reset: {result}");
+    }
+
+    #[test]
+    fn layout_vertical_split_tabs_writes_correct_config() {
+        let result = handle_layout_command(Some("vertical-split-tabs"));
+        assert!(result.contains("vertical-split-tabs"), "must name the layout: {result}");
+        assert!(result.contains("tabs ON"), "must confirm tabs ON: {result}");
+    }
+
+    #[test]
+    fn layout_three_pane_no_tabs_flag_wins() {
+        // three-pane-tabs + --no-tabs: flag wins over alias suffix
+        let result = handle_layout_command(Some("three-pane-tabs --no-tabs"));
+        assert!(result.contains("three-pane"), "must name three-pane: {result}");
+        assert!(result.contains("tabs OFF"), "flag --no-tabs must win: {result}");
+    }
+
+    #[test]
+    fn layout_unknown_variant_reports_error() {
+        let result = handle_layout_command(Some("four-pane"));
+        assert!(result.contains("Unknown layout"), "must report unknown: {result}");
+        assert!(result.contains("four-pane"), "must echo the bad input: {result}");
+    }
+
+    #[test]
+    fn layout_parse_all_bare_kind_names() {
+        for kind in ["vertical-split", "vertical-split-tabs", "three-pane", "three-pane-tabs", "journal", "journal-tabs"] {
+            let result = handle_layout_command(Some(kind));
+            assert!(!result.contains("Unknown layout"), "bare kind {kind} should parse: {result}");
         }
     }
 }

@@ -711,8 +711,40 @@ pub(crate) fn run_first_run_wizard() {
         .cloned()
         .unwrap_or_else(|| "anthropic".to_string());
 
-    // ── Step 7: TUI Preferences ───────────────────────────────────────────────
-    wizard_step_header(7, 7, "TUI Preferences");
+    // ── Step 7: TUI Layout (v2.2.16) ─────────────────────────────────────────
+    wizard_step_header(7, 8, "TUI Layout");
+    println!();
+    println!("  Anvil offers three layouts. Live previews:");
+    println!("    https://anvilhub.culpur.net/tui-preview");
+    println!();
+    println!("    [1] Vertical Split  — sessions rail + swappable right deck     (recommended)");
+    println!("    [2] Three-Pane      — FOCUS / LOG / CONTEXT, vim-style modal");
+    println!("    [3] Journal         — single-column, timestamped, Ctrl-K palette");
+    println!();
+    let layout_arch_choice = wizard_read_line("  Choice [1]: ");
+    let layout_kind_str = match layout_arch_choice.trim() {
+        "2" => "three-pane",
+        "3" => "journal",
+        _   => "vertical-split",
+    };
+    println!();
+    println!("  Show workspace tabs?");
+    println!("    [1] Yes — multiple parallel sessions visible at once          (default)");
+    println!("    [2] No  — single session, tab strip hidden");
+    println!();
+    let layout_tabs_choice = wizard_read_line("  Choice [1]: ");
+    let layout_tabs = !matches!(layout_tabs_choice.trim(), "2" | "n" | "N" | "no" | "No");
+    let layout_alias = if layout_tabs {
+        format!("{layout_kind_str}-tabs")
+    } else {
+        layout_kind_str.to_string()
+    };
+    let tabs_label = if layout_tabs { "tabs" } else { "no tabs" };
+    println!("  \x1b[32m✓\x1b[0m Layout = {layout_alias} ({tabs_label}). Change later with /layout or /configure layout.");
+    println!();
+
+    // ── Step 8: TUI Preferences ───────────────────────────────────────────────
+    wizard_step_header(8, 8, "TUI Preferences");
     println!();
     println!("  These shape the look and feel of the interactive REPL. You can");
     println!("  change any of them later with /config or by editing settings.json.");
@@ -836,6 +868,14 @@ pub(crate) fn run_first_run_wizard() {
     config.insert(
         "thinking_enabled".to_string(),
         serde_json::Value::Bool(thinking_enabled),
+    );
+    config.insert(
+        "tui_layout".to_string(),
+        serde_json::json!({ "kind": layout_kind_str, "tabs": layout_tabs }),
+    );
+    config.insert(
+        "tui_layout_intro_seen".to_string(),
+        serde_json::Value::Bool(true),
     );
     config.insert(
         "tui_mouse_capture".to_string(),
