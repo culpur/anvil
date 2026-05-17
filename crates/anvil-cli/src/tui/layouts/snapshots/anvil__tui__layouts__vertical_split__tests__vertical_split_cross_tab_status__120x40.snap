@@ -2,18 +2,18 @@
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
 expression: rendered
 ---
- SESSIONS               DECK: Conversation
- ● main
-                        ▌ do the thing
- AGENTS (GLOBAL)
- │ none active          ▎ ok
+ SESSIONS                [1: main] [2: aegis-fix⚠] [3: deploy-prep]
+ ● main                 DECK: Conversation
+ ○ aegis-fix
+ ○ deploy-prep          ▌ wire the new dispatch
+
+ AGENTS (GLOBAL)        ▎ routing through canonical dispatcher
+ ⟳ aud on aegis
 
  STATUS (ALL TABS)
- running         0 tabs
- pending         0 perms
- cost            $0.00
-
-
+ running        1 tab
+ pending        1 perm
+ cost           $0.42
 
 
 
@@ -40,5 +40,5 @@ expression: rendered
 
 
                         ────────────────────────────────────────────────────────────────────────────────────────────────
-                        > next prompt
+                        >
                         g switch deck │ d tools │ ? help

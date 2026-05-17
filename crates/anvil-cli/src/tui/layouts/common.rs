@@ -40,23 +40,19 @@ pub(super) fn render_tab_bar(
     let mut tab_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
     let mut cursor_col: u16 = area.x + 1;
 
-    for (idx, (tab_id, tab_name, is_active, has_unread, has_perm)) in
+    for (idx, (_tab_id, tab_name, is_active, has_unread, has_perm)) in
         snap.tab_infos.iter().enumerate()
     {
-        let label = if *has_unread && *has_perm {
-            format!("[{tab_id}: {tab_name}*⚠]")
-        } else if *has_unread {
-            format!("[{tab_id}: {tab_name}*]")
-        } else if *has_perm {
-            format!("[{tab_id}: {tab_name}⚠]")
-        } else {
-            format!("[{tab_id}: {tab_name}]")
-        };
-        let label_len = label.chars().count() as u16;
+        // Base label without badges.
+        let base = tab_name.clone();
         let label_start = cursor_col;
-        let label_end = cursor_col + label_len;
 
-        let style = if *is_active {
+        // Build the tab label with inline badges:
+        //   - Active tab: cyan + bold, with cyan underline indicator
+        //   - Inactive: dim
+        //   - has_unread: superscript digit "²" after name
+        //   - has_perm: "⚠" glyph after name (and after unread if both)
+        let name_style = if *is_active {
             Style::default()
                 .fg(rgb(theme.accent))
                 .add_modifier(Modifier::BOLD)
@@ -65,8 +61,43 @@ pub(super) fn render_tab_bar(
                 .fg(rgb(theme.text_secondary))
                 .add_modifier(Modifier::DIM)
         };
-        tab_spans.push(Span::styled(label, style));
-        cursor_col = label_end;
+        let badge_style = Style::default()
+            .fg(rgb(theme.warning))
+            .add_modifier(Modifier::BOLD);
+        let perm_style = Style::default()
+            .fg(rgb(theme.warning))
+            .add_modifier(Modifier::BOLD);
+
+        // Prefix space.
+        tab_spans.push(Span::raw(" "));
+        cursor_col += 1;
+
+        // Active indicator: ● for active, ○ for inactive.
+        let dot = if *is_active { "● " } else { "○ " };
+        let dot_style = if *is_active { name_style } else {
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+        };
+        tab_spans.push(Span::styled(dot.to_string(), dot_style));
+        cursor_col += dot.chars().count() as u16;
+
+        // Tab name.
+        tab_spans.push(Span::styled(base.clone(), name_style));
+        cursor_col += base.chars().count() as u16;
+
+        // Unread superscript (use ² unicode superscript two as a compact badge).
+        if *has_unread {
+            tab_spans.push(Span::styled("²".to_string(), badge_style));
+            cursor_col += 1;
+        }
+
+        // Pending permission glyph.
+        if *has_perm {
+            tab_spans.push(Span::raw(" "));
+            tab_spans.push(Span::styled("⚠".to_string(), perm_style));
+            cursor_col += 2;
+        }
+
+        let label_end = cursor_col;
 
         let close_col = if snap.can_close_tab {
             let col = cursor_col + 1;

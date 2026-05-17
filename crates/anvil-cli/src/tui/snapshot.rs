@@ -158,4 +158,14 @@ pub(crate) struct LayoutSnapshot {
     // ── Click-geometry helpers (initialised to empty; filled during draw) ─
     /// Whether the session has more than one tab open (enables close glyph).
     pub can_close_tab: bool,
+
+    // ── Cross-tab aggregates (computed once per frame in collect_snapshot) ─
+    /// Number of tabs that currently have an in-flight turn (streaming).
+    pub running_tab_count: usize,
+    /// Total pending permission requests across ALL tabs.
+    pub pending_permission_count: usize,
+    /// Sum of per-tab session cost in USD across ALL tabs.
+    /// Each tab's cost is estimated from its input/output token counts
+    /// and the active model's pricing table.
+    pub total_session_cost_usd: f64,
 }

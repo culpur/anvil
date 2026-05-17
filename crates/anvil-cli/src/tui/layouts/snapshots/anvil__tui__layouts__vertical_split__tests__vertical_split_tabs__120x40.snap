@@ -2,16 +2,16 @@
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
 expression: rendered
 ---
- ⊢ sessions             [1: main]   DECK: Conversation
+ SESSIONS               [1: main]   DECK: Conversation
  ● main
-                        You  do the thing
- ⊢ agents
- │ none active          Anvil  ok
+                        ▌ do the thing
+ AGENTS (GLOBAL)
+ │ none active          ▎ ok
 
- ⊢ status
- • anthropic
-   sonnet-4-6
-
+ STATUS (ALL TABS)
+ running         0 tabs
+ pending         0 perms
+ cost            $0.00
 
 
 

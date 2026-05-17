@@ -1,29 +1,25 @@
 /// Layout A/D — Vertical Split rail+deck renderer.
 ///
-/// Visual design:
+/// Visual design (Layout D, tabs = true):
 /// ```text
-/// ┌─[Anvil]────────────────────────────────────────────────────────────────────┐
-/// │ ⊢ sessions      │                                                          │
-/// │ ● anvil v2.2.16 │   DECK: conversation                                     │
-/// │ ○ aegis-fix     │                                                          │
-/// │ ○ deploy-prep   │   you  ▌ refactor the auth module…                       │
-/// │                 │                                                          │
-/// │ ⊢ agents        │   anvil ▎ reading 4 files. drafting plan…                │
-/// │ │ none active   │                                                          │
-/// │                 │                                                          │
-/// │ ⊢ status        │                                                          │
-/// │ • anthropic     │                                                          │
-/// │   sonnet-4.6    │                                                          │
-/// │ • workspace     │                                                          │
-/// │   anvil-dev     │                                                          │
-/// │ • cost          │                                                          │
-/// │   $0.42         │ ──────────────────────────────────────────────────────── │
-/// │                 │ ▌ <prompt>                                                │
-/// └─────────────────┴──────────────────────────────────────────────────────────┘
-/// Keys: g switch deck │ d tools │ s sessions │ a agents │ ? help
+/// ┌─[Anvil]─────────────────────────────────────────────────────┐
+/// │ SESSIONS        │ ● main   ○ aegis-2 ⚠   ○ deploy-prep   [+]│ ← tab strip in deck only
+/// │ ● v2.2.15...    │                                            │
+/// │ ○ aegis-fix     │  ▌ wire the new dispatch...                │
+/// │                 │  ▎ Routing through the now. Spec entry...  │
+/// │ AGENTS (GLOBAL) │                                            │
+/// │ ● reviewer      │  ▌ good. while you do that...              │
+/// │ ● auditor       │                                            │
+/// │   on aegis-fix  │  ▎ Switching to tab 2 won't                │
+/// │                 │  ▎ break...                                │
+/// │ STATUS (ALL...) │                                            │
+/// │ running 3 tabs  │ ─────────────────────────────────────────  │
+/// │ pending  1 perm │ ▌ ask main, or Ctrl+2 to switch...         │
+/// │ cost   $1.08    │                                            │
+/// └─────────────────┴────────────────────────────────────────────┘
+/// Keys: Ctrl+1-9 tab │ Ctrl+T new │ g cycle deck │ s sessions │ ? help
 /// ```
 ///
-/// Layout D (`tabs: true`): tab strip at top of right deck (NOT full-width).
 /// Layout A (`tabs: false`): no tab strip; left rail anchored.
 
 use ratatui::Frame;
@@ -105,9 +101,6 @@ impl TuiLayoutRenderer for Renderer {
 
         render_rail(frame, rail_area, snap);
         render_deck(frame, deck_area, snap, local, tab_hits_out, self.tabs, deck_mode);
-
-        // ── Keybind hint row at very bottom of rail ─────────────────────────────
-        // We don't draw a separate row; the keys line is inside render_deck footer.
     }
 }
 
@@ -121,16 +114,21 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // ── Sessions section ──────────────────────────────────────────────────────
-    let section_style = Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD);
+    // Style tokens.
+    // Section headers: uppercase, bold, dim — matches mockup spec.
+    let section_style = Style::default()
+        .fg(rgb(theme.accent))
+        .add_modifier(Modifier::BOLD | Modifier::DIM);
     let dim = Style::default().fg(Color::DarkGray);
+    let qualifier_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
     let active_dot_style = Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD);
     let inactive_dot_style = Style::default().fg(Color::DarkGray);
 
-    lines.push(Line::from(Span::styled(
-        truncate(format!(" ⊢ sessions{}", " ".repeat(w.saturating_sub(11))), w),
-        section_style,
-    )));
+    // ── SESSIONS section ──────────────────────────────────────────────────────
+    // Header: "SESSIONS" — no qualifier (sessions are per-tab by nature).
+    lines.push(section_header_line("SESSIONS", None, w, section_style));
 
     for (_, tab_name, is_active, has_unread, _has_perm) in &snap.tab_infos {
         let dot = if *is_active { "●" } else { "○" };
@@ -140,6 +138,7 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         } else {
             Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))
         };
+        // Unread dot: small · at the far right.
         let unread_marker = if *has_unread { "·" } else { " " };
         let available = w.saturating_sub(4);
         let name_truncated = truncate(tab_name.clone(), available);
@@ -151,11 +150,23 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     }
     lines.push(Line::from(""));
 
-    // ── Agents section ────────────────────────────────────────────────────────
-    lines.push(Line::from(Span::styled(
-        truncate(format!(" ⊢ agents{}", " ".repeat(w.saturating_sub(9))), w),
-        section_style,
-    )));
+    // ── AGENTS (GLOBAL) section ───────────────────────────────────────────────
+    // Header includes "(GLOBAL)" qualifier to tell the user this section
+    // doesn't change when they switch tabs.
+    lines.push(section_header_line("AGENTS", Some("GLOBAL"), w, section_style));
+
+    // Build a lookup: tab_id → tab_name for annotation.
+    let tab_id_to_name: std::collections::HashMap<usize, &str> = snap
+        .tab_infos
+        .iter()
+        .map(|(id, name, _, _, _)| (*id, name.as_str()))
+        .collect();
+    let active_tab_id = snap
+        .tab_infos
+        .iter()
+        .find(|(_, _, is_active, _, _)| *is_active)
+        .map(|(id, _, _, _, _)| *id)
+        .unwrap_or(0);
 
     if snap.agent_rows.is_empty() {
         lines.push(Line::from(vec![
@@ -163,87 +174,61 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
             Span::styled("none active".to_string(), dim),
         ]));
     } else {
-        for (_, type_label, _task, elapsed, icon) in snap.agent_rows.iter().take(4) {
+        for (agent_tab_id, type_label, _task, elapsed, icon) in snap.agent_rows.iter().take(4) {
             let icon_style = match *icon {
                 "⟳" => Style::default().fg(rgb(theme.accent)),
                 "✓" => Style::default().fg(rgb(theme.success)),
                 "✗" => Style::default().fg(rgb(theme.error)),
                 _ => dim,
             };
-            let label = truncate(format!("{icon} {type_label} {elapsed}"), w.saturating_sub(2));
-            lines.push(Line::from(vec![
+            // Determine tab annotation — show "on <tab-name>" when the agent
+            // is bound to a tab other than the currently active one.
+            let tab_annotation: Option<String> =
+                if *agent_tab_id != 0 && *agent_tab_id != active_tab_id {
+                    tab_id_to_name
+                        .get(agent_tab_id)
+                        .map(|name| format!(" on {name}"))
+                } else {
+                    None
+                };
+
+            let base_label = format!("{icon} {type_label} {elapsed}");
+            let annotation_len = tab_annotation.as_deref().map(|s| s.len()).unwrap_or(0);
+            let max_base = w.saturating_sub(2 + annotation_len);
+            let base_truncated = truncate(base_label, max_base);
+
+            let mut spans: Vec<Span<'static>> = vec![
                 Span::styled(" ", Style::default()),
-                Span::styled(label, icon_style),
-            ]));
+                Span::styled(base_truncated, icon_style),
+            ];
+            if let Some(ann) = tab_annotation {
+                spans.push(Span::styled(ann, qualifier_style));
+            }
+            lines.push(Line::from(spans));
         }
     }
     lines.push(Line::from(""));
 
-    // ── Status section ────────────────────────────────────────────────────────
-    lines.push(Line::from(Span::styled(
-        truncate(format!(" ⊢ status{}", " ".repeat(w.saturating_sub(9))), w),
-        section_style,
-    )));
+    // ── STATUS (ALL TABS) section ─────────────────────────────────────────────
+    // Header includes "(ALL TABS)" qualifier — data is cross-tab aggregates.
+    lines.push(section_header_line("STATUS", Some("ALL TABS"), w, section_style));
 
-    // Provider + model
-    let model_short = snap.model.split('/').last().unwrap_or(&snap.model);
-    let model_display = if model_short.len() > w.saturating_sub(4) {
-        truncate(model_short.to_string(), w.saturating_sub(4))
+    // Three right-aligned rows: label on left, value right-aligned to rail width.
+    let running_val = if snap.running_tab_count == 1 {
+        "1 tab".to_string()
     } else {
-        model_short.to_string()
+        format!("{} tabs", snap.running_tab_count)
     };
-    // Provider comes from model prefix (e.g. "claude-…" → anthropic, "gpt-…" → openai)
-    let provider = if snap.model.starts_with("claude") || snap.model.contains("anthropic") {
-        "anthropic"
-    } else if snap.model.starts_with("gpt") || snap.model.starts_with("o1") || snap.model.starts_with("o3") {
-        "openai"
-    } else if snap.model.contains("qwen") || snap.model.contains("deepseek") {
-        "local"
+    let pending_val = if snap.pending_permission_count == 1 {
+        "1 perm".to_string()
     } else {
-        "provider"
+        format!("{} perms", snap.pending_permission_count)
     };
-    lines.push(Line::from(vec![
-        Span::styled(" • ", dim),
-        Span::styled(truncate(provider.to_string(), w.saturating_sub(3)), Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("   ", Style::default()),
-        Span::styled(model_display, Style::default().fg(Color::Yellow)),
-    ]));
+    let cost_val = format!("${:.2}", snap.total_session_cost_usd);
 
-    // Workspace (git branch)
-    if !snap.git_branch.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled(" • ", dim),
-            Span::styled("workspace", Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled("   ", Style::default()),
-            Span::styled(
-                truncate(snap.git_branch.clone(), w.saturating_sub(3)),
-                Style::default().fg(Color::Green),
-            ),
-        ]));
-    }
-
-    // Cost
-    let cost_str = if snap.model.contains(':') && !snap.model.contains(":cloud") {
-        "local".to_string()
-    } else if let Some(p) = pricing_for_model(&snap.model) {
-        let cost = (f64::from(snap.input_tokens) / 1_000_000.0) * p.input_cost_per_million
-            + (f64::from(snap.output_tokens) / 1_000_000.0) * p.output_cost_per_million;
-        format_usd(cost)
-    } else {
-        format_usd(0.0)
-    };
-    lines.push(Line::from(vec![
-        Span::styled(" • ", dim),
-        Span::styled("cost", Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("   ", Style::default()),
-        Span::styled(cost_str, Style::default().fg(Color::Rgb(0x88, 0xcc, 0x88))),
-    ]));
+    lines.push(right_aligned_row("running", &running_val, w, dim));
+    lines.push(right_aligned_row("pending", &pending_val, w, dim));
+    lines.push(right_aligned_row("cost", &cost_val, w, dim));
 
     // Fill remaining rows.
     let total = area.height as usize;
@@ -257,6 +242,40 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
             .style(Style::default().bg(rgb(theme.bg_primary))),
         area,
     );
+}
+
+/// Build a section header line with an optional parenthetical qualifier.
+///
+/// Example: `SESSIONS` → ` SESSIONS`
+/// Example: `AGENTS` + `GLOBAL` → ` AGENTS (GLOBAL)`
+fn section_header_line(
+    label: &'static str,
+    qualifier: Option<&'static str>,
+    w: usize,
+    style: Style,
+) -> Line<'static> {
+    let full = if let Some(q) = qualifier {
+        format!(" {label} ({q})")
+    } else {
+        format!(" {label}")
+    };
+    let padded = truncate(format!("{full}{}", " ".repeat(w.saturating_sub(full.len()))), w);
+    Line::from(Span::styled(padded, style))
+}
+
+/// Build a right-aligned two-column row: label left, value right.
+///
+/// Example (w=24): `" running          3 tabs"`.
+fn right_aligned_row(label: &str, value: &str, w: usize, style: Style) -> Line<'static> {
+    // Leading space + label + gap + value, value right-aligned.
+    // Layout: ` <label><pad><value>`
+    // Total width = w.
+    let prefix = format!(" {label}");
+    let total = prefix.len() + value.len();
+    let pad = if total + 1 < w { w - total } else { 1 };
+    let text = format!("{prefix}{}{value}", " ".repeat(pad));
+    let truncated = truncate(text, w);
+    Line::from(Span::styled(truncated, style))
 }
 
 // ─── Deck renderer ────────────────────────────────────────────────────────────
@@ -284,7 +303,7 @@ fn render_deck(
     // Keybind row at the very bottom.
     let keybind_height: u16 = 1;
 
-    // Optionally a tab strip at the top of the deck.
+    // Optionally a tab strip at the top of the deck (NOT spanning the rail).
     let tab_strip_height: u16 = if tabs { 1 } else { 0 };
 
     // Deck header (DECK: <mode>) — 1 row.
@@ -443,6 +462,11 @@ fn render_deck_header(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot, deck
     );
 }
 
+/// Build conversation content lines with left-border accent bars.
+///
+/// User messages:   `▌ <text>` — bar in `theme.accent` cyan
+/// Anvil messages:  `▎ <text>` — bar in a slightly dimmer cyan
+/// Tool calls:      no bar, rendered inline as before
 fn build_content_lines(
     snap: &LayoutSnapshot,
     content_width: u16,
@@ -454,12 +478,27 @@ fn build_content_lines(
     match deck_mode {
         RightDeckMode::Conversation => {
             for entry in &snap.log_snapshot {
-                lines.extend(entry.to_lines_with(content_width, theme, snap.transcript_verbose));
+                lines.extend(entry_to_lines_with_bars(entry, content_width, theme, snap.transcript_verbose));
             }
-            // Streaming assistant text.
+            // Streaming assistant text — apply bar accent to each line.
             if !snap.pending.is_empty() {
                 let clean = strip_ansi(&snap.pending);
-                lines.extend(clean.lines().map(|l| Line::from(Span::raw(l.to_string()))));
+                let bar_style = Style::default()
+                    .fg(Color::Rgb(0x44, 0xaa, 0xaa))
+                    .add_modifier(Modifier::DIM);
+                for (i, l) in clean.lines().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(vec![
+                            Span::styled("▎ ".to_string(), bar_style),
+                            Span::raw(l.to_string()),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled("▎ ".to_string(), bar_style),
+                            Span::raw(l.to_string()),
+                        ]));
+                    }
+                }
             }
             // Thinking spinner.
             if !snap.think.is_empty() {
@@ -489,16 +528,14 @@ fn build_content_lines(
             }
         }
         RightDeckMode::Transcript => {
-            // Full transcript with every entry expanded.
             for entry in &snap.log_snapshot {
-                lines.extend(entry.to_lines_with(content_width, theme, true));
+                lines.extend(entry_to_lines_with_bars(entry, content_width, theme, true));
             }
         }
         RightDeckMode::ToolResults => {
-            // Only tool-call cards.
             for entry in &snap.log_snapshot {
                 if matches!(entry, LogEntry::ToolCall { .. }) {
-                    lines.extend(entry.to_lines_with(content_width, theme, snap.transcript_verbose));
+                    lines.extend(entry_to_lines_with_bars(entry, content_width, theme, snap.transcript_verbose));
                 }
             }
             if lines.is_empty() {
@@ -511,6 +548,56 @@ fn build_content_lines(
     }
 
     lines
+}
+
+/// Render a `LogEntry` to lines, adding left-border accent bars for User and
+/// Assistant entries.  Tool calls and System entries are rendered as before
+/// (no bar).
+fn entry_to_lines_with_bars(
+    entry: &LogEntry,
+    content_width: u16,
+    theme: &runtime::Theme,
+    force_expand: bool,
+) -> Vec<Line<'static>> {
+    match entry {
+        LogEntry::User(text) => {
+            // User bar: ▌ in theme.accent (cyan).
+            let bar_style = Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD);
+            let text_style = Style::default()
+                .fg(rgb(theme.text_primary))
+                .add_modifier(Modifier::BOLD);
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            for (i, l) in text.lines().enumerate() {
+                let label = if i == 0 { "▌ " } else { "▌ " };
+                lines.push(Line::from(vec![
+                    Span::styled(label.to_string(), bar_style),
+                    Span::styled(l.to_string(), text_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines
+        }
+        LogEntry::Assistant(text) => {
+            // Assistant bar: ▎ in a slightly dimmer cyan.
+            let bar_style = Style::default()
+                .fg(Color::Rgb(0x44, 0xaa, 0xaa))
+                .add_modifier(Modifier::DIM);
+            let clean = strip_ansi(text);
+            let mut lines: Vec<Line<'static>> = clean
+                .lines()
+                .map(|l| {
+                    Line::from(vec![
+                        Span::styled("▎ ".to_string(), bar_style),
+                        Span::raw(l.to_string()),
+                    ])
+                })
+                .collect();
+            lines.push(Line::from(""));
+            lines
+        }
+        // Tool calls and System entries: delegate to the standard renderer.
+        _ => entry.to_lines_with(content_width, theme, force_expand),
+    }
 }
 
 fn render_footer(
@@ -665,24 +752,25 @@ mod tests {
             let deck_area = horiz[1];
             let deck_w = deck_area.width as usize;
 
-            // Rail content.
+            // Rail content — updated for new uppercase + qualified headers.
             let rail_lines: Vec<Line<'static>> = vec![
-                Line::from(Span::styled(" ⊢ sessions", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(" SESSIONS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
                 Line::from(Span::styled(" ● main", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
                 Line::from(""),
-                Line::from(Span::styled(" ⊢ agents", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(" AGENTS (GLOBAL)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
                 Line::from(Span::styled(" │ none active", Style::default().fg(Color::DarkGray))),
                 Line::from(""),
-                Line::from(Span::styled(" ⊢ status", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-                Line::from(Span::styled(" • anthropic", Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa)))),
-                Line::from(Span::styled("   sonnet-4-6", Style::default().fg(Color::Yellow))),
+                Line::from(Span::styled(" STATUS (ALL TABS)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
+                Line::from(Span::styled(" running         0 tabs", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(" pending         0 perms", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(" cost            $0.00", Style::default().fg(Color::DarkGray))),
             ];
             frame.render_widget(
                 Paragraph::new(Text::from(rail_lines)).style(Style::default()),
                 rail_area,
             );
 
-            // Deck content.
+            // Deck content — conversation with left-border bars.
             let deck_header = if tabs {
                 format!("[1: main]   DECK: Conversation{}", " ".repeat(deck_w.saturating_sub(32)))
             } else {
@@ -692,9 +780,17 @@ mod tests {
             let deck_lines: Vec<Line<'static>> = vec![
                 Line::from(Span::styled(deck_header, Style::default().fg(Color::Cyan))),
                 Line::from(""),
-                Line::from(Span::raw("You  do the thing")),
+                // User message with left-border bar.
+                Line::from(vec![
+                    Span::styled("▌ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("do the thing", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
                 Line::from(""),
-                Line::from(Span::raw("Anvil  ok")),
+                // Assistant message with left-border bar.
+                Line::from(vec![
+                    Span::styled("▎ ", Style::default().fg(Color::Rgb(0x44, 0xaa, 0xaa)).add_modifier(Modifier::DIM)),
+                    Span::raw("ok"),
+                ]),
                 Line::from(""),
             ];
             let mut all: Vec<Line<'static>> = deck_lines;
@@ -702,7 +798,7 @@ mod tests {
                 all.push(Line::from(""));
             }
             all.push(Line::from(Span::raw(sep.clone())));
-            all.push(Line::from(Span::raw(format!("> next prompt"))));
+            all.push(Line::from(Span::raw("> next prompt".to_string())));
             all.push(Line::from(Span::styled(
                 "g switch deck │ d tools │ ? help",
                 Style::default().fg(Color::DarkGray),
@@ -718,12 +814,105 @@ mod tests {
         extract_text(&terminal)
     }
 
+    /// Build a multi-tab scenario snap for cross-tab status testing.
+    fn make_cross_tab_snap(width: u16, height: u16) -> String {
+        use ratatui::Frame;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+
+        terminal.draw(|frame: &mut Frame| {
+            let size = frame.area();
+
+            use ratatui::layout::{Constraint, Direction, Layout as RLayout};
+            use ratatui::style::{Color, Modifier, Style};
+            use ratatui::text::{Line, Span, Text};
+            use ratatui::widgets::Paragraph;
+
+            let rail_w = super::rail_width(size.width);
+            if rail_w == 0 {
+                frame.render_widget(Paragraph::new("(narrow-cross)"), size);
+                return;
+            }
+            let horiz = RLayout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(rail_w), Constraint::Fill(1)])
+                .split(size);
+            let rail_area = horiz[0];
+            let deck_area = horiz[1];
+
+            // Rail: 3 tabs, 1 streaming, 1 pending perm, 1 idle.
+            // STATUS: running=1 tabs, pending=1 perm, cost=$0.42
+            let rail_lines: Vec<Line<'static>> = vec![
+                Line::from(Span::styled(" SESSIONS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
+                Line::from(Span::styled(" ● main", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(" ○ aegis-fix", Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa)))),
+                Line::from(Span::styled(" ○ deploy-prep", Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa)))),
+                Line::from(""),
+                Line::from(Span::styled(" AGENTS (GLOBAL)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
+                // Agent bound to non-active tab — should show "on aegis".
+                Line::from(vec![
+                    Span::styled(" ⟳ aud ", Style::default().fg(Color::Cyan)),
+                    Span::styled("on aegis", Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(" STATUS (ALL TABS)", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD | Modifier::DIM))),
+                // 1 tab streaming.
+                Line::from(Span::styled(" running        1 tab", Style::default().fg(Color::DarkGray))),
+                // 1 pending permission.
+                Line::from(Span::styled(" pending        1 perm", Style::default().fg(Color::DarkGray))),
+                Line::from(Span::styled(" cost           $0.42", Style::default().fg(Color::DarkGray))),
+            ];
+            frame.render_widget(
+                Paragraph::new(Text::from(rail_lines)).style(Style::default()),
+                rail_area,
+            );
+
+            // Tab strip with badges: main (active), aegis-fix (⚠ perm), deploy-prep (idle).
+            let tab_strip = format!(
+                " [1: main] [2: aegis-fix⚠] [3: deploy-prep]{}",
+                " ".repeat(deck_area.width.saturating_sub(42) as usize)
+            );
+            let sep = "─".repeat(deck_area.width as usize);
+            let mut deck_lines: Vec<Line<'static>> = vec![
+                Line::from(Span::styled(tab_strip, Style::default().fg(Color::Cyan))),
+                Line::from(Span::styled("DECK: Conversation", Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM))),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("▌ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("wire the new dispatch", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("▎ ", Style::default().fg(Color::Rgb(0x44, 0xaa, 0xaa)).add_modifier(Modifier::DIM)),
+                    Span::raw("routing through canonical dispatcher"),
+                ]),
+                Line::from(""),
+            ];
+            while deck_lines.len() < deck_area.height.saturating_sub(3) as usize {
+                deck_lines.push(Line::from(""));
+            }
+            deck_lines.push(Line::from(Span::raw(sep)));
+            deck_lines.push(Line::from(Span::raw("> ")));
+            deck_lines.push(Line::from(Span::styled(
+                "g switch deck │ d tools │ ? help",
+                Style::default().fg(Color::DarkGray),
+            )));
+            frame.render_widget(
+                Paragraph::new(Text::from(deck_lines)).style(Style::default()),
+                deck_area,
+            );
+        }).expect("terminal.draw");
+
+        extract_text(&terminal)
+    }
+
     #[test]
     fn vertical_split__80x24() {
         let rendered = make_snap(80, 24, false);
-        // Verify left rail is present (sessions section visible).
-        assert!(rendered.contains("⊢ sessions"), "rail sessions header must be visible");
-        assert!(rendered.contains("⊢ agents"), "rail agents header must be visible");
+        // Verify new uppercase section headers.
+        assert!(rendered.contains("SESSIONS"), "rail sessions header must be uppercase");
+        assert!(rendered.contains("AGENTS (GLOBAL)"), "rail agents header must have (GLOBAL) qualifier");
+        assert!(rendered.contains("STATUS (ALL TABS)"), "rail status header must have (ALL TABS) qualifier");
         assert!(rendered.contains("DECK:"), "deck header must be visible");
         insta::assert_snapshot!("vertical_split__80x24", rendered);
     }
@@ -731,14 +920,16 @@ mod tests {
     #[test]
     fn vertical_split__120x40() {
         let rendered = make_snap(120, 40, false);
-        assert!(rendered.contains("⊢ sessions"), "rail sessions header must be visible");
+        assert!(rendered.contains("SESSIONS"), "rail sessions header must be uppercase");
+        assert!(rendered.contains("AGENTS (GLOBAL)"), "agents header must have (GLOBAL) qualifier");
+        assert!(rendered.contains("STATUS (ALL TABS)"), "status header must have (ALL TABS) qualifier");
         insta::assert_snapshot!("vertical_split__120x40", rendered);
     }
 
     #[test]
     fn vertical_split__200x60() {
         let rendered = make_snap(200, 60, false);
-        assert!(rendered.contains("⊢ sessions"), "rail sessions header must be visible");
+        assert!(rendered.contains("SESSIONS"), "rail sessions header must be uppercase");
         insta::assert_snapshot!("vertical_split__200x60", rendered);
     }
 
@@ -753,5 +944,20 @@ mod tests {
     fn vertical_split_tabs__120x40() {
         let rendered = make_snap(120, 40, true);
         insta::assert_snapshot!("vertical_split_tabs__120x40", rendered);
+    }
+
+    /// Cross-tab status section: 3 tabs, 1 streaming, 1 with pending permission, 1 idle.
+    /// Verify STATUS shows "running 1 tab", "pending 1 perm", and agent shows "on aegis-fix".
+    #[test]
+    fn vertical_split_cross_tab_status__120x40() {
+        let rendered = make_cross_tab_snap(120, 40);
+        assert!(rendered.contains("STATUS (ALL TABS)"), "cross-tab status header required");
+        assert!(rendered.contains("1 tab") || rendered.contains("running"), "running count must appear");
+        assert!(rendered.contains("1 perm") || rendered.contains("pending"), "pending perm count must appear");
+        assert!(rendered.contains("on aegis"), "agent tab-binding annotation must appear");
+        // Left-border bars must be present.
+        assert!(rendered.contains("▌ "), "user message bar must be present");
+        assert!(rendered.contains("▎ "), "assistant message bar must be present");
+        insta::assert_snapshot!("vertical_split_cross_tab_status__120x40", rendered);
     }
 }

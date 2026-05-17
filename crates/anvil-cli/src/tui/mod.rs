@@ -1105,6 +1105,19 @@ impl AnvilTui {
         let is_ssh_tab = ssh_screen.is_some();
 
         let can_close_tab = self.tabs.len() > 1;
+
+        // ── Cross-tab aggregates ─────────────────────────────────────────────
+        let running_tab_count = self.tabs.iter().filter(|t| t.in_flight).count();
+        let pending_permission_count = self.pending_permissions.len();
+        let total_session_cost_usd: f64 = self.tabs.iter().map(|t| {
+            if let Some(p) = runtime::pricing_for_model(&t.model) {
+                (f64::from(t.input_tokens) / 1_000_000.0) * p.input_cost_per_million
+                    + (f64::from(t.output_tokens) / 1_000_000.0) * p.output_cost_per_million
+            } else {
+                0.0
+            }
+        }).sum();
+
         let provider_login_modal_snapshot = self
             .provider_login_modal
             .as_ref()
@@ -1177,6 +1190,9 @@ impl AnvilTui {
             provider_login_modal_snapshot,
             scrollback_view_lines,
             can_close_tab,
+            running_tab_count,
+            pending_permission_count,
+            total_session_cost_usd,
         }
     }
 
