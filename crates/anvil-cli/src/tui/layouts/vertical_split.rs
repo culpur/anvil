@@ -110,6 +110,16 @@ impl TuiLayoutRenderer for Renderer {
 }
 
 // ─── Rail renderer ────────────────────────────────────────────────────────────
+//
+// Task #596: the rail is split into a vertical 3-region layout so the user
+// can see the dynamic top-of-rail (SESSIONS / AGENTS / STATUS) at the top
+// of the screen and the relatively-static bottom-of-rail (MEMORY → BUILD)
+// anchored to the bottom, with a `bg_primary` fill in between. Previously
+// the rail was a single Vec painted top-to-bottom which left an ugly dark
+// expanse below KEYBINDS on tall terminals.
+//
+// QMD was folded INTO the MEMORY section (it is layers 3-7 of the
+// seven-layer memory architecture) instead of standing as its own block.
 
 fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let theme = &snap.theme;
@@ -117,10 +127,64 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
 
     frame.render_widget(ratatui::widgets::Clear, area);
 
+    let top_lines = build_rail_top(snap, w);
+    let bottom_lines = build_rail_bottom(snap, w);
+
+    // Background paragraph: a fully-blanked rail using `bg_primary` so the
+    // middle Fill chunk is the right color even before we render the two
+    // anchored regions. ratatui needs the background paint here because the
+    // top/bottom paragraphs only cover their own rows.
+    let bg_paint: Vec<Line<'static>> = (0..area.height)
+        .map(|_| Line::from(""))
+        .collect();
+    frame.render_widget(
+        Paragraph::new(Text::from(bg_paint))
+            .style(Style::default().bg(rgb(theme.bg_primary))),
+        area,
+    );
+
+    // Compute the actual visible row counts so the layout doesn't reserve
+    // more rows than the section needs. The top group is always small (≤ ~12);
+    // the bottom group grows with the rail's chrome (memory + qmd + chrome
+    // = ~26 rows). When the terminal is short, prefer to show the top in
+    // full and truncate the bottom — the user can still see what tab they
+    // are in even on an 8-row terminal.
+    let top_h = top_lines.len() as u16;
+    let bottom_h = (bottom_lines.len() as u16).min(area.height.saturating_sub(top_h));
+
+    // Three-chunk vertical layout:
+    //   [Length(top_h), Fill(1), Length(bottom_h)]
+    // The middle chunk is the flex spacer rendered with the bg paragraph above.
+    let vert = RLayout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(top_h),
+            Constraint::Fill(1),
+            Constraint::Length(bottom_h),
+        ])
+        .split(area);
+    let top_area = vert[0];
+    let bottom_area = vert[2];
+
+    frame.render_widget(
+        Paragraph::new(Text::from(top_lines))
+            .style(Style::default().bg(rgb(theme.bg_primary))),
+        top_area,
+    );
+
+    frame.render_widget(
+        Paragraph::new(Text::from(bottom_lines))
+            .style(Style::default().bg(rgb(theme.bg_primary))),
+        bottom_area,
+    );
+}
+
+/// Build the top-of-rail line set: SESSIONS, AGENTS (GLOBAL), STATUS (ALL TABS).
+fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
+    let theme = &snap.theme;
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Style tokens.
-    // Section headers: uppercase, bold, dim — matches mockup spec.
+    // Style tokens — shared with the bottom builder.
     let section_style = Style::default()
         .fg(rgb(theme.accent))
         .add_modifier(Modifier::BOLD | Modifier::DIM);
@@ -132,7 +196,6 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let inactive_dot_style = Style::default().fg(Color::DarkGray);
 
     // ── SESSIONS section ──────────────────────────────────────────────────────
-    // Header: "SESSIONS" — no qualifier (sessions are per-tab by nature).
     lines.push(section_header_line("SESSIONS", None, w, section_style));
 
     for (_, tab_name, is_active, has_unread, _has_perm) in &snap.tab_infos {
@@ -143,7 +206,6 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         } else {
             Style::default().fg(Color::Rgb(0xaa, 0xaa, 0xaa))
         };
-        // Unread dot: small · at the far right.
         let unread_marker = if *has_unread { "·" } else { " " };
         let available = w.saturating_sub(4);
         let name_truncated = truncate(tab_name.clone(), available);
@@ -156,11 +218,8 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     lines.push(Line::from(""));
 
     // ── AGENTS (GLOBAL) section ───────────────────────────────────────────────
-    // Header includes "(GLOBAL)" qualifier to tell the user this section
-    // doesn't change when they switch tabs.
     lines.push(section_header_line("AGENTS", Some("GLOBAL"), w, section_style));
 
-    // Build a lookup: tab_id → tab_name for annotation.
     let tab_id_to_name: std::collections::HashMap<usize, &str> = snap
         .tab_infos
         .iter()
@@ -186,8 +245,6 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
                 "✗" => Style::default().fg(rgb(theme.error)),
                 _ => dim,
             };
-            // Determine tab annotation — show "on <tab-name>" when the agent
-            // is bound to a tab other than the currently active one.
             let tab_annotation: Option<String> =
                 if *agent_tab_id != 0 && *agent_tab_id != active_tab_id {
                     tab_id_to_name
@@ -215,10 +272,8 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     lines.push(Line::from(""));
 
     // ── STATUS (ALL TABS) section ─────────────────────────────────────────────
-    // Header includes "(ALL TABS)" qualifier — data is cross-tab aggregates.
     lines.push(section_header_line("STATUS", Some("ALL TABS"), w, section_style));
 
-    // Three right-aligned rows: label on left, value right-aligned to rail width.
     let running_val = if snap.running_tab_count == 1 {
         "1 tab".to_string()
     } else {
@@ -234,11 +289,28 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     lines.push(right_aligned_row("running", &running_val, w, dim));
     lines.push(right_aligned_row("pending", &pending_val, w, dim));
     lines.push(right_aligned_row("cost", &cost_val, w, dim));
-    lines.push(Line::from(""));
 
-    // ── MEMORY section (task #594 / BUG-13) ───────────────────────────────────
-    // Surface the seven-layer memory store user-visibly. Each row reports
-    // a count pulled from `~/.anvil/` via collect_snapshot helpers.
+    lines
+}
+
+/// Build the bottom-of-rail line set: MEMORY (with QMD rows folded in), MODEL,
+/// PERMISSIONS, CONTEXT, KEYBINDS, optional UPDATE notice, BUILD.
+///
+/// Lines are returned in the order they should appear top-to-bottom; the
+/// caller uses a `Length(N)` layout chunk and ratatui anchors them to the
+/// bottom of the area implicitly via the preceding `Fill(1)` spacer.
+fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
+    let theme = &snap.theme;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let section_style = Style::default()
+        .fg(rgb(theme.accent))
+        .add_modifier(Modifier::BOLD | Modifier::DIM);
+    let dim = Style::default().fg(Color::DarkGray);
+
+    // ── MEMORY section (task #594 / BUG-13 + task #596) ───────────────────────
+    // QMD rows are folded in here: QMD is layers 3-7 of the seven-layer
+    // memory architecture, so a standalone QMD section was double-counting.
     lines.push(section_header_line("MEMORY", None, w, section_style));
     let working_val = format!("{}t / {}tok", snap.memory_working_turns, snap.memory_working_tokens);
     lines.push(right_aligned_row("working", &working_val, w, dim));
@@ -271,6 +343,19 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         format!("{} prior", snap.memory_permission_decisions)
     };
     lines.push(right_aligned_row("permission", &perm_decisions_val, w, dim));
+    // QMD rows — folded in as part of the MEMORY section per task #596.
+    let qmd_val = if snap.qmd_archive_count == 1 {
+        "active · 1 archive".to_string()
+    } else {
+        format!("active · {} archives", snap.qmd_archive_count)
+    };
+    lines.push(right_aligned_row("qmd", &qmd_val, w, dim));
+    if let Some(ref sid) = snap.qmd_latest_session_id {
+        let short_sid: String = sid.chars().take(12).collect();
+        let age = snap.qmd_latest_age_days.unwrap_or(0);
+        let qmd_latest_val = format!("{short_sid} ({age}d ago)");
+        lines.push(right_aligned_row("qmd-latest", &qmd_latest_val, w, dim));
+    }
     lines.push(Line::from(""));
 
     // ── MODEL section ─────────────────────────────────────────────────────────
@@ -291,29 +376,7 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     )));
     lines.push(Line::from(""));
 
-    // ── QMD section ───────────────────────────────────────────────────────────
-    lines.push(section_header_line("QMD", None, w, section_style));
-    let qmd_archives_val = if snap.qmd_archive_count == 1 {
-        "active · 1 archive".to_string()
-    } else {
-        format!("active · {} archives", snap.qmd_archive_count)
-    };
-    let qmd_arch_truncated = truncate(format!(" {qmd_archives_val}"), w);
-    lines.push(Line::from(Span::styled(
-        qmd_arch_truncated,
-        Style::default().fg(Color::Rgb(0x55, 0x88, 0x55)),
-    )));
-    if let Some(ref sid) = snap.qmd_latest_session_id {
-        // Truncate session id to fit; show age suffix when known.
-        let short_sid: String = sid.chars().take(10).collect();
-        let age = snap.qmd_latest_age_days.unwrap_or(0);
-        let latest_val = format!("latest: {short_sid} ({age}d)");
-        let latest_truncated = truncate(format!(" {latest_val}"), w);
-        lines.push(Line::from(Span::styled(latest_truncated, dim)));
-    }
-    lines.push(Line::from(""));
-
-    // ── CONTEXT section (per user: "move this to bottom of left hand rail") ──
+    // ── CONTEXT section ───────────────────────────────────────────────────────
     lines.push(section_header_line("CONTEXT", None, w, section_style));
     lines.push(context_bar_line(
         snap.context_used_tokens,
@@ -328,17 +391,7 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     lines.push(Line::from(Span::styled(block_truncated, dim)));
     lines.push(Line::from(""));
 
-    // ── BUILD section ─────────────────────────────────────────────────────────
-    lines.push(section_header_line("BUILD", None, w, section_style));
-    let build_val = format!(" v{} · {}", snap.build_version, snap.build_git_sha_short);
-    let build_truncated = truncate(build_val, w);
-    lines.push(Line::from(Span::styled(
-        build_truncated,
-        Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
-    )));
-    lines.push(Line::from(""));
-
-    // ── KEYBINDS section (per user: keybinds move to rail) ────────────────────
+    // ── KEYBINDS section ──────────────────────────────────────────────────────
     lines.push(section_header_line("KEYBINDS", None, w, section_style));
     let kb_lines = [
         " g switch deck · d tools",
@@ -351,19 +404,49 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         let kb_truncated = truncate(kb.to_string(), w);
         lines.push(Line::from(Span::styled(kb_truncated, dim)));
     }
+    lines.push(Line::from(""));
 
-    // Fill remaining rows.
-    let total = area.height as usize;
-    while lines.len() < total {
-        lines.push(Line::from(""));
+    // ── UPDATE NOTICE (optional, above BUILD) ─────────────────────────────────
+    // Task #596: when the background update check finds a newer release,
+    // the message is set into `snap.update_available` and we render it as
+    // a single bold accent-colored line ABOVE the BUILD section so the
+    // user can see "I should run anvil --update".
+    if !snap.update_available.is_empty() {
+        // Extract the bare version from the canonical message format:
+        //   "Update available! <current> → <latest>  Run: anvil --update"
+        // Fall back to the full message when the parser doesn't match.
+        let latest = parse_update_latest(&snap.update_available);
+        let label = match latest {
+            Some(v) => format!(" ⬆ update available  v{v}"),
+            None => format!(" ⬆ {}", snap.update_available),
+        };
+        let label_truncated = truncate(label, w);
+        lines.push(Line::from(Span::styled(
+            label_truncated,
+            Style::default()
+                .fg(rgb(theme.accent))
+                .add_modifier(Modifier::BOLD),
+        )));
     }
-    lines.truncate(total);
 
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .style(Style::default().bg(rgb(theme.bg_primary))),
-        area,
-    );
+    // ── BUILD section ─────────────────────────────────────────────────────────
+    lines.push(section_header_line("BUILD", None, w, section_style));
+    let build_val = format!(" v{} · {}", snap.build_version, snap.build_git_sha_short);
+    let build_truncated = truncate(build_val, w);
+    lines.push(Line::from(Span::styled(
+        build_truncated,
+        Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
+    )));
+
+    lines
+}
+
+/// Pull the `<latest>` token out of the canonical update message
+/// `"Update available! <current> → <latest>  Run: anvil --update"`.
+fn parse_update_latest(msg: &str) -> Option<String> {
+    // Token after the arrow, before the next whitespace.
+    let after_arrow = msg.split('→').nth(1)?.trim_start();
+    Some(after_arrow.split_whitespace().next()?.to_string())
 }
 
 /// Build a section header line with an optional parenthetical qualifier.
@@ -1140,8 +1223,13 @@ mod tests {
     }
 
     /// Memory rail at a tall footprint — every section visible.
-    /// Uses height=50 to ensure all 10 rail sections fit. Production frames
-    /// shorter than 50 rows will truncate the bottom (KEYBINDS) gracefully.
+    /// Uses height=50 so the rail's `Length(top) + Fill(1) + Length(bottom)`
+    /// layout has room for both anchored regions plus a healthy spacer.
+    ///
+    /// Task #596 folded the QMD section's rows INTO the MEMORY section,
+    /// so the rail now has 9 sections instead of 10: SESSIONS, AGENTS,
+    /// STATUS (top), MEMORY+qmd-rows, MODEL, PERMISSIONS, CONTEXT, KEYBINDS,
+    /// BUILD (bottom).
     #[test]
     fn vertical_split_memory__120x40() {
         let snap = populated_snap();
@@ -1149,10 +1237,16 @@ mod tests {
         assert!(rendered.contains("MEMORY"), "MEMORY section must render");
         assert!(rendered.contains("MODEL"), "MODEL section must render");
         assert!(rendered.contains("PERMISSIONS"), "PERMISSIONS section must render");
-        assert!(rendered.contains("QMD"), "QMD section must render");
         assert!(rendered.contains("CONTEXT"), "CONTEXT section must render");
         assert!(rendered.contains("BUILD"), "BUILD section must render");
         assert!(rendered.contains("KEYBINDS"), "KEYBINDS section must render");
+        // QMD is now a row inside MEMORY, not a standalone section header.
+        assert!(rendered.contains(" qmd "), "qmd row inside MEMORY must render");
+        assert!(
+            rendered.contains("47 archives"),
+            "qmd archive count must render inside MEMORY"
+        );
+        assert!(rendered.contains("qmd-latest"), "qmd-latest row must render");
         assert!(rendered.contains("working"), "memory working row must render");
         assert!(rendered.contains("episodic"), "memory episodic row must render");
         assert!(rendered.contains("semantic"), "memory semantic row must render");
@@ -1166,6 +1260,108 @@ mod tests {
         assert!(rendered.contains("deadbee"), "git sha must render");
         assert!(rendered.contains("g switch deck"), "keybinds must render");
         insta::assert_snapshot!("vertical_split_memory__120x40", rendered);
+    }
+
+    /// Task #596: on a tall rail the bottom group (MEMORY → BUILD) must be
+    /// anchored to the bottom of the area with a `bg_primary` flex spacer
+    /// between it and the top group (SESSIONS → STATUS). Previously the
+    /// rail painted top-to-bottom and left a dark expanse below KEYBINDS.
+    ///
+    /// We verify the anchor by rendering at a tall height (80) and checking:
+    ///   - SESSIONS appears on row 0 (top anchor).
+    ///   - BUILD appears in the LAST FEW rows (bottom anchor).
+    ///   - There is a contiguous run of blank rows between STATUS and MEMORY.
+    #[test]
+    fn vertical_split_split_anchor__32x80() {
+        let snap = populated_snap();
+        let rendered = render_real_rail(&snap, 32, 80);
+
+        let rows: Vec<&str> = rendered.lines().collect();
+        // Top anchor.
+        let sessions_row = rows
+            .iter()
+            .position(|l| l.contains("SESSIONS"))
+            .expect("SESSIONS must render");
+        assert!(
+            sessions_row <= 1,
+            "SESSIONS must anchor near top, found at row {sessions_row}"
+        );
+
+        // Bottom anchor.
+        let build_row = rows
+            .iter()
+            .rposition(|l| l.contains("BUILD"))
+            .expect("BUILD must render");
+        // BUILD section header + 1 build-info row; we tolerate small drift,
+        // but it must land in the bottom 5 rows of an 80-row rail.
+        assert!(
+            build_row >= rows.len() - 5,
+            "BUILD must anchor near bottom, found at row {build_row} of {}",
+            rows.len()
+        );
+
+        // Verify a spacer exists: at least 10 contiguous empty rows between
+        // STATUS group and MEMORY group on an 80-row rail.
+        let status_row = rows
+            .iter()
+            .position(|l| l.contains("STATUS"))
+            .expect("STATUS row must render");
+        let memory_row = rows
+            .iter()
+            .position(|l| l.contains("MEMORY"))
+            .expect("MEMORY row must render");
+        assert!(
+            memory_row.saturating_sub(status_row) > 10,
+            "expected a tall spacer between STATUS (row {status_row}) and MEMORY (row {memory_row})"
+        );
+        insta::assert_snapshot!("vertical_split_split_anchor__32x80", rendered);
+    }
+
+    /// Task #596: when an update is available the rail renders a single
+    /// `⬆ update available  vX.Y.Z` line above BUILD, styled with
+    /// `theme.accent` bold. Otherwise the line is absent.
+    #[test]
+    fn vertical_split_update_banner__32x80() {
+        let mut snap = populated_snap();
+        snap.update_available = "Update available! 2.2.16 → 2.3.0  Run: anvil --update".to_string();
+        let rendered = render_real_rail(&snap, 32, 80);
+        assert!(
+            rendered.contains("update available"),
+            "update banner must render when set"
+        );
+        assert!(rendered.contains("v2.3.0"), "update banner must show the latest version");
+        // Banner must appear above BUILD, not below.
+        let banner_row = rendered
+            .lines()
+            .position(|l| l.contains("update available"))
+            .expect("banner row");
+        let build_row = rendered
+            .lines()
+            .position(|l| l.contains("BUILD"))
+            .expect("BUILD row");
+        assert!(
+            banner_row < build_row,
+            "banner (row {banner_row}) must appear above BUILD (row {build_row})"
+        );
+        insta::assert_snapshot!("vertical_split_update_banner__32x80", rendered);
+    }
+
+    /// Negative: when `update_available` is empty (no newer version), the
+    /// `⬆ update available` line must NOT appear in the rail.
+    #[test]
+    fn vertical_split_no_update_banner__32x80() {
+        let snap = populated_snap();
+        // populated_snap leaves update_available empty by default.
+        assert!(snap.update_available.is_empty(), "fixture must start clean");
+        let rendered = render_real_rail(&snap, 32, 80);
+        assert!(
+            !rendered.contains("update available"),
+            "banner must not render when update_available is empty"
+        );
+        assert!(
+            !rendered.contains("⬆"),
+            "no arrow glyph when there is no update"
+        );
     }
 
     /// Negative test: the deck footer must contain only the input — no Model,
