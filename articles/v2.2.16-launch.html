@@ -1,0 +1,121 @@
+<p><strong>Anvil v2.2.16 ships today with the TUI Layout System.</strong> Eight live-switchable layout variants built on a per-tab <code>TuiLayoutConfig</code>. The terminal UI is no longer a single hard-coded draw path &mdash; it's a real layout dispatcher with a new default that finally puts your sessions, agents, tools, and memory state in one persistent rail. <code>/layout vertical-split-tabs</code> is what you'll see when you launch. <code>/layout classic-tabs</code> is the old single-deck view, one keystroke away. 50 commits over v2.2.15.</p>
+
+<h2>The TUI you've been waiting for</h2>
+
+<p>Every Anvil release before today drew the same way. Banner up top, status line, conversation scrollback, input row at the bottom. One renderer. One layout. v2.2.16 breaks that.</p>
+
+<p>Four architectures, each with a <em>tabs</em> and <em>no-tabs</em> variant. <strong>Eight real renderers</strong>:</p>
+
+<ul>
+<li><strong>Vertical Split</strong> &mdash; persistent left rail (sessions, agents, tools, MEMORY, gate state) next to a swappable right deck. The rail owns all chrome &mdash; banner, status, model, cost. The deck has input only. The split anchor is mouse-draggable. <strong>This is the new default.</strong></li>
+<li><strong>Classic</strong> &mdash; single-deck, minimal, pixel-identical to pre-v2.2.16. The inline 7-layer MEMORY block sits directly above the input. One keystroke from any other layout: <code>/layout classic-tabs</code>.</li>
+<li><strong>Three-Pane</strong> &mdash; FOCUS / LOG / CONTEXT bands with an always-on input row. No vim modal. Typing always edits the input, with a framed hint and ghost text making the active band discoverable.</li>
+<li><strong>Journal</strong> &mdash; timestamped single-column scroll for when you want a log-only view. Ctrl-K opens a command palette. Stale cells from prior screens never bleed through.</li>
+</ul>
+
+<p>And the <code>/layout</code> command is a full first-class capability &mdash; definition, registration, completion, handler, dispatch, rendering, gate, OTel + tests. All eight axes, wired through Anvil's unified slash dispatcher.</p>
+
+<pre>/layout list                       &mdash; tabular view of the eight variants with the current selection highlighted
+/layout vertical-split             &mdash; switch the active tab to vertical split, no tabs
+/layout vertical-split-tabs        &mdash; switch the active tab to vertical split with workspace tabs
+/layout classic                    &mdash; restore the pre-v2.2.16 single-deck rendering
+/layout three-pane-tabs --global   &mdash; switch AND write the choice to ~/.anvil/config.json for new tabs and future runs
+/layout reset                      &mdash; back to the default (vertical-split-tabs in v2.2.16)</pre>
+
+<p>Live preview of every variant: <a href="https://anvilhub.culpur.net/tui-preview">anvilhub.culpur.net/tui-preview</a>.</p>
+
+<h2>Migration safety, by design</h2>
+
+<p>v2.2.16 changes the default layout. <strong>You don't lose your setting.</strong></p>
+
+<p>The settings parser only falls back to the new default when the <code>tui_layout</code> key is <em>absent</em> from your <code>~/.anvil/config.json</code>. If you set a layout explicitly any time during the preview cycle &mdash; say <code>"tui_layout": "classic-tabs"</code> &mdash; that value is preserved verbatim. A unit test (<code>tui_layout_explicit_classic_in_settings_is_preserved</code>) guards this contract at build time.</p>
+
+<p>If you never set the key, first launch after upgrade lands you on Vertical Split + Tabs and emits a one-time toast:</p>
+
+<pre>&loz; Anvil v2.2.16 introduces TUI layouts. You're on Vertical Split + Tabs
+   (the new default &mdash; persistent left rail, swappable right deck).
+   Try /layout list &mdash; 8 variants. /layout classic-tabs restores pre-v2.2.16
+   single-deck rendering.</pre>
+
+<p>After the toast fires, <code>tui_layout_intro_seen</code> is set to <code>true</code> and it never appears again.</p>
+
+<h2>Paste finally works the way you'd expect</h2>
+
+<p>Drag-and-drop a PDF onto Anvil's input. v2.2.16 attaches it as a <code>ContentBlock::Document</code> to your next request &mdash; the provider receives the file inline, not a hallucinated transcript. Same for Office docs. The consolidated paste handler routes terminal bracketed paste, OSC52, and drag-and-drop file paths through a single code path, so behavior is consistent across iTerm2, Alacritty, Wezterm, and Terminal.app.</p>
+
+<p>Mouse capture is <strong>off by default</strong> now &mdash; native terminal copy works again. Click-to-switch-tabs is still available via opt-in <code>mouse: true</code> in settings.</p>
+
+<p>Long pastes get a placeholder treatment. Drop 4,000 characters of log into the input and the rendered history shows <code>[Pasted 4,127 chars]</code> while the full content goes to the provider. Drag-and-drop on terminals that don't emit OSC52 is detected by inter-keystroke timing and converted to a single paste, not 200 individual keystroke events.</p>
+
+<h2>Ctrl+C actually cancels now</h2>
+
+<p>Across <strong>all seven providers</strong>. Previously the cancel token was wired in some providers and no-op in others. v2.2.16 plumbs it through every provider implementation in <code>DefaultRuntimeClient</code>, with <code>tokio::select!</code> wrapping the blocking HTTP read so the connection closes when the token fires instead of waiting for EOF. A new wiremock integration test exercises the cancel path end-to-end.</p>
+
+<p>Practical impact: hit Ctrl+C on a slow streaming response and the next prompt comes back immediately. No more 30-second wait while the connection drains.</p>
+
+<h2>Three-pane is now genuinely usable</h2>
+
+<p>The pre-v2.2.16 three-pane variant had a vim modal &mdash; you had to press <code>i</code> to enter Insert mode before typing. People hated it. We hated it. Gone in v2.2.16. The input is always on. Typing always edits the input. The active band gets a framed hint and ghost-text placeholder so it's discoverable. The CONTEXT band uses <code>Constraint::Fill</code> so it actually fills available height instead of collapsing to one row.</p>
+
+<h2>Vertical split rail polish</h2>
+
+<p>The new default got the most attention this cycle. The rail owns banner + gate banner + status + model + cost displays. The deck contains only the input row. The split anchor is mouse-draggable at the rail edge. Tool-call boxes close cleanly when the call returns. Markdown is styled inline. Cost rendering is 2-decimal. Section headers are uppercase. Cross-tab status aggregates (e.g. "3 streams active, 2 tabs idle") render in the rail. QMD memory is folded into the MEMORY block. Agent tabs bind to their parent rail row.</p>
+
+<h2>AnvilHub verification gate</h2>
+
+<p>The marketplace gets a verification badge contract. <code>HubPackage</code> ships with verified-badge structs, a <code>require_verified</code> config gate refuses to install unverified packages when set, <code>/plugin update REVOKED</code> guards prevent re-installing a revoked package, and <code>/hub status</code> ships all 8 capability-contract axes. The update probe now prefers anvilhub's <code>/api/version</code> endpoint and falls back to GitHub Releases if the AnvilHub host is down &mdash; resilient to either side failing.</p>
+
+<h2>TUI correctness long tail</h2>
+
+<p>About thirty smaller fixes shipped this cycle, mostly bubbled up from the layout rework:</p>
+
+<ul>
+<li><code>/vault unlock</code> retries up to 3 times and pre-fills the prompt on failure (no more "type your master password three times perfectly or restart")</li>
+<li>Welcome banner names the <em>active</em> provider, not hardcoded Anthropic</li>
+<li>Session-title heuristic skips a bare URL as first message so your sessions list isn't full of URLs</li>
+<li>5xx errors name the configured provider/gateway, never hardcoded Anthropic</li>
+<li>Spinner color warms green &rarr; amber &rarr; red as elapsed time climbs</li>
+<li><code>Read</code> offset accepts string forms with whitespace and <code>+</code> prefix</li>
+<li><code>ANVIL_MCP_TOOL_TIMEOUT</code> env override per request</li>
+<li>Strict RFC 6749 token-exchange parser + startup OAuth validator</li>
+<li>Lenient scopes deserializer prevents auth lockout on tokens that drift from the strict shape</li>
+<li><code>ProviderLoginModal</code> for in-TUI OAuth/API-key flows &mdash; no more bouncing to terminal scrollback to paste a code</li>
+<li>Slash-completion popup is wired into <em>every</em> render path, so TAB always brings up completions regardless of layout</li>
+<li>Every render path redraws on every keystroke so input is live across all layouts</li>
+</ul>
+
+<h2>The wizard nudges you toward the new default</h2>
+
+<p>First-run setup wizard, step 7. v2.2.15 defaulted to Classic [1]. v2.2.16 puts Vertical Split at [1]; Classic moves to [2]. New installs that press Enter through the wizard land on the rail+deck view. The label says <code>(default, recommended)</code> on the new option.</p>
+
+<h2>Test coverage</h2>
+
+<p>10 new unit tests for <code>TuiLayoutConfig</code> parsing, default, and migration. 10 new integration tests for live-switch state machine. 2379 workspace tests, 0 failures.</p>
+
+<h2>Seven platforms, SHA256-verified</h2>
+
+<p>macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary has a paired <code>.sha256</code> manifest published to <a href="https://anvilhub.culpur.net/sha256/">anvilhub.culpur.net/sha256</a> for verification before you trust them. <code>anvil upgrade</code> checks the manifest before swapping the binary.</p>
+
+<h2>Upgrade in 5 seconds</h2>
+
+<pre>brew upgrade anvil      # macOS / Linux Homebrew
+
+# Or one-line installer:
+curl -fsSL https://anvilhub.culpur.net/install.sh | bash</pre>
+
+<p>Verify with <code>anvil --version</code> &mdash; reports <code>2.2.16</code>.</p>
+
+<p>What you'll see on first launch:</p>
+
+<ul>
+<li>If you've never set <code>tui_layout</code>: a one-time toast explaining the new default, then you're on Vertical Split + Tabs.</li>
+<li>If you set <code>tui_layout</code> explicitly during the preview cycle: nothing changes. Your choice is preserved. No toast.</li>
+</ul>
+
+<p>Either way, <code>/layout list</code> shows you the eight variants. Switch as often as you want; switching to the same config is a no-op (the equality guard kicks in). Switching to a different layout fires a terminal clear so previous cells don't bleed through, then redraws.</p>
+
+<h2>The full release notes</h2>
+
+<p><a href="https://github.com/culpur/anvil/releases/tag/v2.2.16">GitHub release v2.2.16</a> has the long-form changelog and every binary. <a href="https://culpur.net/anvil/">culpur.net/anvil</a> has the install CTAs and feature cards. <a href="https://anvilhub.culpur.net/about">AnvilHub /about</a> has the per-release entry. Everything from v2.2.7 onward at <a href="https://github.com/culpur/anvil/releases">github.com/culpur/anvil/releases</a>.</p>
+
+<p>Eight layouts. Your terminal, your tools, your data, your cost. The only AI coding assistant that doesn't lock you in.</p>
