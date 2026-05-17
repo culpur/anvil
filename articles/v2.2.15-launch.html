@@ -1,0 +1,129 @@
+<p><strong>The largest release in Anvil's history is here.</strong> v2.2.15 ships today with a 6x expansion of the provider catalog, a first-class command tree for Cursor's Cloud Agents, a cross-provider model picker that finally treats every backend as equal, and the completion of two foundational arcs that began in v2.2.5. 121 commits over v2.2.13. Every binary signed. Every byte yours.</p>
+
+<h2>Your tools, your terms</h2>
+
+<p>Every other AI coding assistant comes with a leash. One vendor's pipe. One vendor's pricing. One vendor's rate limits. When that vendor changes something you don't like, you're stuck.</p>
+
+<p><strong>Anvil v2.2.15 is the inverse.</strong> Pick any model from any provider with a single <code>/model</code> press. Switch mid-conversation. Fail over when one throttles. When one gets expensive, change it. When the provider does something you don't like, leave.</p>
+
+<p>No account. No telemetry. No lock-in. A single ~24&ndash;42&nbsp;MB binary, zero dependencies, <strong>31 AI providers, seven platforms</strong>.</p>
+
+<h2>The provider catalog grew 6x</h2>
+
+<p>v2.2.13 shipped with five providers. v2.2.15 ships with <strong>thirty-one</strong>. Every implementation either uses a documented public API or identifies as Anvil honestly in headers. <strong>No IDE spoofing. No scraped credentials. No silent fallbacks.</strong></p>
+
+<ul>
+<li><strong>AWS Bedrock</strong> &mdash; hand-rolled SigV4 signing audited against AWS test vectors. No AWS SDK dependency = ~50&nbsp;MB smaller binary. <code>InvokeModel</code> + <code>InvokeModelWithResponseStream</code>. Run Claude, Llama, Mistral, Titan against your AWS account, your bill, your IAM.</li>
+<li><strong>Google Gemini OAuth + Antigravity</strong> &mdash; Code Assist OAuth with PKCE flow, dynamic-port localhost callback, atomic token save, pre-emptive refresh. Anvil identifies as <code>User-Agent: Anvil/2.2.15</code> and <code>x-goog-api-client: anvil-cli</code>. Not VS Code. Not pretending to be.</li>
+<li><strong>GitHub Copilot</strong> &mdash; device flow auth. Use your existing Copilot subscription from the terminal.</li>
+<li><strong>Azure OpenAI</strong> &mdash; deployment-name + <code>api-version</code> URL pattern. For teams locked into Azure.</li>
+<li><strong>Cursor Cloud Agents</strong> &mdash; public Cloud Agents API, repo-bound by design.</li>
+<li><strong>24 more OpenAI-compatible providers</strong> &mdash; Groq, Fireworks AI, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot AI, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, OpenCode, OpenCode-Go.</li>
+</ul>
+
+<p><code>/provider login &lt;slug&gt;</code> runs the right flow for each: API-key paste with live validation for direct-key providers, OAuth PKCE for Google, device flow for Copilot, SigV4 for Bedrock. Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Zero-cost local inference with Ollama or LMStudio.</p>
+
+<h2>Cursor lands as a first-class agent surface</h2>
+
+<p>Cursor's Cloud Agents API doesn't behave like a chat provider &mdash; it spawns autonomous agents against a specific GitHub repo and streams results over SSE. We didn't shoehorn it into <code>/model</code>. We gave it its own command tree.</p>
+
+<pre>/cursor launch &lt;prompt&gt;        — spawn an agent on the current workspace's GitHub repo
+/cursor list                   — show your active agents with status, model, repo, branch
+/cursor get &lt;agent_id&gt;         — full agent record + recent runs
+/cursor cancel &lt;agent_id&gt;      — terminate an in-flight run
+/cursor artifacts &lt;agent_id&gt;   — list and download generated files
+/cursor stream &lt;agent_id&gt; &lt;run_id&gt;  — re-attach to an SSE stream with Last-Event-ID resume</pre>
+
+<p>Repo-bound by design. <code>git remote get-url origin</code> is mandatory &mdash; Cursor errors loudly if the current workspace isn't a GitHub repo. No silent failure, no fallback. Every subcommand passes the full 8-axis capability contract.</p>
+
+<h2>One picker, every provider, atomic switch</h2>
+
+<p>Type <code>/model</code> and press TAB. You used to see one provider's models. Now you see <strong>every configured provider's models in one TAB-completable list</strong>, provider-prefixed for clarity:</p>
+
+<pre>anthropic/claude-4.5-sonnet
+groq/llama-3.3-70b
+gemini/gemini-2.0-flash-thinking
+bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0
+cursor/claude-4-sonnet-thinking
+ollama/qwen-coder
+... 25+ more</pre>
+
+<p>Picking <code>cursor/claude-4-sonnet-thinking</code> performs an <strong>atomic switch</strong>: provider routing, system prompt identity, and TUI chrome all update together. No more "the chrome says Anthropic but the API is going to Groq." Lists are live-fetched from each provider's <code>/models</code> endpoint, cached per session. The static registry is fallback only.</p>
+
+<h2>Memory becomes whole</h2>
+
+<p>v2.2.5 introduced a seven-layer memory architecture: Sensory, Working, Episodic, Semantic, Procedural, Reflective, Long-term. The structure was right. The wiring wasn't. v2.2.15 finishes the wiring.</p>
+
+<ul>
+<li>Retrieval-order block added to the system prompt &mdash; the model now knows which memory layers exist and when to consult them</li>
+<li><code>WorkingMemorySnapshot</code> lands as <code>Vec&lt;PromptSection&gt;</code></li>
+<li><code>PermissionMemory</code> wired into the permission gate &mdash; past decisions actually influence future prompts</li>
+<li><code>/file-cache</code> real handler replaces the v2.2.5 stub</li>
+<li>Egress allowlist wired into <code>settings.json</code> + <code>/policy view</code></li>
+<li><code>/memory why</code> now actually injects DailyStore daily summaries into the prompt &mdash; you can ask "why did you remember that?" and get the answer</li>
+</ul>
+
+<h2>Capabilities, contracts, enforced</h2>
+
+<p>Every Anvil capability now meets an <strong>8-axis contract</strong>: definition / registration / completion / handler / dispatch / rendering / permission gate / OpenTelemetry + tests. The cheap-drift gate enforces it at workspace build time &mdash; a slash command can't ship with a stub message. The compiler refuses.</p>
+
+<h2>Migrating from another assistant? <code>anvil import claude-code</code></h2>
+
+<p>Switching from Claude Code? Anvil brings your investment forward verbatim, with provenance frontmatter so it's clear what came from where:</p>
+
+<ul>
+<li><strong>Memory entries</strong> (typical CC profile = 94 markdown files) &rarr; <code>~/.anvil/memory/</code> with <code>imported_from</code> stamps and content hashes for idempotent re-runs</li>
+<li><strong><code>CLAUDE.md</code> files</strong> (global + per-project) &rarr; <code>ANVIL.md</code> with merge semantics that never clobber existing files</li>
+<li><strong><code>settings.json</code></strong> with conflict detection &mdash; actual conflict counts surface, not booleans</li>
+<li><strong>Skills</strong> import with collision handling, disabled by default until you explicitly enable</li>
+<li><strong>Plugin manifests</strong> with skills/agents fields</li>
+<li><strong>Past sessions</strong> (up to ~1,800 JSONL files, ~1&nbsp;GB) &mdash; gated behind <code>--include-sessions</code>, summarized via your configured provider into <code>~/.anvil/daily/</code>. Resumable across runs.</li>
+</ul>
+
+<p>The day-2 command <code>anvil memory clean</code> rewrites imported entries through a configurable LLM, normalizes vocabulary, and detects duplicate-meaning entries via Jaccard similarity + LLM judge. The first-run setup wizard offers the migration as an opt-in step.</p>
+
+<h2>Token economy + reliability</h2>
+
+<p>v2.2.15 stops paying for redundant work.</p>
+
+<ul>
+<li><strong>File-fingerprint cache wired</strong> &mdash; the module shipped in v2.2.11 without callsites. v2.2.15 wires it into <code>read_file</code>, <code>write_file</code>, <code>edit_file</code>, and the system prompt. Re-reads are free.</li>
+<li><strong>Command-output cache wired</strong> into <code>glob_search</code> and <code>grep_search</code></li>
+<li><strong>WebFetch + WebSearch get 5-min and 1-hour TTL caches</strong></li>
+<li><strong>Skill-chaining engine depth-3 wired</strong> (suggestion engine; full executor lands in v2.2.16)</li>
+<li><strong>Auto-promote engine</strong> for <code>/memory</code> notes is active</li>
+</ul>
+
+<h2>Honesty contract codified</h2>
+
+<p>Several behavioral rules became test-suite-enforced contracts during this cycle:</p>
+
+<ul>
+<li><strong>No silent deferral</strong> &mdash; completion claims that hide pending work fail the build gate</li>
+<li><strong>8-axis capability contract</strong> &mdash; every command ships all 8 axes or it does not ship</li>
+<li><strong>Changelog preservation</strong> &mdash; historical changelog entries are byte-immutable on every release</li>
+<li><strong>Live-model-list, not registry</strong> &mdash; <code>/model</code> reads live provider APIs; static catalog is fallback only</li>
+<li><strong>Atomic provider/model switch</strong> &mdash; routing + system prompt identity + TUI chrome update together, never separately</li>
+</ul>
+
+<h2>Seven platforms, SHA256-verified</h2>
+
+<p>macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary signed by the release pipeline with paired <code>.sha256</code> manifests at <a href="https://anvilhub.culpur.net/sha256/">anvilhub.culpur.net/sha256/</a>.</p>
+
+<h2>Install in seconds</h2>
+
+<pre># Homebrew (macOS + Linux)
+brew install culpur/anvil/anvil
+
+# Or one-liner installer
+curl -fsSL https://anvilhub.culpur.net/install.sh | bash</pre>
+
+<p>Configure your providers, pick your model with <code>/model</code>, and you're coding.</p>
+
+<h2>Why now</h2>
+
+<p>The AI coding assistant market is consolidating around vendor lock-in. Single-provider clients. Single-API pipes. Single-tier pricing. <strong>Anvil rejects that direction.</strong> v2.2.15 is the largest commitment to optionality we've shipped &mdash; thirty-one providers, every implementation honest about what it is, atomic switching across them all, and your credentials in an AES-256-GCM vault that never touches anyone's server.</p>
+
+<p>Your providers. Your credentials. Your data. Your cost. Your terms.</p>
+
+<p><strong><a href="https://anvilhub.culpur.net">Install Anvil v2.2.15</a></strong> &middot; <a href="https://github.com/culpur/anvil/releases/tag/v2.2.15">Full changelog on GitHub</a> &middot; <a href="https://culpur.net/anvil/">Product page</a></p>
