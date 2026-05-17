@@ -16,7 +16,10 @@ pub use failover::{
     format_failover_event, FailoverChain, FailoverConfig, FailoverEntry, FailoverEvent,
     FailoverEventKind, UsageBudget,
 };
-pub use providers::anvil_provider::{AuthSource, AnvilApiClient, AnvilApiClient as ApiClient};
+pub use providers::anvil_provider::{
+    anvil_oauth_config, AnthropicKeepaliveRefresher, AuthSource, AnvilApiClient,
+    AnvilApiClient as ApiClient,
+};
 pub use providers::cross_provider_models::{
     format_ambiguous_model_error, resolve_model_switch, ModelSwitchResolution,
 };

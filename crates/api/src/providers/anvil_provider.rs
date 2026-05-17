@@ -368,20 +368,73 @@ impl AnvilApiClient {
         &self,
         request: &MessageRequest,
     ) -> Result<reqwest::Response, ApiError> {
-        common::send_with_retry(
+        // Task #597 deliverable #2: one-shot 401-retry wrapper.
+        //
+        // If the inner retry-loop surfaces an `ApiError::Api { status: 401 }`
+        // we treat it as "token revoked or expired between resolve and send"
+        // and try ONCE to refresh + rebuild auth + resend.  Bounded to a
+        // single retry: a second 401 after refresh means the refresh_token
+        // itself was rejected (user needs to re-OAuth), and looping would
+        // burn through quota for no benefit.
+        let first_attempt = common::send_with_retry(
             self.max_retries,
             self.initial_backoff,
             self.max_backoff,
             || self.send_raw_request(request),
         )
-        .await
-        .map_err(|err| {
-            // #568, CC-143-B: enrich 5xx errors with Anthropic-specific hint.
-            err.with_provider_hint(ApiError::provider_hint_for(
+        .await;
+
+        let err = match first_attempt {
+            Ok(response) => return Ok(response),
+            Err(err) => err,
+        };
+
+        if !is_oauth_401(&err) || self.auth.bearer_token().is_none() {
+            return Err(err.with_provider_hint(ApiError::provider_hint_for(
                 "Anthropic",
                 "api.anthropic.com",
-            ))
-        })
+            )));
+        }
+
+        // Refresh, rebuild auth, retry once.  This is bounded: the second
+        // call goes through `send_with_retry` (which honours its own retry
+        // budget for 5xx/network), but a 401 on the second attempt
+        // propagates without another refresh.
+        match refresh_saved_oauth_and_rebuild_auth().await {
+            Ok(new_bearer) => {
+                let retry_client = Self {
+                    http: self.http.clone(),
+                    auth: AuthSource::BearerToken(new_bearer),
+                    base_url: self.base_url.clone(),
+                    max_retries: self.max_retries,
+                    initial_backoff: self.initial_backoff,
+                    max_backoff: self.max_backoff,
+                };
+                common::send_with_retry(
+                    retry_client.max_retries,
+                    retry_client.initial_backoff,
+                    retry_client.max_backoff,
+                    || retry_client.send_raw_request(request),
+                )
+                .await
+                .map_err(|err| {
+                    err.with_provider_hint(ApiError::provider_hint_for(
+                        "Anthropic",
+                        "api.anthropic.com",
+                    ))
+                })
+            }
+            Err(refresh_err) => {
+                // Surface a single combined error: the original 401 plus
+                // why the refresh couldn't recover it.  The user's next
+                // step is `/provider anthropic login`.
+                Err(ApiError::Auth(format!(
+                    "OAuth bearer was rejected (HTTP 401) and the refresh \
+                     attempt failed: {refresh_err}.  Run `/provider anthropic login` \
+                     to reauthenticate."
+                )))
+            }
+        }
     }
 
     async fn send_raw_request(
@@ -658,11 +711,147 @@ impl AuthSource {
     }
 }
 
+/// True if `err` is an HTTP 401 surfaced from `send_with_retry` (either
+/// directly or wrapped in `RetriesExhausted`).  Task #597 deliverable #2.
+fn is_oauth_401(err: &ApiError) -> bool {
+    match err {
+        ApiError::Api { status, .. } => status.as_u16() == 401,
+        ApiError::RetriesExhausted { last_error, .. } => {
+            matches!(last_error.as_ref(), ApiError::Api { status, .. } if status.as_u16() == 401)
+        }
+        _ => false,
+    }
+}
+
+/// Drive a refresh of the saved Anthropic OAuth credentials using the
+/// documented default config, persist the refreshed token, and return the
+/// new bearer string.  Used by the 401-retry wrapper (Task #597
+/// deliverable #2) — separate from `from_env_or_saved` because the retry
+/// path bypasses the safety-window check (we already KNOW the bearer was
+/// rejected, no need to re-evaluate expiry).
+async fn refresh_saved_oauth_and_rebuild_auth() -> Result<String, String> {
+    let Some(token_set) = load_saved_oauth_token()
+        .map_err(|e| format!("could not load saved credentials: {e}"))?
+    else {
+        return Err("no saved OAuth credentials to refresh".to_string());
+    };
+    let Some(refresh_token) = token_set.refresh_token.clone() else {
+        return Err("saved OAuth credential has no refresh_token".to_string());
+    };
+    let config = anvil_oauth_config();
+    let client = AnvilApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
+    let refreshed = client
+        .refresh_oauth_token(
+            &config,
+            &OAuthRefreshRequest::from_config(
+                &config,
+                refresh_token,
+                Some(token_set.scopes.clone()),
+            ),
+        )
+        .await
+        .map_err(|e| format!("{e}"))?;
+    let new_token = OAuthTokenSet {
+        access_token: refreshed.access_token.clone(),
+        refresh_token: refreshed.refresh_token.or(token_set.refresh_token),
+        expires_at: refreshed.expires_at,
+        scopes: refreshed.scopes,
+    };
+    save_oauth_credentials(&runtime::OAuthTokenSet {
+        access_token: new_token.access_token.clone(),
+        refresh_token: new_token.refresh_token.clone(),
+        expires_at: new_token.expires_at,
+        scopes: new_token.scopes.clone(),
+    })
+    .map_err(|e| format!("could not persist refreshed credentials: {e}"))?;
+    Ok(new_token.access_token)
+}
+
+/// Canonical Anthropic OAuth config.  Mirrors `auth::default_oauth_config`
+/// in the anvil-cli crate; kept here so api-crate paths (401 retry, keep-
+/// alive refresher) don't need to depend on the CLI crate.
+#[must_use]
+pub fn anvil_oauth_config() -> OAuthConfig {
+    OAuthConfig {
+        client_id: String::from("9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
+        authorize_url: String::from("https://claude.ai/oauth/authorize"),
+        token_url: String::from("https://platform.claude.com/v1/oauth/token"),
+        callback_port: None,
+        manual_redirect_url: Some(String::from(
+            "https://platform.claude.com/oauth/code/callback",
+        )),
+        scopes: vec![
+            String::from("user:profile"),
+            String::from("user:inference"),
+            String::from("user:sessions:claude_code"),
+        ],
+    }
+}
+
+/// Concrete `runtime::OAuthRefresher` implementation backed by an
+/// `AnvilApiClient`.  The keep-alive ticker in `runtime::oauth::keepalive`
+/// invokes this to perform the actual `/oauth/token` refresh-token
+/// exchange.  Task #597 deliverable #3.
+#[derive(Debug, Clone, Default)]
+pub struct AnthropicKeepaliveRefresher;
+
+impl runtime::OAuthRefresher for AnthropicKeepaliveRefresher {
+    fn refresh(
+        &self,
+        token: runtime::OAuthTokenSet,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<runtime::OAuthTokenSet, String>> + Send>,
+    > {
+        Box::pin(async move {
+            let Some(refresh_token) = token.refresh_token.clone() else {
+                return Err("saved OAuth credential has no refresh_token".to_string());
+            };
+            let config = anvil_oauth_config();
+            let client =
+                AnvilApiClient::from_auth(AuthSource::None).with_base_url(read_base_url());
+            let refreshed = client
+                .refresh_oauth_token(
+                    &config,
+                    &OAuthRefreshRequest::from_config(
+                        &config,
+                        refresh_token,
+                        Some(token.scopes.clone()),
+                    ),
+                )
+                .await
+                .map_err(|e| format!("{e}"))?;
+            let new_token = runtime::OAuthTokenSet {
+                access_token: refreshed.access_token.clone(),
+                refresh_token: refreshed.refresh_token.or(token.refresh_token),
+                expires_at: refreshed.expires_at,
+                scopes: refreshed.scopes,
+            };
+            // Persist before returning so a crash between refresh + save
+            // doesn't lose the new bearer.
+            runtime::persist_refreshed_token(new_token)
+        })
+    }
+}
+
+/// True if the saved OAuth bearer should be treated as expired right now.
+///
+/// Applies the `SAFETY_WINDOW_SECS` window from `runtime::oauth`: a token
+/// expiring inside the next 5 minutes is treated as already expired, so
+/// the resolver triggers a proactive refresh before the request can race
+/// the wall-clock expiry mid-flight.  Without the window, a token expiring
+/// in 5 seconds would pass `expires_at <= now` and the in-flight request
+/// would then surface a 401 the user has to manually retry.
+///
+/// Task #597 deliverable #1 (proactive refresh + 401 safety net).
 #[must_use]
 pub fn oauth_token_is_expired(token_set: &OAuthTokenSet) -> bool {
-    token_set
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now_unix_timestamp())
+    let runtime_token = runtime::OAuthTokenSet {
+        access_token: token_set.access_token.clone(),
+        refresh_token: token_set.refresh_token.clone(),
+        expires_at: token_set.expires_at,
+        scopes: token_set.scopes.clone(),
+    };
+    runtime::oauth_token_is_expired_with_window(&runtime_token, now_unix_timestamp())
 }
 
 pub fn resolve_saved_oauth_token(config: &OAuthConfig) -> Result<Option<OAuthTokenSet>, ApiError> {
@@ -1056,7 +1245,9 @@ mod tests {
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
-            expires_at: Some(now_unix_timestamp() + 300),
+            // Past the SAFETY_WINDOW (300s); otherwise Task #597's safety
+            // window treats this as expired and forces a refresh path.
+            expires_at: Some(now_unix_timestamp() + 3600),
             scopes: vec!["scope:a".to_string()],
         })
         .expect("save oauth credentials");
@@ -1077,10 +1268,24 @@ mod tests {
             expires_at: Some(1),
             scopes: Vec::new(),
         }));
+        // Task #597: safety window means a token expiring inside the next
+        // 5 minutes is also "expired" — verify the boundary stays past
+        // the window before claiming the token is fresh.
+        let safe_future = now_unix_timestamp()
+            + (runtime::SAFETY_WINDOW_SECS as u64)
+            + 60;
         assert!(!oauth_token_is_expired(&OAuthTokenSet {
             access_token: "access-token".to_string(),
             refresh_token: None,
-            expires_at: Some(now_unix_timestamp() + 60),
+            expires_at: Some(safe_future),
+            scopes: Vec::new(),
+        }));
+        // Inside the safety window → treated as expired (Task #597).
+        let inside_window = now_unix_timestamp() + 60;
+        assert!(oauth_token_is_expired(&OAuthTokenSet {
+            access_token: "access-token".to_string(),
+            refresh_token: None,
+            expires_at: Some(inside_window),
             scopes: Vec::new(),
         }));
     }
@@ -1133,7 +1338,9 @@ mod tests {
         save_oauth_credentials(&runtime::OAuthTokenSet {
             access_token: "saved-access-token".to_string(),
             refresh_token: Some("refresh".to_string()),
-            expires_at: Some(now_unix_timestamp() + 300),
+            // Past the SAFETY_WINDOW (300s); otherwise Task #597's safety
+            // window treats this as expired and forces a refresh path.
+            expires_at: Some(now_unix_timestamp() + 3600),
             scopes: vec!["scope:a".to_string()],
         })
         .expect("save oauth credentials");
@@ -1850,5 +2057,58 @@ mod tests {
             body.get("thinking").is_none(),
             "thinking block must be suppressed when budget is 0: {body}"
         );
+    }
+
+    // ─── Task #597 — 401-retry wrapper detection helpers ────────────────────
+
+    /// `is_oauth_401` recognises both bare 401 errors and 401 errors
+    /// wrapped in `RetriesExhausted` (the path the inner retry loop takes
+    /// when it exhausts attempts).  Task #597 deliverable #2.
+    #[test]
+    fn is_oauth_401_recognises_bare_and_wrapped_401() {
+        use super::is_oauth_401;
+        use crate::error::ApiError;
+        use reqwest::StatusCode;
+
+        let bare = ApiError::Api {
+            status: StatusCode::UNAUTHORIZED,
+            error_type: Some("authentication_error".to_string()),
+            message: Some("Invalid authentication credentials".to_string()),
+            body: String::new(),
+            retryable: false,
+            retry_after_secs: None,
+            provider_hint: None,
+        };
+        assert!(is_oauth_401(&bare));
+
+        let wrapped = ApiError::RetriesExhausted {
+            attempts: 1,
+            last_error: Box::new(ApiError::Api {
+                status: StatusCode::UNAUTHORIZED,
+                error_type: None,
+                message: None,
+                body: String::new(),
+                retryable: false,
+                retry_after_secs: None,
+                provider_hint: None,
+            }),
+        };
+        assert!(is_oauth_401(&wrapped));
+
+        // 429 / 500 must not trigger the OAuth refresh path — that's the
+        // Max-plan gate or a real outage, not a stale bearer.
+        let api_429 = ApiError::Api {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            error_type: Some("rate_limit_error".to_string()),
+            message: Some("Error".to_string()),
+            body: String::new(),
+            retryable: true,
+            retry_after_secs: None,
+            provider_hint: None,
+        };
+        assert!(!is_oauth_401(&api_429));
+
+        let auth_other = ApiError::Auth("some other auth issue".to_string());
+        assert!(!is_oauth_401(&auth_other));
     }
 }

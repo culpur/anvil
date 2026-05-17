@@ -37,6 +37,7 @@ mod uninstall;
 mod skill_eval;
 mod update;
 mod upgrade;
+mod bg_handlers;
 mod utils;
 mod vault;
 mod wizard;
@@ -2406,17 +2407,23 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Background update check — non-blocking, fires once at startup.
-    let update_check: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    {
-        let update_slot = Arc::clone(&update_check);
-        let current_version = VERSION.to_string();
-        thread::spawn(move || {
-            if let Some(msg) = check_for_update(&current_version)
-                && let Ok(mut slot) = update_slot.lock() {
-                    *slot = Some(msg);
-                }
-        });
-    }
+    // Extracted to `bg_handlers` per `feedback-anvil-main-rs-modularity.md`.
+    // The handler consults `~/.anvil/update_check.json` first (24h cache) so
+    // most launches stay offline; only the first launch of the day (or after
+    // the cache is manually deleted) hits the GitHub Releases endpoint.
+    let update_check = bg_handlers::spawn_update_check(VERSION.to_string());
+
+    // Background QMD status poll — refreshes every 30s so the rail's MEMORY
+    // section reports the live archive count instead of a stale at-startup
+    // snapshot. No-ops when the `qmd` binary isn't on PATH.
+    let qmd_poll = bg_handlers::spawn_qmd_poll();
+
+    // Task #597 deliverable #3/#4: OAuth keep-alive ticker.  Proactively
+    // refreshes the saved Anthropic OAuth bearer before expiry so an idle
+    // user does not hit a forced re-OAuth after a long pause.  Pairs with
+    // the SAFETY_WINDOW lazy-refresh (#1) and the 401-retry wrapper (#2)
+    // in `crates/api/src/providers/anvil_provider.rs`.
+    let oauth_keepalive = bg_handlers::spawn_oauth_keepalive();
 
     let mut task_check_instant = Instant::now();
     // ── Screensaver state ──────────────────────────────────────────────────────
@@ -2479,6 +2486,37 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(mut slot) = update_check.try_lock()
             && let Some(msg) = slot.take() {
                 tui.set_update_available(msg);
+            }
+
+        // Consume any fresh QMD status reading from the 30s poller.
+        if let Ok(mut slot) = qmd_poll.try_lock()
+            && let Some(status) = slot.take() {
+                tui.set_qmd_status(format!(
+                    "QMD: {} docs, {} vectors",
+                    status.total_docs, status.total_vectors
+                ));
+            }
+
+        // Task #597: consume any fresh OAuth keep-alive event.  Refresh
+        // failures surface as a TUI banner (user can decide to re-OAuth);
+        // successful refreshes are silent.  No-events frames complete the
+        // try_lock + take in tens of nanoseconds.
+        if let Ok(mut slot) = oauth_keepalive.last_event.try_lock()
+            && let Some(event) = slot.take() {
+                match event {
+                    runtime::KeepaliveEvent::RefreshFailed { reason } => {
+                        tui.push_system(format!(
+                            "[oauth] Background refresh failed: {reason}.  \
+                             Run `/provider anthropic login` if you start seeing 401s."
+                        ));
+                    }
+                    runtime::KeepaliveEvent::Refreshed { .. }
+                    | runtime::KeepaliveEvent::NoCredential
+                    | runtime::KeepaliveEvent::Stopped => {
+                        // Silent: successful refreshes are routine, and the
+                        // NoCredential / Stopped signals are diagnostic only.
+                    }
+                }
             }
 
         // ── Screensaver: auto-activate on 15-min idle ──────────────────────

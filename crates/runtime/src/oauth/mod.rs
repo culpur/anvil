@@ -13,6 +13,80 @@ use sha2::{Digest, Sha256};
 
 use crate::config::OAuthConfig;
 
+pub mod keepalive;
+
+/// Safety window applied when deciding whether an OAuth bearer is "expired"
+/// for the purpose of triggering a refresh.
+///
+/// The naive check `expires_at <= now` lets a token that's about to expire
+/// in 5 seconds pass — the network round-trip to Anthropic almost certainly
+/// outlives it and the request races expiry mid-flight, surfacing a 401 the
+/// user has to manually retry.  Treating a token as expired
+/// `SAFETY_WINDOW_SECS` seconds before the wall-clock expiry closes that
+/// race window: the worst case is we refresh slightly early, which is cheap.
+///
+/// Task #597 deliverable #1 (safety window, parity with Claude Code's
+/// proactive refresh-on-resolve).
+pub const SAFETY_WINDOW_SECS: i64 = 300;
+
+/// Lower bound for the ticker re-arm interval (Task #597, keep-alive ticker).
+///
+/// Even a token with seconds of life left should not cause the ticker to
+/// spin in a tight refresh loop; clamp to 60s minimum.  See
+/// `oauth::keepalive::next_refresh_delay_secs`.
+pub const KEEPALIVE_MIN_DELAY_SECS: u64 = 60;
+
+/// Upper bound for the ticker re-arm interval (Task #597, keep-alive ticker).
+///
+/// A token that's good for hours (Anthropic Max bearers are usually 1–8h)
+/// still wakes up at least every 30 minutes so that idle drift, system
+/// sleep/wake cycles, and credentials.json edits don't strand the ticker.
+pub const KEEPALIVE_MAX_DELAY_SECS: u64 = 1800;
+
+/// True if `token` should be treated as expired right now, accounting for the
+/// `SAFETY_WINDOW_SECS` safety window (Task #597 deliverable #1).
+///
+/// A token with no `expires_at` is treated as never-expiring (caller paths
+/// that need a definite expiry should check independently).  The check is
+/// `expires_at - SAFETY_WINDOW <= now`, so a token expiring in 5 seconds is
+/// considered expired and triggers refresh BEFORE the request races expiry.
+#[must_use]
+pub fn oauth_token_is_expired_with_window(
+    token: &OAuthTokenSet,
+    now_unix: u64,
+) -> bool {
+    let Some(expires_at) = token.expires_at else {
+        return false;
+    };
+    // Subtract the safety window with saturating arithmetic so a tiny
+    // `expires_at` (e.g. legacy timestamp `1`) doesn't underflow into
+    // u64::MAX and report "not expired".
+    let effective = expires_at.saturating_sub(SAFETY_WINDOW_SECS.max(0) as u64);
+    effective <= now_unix
+}
+
+/// Compute the next ticker re-arm delay for a saved OAuth token, clamped to
+/// `[KEEPALIVE_MIN_DELAY_SECS, KEEPALIVE_MAX_DELAY_SECS]`.
+///
+/// Heuristic: wake at the midpoint between `now` and `expires_at`, so a
+/// 1h-remaining token wakes in 30min, a 100min-remaining token wakes in
+/// 50min.  Already-expired tokens (or no `expires_at`) wake at the minimum
+/// interval — the next tick will trigger refresh.
+///
+/// Task #597 deliverable #3 (keep-alive ticker timing).
+#[must_use]
+pub fn next_refresh_delay_secs(token: &OAuthTokenSet, now_unix: u64) -> u64 {
+    let Some(expires_at) = token.expires_at else {
+        return KEEPALIVE_MIN_DELAY_SECS;
+    };
+    if expires_at <= now_unix {
+        return KEEPALIVE_MIN_DELAY_SECS;
+    }
+    let remaining = expires_at - now_unix;
+    let half = remaining / 2;
+    half.clamp(KEEPALIVE_MIN_DELAY_SECS, KEEPALIVE_MAX_DELAY_SECS)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthTokenSet {
     pub access_token: String,
@@ -834,11 +908,13 @@ mod tests {
     use super::{
         clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
         generate_state, load_oauth_credentials, loopback_redirect_uri,
-        migrate_incomplete_anthropic_credential, parse_oauth_callback_query,
+        migrate_incomplete_anthropic_credential, next_refresh_delay_secs,
+        oauth_token_is_expired_with_window, parse_oauth_callback_query,
         parse_oauth_callback_request_target, parse_pasted_oauth_code,
         parse_token_response_strict_at, save_oauth_credentials, validate_anthropic_credential,
         AnthropicCredentialStatus, OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest,
         OAuthTokenExchangeRequest, OAuthTokenResponse, OAuthTokenSet, StoredOAuthCredentials,
+        KEEPALIVE_MAX_DELAY_SECS, KEEPALIVE_MIN_DELAY_SECS, SAFETY_WINDOW_SECS,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -1363,5 +1439,95 @@ mod tests {
 
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
+    }
+
+    // ─── Task #597 — safety window + ticker timing ─────────────────────────
+
+    fn token_with_expiry(expires_at: Option<u64>) -> OAuthTokenSet {
+        OAuthTokenSet {
+            access_token: "tok".to_string(),
+            refresh_token: Some("refresh".to_string()),
+            expires_at,
+            scopes: vec!["user:inference".to_string()],
+        }
+    }
+
+    /// Safety window covers the race: a token expiring inside the 5-minute
+    /// window is treated as expired so resolve() proactively refreshes
+    /// before the network round-trip can race the wall-clock expiry.
+    /// Task #597 deliverable #1.
+    #[test]
+    fn oauth_token_safety_window_treats_near_expiry_as_expired() {
+        // SAFETY_WINDOW_SECS is the contracted value the brief calls out.
+        assert_eq!(SAFETY_WINDOW_SECS, 300);
+
+        let now = 1_700_000_000_u64;
+        // Token expires in 60 seconds — inside the safety window → expired.
+        let near_expiry = token_with_expiry(Some(now + 60));
+        assert!(
+            oauth_token_is_expired_with_window(&near_expiry, now),
+            "token expiring inside the safety window must be treated as expired"
+        );
+
+        // Token expires exactly at the safety boundary — boundary case is
+        // also treated as expired (refresh now, not later).
+        let at_boundary = token_with_expiry(Some(now + SAFETY_WINDOW_SECS as u64));
+        assert!(
+            oauth_token_is_expired_with_window(&at_boundary, now),
+            "token expiring at the safety boundary must be treated as expired"
+        );
+
+        // Token expires well outside the window → fresh.
+        let far_future = token_with_expiry(Some(now + 3600));
+        assert!(
+            !oauth_token_is_expired_with_window(&far_future, now),
+            "token expiring well outside the safety window must be treated as fresh"
+        );
+
+        // Token with no expires_at (legacy / lenient) is never expired here;
+        // higher-level callers can reject Anthropic-shape tokens without
+        // expires_at via `validate_anthropic_credential`.
+        let no_expiry = token_with_expiry(None);
+        assert!(!oauth_token_is_expired_with_window(&no_expiry, now));
+    }
+
+    /// Ticker math: re-arm at `(expires_at - now) / 2`, clamped to
+    /// `[KEEPALIVE_MIN_DELAY_SECS, KEEPALIVE_MAX_DELAY_SECS]`.
+    /// Verifies the four cases the brief calls out.  Task #597 deliverable #3.
+    #[test]
+    fn next_refresh_delay_clamps_to_documented_bounds() {
+        // Documented bounds for the keep-alive ticker.
+        assert_eq!(KEEPALIVE_MIN_DELAY_SECS, 60);
+        assert_eq!(KEEPALIVE_MAX_DELAY_SECS, 1800);
+
+        let now = 1_700_000_000_u64;
+
+        // 1 hour remaining → wake in 30min (right at the upper clamp).
+        let one_hour = token_with_expiry(Some(now + 3600));
+        assert_eq!(next_refresh_delay_secs(&one_hour, now), 1800);
+
+        // 100 minutes remaining → half = 50min = 3000s, clamped to MAX (1800s).
+        let hundred_min = token_with_expiry(Some(now + 100 * 60));
+        assert_eq!(next_refresh_delay_secs(&hundred_min, now), 1800);
+
+        // 50 minutes remaining → half = 25min = 1500s, inside bounds.
+        let fifty_min = token_with_expiry(Some(now + 50 * 60));
+        assert_eq!(next_refresh_delay_secs(&fifty_min, now), 1500);
+
+        // 10 seconds remaining → half = 5s, clamped to MIN (60s).
+        let ten_sec = token_with_expiry(Some(now + 10));
+        assert_eq!(next_refresh_delay_secs(&ten_sec, now), 60);
+
+        // 3 hours remaining → half = 90min = 5400s, clamped to MAX (1800s).
+        let three_hours = token_with_expiry(Some(now + 3 * 3600));
+        assert_eq!(next_refresh_delay_secs(&three_hours, now), 1800);
+
+        // Already-expired token → wake at MIN so the next tick refreshes.
+        let expired = token_with_expiry(Some(now - 5));
+        assert_eq!(next_refresh_delay_secs(&expired, now), KEEPALIVE_MIN_DELAY_SECS);
+
+        // No expires_at → wake at MIN.
+        let no_expiry = token_with_expiry(None);
+        assert_eq!(next_refresh_delay_secs(&no_expiry, now), KEEPALIVE_MIN_DELAY_SECS);
     }
 }

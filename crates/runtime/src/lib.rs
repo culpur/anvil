@@ -37,6 +37,7 @@ pub mod file_cache;
 pub mod command_cache;
 pub mod release_notes;
 pub mod prompt_section;
+pub mod update_check;
 mod compact;
 mod config;
 mod content_filter;
@@ -123,12 +124,18 @@ pub use mcp_stdio::{
 pub use oauth::{
     clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
     generate_state, load_oauth_credentials, loopback_redirect_uri,
-    migrate_incomplete_anthropic_credential, parse_oauth_callback_query,
+    migrate_incomplete_anthropic_credential, next_refresh_delay_secs,
+    oauth_token_is_expired_with_window, parse_oauth_callback_query,
     parse_oauth_callback_request_target, parse_pasted_oauth_code,
     parse_token_response_strict, parse_token_response_strict_at, save_oauth_credentials,
     unix_now_seconds, validate_anthropic_credential, AnthropicCredentialStatus,
     OAuthAuthorizationRequest, OAuthCallbackParams, OAuthRefreshRequest,
-    OAuthTokenExchangeRequest, OAuthTokenResponse, OAuthTokenSet, PkceChallengeMethod, PkceCodePair,
+    OAuthTokenExchangeRequest, OAuthTokenResponse, OAuthTokenSet, PkceChallengeMethod,
+    PkceCodePair, KEEPALIVE_MAX_DELAY_SECS, KEEPALIVE_MIN_DELAY_SECS, SAFETY_WINDOW_SECS,
+};
+pub use oauth::keepalive::{
+    persist_refreshed_token, spawn as spawn_oauth_keepalive, KeepaliveEvent, KeepaliveHandle,
+    OAuthRefresher,
 };
 pub use permissions::{
     BlockAction, PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
