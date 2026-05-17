@@ -371,6 +371,19 @@ pub fn skill_activated(skill_name: &str, source: &str) {
     );
 }
 
+/// Emit `anvil.hub_package_install`.
+///
+/// Fired by the type-specific install slash commands (`/skill install`,
+/// `/agent install`, `/theme install`, `/plugin install`) and by
+/// `/hub install`.  `pkg_type` is one of `skill`, `agent`, `theme`, `plugin`;
+/// `outcome` is `ok`, `type-mismatch`, `revoked`, `unverified`, or `error`.
+pub fn hub_package_install(pkg_type: &str, slug: &str, outcome: &str) {
+    emit_event(
+        "anvil.hub_package_install",
+        &[("pkg_type", pkg_type), ("slug", slug), ("outcome", outcome)],
+    );
+}
+
 /// Emit `anvil.permission_decision`.
 pub fn permission_decision(tool: &str, decision: &str, source: &str) {
     emit_event(

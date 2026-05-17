@@ -559,6 +559,11 @@ pub enum AgentSubcommand {
     Traits,
     /// `/agent compose <trait1,trait2,...> "<task>"` — compose a temporary agent
     Compose { traits: Vec<String>, task: String },
+    /// `/agent install <slug>` — install an agent package from AnvilHub.
+    ///
+    /// Routes through `HubClient::install` with a `pkg_type=agent` type guard
+    /// and writes to `~/.anvil/agents/<slug>/`.
+    Install { slug: String },
 }
 
 /// Sub-commands for `/skill`.
@@ -572,6 +577,11 @@ pub enum SkillSubcommand {
     List,
     /// `/skill chains`
     Chains,
+    /// `/skill install <slug>` — install a skill package from AnvilHub.
+    ///
+    /// Routes through `HubClient::install` with a `pkg_type=skill` type guard
+    /// and writes to `~/.anvil/skills/<slug>/`.
+    Install { slug: String },
 }
 
 impl SlashCommand {
@@ -918,6 +928,11 @@ impl SlashCommand {
                             .to_string();
                         Self::Agent { subcommand: AgentSubcommand::Compose { traits, task } }
                     }
+                    "install" => {
+                        // /agent install <slug> — AnvilHub package install.
+                        let slug = parts.collect::<Vec<_>>().join(" ").trim().to_string();
+                        Self::Agent { subcommand: AgentSubcommand::Install { slug } }
+                    }
                     _ => Self::Agent { subcommand: AgentSubcommand::Traits },
                 }
             }
@@ -938,6 +953,11 @@ impl SlashCommand {
                     "load" => {
                         let name = parts.collect::<Vec<_>>().join(" ");
                         Self::Skill { subcommand: SkillSubcommand::Load { name } }
+                    }
+                    "install" => {
+                        // /skill install <slug> — AnvilHub package install.
+                        let slug = parts.collect::<Vec<_>>().join(" ").trim().to_string();
+                        Self::Skill { subcommand: SkillSubcommand::Install { slug } }
                     }
                     other_sub => {
                         // "suggest" or bare keyword treated as the start of the prompt
@@ -2554,6 +2574,70 @@ mod tests {
         assert!(
             matches!(cmd, Some(SlashCommand::Skill { subcommand: SkillSubcommand::List })),
             "expected Skill::List, got: {cmd:?}"
+        );
+    }
+
+    // ── /skill install + /agent install parser tests (task #533) ──────────────
+
+    #[test]
+    fn skill_install_parses_with_slug() {
+        let cmd = SlashCommand::parse("/skill install code-review");
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Skill {
+                    subcommand: SkillSubcommand::Install { ref slug }
+                }) if slug == "code-review"
+            ),
+            "expected Skill::Install {{ slug: code-review }}, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn agent_install_parses_with_slug() {
+        let cmd = SlashCommand::parse("/agent install dependabot");
+        assert!(
+            matches!(
+                cmd,
+                Some(SlashCommand::Agent {
+                    subcommand: AgentSubcommand::Install { ref slug }
+                }) if slug == "dependabot"
+            ),
+            "expected Agent::Install {{ slug: dependabot }}, got: {cmd:?}"
+        );
+    }
+
+    #[test]
+    fn theme_install_round_trips_via_action_string() {
+        // /theme install is encoded in the generic `Theme { action }` shape.
+        // The TUI dispatch parses `install <slug>` out of the action string;
+        // here we lock the parser contract so future refactors don't drop it.
+        let cmd = SlashCommand::parse("/theme install solarized");
+        match cmd {
+            Some(SlashCommand::Theme { action: Some(action) }) => {
+                assert!(
+                    action.starts_with("install"),
+                    "expected action starting with 'install', got: {action}"
+                );
+                assert!(action.contains("solarized"));
+            }
+            other => panic!("expected Theme {{ action: Some(\"install solarized\") }}, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_install_routes_via_plugins_variant() {
+        // /plugin install <slug> is encoded in the generic Plugins shape.
+        // The dispatch in main.rs::handle_plugins_command discriminates by
+        // checking `is_local_or_git_install_source(target)`; here we lock
+        // the parser contract.
+        let cmd = SlashCommand::parse("/plugin install my-plugin");
+        assert_eq!(
+            cmd,
+            Some(SlashCommand::Plugins {
+                action: Some("install".to_string()),
+                target: Some("my-plugin".to_string()),
+            })
         );
     }
 

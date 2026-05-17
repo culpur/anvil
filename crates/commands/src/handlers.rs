@@ -652,6 +652,11 @@ pub fn handle_slash_command(
                         skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
                     crate::skill_chaining::render_chains_graph(&all_skills)
                 }
+                SkillSubcommand::Install { .. } => {
+                    // /skill install <slug> requires the live HubClient runtime
+                    // and AnvilHub network access. The TUI path handles it.
+                    "/skill install requires an active session. Run `anvil` and use /skill install <slug> to fetch the package from AnvilHub.".to_string()
+                }
             };
             Some(SlashCommandResult { message, session: session.clone() })
         }

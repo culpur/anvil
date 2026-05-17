@@ -658,6 +658,12 @@ pub const THEME_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[],
         subcommands: &[],
     },
+    SubcommandSpec {
+        name: "install",
+        summary: "Install a theme package from AnvilHub by slug",
+        args: &[ArgSpec::FreeText { hint: "<slug>" }],
+        subcommands: &[],
+    },
 ];
 
 pub const AGENTS_SUBCOMMANDS: &[SubcommandSpec] = &[
@@ -713,6 +719,12 @@ pub const SKILL_SUBCOMMANDS: &[SubcommandSpec] = &[
         name: "chains",
         summary: "Show the skill chain graph",
         args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "install",
+        summary: "Install a skill package from AnvilHub by slug",
+        args: &[ArgSpec::FreeText { hint: "<slug>" }],
         subcommands: &[],
     },
 ];
@@ -1899,6 +1911,12 @@ pub const AGENT_SUBCOMMANDS: &[SubcommandSpec] = &[
             ArgSpec::FreeText { hint: "<trait1,trait2,...>" },
             ArgSpec::FreeText { hint: "\"<task>\"" },
         ],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "install",
+        summary: "Install an agent package from AnvilHub by slug",
+        args: &[ArgSpec::FreeText { hint: "<slug>" }],
         subcommands: &[],
     },
 ];

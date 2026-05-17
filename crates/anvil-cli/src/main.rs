@@ -44,7 +44,7 @@ mod wizard;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
-pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, build_system_prompt_with_identity, friendly_provider_label, run_theme_command, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
+pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, build_system_prompt_with_identity, friendly_provider_label, run_theme_command, is_local_or_git_install_source, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
 
 pub(crate) use configure::config_data_to_json;
 
@@ -5163,7 +5163,22 @@ impl LiveCli {
                 return Ok(false);
             }
             SlashCommand::Theme { action } => {
-                let msg = run_theme_command(action.as_deref(), Some(tui));
+                // `/theme install <slug>` routes through AnvilHub.  The
+                // remaining sub-actions (list/set/reset/import/export/create)
+                // are handled by `run_theme_command`, which has no `LiveCli`
+                // access.
+                let msg = match action.as_deref() {
+                    Some(action_str) => {
+                        let trimmed = action_str.trim();
+                        if let Some(rest) = trimmed.strip_prefix("install") {
+                            let slug = rest.trim();
+                            self.run_hub_install_typed(slug, Some("theme"), false)
+                        } else {
+                            run_theme_command(action.as_deref(), Some(tui))
+                        }
+                    }
+                    None => run_theme_command(action.as_deref(), Some(tui)),
+                };
                 tui.push_system(msg);
                 return Ok(false);
             }
@@ -5924,6 +5939,10 @@ impl LiveCli {
                             }
                         }
                     }
+                    AgentSubcommand::Install { slug } => {
+                        let msg = self.run_hub_install_typed(&slug, Some("agent"), false);
+                        (msg, false)
+                    }
                 }
             }
             SlashCommand::Skill { subcommand } => {
@@ -6008,6 +6027,10 @@ impl LiveCli {
                         let all_skills: std::collections::HashMap<String, commands::agents::SkillSummary> =
                             skills.into_iter().map(|s| (s.name.to_ascii_lowercase(), s)).collect();
                         (render_chains_graph(&all_skills), false)
+                    }
+                    SkillSubcommand::Install { slug } => {
+                        let msg = self.run_hub_install_typed(&slug, Some("skill"), false);
+                        (msg, false)
                     }
                 }
             }
@@ -7303,6 +7326,19 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         action: Option<&str>,
         target: Option<&str>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
+        // `/plugin install <slug>` (AnvilHub slug, not a local path or git
+        // URL) routes through `run_hub_install_typed` with a `pkg_type=plugin`
+        // guard.  Local paths and git URLs continue to flow through
+        // `PluginManager::install`.
+        if action == Some("install") {
+            if let Some(t) = target.map(str::trim) {
+                if !t.is_empty() && !is_local_or_git_install_source(t) {
+                    let msg = self.run_hub_install_typed(t, Some("plugin"), false);
+                    println!("{msg}");
+                    return Ok(false);
+                }
+            }
+        }
         let cwd = env::current_dir()?;
         let loader = ConfigLoader::default_for(&cwd);
         let runtime_config = loader.load()?;
@@ -7321,6 +7357,15 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         action: Option<&str>,
         target: Option<&str>,
     ) -> Result<(String, bool), Box<dyn std::error::Error>> {
+        // See `handle_plugins_command` — same AnvilHub-vs-local discriminator.
+        if action == Some("install") {
+            if let Some(t) = target.map(str::trim) {
+                if !t.is_empty() && !is_local_or_git_install_source(t) {
+                    let msg = self.run_hub_install_typed(t, Some("plugin"), false);
+                    return Ok((msg, false));
+                }
+            }
+        }
         let cwd = env::current_dir()?;
         let loader = ConfigLoader::default_for(&cwd);
         let runtime_config = loader.load()?;

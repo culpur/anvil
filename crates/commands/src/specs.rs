@@ -886,7 +886,7 @@ EXAMPLES
         name: "theme",
         aliases: &[],
         summary: "Show, list, or change the TUI colour theme; create/import/export custom themes",
-        argument_hint: Some("[list | set <name> | reset | create <name> | import <file> | export <name>]"),
+        argument_hint: Some("[list | set <name> | reset | install <slug> | create <name> | import <file> | export <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "",
@@ -2023,16 +2023,17 @@ Notes:
     SlashCommandSpec {
         name: "agent",
         aliases: &[],
-        summary: "Compose a trait-based agent for a one-shot task",
-        argument_hint: Some("[traits|compose <traits> \"<task>\"]"),
+        summary: "Compose a trait-based agent or install an agent package from AnvilHub",
+        argument_hint: Some("[traits|compose <traits> \"<task>\"|install <slug>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "\
-/agent — Trait-based agent composition
+/agent — Trait-based agent composition and AnvilHub install
 
 Usage:
   /agent traits                              List available traits
-  /agent compose <trait1,trait2> \"<task>\"   Compose and run a one-shot agent",
+  /agent compose <trait1,trait2> \"<task>\"   Compose and run a one-shot agent
+  /agent install <slug>                      Install an agent package from AnvilHub",
         subcommands: crate::subcommands::AGENT_SUBCOMMANDS,
         tui_available: true,
         web_available: true,
@@ -2044,8 +2045,8 @@ Usage:
     SlashCommandSpec {
         name: "skill",
         aliases: &[],
-        summary: "Load, suggest, or list Anvil skills",
-        argument_hint: Some("[suggest [<prompt>]|load <name>|list|chains]"),
+        summary: "Load, suggest, list, or install Anvil skills",
+        argument_hint: Some("[suggest [<prompt>]|load <name>|list|chains|install <slug>]"),
         resume_supported: false,
         category: SlashCommandCategory::Core,
         detailed_help: "\
@@ -2055,7 +2056,8 @@ Usage:
   /skill list               List all available skills
   /skill load <name>        Prepend skill body to the next system prompt turn
   /skill suggest [<prompt>] Show trigger-matched skill suggestions for a prompt
-  /skill chains             Show the skill chain graph (skills with chains_to entries)",
+  /skill chains             Show the skill chain graph (skills with chains_to entries)
+  /skill install <slug>     Install a skill package from AnvilHub",
         subcommands: crate::subcommands::SKILL_SUBCOMMANDS,
         tui_available: true,
         web_available: true,

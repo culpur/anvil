@@ -384,6 +384,44 @@ pub(crate) fn render_configure_static(args: Option<&str>) -> String {
 /// - `/theme reset`     — revert to culpur-defense default
 ///
 /// When `tui` is `Some` the theme is applied to the live TUI immediately.
+/// Distinguish between local plugin sources (paths, git URLs) and AnvilHub
+/// slugs.  Used by `/plugin install` to route between
+/// `PluginManager::install` (paths + git) and `HubClient::install` (slugs).
+///
+/// A target is local-or-git when ANY of:
+///   * It starts with `http://`, `https://`, `git@`, `./`, `../`, `/`, or `~`.
+///   * Its extension is `.git`.
+///   * It contains a path separator (`/` or `\`).
+///   * It resolves to an existing path on disk.
+///
+/// Otherwise (a bare token like `my-plugin`) it is treated as an AnvilHub slug.
+pub(crate) fn is_local_or_git_install_source(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.starts_with("http://")
+        || t.starts_with("https://")
+        || t.starts_with("git@")
+        || t.starts_with("./")
+        || t.starts_with("../")
+        || t.starts_with('/')
+        || t.starts_with('~')
+    {
+        return true;
+    }
+    if std::path::Path::new(t)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("git"))
+    {
+        return true;
+    }
+    if t.contains('/') || t.contains('\\') {
+        return true;
+    }
+    std::path::Path::new(t).exists()
+}
+
 pub(crate) fn run_theme_command(action: Option<&str>, tui: Option<&mut AnvilTui>) -> String {
     let action = action.unwrap_or("").trim();
     let mut parts = action.splitn(2, ' ');

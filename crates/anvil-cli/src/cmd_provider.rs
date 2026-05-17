@@ -1003,6 +1003,11 @@ impl LiveCli {
                     }
                 }
             }
+            AgentSubcommand::Install { slug } => {
+                let msg = self.run_hub_install_typed(&slug, Some("agent"), false);
+                println!("{msg}");
+                Ok(())
+            }
         }
     }
 
@@ -1190,26 +1195,7 @@ impl LiveCli {
             if name.is_empty() {
                 return "Usage: /hub install <name> [--allow-unverified]".to_string();
             }
-            let require_verified = runtime::ConfigLoader::default_for(
-                std::env::current_dir().unwrap_or_default()
-            )
-            .load()
-            .map(|cfg| cfg.hub().require_verified())
-            .unwrap_or(false);
-            let pkg = match client.get_package(&name) {
-                Ok(p) => p,
-                Err(e) => return format!("hub install: {e}"),
-            };
-            let install_dir = anvil_home_dir();
-            return match client.install(&pkg, &install_dir, require_verified, allow_unverified) {
-                Ok(dest) => format!(
-                    "Installed {} v{} to {}",
-                    pkg.name,
-                    pkg.version,
-                    dest.display()
-                ),
-                Err(e) => format!("hub install: {e}"),
-            };
+            return self.run_hub_install_typed(&name, None, allow_unverified);
         }
 
         if let Some(name) = args.strip_prefix("status ").map(str::trim) {
@@ -1248,6 +1234,95 @@ impl LiveCli {
                 }
                 out.push_str("\nRun /hub <category> for more, or /hub install <name> to install.");
                 out
+            }
+        }
+    }
+
+    // ── Type-specific install helper ──────────────────────────────────────────
+    //
+    // Used by `/hub install`, `/skill install`, `/agent install`,
+    // `/theme install`, and `/plugin install`.  When `expected_type` is `Some`,
+    // the helper refuses to install a package whose `pkg_type` does not match
+    // (so `/skill install <theme-slug>` is rejected before any download).
+    //
+    // Honours the AnvilHub trust gate (REVOKED is hard-blocked; unverified
+    // packages require `allow_unverified` or `hub.require_verified=false`).
+    // Emits `anvil.hub_package_install` OTel events for every outcome.
+    pub(crate) fn run_hub_install_typed(
+        &self,
+        slug: &str,
+        expected_type: Option<&str>,
+        allow_unverified: bool,
+    ) -> String {
+        let slug_trim = slug.trim();
+        if slug_trim.is_empty() {
+            let label = expected_type.unwrap_or("name");
+            return format!("Usage: /{label} install <slug>");
+        }
+        let hub_url = self.anvil_config_str("anvilhub_url", "https://anvilhub.culpur.net");
+        let client = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => BlockingHubClient::new(&hub_url, handle),
+            Err(_) => match tokio::runtime::Runtime::new() {
+                Ok(rt) => BlockingHubClient::new(&hub_url, rt.handle().clone()),
+                Err(e) => {
+                    runtime::otel::hub_package_install(
+                        expected_type.unwrap_or("unknown"),
+                        slug_trim,
+                        "error",
+                    );
+                    return format!("hub install: could not start async runtime: {e}");
+                }
+            },
+        };
+        let require_verified = runtime::ConfigLoader::default_for(
+            std::env::current_dir().unwrap_or_default(),
+        )
+        .load()
+        .map(|cfg| cfg.hub().require_verified())
+        .unwrap_or(false);
+        let pkg = match client.get_package(slug_trim) {
+            Ok(p) => p,
+            Err(e) => {
+                runtime::otel::hub_package_install(
+                    expected_type.unwrap_or("unknown"),
+                    slug_trim,
+                    "error",
+                );
+                return format!("hub install: {e}");
+            }
+        };
+        if let Some(expected) = expected_type {
+            if !pkg.pkg_type.eq_ignore_ascii_case(expected) {
+                runtime::otel::hub_package_install(expected, slug_trim, "type-mismatch");
+                return format!(
+                    "Type mismatch: '{}' is a {} (not a {}). Try /{} install {}, or /hub install {} for a type-agnostic install.",
+                    pkg.name, pkg.pkg_type, expected, pkg.pkg_type, slug_trim, slug_trim,
+                );
+            }
+        }
+        let install_dir = anvil_home_dir();
+        match client.install(&pkg, &install_dir, require_verified, allow_unverified) {
+            Ok(dest) => {
+                runtime::otel::hub_package_install(&pkg.pkg_type, slug_trim, "ok");
+                format!(
+                    "Installed {} v{} ({}) to {}",
+                    pkg.name,
+                    pkg.version,
+                    pkg.pkg_type,
+                    dest.display()
+                )
+            }
+            Err(runtime::HubError::Revoked(msg)) => {
+                runtime::otel::hub_package_install(&pkg.pkg_type, slug_trim, "revoked");
+                format!("hub install: {msg}")
+            }
+            Err(runtime::HubError::Unverified(msg)) => {
+                runtime::otel::hub_package_install(&pkg.pkg_type, slug_trim, "unverified");
+                format!("hub install: {msg}")
+            }
+            Err(e) => {
+                runtime::otel::hub_package_install(&pkg.pkg_type, slug_trim, "error");
+                format!("hub install: {e}")
             }
         }
     }
