@@ -3,11 +3,13 @@
 # Builds all platform binaries and publishes to GitHub Releases
 #
 # Usage:
-#   ./scripts/release.sh              # Build + release current version
-#   ./scripts/release.sh --build-only # Build without pushing release
-#   ./scripts/release.sh --skip-build # Skip build, upload existing binaries
+#   ./scripts/release.sh                  # Build + release current version
+#   ./scripts/release.sh --build-only     # Build without pushing release
+#   ./scripts/release.sh --skip-build     # Skip build, upload existing binaries
+#   ./scripts/release.sh --skip-verify    # Skip post-publish verification gate
+#   ./scripts/release.sh --dry-run-verify # Print verification plan, no network
 #
-# Requires: cargo, docker, gh (GitHub CLI), rustup
+# Requires: cargo, docker, gh (GitHub CLI), rustup, jq
 set -euo pipefail
 
 # Ensure rustup's rustc takes precedence over any system Rust (brew, distro pkgs).
@@ -25,12 +27,22 @@ TAG="v${VERSION}"
 
 BUILD_ONLY=false
 SKIP_BUILD=false
+SKIP_VERIFY=false
+DRY_RUN_VERIFY=false
 for arg in "$@"; do
     case "$arg" in
-        --build-only) BUILD_ONLY=true ;;
-        --skip-build) SKIP_BUILD=true ;;
+        --build-only)     BUILD_ONLY=true ;;
+        --skip-build)     SKIP_BUILD=true ;;
+        --skip-verify)    SKIP_VERIFY=true ;;
+        --dry-run-verify) DRY_RUN_VERIFY=true ;;
     esac
 done
+
+# Source the post-publish verification helper (modular per
+# feedback-anvil-main-rs-modularity — release.sh itself stays focused on
+# orchestration, the verify logic lives in its own file).
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/release-helpers/verify-release.sh"
 
 echo "╔══════════════════════════════════════════════╗"
 echo "║  Anvil Release Pipeline — v${VERSION}              ║"
@@ -580,6 +592,39 @@ if [ -n "$PREV_TAG" ]; then
     echo "  v${VERSION} — $(date +%B\ %d,\ %Y)"
     git log --oneline "$PREV_TAG..$TAG" | sed 's/^[a-f0-9]* /  - /'
     echo
+fi
+
+# ─── Phase 8: Post-publish verification gate ────────────────────────────────
+#
+# Past bug: v2.2.16 shipped a Windows binary as `*-pc-windows-gnu.exe` but
+# the AnvilHub /api/version endpoint advertised `*-pc-windows-msvc.exe` —
+# every Windows upgrade returned HTTP 404 and the local pipeline thought it
+# had succeeded. This phase catches that class of regression by HEAD-ing
+# every URL the version endpoint advertises and asserting the announced
+# latest_version matches what we just published.
+#
+# Implementation lives in scripts/release-helpers/verify-release.sh.
+# Logic returns:
+#   0  → all green
+#   1  → /api/version unreachable, missing fields, or version mismatch
+#   2  → one or more advertised binary URLs return non-200
+if [ "$SKIP_VERIFY" = "true" ]; then
+    echo
+    echo "▸ Phase 8: Post-publish verification SKIPPED (--skip-verify)"
+elif [ "$DRY_RUN_VERIFY" = "true" ]; then
+    verify_release "$VERSION" --dry-run || {
+        echo "✘ Verification dry-run reported a problem (rc=$?)." >&2
+        exit 3
+    }
+else
+    if ! verify_release "$VERSION"; then
+        rc=$?
+        echo >&2
+        echo "✘ Post-publish verification FAILED (rc=$rc)." >&2
+        echo "  The GitHub Release exists and binaries are uploaded, but a" >&2
+        echo "  downstream surface is broken. See remediation block above." >&2
+        exit "$rc"
+    fi
 fi
 
 echo "╔══════════════════════════════════════════════╗"
