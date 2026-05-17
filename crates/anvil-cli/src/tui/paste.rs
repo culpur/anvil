@@ -16,6 +16,7 @@
 //! paste handler in the TUI.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::AnvilTui;
 use super::state::{PlaceholderPayload, PlaceholderSpan};
@@ -27,6 +28,233 @@ use super::state::{PlaceholderPayload, PlaceholderSpan};
 /// insertion. Matches Claude Code's behaviour for webpage-selection paste.
 pub(super) const LONG_PASTE_LINE_THRESHOLD: usize = 6;
 pub(super) const LONG_PASTE_CHAR_THRESHOLD: usize = 400;
+
+// ── Keystroke-burst detection (Task #604 Part C) ────────────────────────────
+
+/// Minimum number of chars in a burst before the suffix becomes a candidate
+/// for path-substitution. macOS Finder drag-and-drop typically delivers
+/// 30-80 chars (full absolute path); the shortest plausible dropped path
+/// is `/x/y.z` (7 chars) but real-world drops are much longer. We set the
+/// threshold above all common slash-command prefixes (`/help`, `/model`,
+/// `/clear`, `/scroll-speed`, `/permission-mode`, etc. — none exceed
+/// 18 chars when typed by hand) so a slow typist of even the longest
+/// slash command cannot accidentally trip the heuristic.
+pub(super) const BURST_MIN_CHARS: usize = 20;
+
+/// Maximum gap between successive `KeyCode::Char` events that still
+/// qualifies as part of the same burst. Drag-and-drop arrives as a
+/// nearly-instantaneous batch (well under 5 ms between chars on Apple
+/// Terminal); a human typist takes 60-200 ms between keystrokes at
+/// typical chat speed and well over 300 ms at thoughtful prose speed.
+/// 100 ms is the conservative split between these two distributions.
+pub(super) const BURST_MAX_GAP: Duration = Duration::from_millis(100);
+
+/// Minimum quiet time after the last burst keystroke before we attempt
+/// substitution. This is what prevents firing in the middle of a still-
+/// arriving paste burst.
+pub(super) const BURST_IDLE_AFTER: Duration = Duration::from_millis(50);
+
+/// Per-TUI state for the keystroke-burst heuristic. When a user drags a
+/// file from macOS Finder into the Anvil terminal, the file path arrives
+/// as a burst of `KeyCode::Char` events — NOT as a single `Event::Paste`.
+/// The bracketed-paste handler from #599 never fires; the submit-time
+/// fallback from #604 Part A catches it on Enter.
+///
+/// Part C polishes the UX: detect the burst pattern AS IT ARRIVES and
+/// substitute the placeholder *before* Enter, so the user sees
+/// `[image: file.png]` appear in their input box mid-typing (matching CC).
+#[derive(Debug, Clone, Default)]
+pub struct BurstTracker {
+    /// Wall-clock time of the most recent `KeyCode::Char` we observed.
+    pub last_key_at: Option<Instant>,
+    /// Byte offset in `Tab::input` where the current burst started, or
+    /// `None` if we're not currently inside a burst.
+    pub burst_start_idx: Option<usize>,
+    /// Number of chars accumulated in the current burst.
+    pub burst_char_count: usize,
+    /// True once this burst was already evaluated for substitution.
+    /// Prevents re-evaluating the same burst on every subsequent key.
+    pub burst_committed: bool,
+}
+
+impl BurstTracker {
+    /// Clear the tracker — called after a successful substitution or any
+    /// time the input buffer is reset (e.g. submit, history navigation,
+    /// Ctrl+C clear) so the next char starts a fresh burst.
+    pub fn reset(&mut self) {
+        self.last_key_at = None;
+        self.burst_start_idx = None;
+        self.burst_char_count = 0;
+        self.burst_committed = false;
+    }
+}
+
+/// Outcome of a single keystroke as evaluated by the burst tracker.
+#[derive(Debug, PartialEq, Eq)]
+pub enum BurstOutcome {
+    /// The burst is still building — keep typing as usual.
+    KeepTyping,
+    /// A mature burst just ended and its suffix resolved to a real file
+    /// path at `(start, end)` in `input`. Caller should replace
+    /// `input[start..end]` with the appropriate placeholder display
+    /// string and record a span over the new bytes.
+    SubstitutePath { start: usize, end: usize, path: PathBuf },
+}
+
+/// Pure-logic core of the keystroke-burst heuristic. Drives the tracker
+/// based on the most recent keystroke and (when a burst has just ended)
+/// inspects the burst suffix to decide whether to substitute.
+///
+/// Contract:
+/// * Called AFTER the char has been inserted into `input`. `cursor` is the
+///   cursor position post-insert.
+/// * `now` is wall-clock time of the keystroke (always `Instant::now()` in
+///   production; injected by tests).
+/// * Returns `BurstOutcome::SubstitutePath { .. }` only when:
+///     - >= [`BURST_MIN_CHARS`] chars arrived within [`BURST_MAX_GAP`] of
+///       each other (the burst),
+///     - the leading char of the burst region looks like a path prefix
+///       (`/`, `~`, `.`, `'`, `"`),
+///     - the gap between *this* keystroke and the previous keystroke is
+///       >= [`BURST_IDLE_AFTER`] (i.e. the burst has stopped), AND
+///     - the burst suffix resolves to a real file via
+///       [`parse_pasted_file_path`].
+///
+/// Robustness notes (against terminal jitter):
+/// * The 100 ms gap is conservative — Apple Terminal drag-drop measures
+///   1-3 ms between chars; pasted clipboard via keystroke conversion
+///   measures 5-15 ms. The fastest reliable human typing is ~60 ms per
+///   char (~200 wpm sprint), still well above the 100 ms ceiling.
+/// * The 20-char minimum exceeds every built-in slash command. A user
+///   typing `/permission-mode` (16 chars) at full speed CANNOT trip the
+///   heuristic because it stops below the minimum.
+/// * The 50 ms idle-after is the END signal: while keys are still
+///   arriving fast, we know the burst hasn't ended yet.
+/// * If the substitution candidate doesn't resolve to a real file, we
+///   return `KeepTyping` and the submit-time fallback
+///   (`detect_submit_time_file_path`) still catches it on Enter.
+pub fn record_keystroke(
+    tracker: &mut BurstTracker,
+    input: &str,
+    cursor: usize,
+    now: Instant,
+) -> BurstOutcome {
+    let gap = tracker.last_key_at.map(|prev| now.saturating_duration_since(prev));
+
+    let mature_burst_ready_to_commit = tracker.burst_start_idx.is_some()
+        && !tracker.burst_committed
+        && tracker.burst_char_count >= BURST_MIN_CHARS
+        && gap.is_some_and(|g| g >= BURST_IDLE_AFTER);
+
+    if mature_burst_ready_to_commit {
+        let start = tracker.burst_start_idx.unwrap();
+        let end = prev_char_boundary(input, cursor);
+        if end > start && end <= input.len() {
+            let suffix = &input[start..end];
+            if looks_like_path_prefix(suffix) {
+                if let Some(path) = parse_pasted_file_path(suffix) {
+                    tracker.burst_committed = true;
+                    return BurstOutcome::SubstitutePath { start, end, path };
+                }
+            }
+            tracker.burst_committed = true;
+        }
+    }
+
+    match gap {
+        None => {
+            tracker.burst_start_idx = Some(prev_char_boundary(input, cursor));
+            tracker.burst_char_count = 1;
+            tracker.burst_committed = false;
+        }
+        Some(g) if g <= BURST_MAX_GAP => {
+            if tracker.burst_start_idx.is_none() {
+                tracker.burst_start_idx = Some(prev_char_boundary(input, cursor));
+                tracker.burst_char_count = 1;
+                tracker.burst_committed = false;
+            } else {
+                tracker.burst_char_count = tracker.burst_char_count.saturating_add(1);
+            }
+        }
+        Some(_) => {
+            tracker.burst_start_idx = Some(prev_char_boundary(input, cursor));
+            tracker.burst_char_count = 1;
+            tracker.burst_committed = false;
+        }
+    }
+
+    tracker.last_key_at = Some(now);
+    BurstOutcome::KeepTyping
+}
+
+/// Idle-based variant of [`record_keystroke`]. Called by the TUI event
+/// loop on each poll iteration so a burst that ended without a trailing
+/// keystroke still substitutes once the 50 ms idle window elapses.
+pub fn check_burst_idle(
+    tracker: &mut BurstTracker,
+    input: &str,
+    now: Instant,
+) -> BurstOutcome {
+    if tracker.burst_committed {
+        return BurstOutcome::KeepTyping;
+    }
+    let Some(start) = tracker.burst_start_idx else {
+        return BurstOutcome::KeepTyping;
+    };
+    let Some(last) = tracker.last_key_at else {
+        return BurstOutcome::KeepTyping;
+    };
+    if tracker.burst_char_count < BURST_MIN_CHARS {
+        return BurstOutcome::KeepTyping;
+    }
+    if now.saturating_duration_since(last) < BURST_IDLE_AFTER {
+        return BurstOutcome::KeepTyping;
+    }
+    let end = input.len();
+    if end <= start {
+        return BurstOutcome::KeepTyping;
+    }
+    let suffix = &input[start..end];
+    if !looks_like_path_prefix(suffix) {
+        tracker.burst_committed = true;
+        return BurstOutcome::KeepTyping;
+    }
+    if let Some(path) = parse_pasted_file_path(suffix) {
+        tracker.burst_committed = true;
+        return BurstOutcome::SubstitutePath { start, end, path };
+    }
+    tracker.burst_committed = true;
+    BurstOutcome::KeepTyping
+}
+
+/// Test whether `s` starts with a path-like prefix. Cheap (no disk I/O)
+/// fast-path used by the burst tracker to skip the file-system probe
+/// entirely when the burst obviously isn't a path.
+fn looks_like_path_prefix(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.starts_with('\'')
+        || trimmed.starts_with('"')
+}
+
+/// Walk back one Unicode char boundary from `idx` in `s`. Returns 0 if
+/// `idx` is already at the start or at index 0.
+fn prev_char_boundary(s: &str, idx: usize) -> usize {
+    if idx == 0 {
+        return 0;
+    }
+    if idx > s.len() {
+        return s.len();
+    }
+    let mut i = idx - 1;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
@@ -272,6 +500,62 @@ fn insert_placeholder_for_long_paste(tui: &mut AnvilTui, cleaned: String) {
 #[must_use]
 pub(super) fn format_long_paste_display(id: usize, lines: usize, chars: usize) -> String {
     format!("[Pasted text #{id} +{lines} lines, {chars} chars]")
+}
+
+/// Task #604 Part C: replace the byte range `start..end` in the active
+/// tab's input with the placeholder display string for `path`, and record
+/// a `PlaceholderSpan` so submit-time expansion produces the right
+/// content block. Mirrors `insert_placeholder_for_path` but works on a
+/// pre-existing input region instead of inserting fresh text at the cursor.
+///
+/// Called by `insert_char` after `record_keystroke` returns
+/// `BurstOutcome::SubstitutePath`, and by the wait-loop's idle-check after
+/// `check_burst_idle`.
+pub(super) fn apply_burst_substitution(
+    tui: &mut AnvilTui,
+    start: usize,
+    end: usize,
+    path: &Path,
+) {
+    let kind = classify_for_placeholder(path);
+    let display = placeholder_display(path, kind);
+    let payload = PlaceholderPayload::from_kind(kind, path.to_path_buf());
+
+    let tab = tui.active_tab_mut();
+    if start > tab.input.len() || end > tab.input.len() || start > end {
+        return;
+    }
+    if !tab.input.is_char_boundary(start) || !tab.input.is_char_boundary(end) {
+        return;
+    }
+    let removed_len = end - start;
+    tab.input.replace_range(start..end, &display);
+    let new_end = start + display.len();
+    let delta_i: isize = display.len() as isize - removed_len as isize;
+    // Shift any later placeholder spans by the delta.
+    for span in &mut tab.input_placeholders {
+        if span.start >= end {
+            span.start = ((span.start as isize) + delta_i) as usize;
+            span.end = ((span.end as isize) + delta_i) as usize;
+        }
+    }
+    tab.input_placeholders.push(PlaceholderSpan {
+        start,
+        end: new_end,
+        payload,
+    });
+    tab.input_placeholders.sort_by_key(|s| s.start);
+    // Cursor adjustment: if it sat past `end`, shift by delta to track
+    // the trailing text. If it sat inside the burst region (shouldn't
+    // happen in normal flow), clamp to the end of the placeholder.
+    let prior_cursor = tab.cursor;
+    if prior_cursor >= end {
+        tab.cursor = ((prior_cursor as isize) + delta_i) as usize;
+    } else {
+        tab.cursor = new_end;
+    }
+    tab.history_idx = None;
+    tab.history_backup = None;
 }
 
 /// Submit-time path detection (Task #604 Part A).
@@ -1069,5 +1353,270 @@ mod tests {
         // Must be at least 2 blocks (we may merge later).
         assert!(blocks.len() >= 2, "got blocks: {blocks:?}");
         let _ = fs::remove_file(&p);
+    }
+
+    // ── Task #604 Part C: keystroke-burst detection ─────────────────────────
+
+    /// Helper: drive `record_keystroke` over a series of synthetic key
+    /// events. Each tuple is `(char, gap_ms_from_previous)`; the first
+    /// tuple's gap is interpreted as "absolute t=gap_ms" so the test
+    /// can control whether the first keystroke is the start of a burst
+    /// or a continuation of a prior one.
+    ///
+    /// Returns the final `BurstTracker` state and an `Option<(start,
+    /// end, path)>` capturing the FIRST `SubstitutePath` outcome we
+    /// observed during the drive (since `record_keystroke` is called
+    /// per-char, we surface the substitution moment for assertion).
+    fn drive_keystrokes(
+        tracker: &mut BurstTracker,
+        input: &mut String,
+        events: &[(char, u64)],
+    ) -> Option<(usize, usize, PathBuf)> {
+        // Anchor `now` to a fixed Instant so the absolute timeline is
+        // deterministic. The actual Instant value doesn't matter; only
+        // gaps between consecutive observations do.
+        let base = std::time::Instant::now();
+        let mut elapsed = Duration::from_millis(0);
+        let mut substitution: Option<(usize, usize, PathBuf)> = None;
+        for (ch, gap_ms) in events {
+            elapsed += Duration::from_millis(*gap_ms);
+            input.insert(input.len(), *ch);
+            let cursor = input.len();
+            let now = base + elapsed;
+            let outcome = record_keystroke(tracker, input, cursor, now);
+            if let BurstOutcome::SubstitutePath { start, end, path } = outcome {
+                if substitution.is_none() {
+                    substitution = Some((start, end, path));
+                }
+            }
+        }
+        substitution
+    }
+
+    /// Brief Test #1: simulate a fast burst of >= 20 chars whose suffix
+    /// resolves to a real file, then a "post-idle" char to trigger the
+    /// substitution check. The detector must return `SubstitutePath`
+    /// covering the burst region.
+    #[test]
+    fn keystroke_burst_matching_drag_and_drop_substitutes_placeholder() {
+        let p = tmpfile_with_ext("png");
+        let s = p.to_string_lossy().to_string();
+        assert!(
+            s.len() >= BURST_MIN_CHARS,
+            "tmpfile path must exceed BURST_MIN_CHARS for this test to be meaningful; \
+             tmpfile produced {s:?} ({} chars)",
+            s.len()
+        );
+
+        let mut tracker = BurstTracker::default();
+        let mut input = String::new();
+
+        // 1) Each char of the path arrives 2ms after the previous.
+        let mut events: Vec<(char, u64)> = s.chars().map(|c| (c, 2u64)).collect();
+        // 2) A trailing space arrives 80ms later (> BURST_IDLE_AFTER) to
+        //    signal "burst ended". The detector should fire on THIS
+        //    keystroke.
+        events.push((' ', 80));
+
+        let outcome = drive_keystrokes(&mut tracker, &mut input, &events);
+        let (start, end, detected) =
+            outcome.expect("burst should have produced a SubstitutePath");
+        assert_eq!(start, 0, "burst started at offset 0 (input was empty)");
+        assert_eq!(end, s.len(), "burst ended at the byte before the trailing space");
+        assert_eq!(detected, p, "detector resolved to the real tmpfile");
+
+        let _ = fs::remove_file(&p);
+    }
+
+    /// Brief Test #2: slow typing of `/help` (5 chars over 500ms each)
+    /// must NOT trigger the burst — neither the char count nor the gap
+    /// thresholds are met.
+    #[test]
+    fn slow_typing_of_slash_command_does_not_trigger_burst() {
+        let mut tracker = BurstTracker::default();
+        let mut input = String::new();
+
+        // Each char arrives 500 ms after the previous → way past
+        // BURST_MAX_GAP (100 ms). The tracker should treat each char
+        // as the start of a fresh burst with count=1. After all 5
+        // chars, the burst count is still 1 (most recent gap reset).
+        let events: Vec<(char, u64)> = "/help".chars().map(|c| (c, 500u64)).collect();
+        let outcome = drive_keystrokes(&mut tracker, &mut input, &events);
+        assert!(
+            outcome.is_none(),
+            "slow typing must NOT trigger burst substitution; got {outcome:?}"
+        );
+        assert_eq!(input, "/help", "input must remain literal `/help`");
+        // The tracker's char count never crossed the minimum, so it
+        // must NOT be in a committed-substitute state.
+        assert!(!tracker.burst_committed);
+    }
+
+    /// Brief Test #3: with `"look at "` already typed, burst-paste a
+    /// real file path. Only the burst region gets substituted; the
+    /// `"look at "` prefix is preserved.
+    #[test]
+    fn burst_in_middle_of_existing_text_only_substitutes_burst_portion() {
+        let p = tmpfile_with_ext("png");
+        let s = p.to_string_lossy().to_string();
+        assert!(s.len() >= BURST_MIN_CHARS);
+
+        let mut tracker = BurstTracker::default();
+        let mut input = String::from("look at ");
+        // Pretend the user typed "look at " a while ago — we start the
+        // burst tracker fresh, simulating the burst arriving after a
+        // long idle on the existing prefix.
+
+        let mut events: Vec<(char, u64)> = s.chars().map(|c| (c, 2u64)).collect();
+        events.push((' ', 80)); // post-idle trigger
+
+        let outcome = drive_keystrokes(&mut tracker, &mut input, &events);
+        let (start, end, detected) = outcome.expect("burst should substitute");
+        // The burst started at index 8 (length of "look at ") and ended
+        // at start + s.len() (i.e. right before the trailing space).
+        assert_eq!(start, "look at ".len());
+        assert_eq!(end, "look at ".len() + s.len());
+        assert_eq!(detected, p);
+
+        // Simulate applying the substitution: replace `input[start..end]`
+        // with the display string. This mirrors what `apply_burst_substitution`
+        // does on the live TUI.
+        let display = format!("[image: {}]", p.file_name().unwrap().to_str().unwrap());
+        input.replace_range(start..end, &display);
+        assert!(
+            input.starts_with("look at "),
+            "prefix must be preserved; got {input:?}"
+        );
+        assert!(
+            input.contains(&display),
+            "placeholder must be inserted; got {input:?}"
+        );
+
+        let _ = fs::remove_file(&p);
+    }
+
+    /// Brief Test #4: a `CtEvent::Paste` event MUST take the
+    /// bracketed-paste path (`handle_paste` → `parse_pasted_file_path`)
+    /// and not the keystroke-burst path. We assert that
+    /// `parse_pasted_file_path` (the function the Paste handler delegates
+    /// to) still resolves the same input the way it did before Part C,
+    /// and that the burst tracker is untouched on a paste.
+    #[test]
+    fn cmd_v_paste_event_still_goes_through_paste_handler_not_burst() {
+        let p = tmpfile_with_ext("png");
+        let s = p.to_string_lossy().to_string();
+        let resolved = parse_pasted_file_path(&s).expect("paste handler resolves path");
+        assert_eq!(resolved, p);
+
+        // Burst tracker remains untouched if no keystrokes flowed through
+        // `record_keystroke`.
+        let tracker = BurstTracker::default();
+        assert!(tracker.burst_start_idx.is_none());
+        assert_eq!(tracker.burst_char_count, 0);
+        assert!(!tracker.burst_committed);
+
+        let _ = fs::remove_file(&p);
+    }
+
+    /// The idle-based variant must fire when a mature burst has been
+    /// quiet for >= BURST_IDLE_AFTER, even without a trailing keystroke.
+    /// This is the path the wait-loop in `tui::mod` drives on every poll
+    /// iteration.
+    #[test]
+    fn check_burst_idle_fires_after_quiet_period() {
+        let p = tmpfile_with_ext("png");
+        let s = p.to_string_lossy().to_string();
+        assert!(s.len() >= BURST_MIN_CHARS);
+
+        let mut tracker = BurstTracker::default();
+        let mut input = String::new();
+
+        // Drive a fast burst with NO trailing keystroke.
+        let events: Vec<(char, u64)> = s.chars().map(|c| (c, 2u64)).collect();
+        let _ = drive_keystrokes(&mut tracker, &mut input, &events);
+
+        // Tracker state: burst is mature but not yet committed.
+        assert!(tracker.burst_start_idx.is_some());
+        assert!(tracker.burst_char_count >= BURST_MIN_CHARS);
+        assert!(!tracker.burst_committed);
+
+        // Idle check at "now" only 10 ms past the last key → too soon.
+        let last = tracker.last_key_at.unwrap();
+        let too_soon = last + Duration::from_millis(10);
+        assert_eq!(
+            check_burst_idle(&mut tracker, &input, too_soon),
+            BurstOutcome::KeepTyping,
+            "idle check must wait BURST_IDLE_AFTER before firing"
+        );
+
+        // Idle check at "now" past the idle window → fires.
+        let later = last + Duration::from_millis(100);
+        let outcome = check_burst_idle(&mut tracker, &input, later);
+        match outcome {
+            BurstOutcome::SubstitutePath { start, end, path } => {
+                assert_eq!(start, 0);
+                assert_eq!(end, input.len());
+                assert_eq!(path, p);
+            }
+            other => panic!("expected SubstitutePath; got {other:?}"),
+        }
+
+        let _ = fs::remove_file(&p);
+    }
+
+    /// Burst with no path-like prefix must NEVER substitute, even when
+    /// fast and over the char threshold. E.g. a fast-typing user
+    /// mashing a long word does not become a file drop.
+    #[test]
+    fn fast_burst_without_path_prefix_does_not_substitute() {
+        let mut tracker = BurstTracker::default();
+        let mut input = String::new();
+        // 30 random alpha chars, 2 ms apart, then a trigger space.
+        let body: String = std::iter::repeat('q').take(30).collect();
+        let mut events: Vec<(char, u64)> = body.chars().map(|c| (c, 2u64)).collect();
+        events.push((' ', 80));
+
+        let outcome = drive_keystrokes(&mut tracker, &mut input, &events);
+        assert!(
+            outcome.is_none(),
+            "fast typing of non-path text must NOT substitute; got {outcome:?}"
+        );
+    }
+
+    /// Burst of an unresolvable path (looks like a path but doesn't
+    /// exist on disk) must NOT substitute — and the burst is committed
+    /// so we don't keep re-evaluating it on every following char.
+    #[test]
+    fn fast_burst_with_unresolvable_path_does_not_substitute() {
+        let mut tracker = BurstTracker::default();
+        let mut input = String::new();
+        let phantom = "/this/path/definitely/does/not/exist/ever.png";
+        assert!(phantom.len() >= BURST_MIN_CHARS);
+        let mut events: Vec<(char, u64)> = phantom.chars().map(|c| (c, 2u64)).collect();
+        events.push((' ', 80));
+
+        let outcome = drive_keystrokes(&mut tracker, &mut input, &events);
+        assert!(outcome.is_none(), "unresolvable path must not substitute");
+        assert!(
+            tracker.burst_committed,
+            "tracker must be committed so we don't re-evaluate every char"
+        );
+    }
+
+    /// Burst tracker `reset()` must clear all four fields so the next
+    /// keystroke starts a fresh burst from scratch.
+    #[test]
+    fn burst_tracker_reset_clears_all_state() {
+        let mut t = BurstTracker {
+            last_key_at: Some(std::time::Instant::now()),
+            burst_start_idx: Some(5),
+            burst_char_count: 30,
+            burst_committed: true,
+        };
+        t.reset();
+        assert!(t.last_key_at.is_none());
+        assert!(t.burst_start_idx.is_none());
+        assert_eq!(t.burst_char_count, 0);
+        assert!(!t.burst_committed);
     }
 }

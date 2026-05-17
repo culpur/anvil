@@ -107,6 +107,27 @@ impl AnvilTui {
             }
         }
 
+        // Task #604 Part C: if a keystroke-burst just ended (i.e. no key
+        // has arrived for >= 50 ms after a mature burst), substitute the
+        // path-placeholder NOW so the user sees `[image: foo.png]` appear
+        // mid-typing — matching CC. See `tui::paste::check_burst_idle`.
+        {
+            let input_snapshot = self.active_tab().input.clone();
+            let now = std::time::Instant::now();
+            let outcome = super::paste::check_burst_idle(
+                &mut self.burst_tracker,
+                &input_snapshot,
+                now,
+            );
+            if let super::paste::BurstOutcome::SubstitutePath { start, end, path } = outcome {
+                super::paste::apply_burst_substitution(self, start, end, &path);
+                self.burst_tracker.reset();
+                self.refresh_completion();
+                self.redraw.request(DirtyRegions::INPUT | DirtyRegions::FOCUS);
+                self.request_redraw_reason(super::RedrawReason::KeyEvent);
+            }
+        }
+
         if event::poll(Duration::from_millis(80))? {
             match event::read()? {
                 CtEvent::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
@@ -119,6 +140,12 @@ impl AnvilTui {
                     // second paste handler ANYWHERE breaks the
                     // regression gate; see
                     // feedback-clipboard-parity.md.
+                    //
+                    // Part C: Paste events bypass the burst tracker
+                    // (those are real bracketed pastes, not drag-drop
+                    // keystroke bursts). Reset so any partial burst we
+                    // were tracking doesn't leak into post-paste typing.
+                    self.burst_tracker.reset();
                     super::paste::handle_paste(self, text);
                     self.refresh_completion();
                 }
@@ -634,6 +661,9 @@ impl AnvilTui {
                     tab.history_idx = None;
                     tab.history_backup = None;
                     self.ctrl_c_empty_at = None;
+                    // Task #604 Part C: input was just nuked; reset
+                    // the burst tracker so it doesn't keep counting.
+                    self.burst_tracker.reset();
                 }
             }
             KeyCode::Char('d' | 'D') => {
@@ -690,6 +720,27 @@ impl AnvilTui {
         tab.cursor += ch.len_utf8();
         tab.history_idx = None;
         tab.history_backup = None;
+
+        // Task #604 Part C: drive the keystroke-burst tracker. Drag-and-
+        // drop from Finder arrives as a fast `KeyCode::Char` burst (never
+        // as `Event::Paste`); if the burst suffix resolves to a real file,
+        // substitute a placeholder mid-typing. See
+        // `tui::paste::record_keystroke` for the heuristic.
+        let (input_snapshot, cursor_snapshot) = {
+            let tab = self.active_tab();
+            (tab.input.clone(), tab.cursor)
+        };
+        let now = std::time::Instant::now();
+        let outcome = super::paste::record_keystroke(
+            &mut self.burst_tracker,
+            &input_snapshot,
+            cursor_snapshot,
+            now,
+        );
+        if let super::paste::BurstOutcome::SubstitutePath { start, end, path } = outcome {
+            super::paste::apply_burst_substitution(self, start, end, &path);
+            self.burst_tracker.reset();
+        }
     }
 
     pub(super) fn backspace(&mut self) {
@@ -828,6 +879,10 @@ impl AnvilTui {
 
     pub(super) fn submit_input(&mut self) -> Option<String> {
         use super::state::LogEntry;
+        // Task #604 Part C: any keystroke burst we were tracking belongs
+        // to the soon-to-be-cleared input. Reset so the next prompt
+        // starts a fresh burst window.
+        self.burst_tracker.reset();
         let text = std::mem::take(&mut self.active_tab_mut().input);
         // Task #599: snapshot placeholders BEFORE we clear the buffer so
         // that `take_pending_paste_blocks()` (called next from the main

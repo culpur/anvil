@@ -244,6 +244,20 @@ pub struct AnvilTui {
     /// substituted with a `[Pasted text #N +M lines]` placeholder. Survives
     /// tab switches so users get globally-unique IDs across the session.
     pub(super) paste_counter: usize,
+
+    // ── Task #604 Part C: keystroke-burst tracker ───────────────────────────
+
+    /// State for the drag-and-drop keystroke heuristic. Detects when a
+    /// rapid burst of `KeyCode::Char` events looks like a path being
+    /// dragged from Finder (the terminal delivers the bytes one-char-at-
+    /// a-time, never firing `Event::Paste`) and substitutes a
+    /// `[image: foo.png]` placeholder mid-typing — matching CC's UX
+    /// instead of waiting for Enter (which is the Part A fallback). See
+    /// `tui::paste::record_keystroke` for the heuristic.
+    ///
+    /// Singleton across tabs by design: a drop never starts on one tab
+    /// and finishes on another. Reset on tab-switch.
+    pub(super) burst_tracker: paste::BurstTracker,
 }
 
 /// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
@@ -468,6 +482,7 @@ impl AnvilTui {
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .unwrap_or(30),
                 paste_counter: 0,
+                burst_tracker: paste::BurstTracker::default(),
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -587,6 +602,10 @@ impl AnvilTui {
     /// Switch to the tab at 0-based index.  Clears the unread marker on the target.
     pub fn switch_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
+            // Task #604 Part C: burst tracker is singleton across tabs;
+            // a tab switch ends any in-progress drag-drop detection on
+            // the previous tab.
+            self.burst_tracker.reset();
             self.active_tab = index;
             self.tabs[index].has_unread = false;
         }
@@ -1992,9 +2011,33 @@ impl AnvilTui {
                     crossterm::event::Event::Paste(text) => {
                         // Task #599 / v2.2.14 Phase 1: single shared
                         // paste handler. See tui::paste.
+                        //
+                        // Task #604 Part C: Paste events bypass the
+                        // burst tracker; reset so any partial burst
+                        // doesn't leak across.
+                        self.burst_tracker.reset();
                         paste::handle_paste(self, text);
                     }
                     _ => {}
+                }
+            }
+
+            // Task #604 Part C: idle-based burst substitution. A
+            // keystroke-burst that ended without a trailing keystroke
+            // still substitutes once the idle window elapses, so the
+            // input box updates BEFORE Enter is pressed.
+            {
+                let input_snapshot = self.active_tab().input.clone();
+                let now = std::time::Instant::now();
+                let outcome = paste::check_burst_idle(
+                    &mut self.burst_tracker,
+                    &input_snapshot,
+                    now,
+                );
+                if let paste::BurstOutcome::SubstitutePath { start, end, path } = outcome {
+                    paste::apply_burst_substitution(self, start, end, &path);
+                    self.burst_tracker.reset();
+                    self.request_redraw_reason(RedrawReason::KeyEvent);
                 }
             }
 
@@ -2186,6 +2229,11 @@ impl AnvilTui {
                     crossterm::event::Event::Paste(text) => {
                         // Task #599 / v2.2.14 Phase 1: single shared
                         // paste handler. See tui::paste.
+                        //
+                        // Task #604 Part C: Paste events bypass the
+                        // burst tracker; reset so any partial burst
+                        // doesn't leak across.
+                        self.burst_tracker.reset();
                         paste::handle_paste(self, text);
                         // v2.2.14 BUG-fix-real: paste is a multi-char key
                         // event — drive the same gate so the pasted text
@@ -2194,6 +2242,24 @@ impl AnvilTui {
                         self.commit_pending_redraw()?;
                     }
                     _ => {}
+                }
+            }
+
+            // Task #604 Part C: idle-based burst substitution (mirror of
+            // the per-tab wait loop's check above).
+            {
+                let input_snapshot = self.active_tab().input.clone();
+                let now = std::time::Instant::now();
+                let outcome = paste::check_burst_idle(
+                    &mut self.burst_tracker,
+                    &input_snapshot,
+                    now,
+                );
+                if let paste::BurstOutcome::SubstitutePath { start, end, path } = outcome {
+                    paste::apply_burst_substitution(self, start, end, &path);
+                    self.burst_tracker.reset();
+                    self.request_redraw_reason(RedrawReason::KeyEvent);
+                    self.commit_pending_redraw()?;
                 }
             }
 
