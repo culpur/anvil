@@ -245,3 +245,161 @@ pub(super) fn render_completion_popup(frame: &mut Frame, anchor_area: Rect, snap
     frame.render_widget(ratatui::widgets::Clear, popup_area);
     frame.render_widget(popup_widget, popup_area);
 }
+
+// ─── Seven-layer memory + chrome helpers (task #594 / BUG-13) ────────────────
+//
+// These read on-disk caches under `~/.anvil/` to populate the
+// `LayoutSnapshot.memory_*` and related fields. Every helper is best-effort
+// — when a directory is missing or unreadable it returns 0. The functions
+// are `pub(in crate::tui)` so `tui::collect_snapshot` can call them while
+// keeping the implementation co-located with the renderer that reads it.
+
+/// Resolve `~/.anvil/` (matches the rest of the codebase).
+fn anvil_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("ANVIL_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".anvil"))
+        })
+}
+
+/// Count immediate children of a directory that pass `predicate`.
+/// Returns 0 if the directory is missing or unreadable.
+fn count_in<F>(dir: std::path::PathBuf, predicate: F) -> usize
+where
+    F: Fn(&std::fs::DirEntry) -> bool,
+{
+    match std::fs::read_dir(&dir) {
+        Ok(iter) => iter
+            .filter_map(|e| e.ok())
+            .filter(|e| predicate(e))
+            .count(),
+        Err(_) => 0,
+    }
+}
+
+/// Count session JSON files under `~/.anvil/sessions/`.
+pub(in crate::tui) fn count_episodic_sessions() -> usize {
+    let Some(home) = anvil_home() else { return 0; };
+    count_in(home.join("sessions"), |e| {
+        e.path().extension().and_then(|s| s.to_str()) == Some("json")
+    })
+}
+
+/// Return `(collections, archives)` for the QMD semantic store.
+/// Collections is 1 when `~/.anvil/semantic/` exists, 0 otherwise.
+/// Archives is the count of `.md`/`.txt` files inside it.
+pub(in crate::tui) fn semantic_counts() -> (usize, usize) {
+    let Some(home) = anvil_home() else { return (0, 0); };
+    let dir = home.join("semantic");
+    if !dir.exists() {
+        return (0, 0);
+    }
+    let archives = count_in(dir, |e| {
+        let path = e.path();
+        let ext = path.extension().and_then(|s| s.to_str());
+        matches!(ext, Some("md" | "txt" | "json"))
+    });
+    (1, archives)
+}
+
+/// Count skill `.md` files under `~/.anvil/skills/` (non-recursive).
+pub(in crate::tui) fn count_skills() -> usize {
+    let Some(home) = anvil_home() else { return 0; };
+    count_in(home.join("skills"), |e| {
+        e.path().extension().and_then(|s| s.to_str()) == Some("md")
+    })
+}
+
+/// Count plugin subdirectories under `~/.anvil/plugins/`.
+pub(in crate::tui) fn count_plugins() -> usize {
+    let Some(home) = anvil_home() else { return 0; };
+    count_in(home.join("plugins"), |e| {
+        e.file_type().map(|t| t.is_dir()).unwrap_or(false)
+    })
+}
+
+/// Count daily summary JSON files under `~/.anvil/daily/`.
+pub(in crate::tui) fn count_daily_summaries() -> usize {
+    let Some(home) = anvil_home() else { return 0; };
+    count_in(home.join("daily"), |e| {
+        e.path().extension().and_then(|s| s.to_str()) == Some("json")
+    })
+}
+
+/// Count persisted permission decisions for the current project.
+/// Best-effort: uses `std::env::current_dir()` to scope the lookup. Returns 0
+/// when the project_dir cannot be resolved or no permission memory exists.
+pub(in crate::tui) fn count_permission_decisions() -> usize {
+    let Ok(cwd) = std::env::current_dir() else {
+        return 0;
+    };
+    let pm = runtime::PermissionMemory::load(&cwd);
+    pm.all_entries().count()
+}
+
+/// Best-effort archive count parsed from the live `qmd_status` string.
+/// The status line is set by main.rs as `"QMD: <docs> docs, <vectors> vectors"`
+/// — we pull the leading integer.
+pub(in crate::tui) fn qmd_archive_count(qmd_status: &str) -> u32 {
+    // Token after "QMD:" before " docs". Fall back to first integer found.
+    qmd_status
+        .split_whitespace()
+        .find_map(|tok| tok.parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
+/// Map a model name to a short cost-source label that matches the
+/// `compute_cost_usd()` heuristic in the renderer:
+///   - "local"   for Ollama/local models (contains `:` but not `:cloud`)
+///   - "cloud"   for hosted ollama-cloud (contains `:cloud`)
+///   - "OAuth"   for `claude-*` / `gpt-*` proper API names (heuristic)
+///   - "metered" for anything else (priced via pricing_for_model)
+pub(in crate::tui) fn cost_provider_label(model: &str) -> String {
+    if model.contains(":cloud") {
+        "cloud".to_string()
+    } else if model.contains(':') {
+        "local".to_string()
+    } else if model.starts_with("claude-") {
+        "OAuth".to_string()
+    } else if runtime::pricing_for_model(model).is_some() {
+        "metered".to_string()
+    } else {
+        "—".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_provider_label_local_for_ollama() {
+        assert_eq!(cost_provider_label("qwen3.5:latest"), "local");
+        assert_eq!(cost_provider_label("llama3:8b"), "local");
+    }
+
+    #[test]
+    fn cost_provider_label_cloud_for_ollama_cloud() {
+        assert_eq!(cost_provider_label("kimi-k2.6:cloud"), "cloud");
+    }
+
+    #[test]
+    fn cost_provider_label_oauth_for_claude() {
+        assert_eq!(cost_provider_label("claude-opus-4-6"), "OAuth");
+        assert_eq!(cost_provider_label("claude-sonnet-4-6"), "OAuth");
+    }
+
+    #[test]
+    fn cost_provider_label_dash_for_unknown() {
+        assert_eq!(cost_provider_label("unknown-mystery-model"), "—");
+    }
+
+    #[test]
+    fn qmd_archive_count_parses_status_string() {
+        assert_eq!(qmd_archive_count("QMD: 42 docs, 100 vectors"), 42);
+        assert_eq!(qmd_archive_count("QMD: active"), 0);
+        assert_eq!(qmd_archive_count(""), 0);
+        assert_eq!(qmd_archive_count("QMD: 8 docs"), 8);
+    }
+}

@@ -1,6 +1,6 @@
 ---
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
-assertion_line: 1050
+assertion_line: 1204
 expression: rendered
 ---
  SESSIONS                       DECK: Conversation

@@ -1118,6 +1118,50 @@ impl AnvilTui {
             }
         }).sum();
 
+        // ── Task #594 / BUG-13: seven-layer memory + chrome surface ──────────
+        // All values are best-effort `read_dir` counts off `~/.anvil/`. The
+        // helpers live in `tui/layouts/common.rs` so the renderers (and the
+        // tests that assert population) share a single implementation.
+        let memory_working_turns = log_snapshot
+            .iter()
+            .filter(|e| matches!(e, LogEntry::User(_) | LogEntry::Assistant(_)))
+            .count();
+        let memory_working_tokens = input_tokens.saturating_add(output_tokens);
+        let memory_episodic_sessions = layouts::common::count_episodic_sessions();
+        let (memory_semantic_collections, memory_semantic_archives) =
+            layouts::common::semantic_counts();
+        let memory_procedural_skills = layouts::common::count_skills();
+        let memory_procedural_plugins = layouts::common::count_plugins();
+        let memory_reflective_daily = layouts::common::count_daily_summaries();
+        let memory_permission_decisions = layouts::common::count_permission_decisions();
+
+        let qmd_latest_session_id = if session_id.is_empty() {
+            None
+        } else {
+            Some(session_id.clone())
+        };
+        let qmd_latest_age_days: Option<u32> = qmd_latest_session_id.as_ref().map(|_| 0);
+        let qmd_archive_count: u32 = layouts::common::qmd_archive_count(&qmd_status);
+
+        let permission_mode_label = helpers::permission_mode_display(&permission_mode);
+        let cost_provider_label = layouts::common::cost_provider_label(&model);
+
+        let build_version = env!("CARGO_PKG_VERSION").to_string();
+        let build_git_sha_short = {
+            let sha = env!("GIT_SHA");
+            sha.chars().take(7).collect::<String>()
+        };
+
+        let context_used_tokens = memory_working_tokens;
+        let context_limit_tokens = context_max_tokens;
+        let session_pct: f32 = if context_limit_tokens > 0 {
+            ((f64::from(context_used_tokens) / f64::from(context_limit_tokens)) * 100.0)
+                .min(100.0) as f32
+        } else {
+            0.0
+        };
+        let block_minutes: u32 = (elapsed.as_secs() / 60) as u32;
+
         let provider_login_modal_snapshot = self
             .provider_login_modal
             .as_ref()
@@ -1193,6 +1237,26 @@ impl AnvilTui {
             running_tab_count,
             pending_permission_count,
             total_session_cost_usd,
+            memory_working_turns,
+            memory_working_tokens: memory_working_tokens,
+            memory_episodic_sessions,
+            memory_semantic_collections,
+            memory_semantic_archives,
+            memory_procedural_skills,
+            memory_procedural_plugins,
+            memory_reflective_daily,
+            memory_permission_decisions,
+            qmd_latest_session_id,
+            qmd_latest_age_days,
+            qmd_archive_count,
+            permission_mode_label,
+            cost_provider_label,
+            build_version,
+            build_git_sha_short,
+            context_used_tokens,
+            context_limit_tokens,
+            session_pct,
+            block_minutes,
         }
     }
 

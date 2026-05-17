@@ -1,13 +1,14 @@
 ---
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
+assertion_line: 1085
 expression: rendered
 ---
- SESSIONS                [1: main] [2: aegis-fix⚠] [3: deploy-prep]
- ● main                 DECK: Conversation
+ SESSIONS                        [1: main] [2: aegis-fix⚠] [3: deploy-prep]
+ ● main                         DECK: Conversation
  ○ aegis-fix
- ○ deploy-prep          ▌ wire the new dispatch
+ ○ deploy-prep                  ▌ wire the new dispatch
 
- AGENTS (GLOBAL)        ▎ routing through canonical dispatcher
+ AGENTS (GLOBAL)                ▎ routing through canonical dispatcher
  ⟳ aud on aegis
 
  STATUS (ALL TABS)
@@ -39,6 +40,5 @@ expression: rendered
 
 
 
-                        ────────────────────────────────────────────────────────────────────────────────────────────────
-                        >
-                        g switch deck │ d tools │ ? help
+                                ────────────────────────────────────────────────────────────────────────────────────────
+                                >

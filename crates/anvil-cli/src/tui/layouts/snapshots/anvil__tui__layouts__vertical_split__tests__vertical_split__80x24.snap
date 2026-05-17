@@ -1,17 +1,18 @@
 ---
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
+assertion_line: 1041
 expression: rendered
 ---
- SESSIONS           DECK: Conversation
+ SESSIONS                 DECK: Conversation
  ● main
-                    ▌ do the thing
+                          ▌ do the thing
  AGENTS (GLOBAL)
- │ none active      ▎ ok
+ │ none active            ▎ ok
 
  STATUS (ALL TABS)
- running         0 t
- pending         0 p
- cost            $0.
+ running         0 tabs
+ pending         0 perms
+ cost            $0.00
 
 
 
@@ -23,6 +24,5 @@ expression: rendered
 
 
 
-                    ────────────────────────────────────────────────────────────
-                    > next prompt
-                    g switch deck │ d tools │ ? help
+                          ──────────────────────────────────────────────────────
+                          > next prompt

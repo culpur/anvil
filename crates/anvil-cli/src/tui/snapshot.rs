@@ -168,4 +168,153 @@ pub(crate) struct LayoutSnapshot {
     /// Each tab's cost is estimated from its input/output token counts
     /// and the active model's pricing table.
     pub total_session_cost_usd: f64,
+
+    // ── Seven-layer memory surface (task #594 / BUG-13) ─────────────────────
+    // These power the rail's MEMORY section. All fields are best-effort
+    // counts pulled from on-disk caches in `~/.anvil/`; they degrade to zero
+    // when the relevant store is absent.
+    /// Working memory: count of user+assistant turns in the active tab's log.
+    pub memory_working_turns: usize,
+    /// Working memory: cumulative input+output tokens for the active tab.
+    pub memory_working_tokens: u32,
+    /// Episodic memory: number of session files persisted in
+    /// `~/.anvil/sessions/`. Includes the live session.
+    pub memory_episodic_sessions: usize,
+    /// Semantic memory: number of QMD collections (currently 1 when the
+    /// `anvil-semantic` collection is initialised, 0 otherwise).
+    pub memory_semantic_collections: usize,
+    /// Semantic memory: number of archived semantic documents indexed via
+    /// `~/.anvil/semantic/` (best-effort `read_dir` count).
+    pub memory_semantic_archives: usize,
+    /// Procedural memory: number of skill `.md` files under `~/.anvil/skills/`.
+    pub memory_procedural_skills: usize,
+    /// Procedural memory: number of plugin subdirectories under
+    /// `~/.anvil/plugins/`.
+    pub memory_procedural_plugins: usize,
+    /// Reflective memory: number of daily summary JSON files under
+    /// `~/.anvil/daily/`.
+    pub memory_reflective_daily: usize,
+    /// Permission memory: number of stored allow decisions for the current
+    /// project (sourced from `PermissionMemory::load`).
+    pub memory_permission_decisions: usize,
+
+    // ── QMD surface ────────────────────────────────────────────────────────
+    /// QMD: latest indexed session id (best-effort; falls back to the live
+    /// session id when no archived sessions are present).
+    pub qmd_latest_session_id: Option<String>,
+    /// QMD: age in days of the latest indexed session (0 for the live one).
+    pub qmd_latest_age_days: Option<u32>,
+    /// QMD: total archived documents indexed (`QmdStatus::total_docs`).
+    pub qmd_archive_count: u32,
+
+    // ── Permission + cost labels (formatted strings for the rail) ──────────
+    /// Pretty label for the active permission mode (e.g. "bypass on",
+    /// "default", "plan").
+    pub permission_mode_label: String,
+    /// Cost-source label: "local", "cloud", "metered", or "OAuth".
+    pub cost_provider_label: String,
+
+    // ── Build / version ────────────────────────────────────────────────────
+    /// `env!("CARGO_PKG_VERSION")` — same value the welcome banner shows.
+    pub build_version: String,
+    /// Short git SHA (first 7 chars of `env!("GIT_SHA")`).
+    pub build_git_sha_short: String,
+
+    // ── Context bar (lifted out of classic status line) ────────────────────
+    /// Tokens currently consumed by the active tab (input + output).
+    pub context_used_tokens: u32,
+    /// Effective context window size for the active model.
+    pub context_limit_tokens: u32,
+    /// Session percent of context used (0.0–100.0).
+    pub session_pct: f32,
+    /// Whole minutes elapsed in the current session block.
+    pub block_minutes: u32,
+}
+
+#[cfg(test)]
+impl LayoutSnapshot {
+    /// Test-only constructor with reasonable defaults across all fields.
+    ///
+    /// Use this in renderer goldens to call the real `render_rail` /
+    /// `render_deck` with a minimal-but-complete snapshot. Test code can
+    /// override individual fields after construction.
+    pub(crate) fn test_default() -> Self {
+        Self {
+            log_snapshot: Vec::new(),
+            transcript_verbose: false,
+            pending: String::new(),
+            think: String::new(),
+            think_frame: "",
+            think_elapsed_secs: 0.0,
+            spinner_warn_secs: 10,
+            spinner_error_secs: 30,
+            input_text: String::new(),
+            queued_count: 0,
+            queued_preview: Vec::new(),
+            cursor_pos: 0,
+            scroll: 0,
+            scrollback_state: super::scrollback::ScrollbackState::live(),
+            scrollback_is_live: true,
+            model: String::new(),
+            session_id: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            elapsed: Duration::ZERO,
+            completion_visible: false,
+            completion_selected: 0,
+            completion_matches: Vec::new(),
+            completion_view_offset: 0,
+            tab_infos: Vec::new(),
+            active_permission_modal: None,
+            git_branch: String::new(),
+            git_diff_stats: String::new(),
+            permission_mode: String::new(),
+            context_max_tokens: 0,
+            qmd_status: String::new(),
+            last_archive_status: String::new(),
+            update_available: String::new(),
+            configure_state: ConfigureState::Inactive,
+            configure_data: ConfigureData::default(),
+            configure_viewport: super::list_viewport::ListViewport::new(),
+            theme: Theme::default_theme(),
+            agent_panel_visible: false,
+            agent_rows: Vec::new(),
+            remote_url: String::new(),
+            remote_code: String::new(),
+            sl_config: StatusLineConfig::default(),
+            thinking_enabled: false,
+            lines_added: 0,
+            lines_removed: 0,
+            effort_level: String::new(),
+            ssh_screen: None,
+            is_ssh_tab: false,
+            ssh_form_snapshot: None,
+            provider_login_modal_snapshot: None,
+            scrollback_view_lines: None,
+            can_close_tab: false,
+            running_tab_count: 0,
+            pending_permission_count: 0,
+            total_session_cost_usd: 0.0,
+            memory_working_turns: 0,
+            memory_working_tokens: 0,
+            memory_episodic_sessions: 0,
+            memory_semantic_collections: 0,
+            memory_semantic_archives: 0,
+            memory_procedural_skills: 0,
+            memory_procedural_plugins: 0,
+            memory_reflective_daily: 0,
+            memory_permission_decisions: 0,
+            qmd_latest_session_id: None,
+            qmd_latest_age_days: None,
+            qmd_archive_count: 0,
+            permission_mode_label: String::new(),
+            cost_provider_label: String::new(),
+            build_version: String::new(),
+            build_git_sha_short: String::new(),
+            context_used_tokens: 0,
+            context_limit_tokens: 0,
+            session_pct: 0.0,
+            block_minutes: 0,
+        }
+    }
 }

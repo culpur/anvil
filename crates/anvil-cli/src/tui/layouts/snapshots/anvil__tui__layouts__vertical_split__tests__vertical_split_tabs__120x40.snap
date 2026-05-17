@@ -1,12 +1,13 @@
 ---
 source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
+assertion_line: 1070
 expression: rendered
 ---
- SESSIONS               [1: main]   DECK: Conversation
+ SESSIONS                       [1: main]   DECK: Conversation
  ● main
-                        ▌ do the thing
+                                ▌ do the thing
  AGENTS (GLOBAL)
- │ none active          ▎ ok
+ │ none active                  ▎ ok
 
  STATUS (ALL TABS)
  running         0 tabs
@@ -39,6 +40,5 @@ expression: rendered
 
 
 
-                        ────────────────────────────────────────────────────────────────────────────────────────────────
-                        > next prompt
-                        g switch deck │ d tools │ ? help
+                                ────────────────────────────────────────────────────────────────────────────────────────
+                                > next prompt

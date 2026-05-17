@@ -1,0 +1,50 @@
+---
+source: crates/anvil-cli/src/tui/layouts/vertical_split.rs
+assertion_line: 1168
+expression: rendered
+---
+ SESSIONS
+ ● main
+
+ AGENTS (GLOBAL)
+ │ none active
+
+ STATUS (ALL TABS)
+ running                  0 tabs
+ pending                 0 perms
+ cost                      $0.00
+
+ MEMORY
+ working            6t / 2000tok
+ episodic            12 sessions
+ semantic              1c · 47a
+ procedural             3s · 5p
+ reflective              8 daily
+ long-term                L7/QMD
+ permission              4 prior
+
+ MODEL
+ claude-sonnet-4-6
+ thinking                     no
+ cost                      OAuth
+
+ PERMISSIONS
+ bypass on
+
+ QMD
+ active · 47 archives
+ latest: s-abc12345 (0d)
+
+ CONTEXT
+ [················] 2k/200k
+ session 1.0% · block 3m
+
+ BUILD
+ v2.2.16 · deadbee
+
+ KEYBINDS
+ g switch deck · d tools
+ s sessions · a agents
+ F2/F3 tab · Ctrl+T new
+ Ctrl+W close · Ctrl+R deck
+ ? help · /quit exit
