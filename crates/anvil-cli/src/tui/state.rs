@@ -446,9 +446,10 @@ impl LogEntry {
 pub enum PlaceholderPayload {
     /// PNG/JPG/GIF/WebP — expanded to an Image content block.
     Image(std::path::PathBuf),
-    /// PDF — expanded to a base64 Image block (Anthropic accepts PDFs
-    /// via the image source kind on current models) plus a Text block
-    /// announcing the filename.
+    /// PDF / DOCX / DOC / XLSX / PPTX — expanded to a first-class
+    /// `runtime::ContentBlock::Document` (Anthropic native document
+    /// support; non-Anthropic providers fall back to a text notice in
+    /// their wire-format builders). Task #601 (v2.2.16).
     Document(std::path::PathBuf),
     /// Anything else — read as UTF-8 text and wrapped in a `<file>` tag.
     Text(std::path::PathBuf),
@@ -475,6 +476,12 @@ impl PlaceholderPayload {
         use runtime::ContentBlock;
         const IMAGE_SIZE_LIMIT: usize = 20 * 1024 * 1024;
         const TEXT_SIZE_LIMIT: usize = 100 * 1024;
+        // Task #601: Anthropic caps document attachments at 32 MB
+        // (the same as their max PDF size); the page-count cap is
+        // server-side. We refuse to attach larger files locally so
+        // the user gets immediate feedback instead of a 400 from the
+        // model API.
+        const DOCUMENT_SIZE_LIMIT: usize = 32 * 1024 * 1024;
         match self {
             Self::Image(path) => {
                 let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -503,26 +510,25 @@ impl PlaceholderPayload {
                 let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("document.pdf")
+                    .unwrap_or("document")
                     .to_string();
                 let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-                if bytes.len() > IMAGE_SIZE_LIMIT {
+                if bytes.len() > DOCUMENT_SIZE_LIMIT {
+                    // Task #601: emit a human-readable size-limit notice
+                    // and DO NOT attach. Caller surfaces this string in
+                    // the TUI scrollback via `expand_input_for_submit`.
+                    let mb = bytes.len() as f64 / (1024.0 * 1024.0);
                     return Err(format!(
-                        "document too large: {} bytes (limit {IMAGE_SIZE_LIMIT})",
-                        bytes.len()
+                        "Document too large: {name} ({mb:.1} MB / 32 MB max)"
                     ));
                 }
-                // Until Anvil's content-block schema gains a Document variant,
-                // surface PDFs as a Text block with a base64-data note so
-                // the model knows the user attached a binary document.
+                let media_type = document_media_type_for_path(path);
                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                Ok(vec![ContentBlock::Text {
-                    text: format!(
-                        "The user attached a PDF: {name} ({} bytes, base64 below).\n\n\
-                         <document filename=\"{name}\" encoding=\"base64\" \
-                         media_type=\"application/pdf\">\n{data}\n</document>",
-                        bytes.len()
-                    ),
+                Ok(vec![ContentBlock::Document {
+                    media_type,
+                    data,
+                    title: Some(name),
+                    context: None,
                 }])
             }
             Self::Text(path) => {
@@ -555,6 +561,39 @@ impl PlaceholderPayload {
             }
         }
     }
+}
+
+/// Map a document path to the canonical MIME type that the Anthropic
+/// API recognises (or that non-Anthropic providers can pass through
+/// verbatim in their text-fallback notice).
+///
+/// Task #601: kept as a free function (not a method) so the paste
+/// classifier can reuse it without instantiating a payload.
+#[must_use]
+pub fn document_media_type_for_path(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "doc" => "application/msword",
+        "docx" => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 /// One byte range in `Tab::input` covered by a placeholder display.

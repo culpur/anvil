@@ -2111,4 +2111,54 @@ mod tests {
         let auth_other = ApiError::Auth("some other auth issue".to_string());
         assert!(!is_oauth_401(&auth_other));
     }
+
+    /// Task #601 (v2.2.16): `build_messages_request_body` adds Anthropic-
+    /// specific cache-control + identity decoration to the system prompt
+    /// and the tool list, but it MUST NOT touch user-message content
+    /// blocks. A `Document` content block in the request must survive
+    /// the wire-format pass byte-for-byte (same media_type, same base64
+    /// data, same title) so Anthropic's native document tokenisation
+    /// kicks in.
+    #[test]
+    fn document_block_survives_anthropic_wire_format_unchanged() {
+        use crate::types::{
+            DocumentSource, DocumentSourceKind, InputContentBlock, InputMessage,
+        };
+        let request = MessageRequest {
+            model: "claude-sonnet-4-6".to_string(),
+            max_tokens: 1024,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Document {
+                    source: DocumentSource {
+                        kind: DocumentSourceKind::Base64,
+                        media_type: "application/pdf".to_string(),
+                        data: "JVBERi0xLjQK".to_string(),
+                    },
+                    title: Some("spec.pdf".to_string()),
+                    context: None,
+                }],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let body = super::build_messages_request_body(&request, false);
+        let msg = &body["messages"][0];
+        assert_eq!(msg["role"], serde_json::json!("user"));
+        let block = &msg["content"][0];
+        assert_eq!(block["type"], serde_json::json!("document"));
+        assert_eq!(block["source"]["type"], serde_json::json!("base64"));
+        assert_eq!(
+            block["source"]["media_type"],
+            serde_json::json!("application/pdf")
+        );
+        assert_eq!(block["source"]["data"], serde_json::json!("JVBERi0xLjQK"));
+        assert_eq!(block["title"], serde_json::json!("spec.pdf"));
+        // `cache_control` and the OAuth identity preamble are
+        // intentionally applied to the system prompt + tool list only —
+        // they MUST NOT bleed into user content blocks.
+        assert!(block.get("cache_control").is_none(), "block: {block}");
+    }
 }

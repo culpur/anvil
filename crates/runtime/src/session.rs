@@ -30,6 +30,26 @@ pub enum ContentBlock {
         /// Base64-encoded image bytes.
         data: String,
     },
+    /// First-class document attachment (PDF, DOCX, XLSX, etc.).
+    ///
+    /// Task #601 (v2.2.16): Anthropic supports native document content
+    /// blocks via the `{"type":"document","source":{"type":"base64",...}}`
+    /// shape on Claude 3.5+. PDFs are tokenized natively (≈1500 tokens
+    /// per page) rather than the per-page text-rendering path. Maximum
+    /// 100 pages / 32 MB per Anthropic. For non-Anthropic providers,
+    /// `Document` falls back to a base64-in-text representation in the
+    /// wire-format builders (`openai_compat`, `bedrock`, etc.) so the
+    /// model still sees that something was attached.
+    Document {
+        /// MIME type, e.g. `"application/pdf"`.
+        media_type: String,
+        /// Base64-encoded document bytes.
+        data: String,
+        /// Optional human-readable title (typically the filename).
+        title: Option<String>,
+        /// Optional caption/context describing the document.
+        context: Option<String>,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -287,6 +307,28 @@ impl ContentBlock {
                 );
                 object.insert("data".to_string(), JsonValue::String(data.clone()));
             }
+            Self::Document {
+                media_type,
+                data,
+                title,
+                context,
+            } => {
+                object.insert(
+                    "type".to_string(),
+                    JsonValue::String("document".to_string()),
+                );
+                object.insert(
+                    "media_type".to_string(),
+                    JsonValue::String(media_type.clone()),
+                );
+                object.insert("data".to_string(), JsonValue::String(data.clone()));
+                if let Some(title) = title {
+                    object.insert("title".to_string(), JsonValue::String(title.clone()));
+                }
+                if let Some(context) = context {
+                    object.insert("context".to_string(), JsonValue::String(context.clone()));
+                }
+            }
             Self::ToolUse { id, name, input } => {
                 object.insert(
                     "type".to_string(),
@@ -336,6 +378,18 @@ impl ContentBlock {
             "image" => Ok(Self::Image {
                 media_type: required_string(object, "media_type")?,
                 data: required_string(object, "data")?,
+            }),
+            "document" => Ok(Self::Document {
+                media_type: required_string(object, "media_type")?,
+                data: required_string(object, "data")?,
+                title: object
+                    .get("title")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned),
+                context: object
+                    .get("context")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned),
             }),
             "tool_use" => Ok(Self::ToolUse {
                 id: required_string(object, "id")?,
@@ -462,5 +516,66 @@ mod tests {
             restored.messages[1].usage.expect("usage").total_tokens(),
             17
         );
+    }
+
+    /// Task #601 (v2.2.16): the runtime `ContentBlock::Document` variant
+    /// must round-trip through the on-disk session JSON. This is the
+    /// session-layer counterpart to the wire-format
+    /// `document_serialises_to_anthropic_spec` test in
+    /// `crates/api/src/types.rs` — the two together cover the full
+    /// pipeline from disk → in-memory → wire-format.
+    #[test]
+    fn document_content_block_round_trips_through_session_json() {
+        let block = ContentBlock::Document {
+            media_type: "application/pdf".to_string(),
+            data: "JVBERi0xLjQK".to_string(),
+            title: Some("spec.pdf".to_string()),
+            context: Some("the spec".to_string()),
+        };
+        let mut session = Session::new();
+        session
+            .messages
+            .push(ConversationMessage::user_with_blocks(vec![block.clone()]));
+
+        // Inspect the serialised JSON shape directly — `type` must be
+        // `"document"` (not `"image"`), and `title` / `context` must
+        // round-trip when present.
+        let json = session.to_json().render();
+        assert!(json.contains("\"type\":\"document\""), "json: {json}");
+        assert!(json.contains("\"media_type\":\"application/pdf\""), "json: {json}");
+        assert!(json.contains("\"title\":\"spec.pdf\""), "json: {json}");
+        assert!(json.contains("\"context\":\"the spec\""), "json: {json}");
+
+        // Round-trip through save+load preserves the variant + every field.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("runtime-session-doc-{nanos}.json"));
+        session.save_to_path(&path).expect("save");
+        let restored = Session::load_from_path(&path).expect("load");
+        fs::remove_file(&path).expect("rm tmp");
+        assert_eq!(restored, session);
+    }
+
+    /// Round-trip with `title` and `context` absent: the optional fields
+    /// must not appear in the JSON output (we use BTreeMap so the
+    /// "missing" case is predictable).
+    #[test]
+    fn document_without_title_or_context_omits_optionals() {
+        let block = ContentBlock::Document {
+            media_type: "application/pdf".to_string(),
+            data: "AAAA".to_string(),
+            title: None,
+            context: None,
+        };
+        let mut session = Session::new();
+        session
+            .messages
+            .push(ConversationMessage::user_with_blocks(vec![block]));
+        let json = session.to_json().render();
+        assert!(json.contains("\"type\":\"document\""));
+        assert!(!json.contains("\"title\""), "json: {json}");
+        assert!(!json.contains("\"context\""), "json: {json}");
     }
 }

@@ -529,6 +529,12 @@ fn build_archive_markdown(
                 ContentBlock::Image { media_type, .. } => {
                     let _ = write!(out, "*[image: {media_type}]*\n\n");
                 }
+                ContentBlock::Document {
+                    media_type, title, ..
+                } => {
+                    let name = title.as_deref().unwrap_or("document");
+                    let _ = write!(out, "*[document: {name} ({media_type})]*\n\n");
+                }
             }
         }
     }

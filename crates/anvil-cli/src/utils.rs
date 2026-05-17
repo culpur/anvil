@@ -1351,6 +1351,15 @@ pub(crate) fn render_export_text(session: &Session) -> String {
                 ContentBlock::Image { media_type, data } => {
                     lines.push(format!("[image {media_type} {} bytes]", data.len()));
                 }
+                ContentBlock::Document {
+                    media_type, data, title, ..
+                } => {
+                    let name = title.as_deref().unwrap_or("document");
+                    lines.push(format!(
+                        "[document {name} {media_type} {} bytes]",
+                        data.len()
+                    ));
+                }
                 ContentBlock::ToolUse { id, name, input } => {
                     lines.push(format!("[tool_use id={id} name={name}] {input}"));
                 }

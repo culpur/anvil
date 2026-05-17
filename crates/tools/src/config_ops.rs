@@ -783,10 +783,10 @@ pub(crate) fn run_exit_plan_mode() -> Result<String, String> {
 // =============================================================================
 
 use api::{
-    max_tokens_for_model, resolve_model_alias, ContentBlockDelta, ImageSource, ImageSourceKind,
-    InputContentBlock, InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
-    ProviderClient, StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition,
-    ToolResultContentBlock,
+    max_tokens_for_model, resolve_model_alias, ContentBlockDelta, DocumentSource,
+    DocumentSourceKind, ImageSource, ImageSourceKind, InputContentBlock, InputMessage,
+    MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
+    StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 use runtime::{
     load_system_prompt_sections_with_identity, ApiClient, ApiRequest, AssistantEvent,
@@ -1596,6 +1596,22 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
                             media_type: media_type.clone(),
                             data: data.clone(),
                         },
+                    },
+                    // Task #601 (v2.2.16): first-class document attachments,
+                    // mirroring `anvil-cli::providers::convert_messages`.
+                    ContentBlock::Document {
+                        media_type,
+                        data,
+                        title,
+                        context,
+                    } => InputContentBlock::Document {
+                        source: DocumentSource {
+                            kind: DocumentSourceKind::Base64,
+                            media_type: media_type.clone(),
+                            data: data.clone(),
+                        },
+                        title: title.clone(),
+                        context: context.clone(),
                     },
                     ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
                         id: id.clone(),

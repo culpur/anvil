@@ -1218,8 +1218,10 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
             for block in &message.content {
                 match block {
                     InputContentBlock::Text { text: value } => text.push_str(value),
-                    // Images are not expected in assistant turns; skip silently.
-                    InputContentBlock::Image { .. } | InputContentBlock::ToolResult { .. } => {}
+                    // Images / documents are not expected in assistant turns; skip silently.
+                    InputContentBlock::Image { .. }
+                    | InputContentBlock::Document { .. }
+                    | InputContentBlock::ToolResult { .. } => {}
                     InputContentBlock::ToolUse { id, name, input } => tool_calls.push(json!({
                         "id": id,
                         "type": "function",
@@ -1261,6 +1263,34 @@ fn translate_message(message: &InputMessage) -> Vec<Value> {
                         }
                     }]
                 })),
+                // Task #601 (v2.2.16): non-Anthropic providers don't
+                // support Anthropic's native `document` content block.
+                // Degrade gracefully to a text notice with the base64
+                // body inline (Option B from the brief): the model at
+                // least sees that something was attached, the filename,
+                // the MIME type, and the encoded bytes — capable models
+                // can still decode it if they choose. Adding a
+                // `pdf-extract` dep was rejected to keep the build
+                // matrix portable (FreeBSD / NetBSD source-only).
+                InputContentBlock::Document { source, title, context } => {
+                    let label = title.as_deref().unwrap_or("document");
+                    let ctx = context
+                        .as_deref()
+                        .map(|c| format!(" — {c}"))
+                        .unwrap_or_default();
+                    Some(json!({
+                        "role": "user",
+                        "content": format!(
+                            "[Document attached: {label} ({}, {} base64 bytes){ctx}]\n\n\
+                             <document filename=\"{label}\" media_type=\"{}\" \
+                             encoding=\"base64\">\n{}\n</document>",
+                            source.media_type,
+                            source.data.len(),
+                            source.media_type,
+                            source.data,
+                        ),
+                    }))
+                }
                 InputContentBlock::ToolResult {
                     tool_use_id,
                     content,
@@ -1460,8 +1490,8 @@ mod tests {
     };
     use crate::error::ApiError;
     use crate::types::{
-        InputContentBlock, InputMessage, MessageRequest, ToolChoice, ToolDefinition,
-        ToolResultContentBlock,
+        DocumentSource, DocumentSourceKind, InputContentBlock, InputMessage, MessageRequest,
+        ToolChoice, ToolDefinition, ToolResultContentBlock,
     };
     use serde_json::json;
 
@@ -1937,6 +1967,69 @@ mod tests {
             payload.get("think"),
             Some(&json!(false)),
             "Ollama model must have think=false when ANVIL_EFFORT is unset"
+        );
+    }
+
+    /// Task #601 (v2.2.16): `InputContentBlock::Document` does not have
+    /// a native shape in OpenAI's API (and by extension Ollama's
+    /// OpenAI-compatible endpoint). The wire builder must degrade
+    /// gracefully — Option B in the brief: send a `[Document
+    /// attached: …]` notice with the base64 payload embedded inline so
+    /// the model at least sees what was pasted. Anthropic's native
+    /// `document` block is reserved for the Anthropic provider path
+    /// (`crates/api/src/providers/anvil_provider.rs`).
+    ///
+    /// This is the `document_block_falls_back_to_text_on_ollama_provider`
+    /// test from the task brief — we use the Ollama-tagged model name
+    /// to exercise the same Ollama codepath the OpenAI-compat client
+    /// uses at runtime.
+    #[test]
+    fn document_block_falls_back_to_text_on_ollama_provider() {
+        let _lock = env_lock();
+        let _e = EnvRestore::set("ANVIL_EFFORT", None);
+        let payload = build_chat_completion_request(&MessageRequest {
+            model: "ollama/qwen3:8b".to_string(),
+            max_tokens: 64,
+            messages: vec![InputMessage {
+                role: "user".to_string(),
+                content: vec![InputContentBlock::Document {
+                    source: DocumentSource {
+                        kind: DocumentSourceKind::Base64,
+                        media_type: "application/pdf".to_string(),
+                        data: "JVBERi0xLjQK".to_string(),
+                    },
+                    title: Some("spec.pdf".to_string()),
+                    context: None,
+                }],
+            }],
+            system: None,
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        });
+
+        // The user message must NOT carry a native `document` content
+        // block — Ollama would 400 on that shape. Instead, the body is a
+        // plain text content with the `[Document attached: ...]` notice
+        // and the base64 payload embedded.
+        let body = payload.to_string();
+        assert!(
+            !body.contains("\"type\":\"document\""),
+            "Ollama wire body must not contain Anthropic's native \
+             `document` block; got: {body}"
+        );
+        assert!(
+            body.contains("[Document attached: spec.pdf"),
+            "expected the fallback notice; got: {body}"
+        );
+        assert!(
+            body.contains("application/pdf"),
+            "fallback should still surface the MIME type; got: {body}"
+        );
+        assert!(
+            body.contains("JVBERi0xLjQK"),
+            "fallback should embed the base64 body so capable models can \
+             still decode it; got: {body}"
         );
     }
 }

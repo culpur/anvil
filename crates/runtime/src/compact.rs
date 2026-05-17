@@ -198,7 +198,9 @@ fn summarize_messages(messages: &[ConversationMessage]) -> String {
         .filter_map(|block| match block {
             ContentBlock::ToolUse { name, .. } => Some(name.as_str()),
             ContentBlock::ToolResult { tool_name, .. } => Some(tool_name.as_str()),
-            ContentBlock::Text { .. } | ContentBlock::Image { .. } => None,
+            ContentBlock::Text { .. }
+            | ContentBlock::Image { .. }
+            | ContentBlock::Document { .. } => None,
         })
         .collect::<Vec<_>>();
     tool_names.sort_unstable();
@@ -304,6 +306,12 @@ fn summarize_block(block: &ContentBlock) -> String {
     let raw = match block {
         ContentBlock::Text { text } => text.clone(),
         ContentBlock::Image { media_type, .. } => format!("[image: {media_type}]"),
+        ContentBlock::Document {
+            media_type, title, ..
+        } => {
+            let name = title.as_deref().unwrap_or("document");
+            format!("[document: {name} ({media_type})]")
+        }
         ContentBlock::ToolUse { name, input, .. } => format!("tool_use {name}({input})"),
         ContentBlock::ToolResult {
             tool_name,
@@ -365,7 +373,7 @@ fn collect_key_files(messages: &[ConversationMessage]) -> Vec<String> {
             ContentBlock::Text { text } => Some(text.as_str()),
             ContentBlock::ToolUse { input, .. } => Some(input.as_str()),
             ContentBlock::ToolResult { output, .. } => Some(output.as_str()),
-            ContentBlock::Image { .. } => None,
+            ContentBlock::Image { .. } | ContentBlock::Document { .. } => None,
         })
         .flat_map(extract_file_candidates)
         .collect::<Vec<_>>();
@@ -389,7 +397,8 @@ fn first_text_block(message: &ConversationMessage) -> Option<&str> {
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
         | ContentBlock::Text { .. }
-        | ContentBlock::Image { .. } => None,
+        | ContentBlock::Image { .. }
+        | ContentBlock::Document { .. } => None,
     })
 }
 
@@ -437,6 +446,10 @@ fn estimate_message_tokens(message: &ConversationMessage) -> usize {
             ContentBlock::Text { text } => text.len() / 4 + 1,
             // Image data is base64; estimate from raw byte length.
             ContentBlock::Image { data, .. } => data.len() * 3 / 4 / 4 + 85,
+            // Anthropic PDF tokenisation is ~1500 tokens / page; we can't
+            // count pages locally without decoding, so estimate from the
+            // raw byte length using the same coefficient as Image.
+            ContentBlock::Document { data, .. } => data.len() * 3 / 4 / 4 + 85,
             ContentBlock::ToolUse { name, input, .. } => (name.len() + input.len()) / 4 + 1,
             ContentBlock::ToolResult {
                 tool_name, output, ..

@@ -118,6 +118,22 @@ pub enum InputContentBlock {
     Image {
         source: ImageSource,
     },
+    /// First-class document attachment per Anthropic's spec:
+    /// `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."},"title":"foo.pdf"}`.
+    ///
+    /// Task #601: Claude 3.5+ tokenises PDFs natively (~1500 tokens per
+    /// page); non-Anthropic providers degrade this block to a text
+    /// notice in their wire-format builders (`openai_compat`,
+    /// `bedrock`, etc.). Maximum 100 pages / 32 MB per Anthropic; the
+    /// paste-handler enforces the 32 MB local cap before this block is
+    /// ever constructed.
+    Document {
+        source: DocumentSource,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -143,6 +159,26 @@ pub struct ImageSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageSourceKind {
+    Base64,
+}
+
+/// Source descriptor for a document content block (Anthropic spec).
+///
+/// Task #601: kept structurally separate from `ImageSource` even though
+/// today both carry base64 — Anthropic has hinted at adding `url` and
+/// `text` source kinds for documents in the future, and we'd rather
+/// have an obvious extension point than re-shape `ImageSource`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentSource {
+    #[serde(rename = "type")]
+    pub kind: DocumentSourceKind,
+    pub media_type: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentSourceKind {
     Base64,
 }
 
@@ -289,4 +325,76 @@ pub enum StreamEvent {
     ContentBlockDelta(ContentBlockDeltaEvent),
     ContentBlockStop(ContentBlockStopEvent),
     MessageStop(MessageStopEvent),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Task #601 (v2.2.16): the wire-format `InputContentBlock::Document`
+    /// must serialise to Anthropic's documented document-content-block
+    /// shape verbatim:
+    ///
+    /// ```json
+    /// {
+    ///   "type": "document",
+    ///   "source": {
+    ///     "type": "base64",
+    ///     "media_type": "application/pdf",
+    ///     "data": "..."
+    ///   },
+    ///   "title": "spec.pdf"
+    /// }
+    /// ```
+    ///
+    /// Tag = `document` (snake_case via `#[serde(rename_all)]`), `source`
+    /// is a nested object with `type=base64`, and `title` / `context`
+    /// are omitted entirely when `None`. This is the contract the
+    /// Anthropic Max-plan endpoint validates.
+    #[test]
+    fn document_serialises_to_anthropic_spec() {
+        let block = InputContentBlock::Document {
+            source: DocumentSource {
+                kind: DocumentSourceKind::Base64,
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0xLjQK".to_string(),
+            },
+            title: Some("spec.pdf".to_string()),
+            context: None,
+        };
+        let value = serde_json::to_value(&block).expect("serialise");
+        assert_eq!(
+            value,
+            json!({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": "JVBERi0xLjQK",
+                },
+                "title": "spec.pdf",
+            }),
+            "wire shape diverged from Anthropic's documented spec: {value}"
+        );
+    }
+
+    /// Round-trip the wire-format Document block through
+    /// serialise + deserialise to ensure the `#[serde(tag = "type")]`
+    /// discriminator survives both directions.
+    #[test]
+    fn document_round_trips_through_serde() {
+        let original = InputContentBlock::Document {
+            source: DocumentSource {
+                kind: DocumentSourceKind::Base64,
+                media_type: "application/pdf".to_string(),
+                data: "AAAA".to_string(),
+            },
+            title: Some("foo.pdf".to_string()),
+            context: Some("a note".to_string()),
+        };
+        let wire = serde_json::to_value(&original).expect("ser");
+        let restored: InputContentBlock = serde_json::from_value(wire).expect("de");
+        assert_eq!(original, restored);
+    }
 }

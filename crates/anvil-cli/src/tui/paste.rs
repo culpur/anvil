@@ -158,7 +158,14 @@ pub(super) fn classify_for_placeholder(path: &Path) -> PlaceholderKind {
         .to_lowercase();
     match ext.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" => PlaceholderKind::Image,
-        "pdf" => PlaceholderKind::Document,
+        // Task #601 (v2.2.16): PDF + the Office / OpenDocument formats
+        // that Anthropic accepts via the native `document` content block.
+        // The runtime's `expand_to_blocks` emits a
+        // `ContentBlock::Document` for these; the provider wire-format
+        // builders pass them through to Anthropic and fall back to a
+        // base64-in-text notice for non-Anthropic providers.
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods"
+        | "odp" => PlaceholderKind::Document,
         _ => PlaceholderKind::Text,
     }
 }
@@ -421,6 +428,91 @@ mod tests {
             classify_for_placeholder(Path::new("/tmp/readme.md")),
             PlaceholderKind::Text
         );
+    }
+
+    /// Task #601 (v2.2.16): Office and OpenDocument formats classify as
+    /// Document so they ride the first-class Anthropic document-content
+    /// path rather than the base64-in-text fallback. This is the test
+    /// the task brief enumerates as `docx_routes_to_document_block`.
+    #[test]
+    fn docx_routes_to_document_block() {
+        for ext in &[
+            "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp",
+        ] {
+            let p = PathBuf::from(format!("/tmp/foo.{ext}"));
+            assert_eq!(
+                classify_for_placeholder(&p),
+                PlaceholderKind::Document,
+                "expected {ext} to classify as Document"
+            );
+        }
+        // Case insensitivity — uppercase extension still routes correctly.
+        assert_eq!(
+            classify_for_placeholder(Path::new("/tmp/Report.DOCX")),
+            PlaceholderKind::Document
+        );
+    }
+
+    /// Task #601 (v2.2.16): a pasted PDF must produce a
+    /// `runtime::ContentBlock::Document` (NOT a `Text` block with an
+    /// embedded base64 payload — that was the v2.2.13 behaviour we
+    /// just replaced).
+    #[test]
+    fn pdf_paste_routes_to_document_block_not_text() {
+        use crate::tui::state::PlaceholderPayload;
+        // Build a tiny "PDF" on disk — the runtime doesn't validate the
+        // header; it just base64-encodes the bytes and tags them with
+        // `application/pdf` based on the extension.
+        let p = tmpfile_with_ext("pdf");
+        std::fs::write(&p, b"%PDF-1.4\n%fake but valid extension\n").unwrap();
+        let payload = PlaceholderPayload::Document(p.clone());
+        let blocks = payload
+            .expand_to_blocks()
+            .expect("expansion should succeed for small pdf");
+        assert_eq!(blocks.len(), 1, "expected exactly one block, got {blocks:?}");
+        match &blocks[0] {
+            runtime::ContentBlock::Document {
+                media_type,
+                title,
+                data,
+                ..
+            } => {
+                assert_eq!(media_type, "application/pdf");
+                assert_eq!(title.as_deref(), Some(p.file_name().unwrap().to_str().unwrap()));
+                assert!(!data.is_empty(), "data should be base64 encoded");
+            }
+            other => panic!(
+                "expected ContentBlock::Document; got {other:?} — this is the \
+                 regression task #601 fixes (was a Text block with base64 \
+                 stuffed inside, which billed as text tokens and bypassed \
+                 Anthropic's native document support)"
+            ),
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Task #601 (v2.2.16): documents larger than 32 MB are refused
+    /// locally with a human-readable notice. The notice format is the
+    /// one the brief specifies — the leading `[Document too large:` is
+    /// a contract for the TUI surface text.
+    #[test]
+    fn large_pdf_above_32mb_emits_size_error_placeholder() {
+        use crate::tui::state::PlaceholderPayload;
+        let p = tmpfile_with_ext("pdf");
+        // Write 33 MB of zero bytes — the size guard fires before any
+        // base64 work is done, so this is cheap.
+        let big = vec![0u8; 33 * 1024 * 1024];
+        std::fs::write(&p, &big).expect("write big tmp file");
+        let payload = PlaceholderPayload::Document(p.clone());
+        let err = payload
+            .expand_to_blocks()
+            .expect_err("expansion must refuse files > 32 MB");
+        assert!(
+            err.starts_with("Document too large:"),
+            "notice must start with the brief's exact prefix; got {err:?}"
+        );
+        assert!(err.contains("32 MB max"), "notice should cite the 32 MB cap; got {err:?}");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

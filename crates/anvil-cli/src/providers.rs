@@ -21,11 +21,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use api::{
-    AnvilApiClient, AuthSource, ContentBlockDelta, ImageSource, ImageSourceKind,
-    InputContentBlock, InputMessage, MessageRequest, OutputContentBlock, ProviderClient,
-    ProviderKind, StreamEvent as ApiStreamEvent, ToolChoice, ToolResultContentBlock,
-    detect_provider_kind, max_tokens_for_model, parse_ollama_text_for_tool_calls,
-    resolve_startup_auth_source, silent_write_warning,
+    AnvilApiClient, AuthSource, ContentBlockDelta, DocumentSource, DocumentSourceKind,
+    ImageSource, ImageSourceKind, InputContentBlock, InputMessage, MessageRequest,
+    OutputContentBlock, ProviderClient, ProviderKind, StreamEvent as ApiStreamEvent,
+    ToolChoice, ToolResultContentBlock, detect_provider_kind, max_tokens_for_model,
+    parse_ollama_text_for_tool_calls, resolve_startup_auth_source, silent_write_warning,
 };
 use commands::slash_command_specs;
 use crate::format_tool::{
@@ -2152,6 +2152,26 @@ pub(crate) fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMes
                             media_type: media_type.clone(),
                             data: data.clone(),
                         },
+                    },
+                    // Task #601 (v2.2.16): first-class document attachments.
+                    // Anthropic providers (`anvil_provider`) pass this
+                    // through verbatim per the API spec; non-Anthropic
+                    // providers (`openai_compat`, `bedrock`, …) degrade
+                    // to a base64-in-text notice inside their
+                    // `translate_message` builders.
+                    ContentBlock::Document {
+                        media_type,
+                        data,
+                        title,
+                        context,
+                    } => InputContentBlock::Document {
+                        source: DocumentSource {
+                            kind: DocumentSourceKind::Base64,
+                            media_type: media_type.clone(),
+                            data: data.clone(),
+                        },
+                        title: title.clone(),
+                        context: context.clone(),
                     },
                     ContentBlock::ToolUse { id, name, input } => InputContentBlock::ToolUse {
                         id: id.clone(),
