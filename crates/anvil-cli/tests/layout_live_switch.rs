@@ -97,14 +97,15 @@ fn different_kinds_are_not_equal() {
 
 // ─── 3. Default config ───────────────────────────────────────────────────────
 
-/// The default layout must be `classic-tabs` (v2.2.16 Correction 2).
-/// Fresh installs default to the Classic renderer with tabs enabled.
+/// The default layout is `vertical-split-tabs` (v2.2.16 Correction 3 — release).
+/// Fresh installs and upgraders without an explicit `tui_layout` land on the
+/// rail+deck renderer with workspace tabs enabled.
 #[test]
 fn default_config_is_vertical_split_tabs() {
     let def = TuiLayoutConfig::default();
-    assert_eq!(def.kind, TuiLayoutKind::Classic);
+    assert_eq!(def.kind, TuiLayoutKind::VerticalSplit);
     assert!(def.tabs, "default must have tabs enabled");
-    assert_eq!(tui_layout_to_alias(&def), "classic-tabs");
+    assert_eq!(tui_layout_to_alias(&def), "vertical-split-tabs");
 }
 
 // ─── 4. should_show_tui_layout_intro gate ────────────────────────────────────
@@ -127,21 +128,21 @@ fn default_config_is_vertical_split_tabs() {
 ///   (c) A hypothetical re-switch to the same config is equal (no-op guard).
 #[test]
 fn layout_state_machine_transitions() {
-    // Start: default (classic-tabs / Layout D0 per v2.2.16 Correction 2).
+    // Start: default (vertical-split-tabs / Layout A1 per v2.2.16 release).
     let mut current = TuiLayoutConfig::default();
-    assert_eq!(current.kind, TuiLayoutKind::Classic);
+    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
     assert!(current.tabs);
 
-    // Switch to Layout A (vertical-split, no tabs).
-    let a = tui_layout_kind_from_alias("vertical-split").unwrap();
-    assert_ne!(current, a);
-    current = a;
-    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
+    // Switch to Layout D0 (classic, no tabs).
+    let classic = tui_layout_kind_from_alias("classic").unwrap();
+    assert_ne!(current, classic);
+    current = classic;
+    assert_eq!(current.kind, TuiLayoutKind::Classic);
     assert!(!current.tabs);
 
     // Re-switch to same config → no-op (equal).
-    let a_again = tui_layout_kind_from_alias("vertical-split").unwrap();
-    assert_eq!(current, a_again, "re-switch same config must be no-op (equal)");
+    let classic_again = tui_layout_kind_from_alias("classic").unwrap();
+    assert_eq!(current, classic_again, "re-switch same config must be no-op (equal)");
 
     // Switch to Layout F (journal-tabs).
     let f = tui_layout_kind_from_alias("journal-tabs").unwrap();
@@ -150,13 +151,13 @@ fn layout_state_machine_transitions() {
     assert_eq!(current.kind, TuiLayoutKind::Journal);
     assert!(current.tabs);
 
-    // Reset to default (classic-tabs).
+    // Reset to default (vertical-split-tabs).
     let default = TuiLayoutConfig::default();
     assert_ne!(current, default);
     current = default;
-    assert_eq!(current.kind, TuiLayoutKind::Classic);
+    assert_eq!(current.kind, TuiLayoutKind::VerticalSplit);
     assert!(current.tabs);
-    assert_eq!(tui_layout_to_alias(&current), "classic-tabs");
+    assert_eq!(tui_layout_to_alias(&current), "vertical-split-tabs");
 }
 
 /// Tabs flag can be toggled on any kind independently of kind switching.
@@ -178,15 +179,15 @@ fn tabs_flag_override_independent_of_kind() {
     assert_eq!(tui_layout_to_alias(&cfg), "three-pane");
 }
 
-/// `/layout reset` produces the canonical default, which is
-/// `classic-tabs` (v2.2.16 Correction 2 — Classic is now the upgrader default).
+/// `/layout reset` produces the canonical default, which in v2.2.16 release is
+/// `vertical-split-tabs`.
 #[test]
 fn reset_alias_is_vertical_split_tabs() {
     let default = TuiLayoutConfig::default();
     assert_eq!(
         tui_layout_to_alias(&default),
-        "classic-tabs",
-        "/layout reset message must say 'classic-tabs'"
+        "vertical-split-tabs",
+        "/layout reset message must say 'vertical-split-tabs'"
     );
 }
 
