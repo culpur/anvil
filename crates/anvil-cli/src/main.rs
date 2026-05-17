@@ -3305,8 +3305,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             }
             ReadResult::Submit(input) => {
                 last_input_time = Instant::now();
+                // Task #599: drain any expanded paste-placeholder blocks
+                // BEFORE we dispatch the submit. Pasted images/PDFs/files
+                // ride as InputContentBlock::Image / Text alongside the
+                // user's literal text on the next turn.
+                let pending_paste_blocks = tui.take_pending_paste_blocks();
                 let trimmed = input.trim();
-                if trimmed.is_empty() {
+                if trimmed.is_empty() && pending_paste_blocks.is_empty() {
                     continue;
                 }
                 if matches!(trimmed, "/exit" | "/quit") {
@@ -3653,6 +3658,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     tui.enqueue_on_tab(active, trimmed);
                     tui.push_system("↳ queued: tab still finishing previous turn".to_string());
                     continue;
+                }
+                // Task #599: inject any expanded paste blocks (image / PDF
+                // / file) into the active runtime before spawning the
+                // turn. The blocks ride alongside the literal text in the
+                // next user message.
+                if !pending_paste_blocks.is_empty() {
+                    cli.active_runtime_mut().inject_user_blocks(pending_paste_blocks.clone());
                 }
                 if let Err(reason) = cli.spawn_turn_for_tab(active, effective_input, cli.permission_mode) {
                     tui.push_system(format!("Cannot start turn: {reason}"));

@@ -1023,6 +1023,8 @@ impl LiveCli {
                     pending_text: String::new(),
                     scroll: 0,
                     input: String::new(),
+                    input_placeholders: Vec::new(),
+                    pending_paste_blocks: Vec::new(),
                     cursor: 0,
                     history: Vec::new(),
                     history_idx: None,

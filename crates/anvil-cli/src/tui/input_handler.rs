@@ -113,10 +113,13 @@ impl AnvilTui {
                     return self.handle_key(key);
                 }
                 CtEvent::Paste(text) => {
-                    let cleaned = text.replace('\r', "");
-                    for ch in cleaned.chars() {
-                        self.insert_char(ch);
-                    }
+                    // Task #599 / v2.2.14 Phase 1: single shared paste
+                    // handler — file-path detection + placeholder
+                    // substitution lives in tui::paste. Adding a
+                    // second paste handler ANYWHERE breaks the
+                    // regression gate; see
+                    // feedback-clipboard-parity.md.
+                    super::paste::handle_paste(self, text);
                     self.refresh_completion();
                 }
                 CtEvent::Mouse(mouse) => {
@@ -693,6 +696,12 @@ impl AnvilTui {
         if self.active_tab().cursor == 0 {
             return;
         }
+        // Task #599: if the cursor sits at the END of a placeholder span,
+        // delete the WHOLE span (not just one character). This is what
+        // makes `[image: foo.png]` feel atomic to the user.
+        if super::paste::try_backspace_placeholder(self) {
+            return;
+        }
         let (cursor, input) = {
             let tab = self.active_tab();
             (tab.cursor, tab.input.clone())
@@ -701,6 +710,14 @@ impl AnvilTui {
         let tab = self.active_tab_mut();
         tab.input.drain(prev..cursor);
         tab.cursor = prev;
+        // Shift any placeholder spans that lived past the removed range.
+        let removed = cursor - prev;
+        for span in &mut tab.input_placeholders {
+            if span.start >= cursor {
+                span.start -= removed;
+                span.end -= removed;
+            }
+        }
         tab.history_idx = None;
         tab.history_backup = None;
     }
@@ -812,14 +829,33 @@ impl AnvilTui {
     pub(super) fn submit_input(&mut self) -> Option<String> {
         use super::state::LogEntry;
         let text = std::mem::take(&mut self.active_tab_mut().input);
+        // Task #599: snapshot placeholders BEFORE we clear the buffer so
+        // that `take_pending_paste_blocks()` (called next from the main
+        // loop) can expand them into content blocks. They get stashed on
+        // `pending_paste_blocks` so the existing String API stays intact.
+        let spans = std::mem::take(&mut self.active_tab_mut().input_placeholders);
+        let pending_blocks = if spans.is_empty() {
+            Vec::new()
+        } else {
+            super::paste::expand_input_for_submit(&text, &spans)
+        };
         {
             let tab = self.active_tab_mut();
             tab.cursor = 0;
             tab.history_idx = None;
             tab.history_backup = None;
+            tab.pending_paste_blocks = pending_blocks;
         }
         let trimmed = text.trim().to_string();
         if trimmed.is_empty() {
+            // No literal text. If we have any expanded blocks, ensure the
+            // session still gets something to react to.
+            if !self.active_tab().pending_paste_blocks.is_empty() {
+                let tab = self.active_tab_mut();
+                tab.log.push(LogEntry::User(text.clone()));
+                self.scroll_to_bottom();
+                return Some(text);
+            }
             return None;
         }
         {
@@ -829,6 +865,13 @@ impl AnvilTui {
         }
         self.scroll_to_bottom();
         Some(trimmed)
+    }
+
+    /// Drain whatever expanded content blocks the most recent
+    /// `submit_input()` produced. Returns an empty Vec when the
+    /// submission had no placeholders. Idempotent.
+    pub fn take_pending_paste_blocks(&mut self) -> Vec<runtime::ContentBlock> {
+        std::mem::take(&mut self.active_tab_mut().pending_paste_blocks)
     }
 
     // ─── Completion ──────────────────────────────────────────────────────────

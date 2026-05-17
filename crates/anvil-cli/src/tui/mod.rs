@@ -23,6 +23,7 @@ pub(super) mod ssh_tab;
 pub(super) mod state;
 pub(super) mod widgets;
 pub(super) mod input_handler;
+pub(super) mod paste;
 
 // ─── Public re-exports ────────────────────────────────────────────────────────
 
@@ -332,31 +333,30 @@ impl AnvilTui {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
 
-        // Mouse capture is OFF by default so the user's terminal handles text
-        // selection natively (drag-to-select copies normally, no modifier
-        // required). Mouse capture stole that on every terminal — even the
-        // Shift+Drag pass-through only worked on iTerm2/Windows Terminal/Linux
-        // VTEs, never on macOS Terminal.app.
+        // Mouse capture is OFF by default. Task #599 / v2.2.14 Phase 1:
+        // when mouse capture is on, the terminal hands every mouse event
+        // (drag, click, wheel) to Anvil and the user can no longer use
+        // native drag-to-select / Cmd+C copy. Past releases shipped this
+        // ON and tried to compensate with a Shift+Drag pass-through; that
+        // only worked on iTerm2 / Windows Terminal / some Linux VTEs and
+        // NEVER worked on macOS Terminal.app.
         //
-        // Mouse capture is ON by default (enables clickable tabs + wheel-scroll).
         // Resolution order:
-        //   1. ANVIL_TUI_MOUSE env var (if set, wins)
-        //   2. ~/.anvil/config.json "tui_mouse_capture" (set by the first-run wizard)
-        //   3. default ON
-        // Native drag-select still works because we pass Shift+Drag through to the
-        // terminal.
-        let mouse_capture = match std::env::var("ANVIL_TUI_MOUSE").ok() {
-            Some(v) => !matches!(v.as_str(), "0" | "false" | "no" | "off"),
-            None => {
-                // Try config.json.
-                let from_config = dirs_next::home_dir()
-                    .map(|h| h.join(".anvil").join("config.json"))
-                    .and_then(|p| std::fs::read_to_string(p).ok())
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                    .and_then(|v| v.get("tui_mouse_capture").and_then(|b| b.as_bool()));
-                from_config.unwrap_or(true)
-            }
-        };
+        //   1. ANVIL_TUI_MOUSE env var (if set, wins).
+        //   2. ~/.anvil/config.json "tui_mouse_capture".
+        //   3. default OFF.
+        //
+        // Opting in (`ANVIL_TUI_MOUSE=1`) enables clickable tabs +
+        // wheel-scroll, and the status banner switches to instruct the
+        // user to hold Option (macOS) / Shift (others) to select text.
+        let env_value = std::env::var("ANVIL_TUI_MOUSE").ok();
+        let config_value = dirs_next::home_dir()
+            .map(|h| h.join(".anvil").join("config.json"))
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("tui_mouse_capture").and_then(|b| b.as_bool()));
+        let mouse_capture =
+            paste::resolve_mouse_capture_default(env_value.as_deref(), config_value);
         // CC parity (v2.2.14): respect ANVIL_DISABLE_ALTERNATE_SCREEN so the
         // conversation can stay in the terminal's native scrollback when the
         // user prefers that. Mouse capture and bracketed paste are independent
@@ -400,14 +400,8 @@ impl AnvilTui {
         // Printed once at startup so users know the key conventions without
         // reading documentation. With mouse capture off (the default), normal
         // drag-to-select works in every terminal — no modifier required.
-        let sel_hint = if mouse_capture {
-            #[cfg(target_os = "macos")]
-            { "Hold Option and drag to select text" }
-            #[cfg(not(target_os = "macos"))]
-            { "Hold Shift and drag to select text" }
-        } else {
-            "Drag to select text  •  Set ANVIL_TUI_MOUSE=1 to enable mouse-wheel scroll"
-        };
+        let is_macos = cfg!(target_os = "macos");
+        let sel_hint = paste::mouse_selection_hint(mouse_capture, is_macos);
 
         initial_tab.log.push(LogEntry::System(format!(
             "{sel_hint}  •  PageUp to scroll back  •  End to return to live view"
@@ -1974,10 +1968,9 @@ impl AnvilTui {
                         self.handle_in_flight_key(key);
                     }
                     crossterm::event::Event::Paste(text) => {
-                        let cleaned = text.replace('\r', "");
-                        for ch in cleaned.chars() {
-                            self.insert_char(ch);
-                        }
+                        // Task #599 / v2.2.14 Phase 1: single shared
+                        // paste handler. See tui::paste.
+                        paste::handle_paste(self, text);
                     }
                     _ => {}
                 }
@@ -2169,10 +2162,9 @@ impl AnvilTui {
                         }
                     }
                     crossterm::event::Event::Paste(text) => {
-                        let cleaned = text.replace('\r', "");
-                        for ch in cleaned.chars() {
-                            self.insert_char(ch);
-                        }
+                        // Task #599 / v2.2.14 Phase 1: single shared
+                        // paste handler. See tui::paste.
+                        paste::handle_paste(self, text);
                         // v2.2.14 BUG-fix-real: paste is a multi-char key
                         // event — drive the same gate so the pasted text
                         // shows up in the input box on the active tab.

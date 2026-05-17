@@ -433,6 +433,144 @@ impl LogEntry {
     }
 }
 
+// ─── Paste placeholder model ──────────────────────────────────────────────────
+
+/// Payload backing one `PlaceholderSpan`. Submit-time expansion converts
+/// each variant into one or more `runtime::ContentBlock` values.
+///
+/// Task #599 / v2.2.14 Phase 1: lets the TUI represent a pasted file
+/// (image / PDF / text) as an atomic placeholder inside the input buffer
+/// without colliding with the slash-command parser. See
+/// `crates/anvil-cli/src/tui/paste.rs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaceholderPayload {
+    /// PNG/JPG/GIF/WebP — expanded to an Image content block.
+    Image(std::path::PathBuf),
+    /// PDF — expanded to a base64 Image block (Anthropic accepts PDFs
+    /// via the image source kind on current models) plus a Text block
+    /// announcing the filename.
+    Document(std::path::PathBuf),
+    /// Anything else — read as UTF-8 text and wrapped in a `<file>` tag.
+    Text(std::path::PathBuf),
+}
+
+impl PlaceholderPayload {
+    #[must_use]
+    pub fn from_kind(
+        kind: crate::tui::paste::PlaceholderKind,
+        path: std::path::PathBuf,
+    ) -> Self {
+        use crate::tui::paste::PlaceholderKind;
+        match kind {
+            PlaceholderKind::Image => Self::Image(path),
+            PlaceholderKind::Document => Self::Document(path),
+            PlaceholderKind::Text => Self::Text(path),
+        }
+    }
+
+    /// Read the file from disk and return content block(s) to attach to
+    /// the next user message. Errors are reported as a short string.
+    pub fn expand_to_blocks(&self) -> Result<Vec<runtime::ContentBlock>, String> {
+        use base64::Engine as _;
+        use runtime::ContentBlock;
+        const IMAGE_SIZE_LIMIT: usize = 20 * 1024 * 1024;
+        const TEXT_SIZE_LIMIT: usize = 100 * 1024;
+        match self {
+            Self::Image(path) => {
+                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+                if bytes.len() > IMAGE_SIZE_LIMIT {
+                    return Err(format!(
+                        "image too large: {} bytes (limit {IMAGE_SIZE_LIMIT})",
+                        bytes.len()
+                    ));
+                }
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let media_type = match ext.as_str() {
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    _ => "image/png",
+                }
+                .to_string();
+                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(vec![ContentBlock::Image { media_type, data }])
+            }
+            Self::Document(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("document.pdf")
+                    .to_string();
+                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+                if bytes.len() > IMAGE_SIZE_LIMIT {
+                    return Err(format!(
+                        "document too large: {} bytes (limit {IMAGE_SIZE_LIMIT})",
+                        bytes.len()
+                    ));
+                }
+                // Until Anvil's content-block schema gains a Document variant,
+                // surface PDFs as a Text block with a base64-data note so
+                // the model knows the user attached a binary document.
+                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                Ok(vec![ContentBlock::Text {
+                    text: format!(
+                        "The user attached a PDF: {name} ({} bytes, base64 below).\n\n\
+                         <document filename=\"{name}\" encoding=\"base64\" \
+                         media_type=\"application/pdf\">\n{data}\n</document>",
+                        bytes.len()
+                    ),
+                }])
+            }
+            Self::Text(path) => {
+                let display = path.display().to_string();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&display)
+                    .to_string();
+                let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                let (body, truncated) = if raw.len() > TEXT_SIZE_LIMIT {
+                    (
+                        format!(
+                            "{}\n\n[... truncated — file is {} bytes; showing first 100 KB ...]",
+                            &raw[..TEXT_SIZE_LIMIT],
+                            raw.len()
+                        ),
+                        true,
+                    )
+                } else {
+                    (raw, false)
+                };
+                let _ = name; // kept for future use
+                let _ = truncated;
+                Ok(vec![ContentBlock::Text {
+                    text: format!(
+                        "<file path=\"{display}\">\n{body}\n</file>",
+                    ),
+                }])
+            }
+        }
+    }
+}
+
+/// One byte range in `Tab::input` covered by a placeholder display.
+///
+/// `start..end` is `Tab::input.as_bytes()[start..end]` and equals the
+/// human-readable display string (e.g. `[image: foo.png]`). Spans never
+/// overlap. Backspace at `cursor == end` deletes the whole span
+/// atomically; left/right arrow keys can still step through the display
+/// characters (we don't try to gate cursor motion).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceholderSpan {
+    pub start: usize,
+    pub end: usize,
+    pub payload: PlaceholderPayload,
+}
+
 // ─── Tab ──────────────────────────────────────────────────────────────────────
 
 /// All per-tab mutable state.
@@ -443,6 +581,15 @@ pub(crate) struct Tab {
     pub pending_text: String,
     pub scroll: usize,
     pub input: String,
+    /// Atomic placeholder spans in `input` (see `PlaceholderSpan`).
+    /// Task #599 / v2.2.14 Phase 1: pasted file paths are stored as
+    /// `[image: foo.png]` / `[file: bar.txt]` markers here so the slash
+    /// parser doesn't get confused and so backspace deletes them whole.
+    pub input_placeholders: Vec<PlaceholderSpan>,
+    /// Content blocks the most recent submit_input() expanded from
+    /// placeholders. Drained by the main loop right after Submit so the
+    /// runtime gets the image / document attached to the next turn.
+    pub pending_paste_blocks: Vec<runtime::ContentBlock>,
     pub cursor: usize,
     pub history: Vec<String>,
     pub history_idx: Option<usize>,
@@ -540,6 +687,8 @@ impl Tab {
             pending_text: String::new(),
             scroll: 0,
             input: String::new(),
+            input_placeholders: Vec::new(),
+            pending_paste_blocks: Vec::new(),
             cursor: 0,
             history: Vec::new(),
             history_idx: None,
