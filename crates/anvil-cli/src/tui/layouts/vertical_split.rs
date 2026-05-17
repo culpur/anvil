@@ -716,24 +716,20 @@ fn build_content_lines(
             for entry in &snap.log_snapshot {
                 lines.extend(entry_to_lines_with_bars(entry, content_width, theme, snap.transcript_verbose));
             }
-            // Streaming assistant text — apply bar accent to each line.
+            // Streaming assistant text — apply bar accent + markdown
+            // styling to each line (#592 — same fix as the committed
+            // Assistant entry below).
             if !snap.pending.is_empty() {
                 let clean = strip_ansi(&snap.pending);
                 let bar_style = Style::default()
                     .fg(Color::Rgb(0x44, 0xaa, 0xaa))
                     .add_modifier(Modifier::DIM);
-                for (i, l) in clean.lines().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(vec![
-                            Span::styled("▎ ".to_string(), bar_style),
-                            Span::raw(l.to_string()),
-                        ]));
-                    } else {
-                        lines.push(Line::from(vec![
-                            Span::styled("▎ ".to_string(), bar_style),
-                            Span::raw(l.to_string()),
-                        ]));
-                    }
+                let styled = super::common::assistant_text_to_lines(&clean);
+                for inner in styled {
+                    let mut spans: Vec<Span<'static>> =
+                        vec![Span::styled("▎ ".to_string(), bar_style)];
+                    spans.extend(inner.spans);
+                    lines.push(Line::from(spans));
                 }
             }
             // Thinking spinner.
@@ -815,17 +811,27 @@ fn entry_to_lines_with_bars(
         }
         LogEntry::Assistant(text) => {
             // Assistant bar: ▎ in a slightly dimmer cyan.
+            //
+            // #592: prior versions called `strip_ansi(text)` then pushed each
+            // line as a `Span::raw`, leaving `##`, `**bold**`, `` `code` ``,
+            // and table-pipes as visible markdown syntax. We now route the
+            // prose through the shared `assistant_text_to_lines` helper
+            // (common.rs) so headings render bold, bold/italic spans pick
+            // up the correct modifiers, inline code is coloured, and
+            // table pipes dim down to a structural rail. The leading ▎
+            // accent bar is preserved on every wrapped line.
             let bar_style = Style::default()
                 .fg(Color::Rgb(0x44, 0xaa, 0xaa))
                 .add_modifier(Modifier::DIM);
             let clean = strip_ansi(text);
-            let mut lines: Vec<Line<'static>> = clean
-                .lines()
-                .map(|l| {
-                    Line::from(vec![
-                        Span::styled("▎ ".to_string(), bar_style),
-                        Span::raw(l.to_string()),
-                    ])
+            let styled = super::common::assistant_text_to_lines(&clean);
+            let mut lines: Vec<Line<'static>> = styled
+                .into_iter()
+                .map(|inner| {
+                    let mut spans: Vec<Span<'static>> =
+                        vec![Span::styled("▎ ".to_string(), bar_style)];
+                    spans.extend(inner.spans);
+                    Line::from(spans)
                 })
                 .collect();
             lines.push(Line::from(""));

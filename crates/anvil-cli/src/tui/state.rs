@@ -301,7 +301,24 @@ impl LogEntry {
                     (rgb(theme.accent), "●", name.clone())
                 };
 
-                let dash_count = (width.saturating_sub(label.len() + 6)).min(width);
+                // Card layout target — the box-drawing card is `card_w` columns
+                // wide. We size to the inner-content width plus the two side
+                // bars so the right `│` lands at column `card_w-1`. Pre-fix,
+                // each border line had a different visible width (top = width+1,
+                // bottom not-done = width+4, bottom with hint = width+1), inner
+                // lines had no closing `│`, and the right-edge bleed produced
+                // the residual "J" glyph users reported on the row below each
+                // card (#590).
+                let card_w = width + 2; // top/bottom rule + content area
+                let inner_w = card_w.saturating_sub(4); // ` ... ` between │ │
+
+                // ── Top border ───────────────────────────────────────────────
+                // Format: `╭─ {icon} {label} {dashes}╮` with the same visible
+                // width as the bottom border so the card is a true rectangle.
+                // Char count: `╭` `─` ` ` icon ` ` label ` ` dashes `╮`
+                //              = 7 + label.len() + dash_count
+                let header_overhead = 7 + label.chars().count();
+                let dash_count = card_w.saturating_sub(header_overhead);
                 let dashes = "─".repeat(dash_count);
                 let top = format!("╭─ {icon} {label} {dashes}╮");
 
@@ -310,21 +327,45 @@ impl LogEntry {
                     Style::default().fg(border_color),
                 ))];
 
-                let inner_width = width.saturating_sub(2);
                 let muted = Color::DarkGray;
+
+                // ── Inner-line builder (#590) ────────────────────────────────
+                // Every inner line MUST close with `│` so the box has a right
+                // edge. We truncate / pad content to exactly `inner_w` columns
+                // (Unicode-char count, since box-drawing chars are 1 col each
+                // in the fonts this TUI supports) then sandwich it between
+                // `│ ` and ` │`.
+                let push_inner = |lines: &mut Vec<Line<'static>>,
+                                  raw: &str,
+                                  content_style: Style,
+                                  do_truncate: bool| {
+                    let count = raw.chars().count();
+                    let truncated: String = if do_truncate && count > inner_w {
+                        let mut s: String = raw.chars().take(inner_w.saturating_sub(1)).collect();
+                        s.push('…');
+                        s
+                    } else if count > inner_w {
+                        // Hard cap so the right `│` always lands at card_w-1
+                        // even in unexpanded mode never went through the
+                        // explicit truncate branch.
+                        raw.chars().take(inner_w).collect()
+                    } else {
+                        raw.to_string()
+                    };
+                    let visible = truncated.chars().count();
+                    let pad = inner_w.saturating_sub(visible);
+                    let padded = format!("{truncated}{}", " ".repeat(pad));
+                    lines.push(Line::from(vec![
+                        Span::styled("│ ", Style::default().fg(border_color)),
+                        Span::styled(padded, content_style),
+                        Span::styled(" │", Style::default().fg(border_color)),
+                    ]));
+                };
 
                 // Detail lines: uncapped when expanded, capped at 12 otherwise.
                 let detail_cap = if *expanded { usize::MAX } else { 12 };
                 for dl in detail.lines().take(detail_cap) {
-                    let truncated = if !*expanded && dl.chars().count() > inner_width {
-                        format!("{}…", dl.chars().take(inner_width.saturating_sub(1)).collect::<String>())
-                    } else {
-                        dl.to_string()
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled("│ ", Style::default().fg(border_color)),
-                        Span::raw(truncated),
-                    ]));
+                    push_inner(&mut lines, dl, Style::default(), !*expanded);
                 }
 
                 // When done: show one-line result summary in muted color.
@@ -338,39 +379,43 @@ impl LogEntry {
                         if *expanded {
                             // Expanded: show full result body, up to 200 lines.
                             let raw_body = full_result.as_deref().unwrap_or("");
-                            lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(border_color)),
-                                Span::styled("── result ──", Style::default().fg(muted)),
-                            ]));
+                            push_inner(
+                                &mut lines,
+                                "── result ──",
+                                Style::default().fg(muted),
+                                false,
+                            );
                             for rl in raw_body.lines().take(200) {
-                                let truncated = if rl.chars().count() > inner_width {
-                                    format!("{}…", rl.chars().take(inner_width.saturating_sub(1)).collect::<String>())
-                                } else {
-                                    rl.to_string()
-                                };
-                                lines.push(Line::from(vec![
-                                    Span::styled("│ ", Style::default().fg(border_color)),
-                                    Span::styled(truncated, Style::default().fg(muted)),
-                                ]));
+                                push_inner(
+                                    &mut lines,
+                                    rl,
+                                    Style::default().fg(muted),
+                                    true,
+                                );
                             }
                         } else {
-                            lines.push(Line::from(vec![
-                                Span::styled("│ ", Style::default().fg(border_color)),
-                                Span::styled(result_text, Style::default().fg(muted)),
-                            ]));
+                            push_inner(
+                                &mut lines,
+                                &result_text,
+                                Style::default().fg(muted),
+                                true,
+                            );
                         }
                     }
                 }
 
-                // Footer with Ctrl+O hint when done.
+                // ── Bottom border ────────────────────────────────────────────
+                // Sized to exactly `card_w` columns regardless of which hint
+                // (or none) is in play. `╰` + dashes + `╯` plus the optional
+                // " Ctrl+O to expand/collapse " label.
                 let bot = if *done {
-                    if *expanded {
-                        format!("╰─ Ctrl+O to collapse {:─<w$}╯", "", w = width.saturating_sub(22))
-                    } else {
-                        format!("╰─ Ctrl+O to expand {:─<w$}╯", "", w = width.saturating_sub(20))
-                    }
+                    let hint = if *expanded { " Ctrl+O to collapse " } else { " Ctrl+O to expand " };
+                    let hint_w = hint.chars().count();
+                    let dash_w = card_w.saturating_sub(2 + hint_w); // 2 = corners
+                    format!("╰{hint}{}╯", "─".repeat(dash_w))
                 } else {
-                    format!("╰{:─<width$}╯", "", width = width + 2)
+                    let dash_w = card_w.saturating_sub(2);
+                    format!("╰{}╯", "─".repeat(dash_w))
                 };
 
                 lines.push(Line::from(Span::styled(
@@ -1414,5 +1459,111 @@ mod tests {
         // 5 TextDeltas + 1 TurnDone from worker 1 = 6
         // 3 TextDeltas + 1 TurnDone from worker 2 = 4
         assert_eq!(count, 10, "expected 10 events, got {count}");
+    }
+}
+
+// ─── ToolCall card rendering (#590) ───────────────────────────────────────────
+
+#[cfg(test)]
+mod tool_call_card_tests {
+    use super::*;
+    use runtime::Theme;
+
+    /// #590: every tool-call card must close the box on its right edge AND
+    /// must not leak the literal letter `J` onto the row below. Pre-fix
+    /// the inner content lines lacked the closing `│`, the top border was
+    /// `width + 1` chars wide, the not-done bottom was `width + 4`, and
+    /// the Ctrl+O-hint bottom was `width + 1` — every line a different
+    /// length. When ratatui re-wrapped the over-long bottom the `╯` glyph
+    /// often partially-truncated to a residual character on the next row
+    /// (`J` in the user-reported terminal/font pairing).
+    ///
+    /// The contract this test pins:
+    ///   1. The closing `│` is present on every inner line.
+    ///   2. Top, bottom, and every inner line have IDENTICAL visible
+    ///      column counts.
+    ///   3. No produced line contains a stray uppercase `J` from a
+    ///      box-drawing slice.
+    #[test]
+    fn tool_call_card_renders_closed_box_no_j_glyph() {
+        let theme = Theme::default_theme();
+        let entry = LogEntry::ToolCall {
+            name: "Bash".to_string(),
+            detail: "echo hello".to_string(),
+            done: true,
+            is_error: false,
+            expanded: false,
+            full_input: Some(r#"{"command":"echo hello"}"#.to_string()),
+            full_result: Some(r#"{"stdout":"hello\n","stderr":"","interrupted":false}"#.to_string()),
+        };
+
+        // max_width 80 matches the user's reported terminal in the
+        // v2.2.16-preview screenshot that exposed #590.
+        let max_width: u16 = 80;
+        let lines = entry.to_lines_with(max_width, &theme, false);
+
+        // Helper: column count of all spans concatenated. Box-drawing
+        // chars are single-column in the fonts the TUI supports.
+        let line_cols = |line: &Line<'static>| -> usize {
+            line.spans
+                .iter()
+                .map(|s| s.content.chars().count())
+                .sum::<usize>()
+        };
+
+        // Drop the trailing empty separator line the renderer always
+        // appends so all the asserts run against the actual card.
+        let non_empty: Vec<&Line<'static>> = lines
+            .iter()
+            .filter(|l| !l.spans.is_empty() && line_cols(l) > 0)
+            .collect();
+
+        assert!(
+            non_empty.len() >= 3,
+            "expected at least top+inner+bottom border, got {} non-empty lines",
+            non_empty.len()
+        );
+
+        // (1) No produced line may contain a stray uppercase J — a regression
+        // on the residual-glyph symptom of #590.
+        for line in &non_empty {
+            let joined: String = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert!(
+                !joined.chars().any(|c| c == 'J'),
+                "card line must not contain stray 'J': {joined:?}"
+            );
+        }
+
+        // (2) Every inner line must close with `│` on the right edge.
+        for line in non_empty.iter().skip(1).take(non_empty.len() - 2) {
+            let last_span = line
+                .spans
+                .last()
+                .expect("inner line must have at least one span");
+            assert!(
+                last_span.content.ends_with('│'),
+                "inner card line must end with the right border `│`: spans = {:?}",
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        // (3) Top, every inner, and bottom all have the same visible
+        // column count — that's what makes the card a true rectangle and
+        // is the property that eliminates the J-glyph wrap.
+        let widths: Vec<usize> = non_empty.iter().map(|l| line_cols(l)).collect();
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(
+                *w, first,
+                "card line {i} width {w} != top border width {first}; widths = {widths:?}",
+            );
+        }
     }
 }

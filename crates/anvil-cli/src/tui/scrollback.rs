@@ -178,6 +178,22 @@ impl ScrollbackState {
         self.0.is_none()
     }
 
+    /// True when this state should render AS live for the given buffer +
+    /// viewport height. A stored anchor that's at or past the current
+    /// live anchor means new content has streamed in to the point where
+    /// the user is effectively viewing the live tail — show the live UI,
+    /// not the yellow "HISTORICAL VIEW" banner.
+    ///
+    /// Fixes #591: prior to this helper, `Some(a)` where `a` was a
+    /// 1-line mouse-wheel scroll-up would freeze the banner on even
+    /// after enough new content arrived that `a >= live_anchor`.
+    pub fn is_effectively_live(self, buf: &ScrollbackBuffer, height: usize) -> bool {
+        match self.0 {
+            None => true,
+            Some(a) => a >= buf.live_anchor(height),
+        }
+    }
+
     /// Return the anchor to use when rendering.
     ///
     /// `height` is the visible line count of the content area.
@@ -518,5 +534,58 @@ mod tests {
         let is_shift_drag3 = matches!(kind3, MouseEventKind::Drag(_))
             && mods3.contains(KeyModifiers::SHIFT);
         assert!(!is_shift_drag3);
+    }
+
+    // ── #591 historical-view banner gate ──────────────────────────────────
+
+    /// #591 fix surface: `is_effectively_live` must return `true` when
+    /// `Some(a)` is at or past the current `live_anchor`. Before this
+    /// helper, the snapshot picked `Option::is_none()` as the only
+    /// live-ness signal, so a single mouse-wheel scroll-up that landed at
+    /// `Some(a)` would freeze the yellow banner on even after enough new
+    /// content streamed in that the visible region was the live tail.
+    #[test]
+    fn historical_view_banner_hidden_when_at_live_tail() {
+        let height = 20usize;
+        let mut buf = ScrollbackBuffer::with_capacity(200);
+        for i in 0..30u32 {
+            buf.push(format!("L{i}"));
+        }
+
+        // True live: discriminant is None → live everywhere.
+        let live = ScrollbackState::live();
+        assert!(live.is_live(), "None discriminant must be is_live()");
+        assert!(
+            live.is_effectively_live(&buf, height),
+            "None discriminant must be is_effectively_live() too"
+        );
+
+        // Stored anchor sits BELOW live_anchor — genuine historical view.
+        let live_anchor = buf.live_anchor(height);
+        assert!(live_anchor > 0, "test pre-cond: buffer must produce a non-zero live anchor");
+        let historical = ScrollbackState(Some(live_anchor - 1));
+        assert!(!historical.is_live(), "Some(_) is_live() is always false");
+        assert!(
+            !historical.is_effectively_live(&buf, height),
+            "an anchor below live_anchor is genuinely historical and MUST show the banner",
+        );
+
+        // Stored anchor sits AT live_anchor — visually live tail, banner
+        // must go away. This is the #591 case: user scrolled up by 1, then
+        // enough new content arrived that the live anchor caught up.
+        let at_live = ScrollbackState(Some(live_anchor));
+        assert!(!at_live.is_live(), "literal is_live() still reports historical");
+        assert!(
+            at_live.is_effectively_live(&buf, height),
+            "an anchor AT live_anchor is at the live tail; banner MUST be hidden (#591)",
+        );
+
+        // Anchor past live_anchor (buffer grew under a stale Some(a)) —
+        // also effectively live.
+        let past_live = ScrollbackState(Some(live_anchor + 5));
+        assert!(
+            past_live.is_effectively_live(&buf, height),
+            "an anchor past live_anchor must also gate the banner off",
+        );
     }
 }

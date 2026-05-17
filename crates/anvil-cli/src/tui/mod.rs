@@ -899,7 +899,21 @@ impl AnvilTui {
         let cursor_pos = tab.cursor;
         let scroll = tab.scroll;
         let scrollback_state = tab.scrollback_state;
-        let scrollback_is_live = scrollback_state.is_live();
+        // BUG-#591: `is_live()` only checks for the literal `None` discriminant
+        // and misses the case where the user nudged the scrollwheel by one
+        // line and then enough new content streamed in that the stored
+        // anchor is now at or past the live anchor — visually they're at
+        // the live tail. `is_effectively_live` accounts for that and is
+        // the value the banner gate at vertical_split.rs / classic.rs reads.
+        // Concrete height is computed below; use a conservative ceiling here
+        // since `approx_content_height` is established later in this function.
+        let approx_height_for_live_check = self
+            .terminal
+            .size()
+            .map(|s| s.height.saturating_sub(6) as usize)
+            .unwrap_or(18);
+        let scrollback_is_live =
+            scrollback_state.is_effectively_live(&tab.scrollback, approx_height_for_live_check);
         let model = tab.model.clone();
         let session_id = tab.session_id.clone();
         let input_tokens = tab.input_tokens;

@@ -369,6 +369,246 @@ pub(in crate::tui) fn cost_provider_label(model: &str) -> String {
     }
 }
 
+// ─── Assistant markdown rendering (#592) ─────────────────────────────────────
+//
+// `vertical_split`'s assistant-message renderer used to push every line as a
+// `Span::raw`, so prose with `## headings`, `**bold**`, table-pipes, or
+// `` `inline code` `` rendered with the literal markdown syntax visible.
+// Classic.rs had the same problem (state.rs `LogEntry::Assistant` arm only
+// `strip_ansi`s the body). The fix is a single shared helper both surfaces
+// call so the deck-conversation column always shows styled prose.
+//
+// The helper takes the raw assistant text (NOT pre-rendered ANSI — that
+// arrives as part of the streaming `pending_text` path which is also
+// channeled through here) and emits styled `Line`s. We don't go through
+// `markdown_to_ansi` + an ANSI parser because (a) we'd then need a separate
+// SGR-to-Span layer, and (b) the inline rendering is faster + simpler for
+// the narrow set of markdown the assistant produces in chat.
+//
+// Supported:
+//   - ATX headings `# ` … `###### ` → bold, accent-coloured
+//   - Bold `**text**` → bold span
+//   - Italic `*text*` / `_text_` (single-character markers, word-bounded)
+//   - Inline code `` `text` `` → magenta/256-colour
+//   - Tables: `|` pipes coloured dim so the structure reads, cell text plain
+//   - Fenced code-blocks `` ``` `` … `` ``` `` → entire body in code style
+//   - Bullet markers `- `, `* `, `+ ` and numbered `1. ` left alone (already
+//     readable)
+
+#[allow(clippy::cast_possible_truncation)]
+pub(in crate::tui) fn assistant_text_to_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut in_fence = false;
+    let mut fence_lang: String = String::new();
+
+    let code_block_style = Style::default().fg(Color::Rgb(0xc0, 0xc0, 0xc0));
+    let code_block_border = Style::default().fg(Color::DarkGray);
+    let table_pipe_style = Style::default().fg(Color::DarkGray);
+    let heading_style = Style::default()
+        .fg(Color::Rgb(0x44, 0xaa, 0xaa))
+        .add_modifier(Modifier::BOLD);
+
+    for raw in text.lines() {
+        // Fence start/end (``` or ~~~).
+        if raw.trim_start().starts_with("```") || raw.trim_start().starts_with("~~~") {
+            if in_fence {
+                in_fence = false;
+                fence_lang.clear();
+                lines.push(Line::from(Span::styled(
+                    raw.to_string(),
+                    code_block_border,
+                )));
+            } else {
+                in_fence = true;
+                fence_lang = raw.trim_start().trim_start_matches(['`', '~']).to_string();
+                lines.push(Line::from(Span::styled(
+                    raw.to_string(),
+                    code_block_border,
+                )));
+            }
+            continue;
+        }
+        if in_fence {
+            lines.push(Line::from(Span::styled(
+                raw.to_string(),
+                code_block_style,
+            )));
+            continue;
+        }
+
+        // ATX heading: strip the `#`s + space, render bold + accent.
+        let trimmed = raw.trim_start();
+        if let Some(after_hashes) = strip_atx_heading(trimmed) {
+            lines.push(Line::from(Span::styled(
+                after_hashes.to_string(),
+                heading_style,
+            )));
+            continue;
+        }
+
+        // Table row: contains `|` and is not pure prose. Treat as a row when
+        // the line has at least 2 pipes or starts with `|`.
+        let pipe_count = raw.bytes().filter(|b| *b == b'|').count();
+        if pipe_count >= 2 || (raw.starts_with('|') && pipe_count >= 1) {
+            let spans = split_on_char_styled(raw, '|', table_pipe_style);
+            lines.push(Line::from(spans));
+            continue;
+        }
+
+        // Inline markdown: split on **bold** / `code` / *italic* / _italic_.
+        lines.push(Line::from(inline_markdown_spans(raw)));
+    }
+
+    lines
+}
+
+/// Return the text after the leading `#`s for an ATX heading, or `None`.
+fn strip_atx_heading(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'#' {
+        return None;
+    }
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b'#' {
+        i += 1;
+    }
+    if i == 0 || i > 6 {
+        return None;
+    }
+    // Require a space after the run of `#`s for it to be a heading.
+    if i >= bytes.len() || bytes[i] != b' ' {
+        return None;
+    }
+    Some(&line[i + 1..])
+}
+
+/// Split `s` on every occurrence of `delim`, returning a vec of styled spans
+/// where the delimiter glyphs get `delim_style` and the runs between them
+/// stay default.
+fn split_on_char_styled(s: &str, delim: char, delim_style: Style) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    for ch in s.chars() {
+        if ch == delim {
+            if !buf.is_empty() {
+                out.push(Span::raw(std::mem::take(&mut buf)));
+            }
+            out.push(Span::styled(ch.to_string(), delim_style));
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.is_empty() {
+        out.push(Span::raw(buf));
+    }
+    out
+}
+
+/// Render one prose line, applying inline-markdown styling.
+///
+/// Scanner-driven so we don't have to allocate intermediate strings per
+/// rule: we walk the chars once and split spans as we go.
+#[allow(clippy::cognitive_complexity)]
+fn inline_markdown_spans(line: &str) -> Vec<Span<'static>> {
+    let bold_style = Style::default().add_modifier(Modifier::BOLD);
+    let italic_style = Style::default().add_modifier(Modifier::ITALIC);
+    let code_style = Style::default().fg(Color::Rgb(0xc8, 0x7c, 0xff));
+
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut buf = String::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    let flush = |buf: &mut String, out: &mut Vec<Span<'static>>| {
+        if !buf.is_empty() {
+            out.push(Span::raw(std::mem::take(buf)));
+        }
+    };
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        // **bold**
+        if c == '*' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            if let Some(end) = find_close_marker(&chars, i + 2, "**") {
+                flush(&mut buf, &mut out);
+                let body: String = chars[i + 2..end].iter().collect();
+                out.push(Span::styled(body, bold_style));
+                i = end + 2;
+                continue;
+            }
+        }
+        // `inline code`
+        if c == '`' {
+            if let Some(end) = chars[i + 1..].iter().position(|&ch| ch == '`') {
+                let end = i + 1 + end;
+                flush(&mut buf, &mut out);
+                let body: String = chars[i + 1..end].iter().collect();
+                out.push(Span::styled(body, code_style));
+                i = end + 1;
+                continue;
+            }
+        }
+        // *italic* / _italic_ — single-char marker, word-bounded so URLs
+        // and bullet markers don't get accidentally italicised.
+        if (c == '*' || c == '_') && is_word_bounded_marker(&chars, i) {
+            if let Some(end) = find_single_close_marker(&chars, i + 1, c) {
+                flush(&mut buf, &mut out);
+                let body: String = chars[i + 1..end].iter().collect();
+                out.push(Span::styled(body, italic_style));
+                i = end + 1;
+                continue;
+            }
+        }
+
+        buf.push(c);
+        i += 1;
+    }
+    flush(&mut buf, &mut out);
+    if out.is_empty() {
+        // Empty line: emit a single empty span so the Line still renders
+        // a blank row of the correct height.
+        out.push(Span::raw(String::new()));
+    }
+    out
+}
+
+fn find_close_marker(chars: &[char], start: usize, marker: &str) -> Option<usize> {
+    let m: Vec<char> = marker.chars().collect();
+    let mut j = start;
+    while j + m.len() <= chars.len() {
+        if chars[j..j + m.len()] == m[..] {
+            return Some(j);
+        }
+        j += 1;
+    }
+    None
+}
+
+fn find_single_close_marker(chars: &[char], start: usize, marker: char) -> Option<usize> {
+    let mut j = start;
+    while j < chars.len() {
+        if chars[j] == marker {
+            // Require the closing marker NOT to be immediately preceded
+            // by a space (CommonMark-ish: emphasis can't close after a
+            // space).
+            if j > start && !chars[j - 1].is_whitespace() {
+                return Some(j);
+            }
+        }
+        j += 1;
+    }
+    None
+}
+
+/// `*` and `_` only count as italic markers when their left side is the
+/// start-of-line or a non-alphanumeric, and the next char is not whitespace.
+fn is_word_bounded_marker(chars: &[char], i: usize) -> bool {
+    let left_ok = i == 0 || !chars[i - 1].is_alphanumeric();
+    let right_ok = i + 1 < chars.len() && !chars[i + 1].is_whitespace();
+    left_ok && right_ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +641,122 @@ mod tests {
         assert_eq!(qmd_archive_count("QMD: active"), 0);
         assert_eq!(qmd_archive_count(""), 0);
         assert_eq!(qmd_archive_count("QMD: 8 docs"), 8);
+    }
+
+    // ── #592 assistant markdown rendering ─────────────────────────────
+
+    /// Concatenate the contents of every span on a line.
+    fn line_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Returns the `Modifier` flags applied to the span that contains
+    /// `needle` inside `line`. Helper for the #592 contract that
+    /// `**bold**` actually produces a BOLD span (not a raw `**…**`).
+    fn modifiers_for(line: &Line<'static>, needle: &str) -> Option<Modifier> {
+        line.spans
+            .iter()
+            .find(|s| s.content.contains(needle))
+            .map(|s| s.style.add_modifier)
+    }
+
+    /// #592: assistant-message renderer in `vertical_split` used to emit
+    /// raw markdown syntax (`##`, `**bold**`, table pipes) because each
+    /// line was a single `Span::raw`. The fix routes assistant prose
+    /// through `assistant_text_to_lines`, which strips heading markers,
+    /// applies BOLD modifier on `**…**`, ITALIC on `*…*` / `_…_`,
+    /// foreground colour on `` `code` ``, and dims table `|` glyphs.
+    ///
+    /// This test pins all of the above on a single representative input.
+    #[test]
+    fn vertical_split_renders_assistant_markdown_styled_not_raw() {
+        let body = "\
+## Heading line
+This paragraph contains **bold** and *italic* and `code`.
+| col1 | col2 |
+|------|------|
+| a    | b    |
+";
+        let lines = assistant_text_to_lines(body);
+        assert!(lines.len() >= 5, "expected at least 5 lines, got {}", lines.len());
+
+        // Heading: `##` markers stripped, content rendered.
+        let heading = line_text(&lines[0]);
+        assert!(
+            !heading.contains("##"),
+            "heading markers `##` must be stripped, got {heading:?}",
+        );
+        assert!(
+            heading.contains("Heading line"),
+            "heading text must survive, got {heading:?}",
+        );
+        // Heading should be BOLD (the renderer applies bold + accent).
+        let h_mods = lines[0]
+            .spans
+            .iter()
+            .next()
+            .map(|s| s.style.add_modifier)
+            .unwrap_or(Modifier::empty());
+        assert!(
+            h_mods.contains(Modifier::BOLD),
+            "heading line must be BOLD-styled, got {h_mods:?}",
+        );
+
+        // Bold span: literal `**` must NOT appear in the rendered text.
+        let prose = line_text(&lines[1]);
+        assert!(
+            !prose.contains("**"),
+            "rendered prose must not contain literal `**`, got {prose:?}",
+        );
+        // The word "bold" must live in a BOLD-modified span.
+        let bold_mods = modifiers_for(&lines[1], "bold").unwrap_or(Modifier::empty());
+        assert!(
+            bold_mods.contains(Modifier::BOLD),
+            "the word inside **…** must be BOLD-styled, got {bold_mods:?}",
+        );
+
+        // Italic span: the word "italic" must live in an ITALIC-modified
+        // span, and no literal `*italic*` should leak through.
+        let it_mods = modifiers_for(&lines[1], "italic").unwrap_or(Modifier::empty());
+        assert!(
+            it_mods.contains(Modifier::ITALIC),
+            "the word inside *…* must be ITALIC-styled, got {it_mods:?}",
+        );
+
+        // Inline code: rendered without the backticks.
+        let code_text: String = lines[1]
+            .spans
+            .iter()
+            .filter(|s| s.style.fg.is_some()) // code span has a colour set
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            !prose.contains("`code`"),
+            "literal backticks must not appear in rendered prose, got {prose:?}",
+        );
+        assert!(
+            code_text.contains("code"),
+            "inline code body `code` must end up in a styled span, got {code_text:?}",
+        );
+
+        // Table row: `|` glyphs styled (DarkGray), cell text default.
+        let pipe_count_line = line_text(&lines[2]);
+        assert!(
+            pipe_count_line.matches('|').count() >= 2,
+            "table row pipes must still render visibly, got {pipe_count_line:?}",
+        );
+        let pipe_dim_count = lines[2]
+            .spans
+            .iter()
+            .filter(|s| s.content == "|" && s.style.fg == Some(Color::DarkGray))
+            .count();
+        assert!(
+            pipe_dim_count >= 2,
+            "every `|` in a table row must render with DarkGray, dim styling, got {pipe_dim_count}",
+        );
     }
 }

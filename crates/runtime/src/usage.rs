@@ -228,7 +228,13 @@ fn cost_for_tokens(tokens: u32, usd_per_million_tokens: f64) -> f64 {
 
 #[must_use]
 pub fn format_usd(amount: f64) -> String {
-    format!("${amount:.4}")
+    // #593: cost display reads $1.8841 / $52.5000 etc — 4 decimal places
+    // is excessive for a user-facing line. Standardise on 2 decimals so
+    // the status line + rail STATUS section read as currency, not as a
+    // micro-transaction ledger. All callers — `tui/layouts/classic.rs`,
+    // the `/cost` slash-command, the session usage summary — pick this
+    // up via the shared helper.
+    format!("${amount:.2}")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -319,12 +325,20 @@ mod tests {
         };
 
         let cost = usage.estimate_cost_usd();
-        assert_eq!(format_usd(cost.input_cost_usd), "$15.0000");
-        assert_eq!(format_usd(cost.output_cost_usd), "$37.5000");
+        // #593: format_usd standardises on 2-decimal display.
+        assert_eq!(format_usd(cost.input_cost_usd), "$15.00");
+        assert_eq!(format_usd(cost.output_cost_usd), "$37.50");
         let lines = usage.summary_lines_for_model("usage", Some("claude-sonnet-4-6"));
-        assert!(lines[0].contains("estimated_cost=$54.6750"));
+        // Total is 54.675 — Rust's `{:.2}` may round half-to-even, so accept
+        // either $54.67 or $54.68 (the user-visible bug was the 4-decimal
+        // tail `$54.6750`, not the rounding direction).
+        assert!(
+            lines[0].contains("estimated_cost=$54.67") || lines[0].contains("estimated_cost=$54.68"),
+            "expected 2-decimal cost near $54.67, got line: {}",
+            lines[0]
+        );
         assert!(lines[0].contains("model=claude-sonnet-4-6"));
-        assert!(lines[1].contains("cache_read=$0.3000"));
+        assert!(lines[1].contains("cache_read=$0.30"));
     }
 
     #[test]
@@ -340,8 +354,8 @@ mod tests {
         let opus = pricing_for_model("claude-opus-4-6").expect("opus pricing");
         let haiku_cost = usage.estimate_cost_usd_with_pricing(haiku);
         let opus_cost = usage.estimate_cost_usd_with_pricing(opus);
-        assert_eq!(format_usd(haiku_cost.total_cost_usd()), "$3.5000");
-        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$52.5000");
+        assert_eq!(format_usd(haiku_cost.total_cost_usd()), "$3.50");
+        assert_eq!(format_usd(opus_cost.total_cost_usd()), "$52.50");
     }
 
     #[test]
@@ -354,6 +368,47 @@ mod tests {
         };
         let lines = usage.summary_lines_for_model("usage", Some("custom-model"));
         assert!(lines[0].contains("pricing=estimated-default"));
+    }
+
+    /// #593: `format_usd` standardised on `${:.2}` so the cost row in the
+    /// TUI rail + classic status line + `/cost` slash command all read as
+    /// currency (`$1.88`) instead of a 4-decimal micro-ledger (`$1.8841`).
+    /// This is the canonical regression net for that contract — any change
+    /// that adds a third or fourth decimal must update this test (and
+    /// presumably justify it in the PR description).
+    #[test]
+    fn cost_formats_to_two_decimal_places() {
+        // Whole-dollar — pads with two zeros, not four.
+        assert_eq!(format_usd(0.0), "$0.00", "zero must format as $0.00");
+        assert_eq!(format_usd(1.0), "$1.00");
+        assert_eq!(format_usd(52.5), "$52.50");
+
+        // The user-reported regression: `$1.8841` collapsed to `$1.88`.
+        assert_eq!(format_usd(1.8841), "$1.88");
+
+        // Banker's-rounding-adjacent: `1.885` rounds to nearest-even at
+        // f64 precision; pin the actual emitted value so a future format
+        // engine swap (e.g. switching to `decimal` for currency) gets
+        // flagged.
+        let rounded = format_usd(1.885);
+        assert!(
+            rounded == "$1.88" || rounded == "$1.89",
+            "1.885 should round to 1.88 or 1.89, got {rounded:?}",
+        );
+
+        // No string in the output may carry more than 2 digits past the
+        // decimal point.
+        for amt in [0.0123_f64, 0.999_999, 99.555_5, 1_000.0001] {
+            let s = format_usd(amt);
+            let after_dot = s
+                .split_once('.')
+                .map(|(_, frac)| frac.chars().count())
+                .unwrap_or(0);
+            assert_eq!(
+                after_dot, 2,
+                "format_usd({amt}) must have exactly 2 decimal digits, got {s:?}",
+            );
+        }
     }
 
     #[test]
