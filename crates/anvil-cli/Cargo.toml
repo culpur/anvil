@@ -46,6 +46,12 @@ rand = "0.8"
 russh = "0.49.2"
 russh-keys = "0.49.2"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+# Task #606: real-network cancel integration test. wiremock spins up an in-process
+# HTTP server, streams a partial SSE response with a long mid-stream pause, and
+# we verify the `tokio::select!` arm in DefaultRuntimeClient::stream drops the
+# reqwest connection within ~50 ms of the cancel flag flipping. This closes the
+# "wiremock-free constraint" gap noted in providers.rs::cancel_token_tests.
+wiremock = "0.6"
 
 [lints]
 workspace = true
