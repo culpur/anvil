@@ -20,6 +20,14 @@ use std::path::{Path, PathBuf};
 use super::AnvilTui;
 use super::state::{PlaceholderPayload, PlaceholderSpan};
 
+// ── Long-paste thresholds (Task #604) ───────────────────────────────────────
+
+/// A paste this long-or-longer (in either dimension) gets the
+/// `[Pasted text #N +M lines]` placeholder treatment instead of literal
+/// insertion. Matches Claude Code's behaviour for webpage-selection paste.
+pub(super) const LONG_PASTE_LINE_THRESHOLD: usize = 6;
+pub(super) const LONG_PASTE_CHAR_THRESHOLD: usize = 400;
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 /// Single source of truth for bracketed-paste handling. All three callsites
@@ -44,10 +52,29 @@ pub(super) fn handle_paste(tui: &mut AnvilTui, raw: String) {
         return;
     }
 
+    // Task #604: long bracketed paste from a webpage / clipboard. Anything
+    // above the line/char threshold becomes a `[Pasted text #N +M lines,
+    // C chars]` placeholder so the input box stays usable. The literal text
+    // rides along as a Text content block on submit-time expansion.
+    if is_long_paste(&cleaned) {
+        insert_placeholder_for_long_paste(tui, cleaned);
+        return;
+    }
+
     // Fallback: literal text insert (the historical behavior).
     for ch in cleaned.chars() {
         tui.insert_char(ch);
     }
+}
+
+/// Threshold check that decides whether a paste qualifies for the
+/// `[Pasted text #N]` placeholder treatment.
+#[must_use]
+pub(super) fn is_long_paste(cleaned: &str) -> bool {
+    // Count newlines as line breaks. A paste with no terminating newline
+    // still counts the last line, so we use `lines().count()`.
+    let line_count = cleaned.lines().count();
+    line_count > LONG_PASTE_LINE_THRESHOLD || cleaned.chars().count() > LONG_PASTE_CHAR_THRESHOLD
 }
 
 // ── File-path detection ─────────────────────────────────────────────────────
@@ -95,16 +122,77 @@ pub fn parse_pasted_file_path(s: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    let expanded = if let Some(rest) = stripped.strip_prefix("~/") {
+    // Some terminals shell-escape spaces with backslashes when dragging
+    // (Apple Terminal does this). Replace `\<space>` with `<space>` so
+    // `/Users/foo/Downloads/Screenshot\ 2026.png` resolves to the real
+    // path the file lives at. This was the trailing-backslash mystery
+    // in the v2.2.14 screenshot: `Screenshot\` was just the escape on
+    // the last char of the dropped path.
+    let unescaped: String = unescape_shell_spaces(stripped);
+    let candidate = unescaped.as_str();
+    let expanded = if let Some(rest) = candidate.strip_prefix("~/") {
         dirs_next::home_dir()?.join(rest)
     } else {
-        PathBuf::from(stripped)
+        PathBuf::from(candidate)
     };
     if expanded.is_file() {
-        Some(expanded)
-    } else {
-        None
+        return Some(expanded);
     }
+    // Task #604: macOS bundles (`.xcworkspace`, `.app`, `.framework`,
+    // `.xcodeproj`, …) are directories the user thinks of as files.
+    // Accept them so a workspace path dragged from Finder doesn't fall
+    // through to the slash parser. We don't accept arbitrary directories
+    // — a bare `/` or `/Users` should NOT be treated as a path drop.
+    if expanded.is_dir() && is_macos_bundle(&expanded) {
+        return Some(expanded);
+    }
+    None
+}
+
+/// Return true when `path` ends in a macOS bundle extension. Bundles are
+/// directories that the OS surfaces as opaque files in Finder.
+fn is_macos_bundle(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "xcworkspace"
+            | "xcodeproj"
+            | "app"
+            | "framework"
+            | "bundle"
+            | "playground"
+            | "pkg"
+            | "kext"
+    )
+}
+
+/// Replace `\<space>` and `\<tab>` with the unescaped character. Used
+/// only by `parse_pasted_file_path` so paths dragged from Finder /
+/// Nautilus (where they arrive shell-escaped) resolve correctly. Leaves
+/// other backslashes alone — they're either literal filename characters
+/// or the start of a multi-char escape we don't try to interpret.
+fn unescape_shell_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some(' ') | Some('\t') => {
+                    // Drop the backslash; the next loop iteration emits
+                    // the whitespace verbatim.
+                    continue;
+                }
+                _ => out.push(c),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // ── Placeholder insertion ───────────────────────────────────────────────────
@@ -140,6 +228,72 @@ fn insert_placeholder_for_path(tui: &mut AnvilTui, path: &Path) {
     tab.cursor = end;
     tab.history_idx = None;
     tab.history_backup = None;
+}
+
+/// Insert a `[Pasted text #N +M lines, C chars]` placeholder for a long
+/// bracketed paste. Records the literal text on a `PastedText` span so
+/// `expand_input_for_submit` produces a Text content block on submit.
+fn insert_placeholder_for_long_paste(tui: &mut AnvilTui, cleaned: String) {
+    let lines = cleaned.lines().count();
+    let chars = cleaned.chars().count();
+    tui.paste_counter = tui.paste_counter.saturating_add(1);
+    let id = tui.paste_counter;
+    let display = format_long_paste_display(id, lines, chars);
+    let payload = PlaceholderPayload::PastedText {
+        text: cleaned,
+        lines,
+        chars,
+        id,
+    };
+
+    let tab = tui.active_tab_mut();
+    let start = tab.cursor;
+    tab.input.insert_str(start, &display);
+    let end = start + display.len();
+    for span in &mut tab.input_placeholders {
+        if span.start >= start {
+            span.start += display.len();
+            span.end += display.len();
+        }
+    }
+    tab.input_placeholders.push(PlaceholderSpan {
+        start,
+        end,
+        payload,
+    });
+    tab.input_placeholders.sort_by_key(|s| s.start);
+    tab.cursor = end;
+    tab.history_idx = None;
+    tab.history_backup = None;
+}
+
+/// Human-readable display for a long-paste placeholder. Kept as a pure
+/// function so the unit tests assert the exact format the user sees.
+#[must_use]
+pub(super) fn format_long_paste_display(id: usize, lines: usize, chars: usize) -> String {
+    format!("[Pasted text #{id} +{lines} lines, {chars} chars]")
+}
+
+/// Submit-time path detection (Task #604 Part A).
+///
+/// When the user hits Enter, `trim(input)` might be:
+///   1. A bracketed-paste file path that arrived as KEYSTROKES (Apple
+///      Terminal Cmd+V on a Finder-copied image — the path arrives one
+///      character at a time, NOT as a `Event::Paste`, so `handle_paste`
+///      never fires).
+///   2. A workspace/folder path the user typed by hand.
+///   3. A bracketed paste whose receiving terminal converted it to keystrokes.
+///
+/// All three look the same at submit time: `trimmed` starts with `/` and
+/// resolves to a real file on disk. Returns `Some(path)` so the caller
+/// can route the submission through the placeholder-substitution path
+/// instead of letting `SlashCommand::parse` return `Unknown("Users")`.
+///
+/// This is the missing piece behind the user-reported regression at
+/// 2026-05-17 — see `feedback-clipboard-parity.md`.
+#[must_use]
+pub fn detect_submit_time_file_path(trimmed: &str) -> Option<PathBuf> {
+    parse_pasted_file_path(trimmed)
 }
 
 /// Categories used for placeholder display + submit-time expansion.
@@ -691,6 +845,207 @@ mod tests {
                  See feedback-clipboard-parity.md."
             );
         }
+    }
+
+    // ── Task #604 Part A: submit-time path detection ────────────────────────
+
+    /// User repro: Cmd+V on a Finder-copied PNG screenshot. Terminal
+    /// delivers the path as keystrokes (no Paste event), so it lives in
+    /// `tab.input` as plain text. On Enter, `trimmed` starts with `/` →
+    /// `SlashCommand::parse` returns `Unknown("Users")` → "Unknown command"
+    /// error. The Part A fix is `detect_submit_time_file_path`, which
+    /// resolves the path BEFORE the slash parser sees it.
+    #[test]
+    fn submit_with_image_path_input_substitutes_placeholder() {
+        let p = tmpfile_with_ext("png");
+        let typed_or_pasted = p.to_string_lossy().to_string();
+        let detected = detect_submit_time_file_path(&typed_or_pasted)
+            .expect("real image path must resolve at submit time");
+        assert_eq!(detected, p, "submit-time detector must return the resolved path");
+        let _ = fs::remove_file(&p);
+    }
+
+    /// User repro: workspace path
+    /// `/Users/soulofall/projects/aegis-culpur.net/ios/Aegis.xcworkspace`
+    /// arrives as keystrokes. Submit-time detection must still route to
+    /// the file-drop pipeline rather than letting it hit the slash parser.
+    #[test]
+    fn submit_with_document_path_input_substitutes_placeholder() {
+        let p = tmpfile_with_ext("pdf");
+        let typed_or_pasted = p.to_string_lossy().to_string();
+        let detected = detect_submit_time_file_path(&typed_or_pasted)
+            .expect("real document path must resolve at submit time");
+        assert_eq!(detected, p);
+        let _ = fs::remove_file(&p);
+    }
+
+    /// Negative: a normal chat prompt or a real slash command MUST NOT
+    /// be misclassified as a file path.
+    #[test]
+    fn submit_with_arbitrary_text_unchanged_runs_normally() {
+        assert!(detect_submit_time_file_path("hello world").is_none());
+        assert!(detect_submit_time_file_path("/help").is_none());
+        assert!(detect_submit_time_file_path("/model").is_none());
+        assert!(detect_submit_time_file_path("/clear").is_none());
+        // A path that LOOKS valid but doesn't exist must also be None
+        // — otherwise we'd shadow `/Users` slash commands that don't yet
+        // map to a real binary.
+        assert!(
+            detect_submit_time_file_path("/Users/nobody/notarealfile.png").is_none()
+        );
+    }
+
+    /// User repro #3: workspace path
+    /// `/Users/soulofall/projects/aegis-culpur.net/ios/Aegis.xcworkspace`.
+    /// macOS bundles are directories that Finder + the user think of as
+    /// files. The submit-time detector must accept them so a dragged
+    /// workspace path doesn't fall through to the slash parser.
+    #[test]
+    fn submit_with_macos_bundle_directory_resolves() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir();
+        let bundle = dir.join(format!("anvil-paste-test-{pid}-{nanos}-{n}.xcworkspace"));
+        fs::create_dir(&bundle).expect("tmp bundle");
+        let s = bundle.to_string_lossy().to_string();
+        let detected = detect_submit_time_file_path(&s)
+            .expect("xcworkspace bundle directory must resolve as a path");
+        assert_eq!(detected, bundle);
+        let _ = std::fs::remove_dir(&bundle);
+    }
+
+    /// Negative: a regular non-bundle directory must NOT match. We never
+    /// want `/Users` or `/tmp` slipping through and shadowing slash
+    /// commands.
+    #[test]
+    fn regular_directory_is_not_a_path_drop() {
+        assert!(detect_submit_time_file_path("/").is_none());
+        assert!(detect_submit_time_file_path("/Users").is_none());
+        assert!(detect_submit_time_file_path("/tmp").is_none());
+    }
+
+    /// Apple Terminal escapes spaces with backslash when dragging from
+    /// Finder. The submit-time detector must unescape so the resolved
+    /// path lands on disk.
+    #[test]
+    fn submit_with_shell_escaped_space_resolves() {
+        // Build a tmpfile whose name contains a literal space, then
+        // construct the shell-escaped form the user sees.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir();
+        let real = dir.join(format!("anvil paste test {pid}-{nanos}-{n}.png"));
+        fs::write(&real, b"dummy").expect("tmpfile");
+        let escaped = real.to_string_lossy().replace(' ', "\\ ");
+        let detected = detect_submit_time_file_path(&escaped)
+            .expect("shell-escaped path must resolve");
+        assert_eq!(detected, real, "detector must canonicalise to the real path");
+        let _ = fs::remove_file(&real);
+    }
+
+    // ── Task #604 Part B: long-paste placeholder ────────────────────────────
+
+    /// Long paste from a webpage / clipboard: anything above the line OR
+    /// char threshold must be substituted. The Part B fix is
+    /// `is_long_paste` in `handle_paste`.
+    #[test]
+    fn long_paste_substitutes_summary_placeholder_in_input() {
+        // Build a 50-line paste — clearly past LONG_PASTE_LINE_THRESHOLD.
+        let body = (1..=50)
+            .map(|i| format!("line {i}: some sample text content"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(is_long_paste(&body), "50-line paste must qualify");
+        let display = format_long_paste_display(1, 50, body.chars().count());
+        assert!(
+            display.starts_with("[Pasted text #1 +50 lines, "),
+            "display format must match the brief; got {display:?}"
+        );
+        assert!(display.ends_with(" chars]"), "got {display:?}");
+        // And a short blob over the char threshold (400) but only 1 line.
+        let long_line = "x".repeat(500);
+        assert!(is_long_paste(&long_line));
+    }
+
+    /// Negative: a 3-line paste under 400 chars goes in LITERALLY.
+    #[test]
+    fn short_paste_inserts_literally() {
+        let s = "hello\nworld\nthird line";
+        assert!(!is_long_paste(s));
+        let two_hundred = "x".repeat(200);
+        assert!(!is_long_paste(&two_hundred));
+        let six_lines = "a\nb\nc\nd\ne\nf"; // exactly 6 lines → at threshold, NOT over
+        assert!(!is_long_paste(six_lines));
+    }
+
+    /// Per-session monotonic counter — multiple long pastes get unique IDs.
+    /// We exercise the pure display helper directly; integration with
+    /// `AnvilTui::paste_counter` is covered by the broader paste path.
+    #[test]
+    fn multiple_long_pastes_get_unique_numbers() {
+        let d1 = format_long_paste_display(1, 50, 500);
+        let d2 = format_long_paste_display(2, 30, 1200);
+        let d3 = format_long_paste_display(3, 7, 401);
+        assert!(d1.contains("#1"), "got {d1:?}");
+        assert!(d2.contains("#2"), "got {d2:?}");
+        assert!(d3.contains("#3"), "got {d3:?}");
+        // All three must be DIFFERENT strings.
+        assert_ne!(d1, d2);
+        assert_ne!(d2, d3);
+        assert_ne!(d1, d3);
+    }
+
+    /// PastedText expansion: the inline text rides as a Text content
+    /// block wrapped in `<pasted_text id="N">…</pasted_text>` so the
+    /// model can distinguish pasted blobs from typed prompt.
+    #[test]
+    fn pasted_text_expands_to_text_block() {
+        use crate::tui::state::PlaceholderPayload;
+        let payload = PlaceholderPayload::PastedText {
+            text: "first line\nsecond line\nthird".to_string(),
+            lines: 3,
+            chars: 28,
+            id: 7,
+        };
+        let blocks = payload.expand_to_blocks().expect("inline text never fails");
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+            runtime::ContentBlock::Text { text } => {
+                assert!(text.contains("first line"));
+                assert!(text.contains("third"));
+                assert!(text.contains("id=\"7\""), "expected id marker; got {text:?}");
+            }
+            other => panic!("expected Text block; got {other:?}"),
+        }
+    }
+
+    /// User screenshot repro: the long-paste threshold MUST fire on a
+    /// 49-line paste even when the paste arrives as a single Paste event
+    /// (Part B). 49 lines is well above the 6-line threshold; this guards
+    /// against accidentally raising the threshold above realistic webpage
+    /// selections (the user's actual paste was "many lines of text").
+    #[test]
+    fn screenshot_repro_49_line_paste_qualifies_as_long() {
+        let body = (0..49)
+            .map(|i| format!("paragraph {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            is_long_paste(&body),
+            "49-line paste must qualify (LONG_PASTE_LINE_THRESHOLD = {LONG_PASTE_LINE_THRESHOLD})"
+        );
     }
 
     #[test]

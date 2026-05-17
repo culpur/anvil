@@ -237,6 +237,13 @@ pub struct AnvilTui {
     /// Elapsed seconds before the spinner shifts from amber to red.
     /// Defaults to 30. Override via `ANVIL_SPINNER_ERROR_SECS`.
     pub(super) spinner_error_secs: u64,
+
+    // ── v2.2.14 Phase 1 / Task #604: paste counter ──────────────────────────
+
+    /// Monotonic counter incremented every time a long bracketed paste is
+    /// substituted with a `[Pasted text #N +M lines]` placeholder. Survives
+    /// tab switches so users get globally-unique IDs across the session.
+    pub(super) paste_counter: usize,
 }
 
 /// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
@@ -460,6 +467,7 @@ impl AnvilTui {
                     .ok()
                     .and_then(|v| v.trim().parse::<u64>().ok())
                     .unwrap_or(30),
+                paste_counter: 0,
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),

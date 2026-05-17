@@ -498,6 +498,17 @@ pub enum PlaceholderPayload {
     Document(std::path::PathBuf),
     /// Anything else — read as UTF-8 text and wrapped in a `<file>` tag.
     Text(std::path::PathBuf),
+    /// Task #604 (v2.2.14 Phase 1): a long bracketed paste that the user
+    /// typed/pasted from a webpage or other source. The literal text is
+    /// stored inline (not on disk) and rides as a Text content block on
+    /// the next turn. Display is the `[Pasted text #N +M lines, C chars]`
+    /// placeholder so the input box stays short.
+    PastedText {
+        text: String,
+        lines: usize,
+        chars: usize,
+        id: usize,
+    },
 }
 
 impl PlaceholderPayload {
@@ -601,6 +612,18 @@ impl PlaceholderPayload {
                 Ok(vec![ContentBlock::Text {
                     text: format!(
                         "<file path=\"{display}\">\n{body}\n</file>",
+                    ),
+                }])
+            }
+            // Task #604: long bracketed paste from a webpage / clipboard.
+            // The literal text is stored inline and wrapped in a `<pasted_text>`
+            // tag so the model can tell it apart from the user's typed prompt
+            // while the input box just shows `[Pasted text #N +M lines]`.
+            Self::PastedText { text, id, lines, chars } => {
+                let _ = (lines, chars);
+                Ok(vec![ContentBlock::Text {
+                    text: format!(
+                        "<pasted_text id=\"{id}\">\n{text}\n</pasted_text>"
                     ),
                 }])
             }

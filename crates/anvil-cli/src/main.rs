@@ -3467,7 +3467,33 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                if let Some(command) = SlashCommand::parse(trimmed) {
+                // Task #604 Part A: submit-time file-path detection.
+                //
+                // If the user typed (or pasted-as-keystrokes) a real file
+                // path and pressed Enter, route to the file-drop pipeline
+                // BEFORE `SlashCommand::parse` sees it — otherwise a path
+                // like `/Users/foo/bar.png` parses as
+                // `SlashCommand::Unknown("Users")` and the user gets the
+                // dreaded `Unknown command: /Users/...` error from the
+                // 2026-05-17 screenshot. This is the gate that fixes the
+                // image-paste / workspace-path regression for terminals
+                // that don't fire bracketed paste (Apple Terminal, kitty
+                // in some configs, tmux passthrough).
+                //
+                // `detect_submit_time_file_path` also unescapes
+                // `Screenshot\ 2026.png` style shell-escaped paths so
+                // Apple Terminal's Cmd+V on a Finder selection resolves
+                // even when the literal keystrokes carry the backslashes.
+                //
+                // See `feedback-clipboard-parity.md`.
+                let submit_time_path =
+                    crate::tui::paste::detect_submit_time_file_path(trimmed);
+
+                if submit_time_path.is_some() {
+                    // Fall through to the file-drop block below — we pass
+                    // the resolved path in via a local override so
+                    // shell-escaped spaces resolve correctly.
+                } else if let Some(command) = SlashCommand::parse(trimmed) {
                     // Handle slash commands — capture their output as a system message.
                     match cli.handle_repl_command_tui(command, &mut tui) {
                         Ok(should_persist) => {
@@ -3486,7 +3512,16 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Check whether the input looks like one or more file paths.
-                let file_paths = file_drop::detect_file_paths(trimmed);
+                // Task #604: the submit-time detector above already resolved
+                // single shell-escaped paths (e.g. `Screenshot\ 2026.png`);
+                // use its result when available so the file_drop pipeline
+                // gets a path that exists on disk. For multi-path pastes
+                // (newline-separated), fall back to `detect_file_paths`.
+                let file_paths = if let Some(p) = submit_time_path.clone() {
+                    vec![p]
+                } else {
+                    file_drop::detect_file_paths(trimmed)
+                };
                 if !file_paths.is_empty() {
                     let mut any_blocks = false;
                     for path in &file_paths {
