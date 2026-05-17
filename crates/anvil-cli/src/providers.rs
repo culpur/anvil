@@ -807,6 +807,37 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
     }
 }
 
+/// Block until the runtime's cancel flag flips to `true`, polling every 50 ms.
+///
+/// When the token is `None`, this future never resolves — `tokio::select!` will
+/// then act as a plain await of the partner branch with zero overhead.
+///
+/// v2.2.14 follow-on to TUI-1 / task #605: the previous fix polled the cancel
+/// flag only between SSE frames, so a stream blocked on the next chunk read
+/// could ignore three or four Ctrl+Cs before the user saw any effect. Wrapping
+/// `stream.next_event` in a `tokio::select!` against this future makes the
+/// in-flight HTTP read itself abort (via future drop → reqwest connection
+/// teardown) within one poll interval of the flag flipping.
+///
+/// The 50 ms cadence gives sub-100 ms cancel latency (worst case: flag flips
+/// immediately after a sleep starts → 50 ms until next check, 50 ms more for
+/// the task wake-up + select arm to fire). Tighter intervals waste CPU; the
+/// user only needs human-perceptible responsiveness here.
+async fn wait_for_cancel(token: Option<Arc<std::sync::atomic::AtomicBool>>) {
+    let Some(token) = token else {
+        // No cancel handle registered (e.g. tests, non-runtime invocations).
+        // Park forever so the select! partner branch wins unconditionally.
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        if token.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 pub(crate) struct DefaultRuntimeClient {
     runtime: tokio::runtime::Runtime,
     client: ProviderClient,
@@ -1022,20 +1053,35 @@ impl ApiClient for DefaultRuntimeClient {
 
             let stall_timeout = std::time::Duration::from_secs(300); // 5 minutes
             loop {
-            // Cooperative cancellation: poll the runtime's cancel flag between
-            // every chunk. If the TUI flipped it (Ctrl+C), drop the stream and
-            // bail before appending any more deltas to the assistant message.
-            // The underlying HTTP read may continue draining for a few hundred
-            // ms after we return — that's acceptable; what matters is that no
-            // further events reach the session.
+            // Cooperative cancellation: poll the flag between every chunk so a
+            // flag that flipped *during* the previous iteration's downstream
+            // work (event handling, TUI dispatch) is observed before we re-enter
+            // the read. This is the cheap-fast path; the select! below is what
+            // catches a flag flip while the HTTP read is itself blocked.
             if let Some(token) = cancel_token.as_ref()
                 && token.load(std::sync::atomic::Ordering::SeqCst)
             {
                 return Err(RuntimeError::cancelled());
             }
-            let next = tokio::time::timeout(stall_timeout, stream.next_event()).await;
-            // Poll again after the await — the user may have pressed Ctrl+C
-            // while we were blocked waiting for the next SSE frame.
+            // Task #605: race the in-flight read against the cancel-flag watcher.
+            // When the user presses Ctrl+C, `wait_for_cancel` resolves within
+            // ~50 ms, the `next_event` future is dropped, and reqwest's
+            // chunked-stream Drop tears down the underlying TCP/TLS connection
+            // — turning multi-press "⏸ cancelled" floods into a single message.
+            //
+            // Before #605 this was a bare `tokio::time::timeout(...).await` and
+            // a stalled socket read could shadow three or four flag flips.
+            let next = tokio::select! {
+                biased;
+                () = wait_for_cancel(cancel_token.clone()) => {
+                    return Err(RuntimeError::cancelled());
+                }
+                result = tokio::time::timeout(stall_timeout, stream.next_event()) => result,
+            };
+            // Post-await re-check is now defensive — the select! above already
+            // caught any flip that happened while we were blocked. Kept so a
+            // race where the flag flipped *exactly* as `next_event` returned
+            // a frame still surfaces as Cancelled instead of one extra delta.
             if let Some(token) = cancel_token.as_ref()
                 && token.load(std::sync::atomic::Ordering::SeqCst)
             {
@@ -2411,5 +2457,157 @@ mod cancel_token_tests {
             "expected Cancelled error, got: {err} (cancelled={})",
             err.is_cancelled()
         );
+    }
+
+    // --- Task #605: wait_for_cancel helper tests --------------------------
+    //
+    // The two tests below exercise the helper that #605 added to make
+    // `DefaultRuntimeClient::stream` cancel-responsive *during* an in-flight
+    // HTTP read. The pre-existing tests (1-3 above) only covered the
+    // between-chunk poll, which `#603` already had. The new contract is:
+    // a flag flip observed while a slow `next_event` is awaiting MUST cause
+    // the streaming loop to abort within ~100 ms, by dropping the read future
+    // (which in turn tears down the reqwest TCP/TLS connection).
+    //
+    // These tests target the helper directly because the full
+    // `DefaultRuntimeClient::stream` path requires a real `MessageStream` /
+    // HTTP server pair. Building a fake `MessageStream` would mean modifying
+    // the `api` crate's stream enum, and the same `wiremock`-free constraint
+    // applies as in #603. The helper IS the new behavior — if it resolves
+    // promptly when the flag flips and parks forever when there's no token,
+    // the `tokio::select!` in `stream()` will route correctly. See module
+    // comment on `wait_for_cancel` in the parent module for the integration
+    // shape.
+
+    use std::time::Instant;
+    use tokio::time::{Duration as TokioDuration, sleep};
+
+    use super::wait_for_cancel;
+
+    #[test]
+    fn cancel_aborts_blocking_http_read_within_200ms() {
+        // Models the live bug: a `stream.next_event()` blocked on the socket
+        // for ~5 s. Without the select! arm, the loop would only check the
+        // cancel flag after the read returned. With the select! arm,
+        // `wait_for_cancel` resolves within one poll interval (~50 ms) of
+        // the flag flipping, the partner future is dropped, and the outer
+        // select arm returns.
+        //
+        // We give 200 ms of headroom (50 ms poll + 100 ms scheduling slack +
+        // 50 ms test-runner jitter) over the 100 ms cancel-after delay.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("tokio test runtime");
+
+        let token = Arc::new(AtomicBool::new(false));
+        let flipper = Arc::clone(&token);
+
+        rt.block_on(async move {
+            let start = Instant::now();
+            tokio::select! {
+                biased;
+                () = wait_for_cancel(Some(Arc::clone(&token))) => {
+                    let elapsed = start.elapsed();
+                    assert!(
+                        elapsed < TokioDuration::from_millis(200),
+                        "wait_for_cancel resolved in {elapsed:?}, expected <200 ms — \
+                         this means the select! arm in DefaultRuntimeClient::stream \
+                         would NOT abort a blocked HTTP read fast enough"
+                    );
+                }
+                // Simulate the in-flight HTTP read: a 5-second sleep that
+                // would dominate without the cancel arm. After 100 ms we
+                // (separately) flip the flag from a background task.
+                () = async {
+                    let _ = tokio::spawn(async move {
+                        sleep(TokioDuration::from_millis(100)).await;
+                        flipper.store(true, Ordering::SeqCst);
+                    });
+                    sleep(TokioDuration::from_secs(5)).await;
+                } => {
+                    panic!(
+                        "the 5-second 'HTTP read' arm fired before the cancel arm — \
+                         this means the cancel flag was ignored, which is the v2.2.14 \
+                         #603 partial-fix bug that #605 is patching"
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn cancel_during_active_read_does_not_wait_for_next_event() {
+        // Strengthened proof: a "stream" that NEVER produces an event (an
+        // infinite read) MUST still surface the cancel inside the select!
+        // arm. Before #605, the loop polled the flag only between events —
+        // so this scenario would hang for the 5-minute stall timeout.
+        //
+        // We model the >1 s blocking read as a future that resolves after
+        // 10 seconds. The cancel arm should win comfortably under 200 ms.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("tokio test runtime");
+
+        let token = Arc::new(AtomicBool::new(false));
+        let flipper = Arc::clone(&token);
+
+        rt.block_on(async move {
+            // Flip the flag 50 ms in — well after the select! has parked on
+            // wait_for_cancel's first sleep. This proves the helper wakes
+            // through the Arc, not from a polling cycle that happened to
+            // catch the initial state.
+            let _flipper_task = tokio::spawn(async move {
+                sleep(TokioDuration::from_millis(50)).await;
+                flipper.store(true, Ordering::SeqCst);
+            });
+
+            let start = Instant::now();
+            let cancelled = tokio::select! {
+                biased;
+                () = wait_for_cancel(Some(Arc::clone(&token))) => true,
+                () = async {
+                    // A "next_event" that takes >10 s — i.e., a real socket
+                    // read with no traffic. Without the cancel arm, the
+                    // stream loop would block here.
+                    sleep(TokioDuration::from_secs(10)).await;
+                } => false,
+            };
+            let elapsed = start.elapsed();
+
+            assert!(cancelled, "cancel arm must win against a 10-second blocking read");
+            assert!(
+                elapsed < TokioDuration::from_millis(200),
+                "cancel observed in {elapsed:?}, expected <200 ms — slow cancel \
+                 latency means Ctrl+C requires multiple presses (the #605 user \
+                 screenshot showed FOUR ⏸ cancelled messages)"
+            );
+        });
+    }
+
+    #[test]
+    fn wait_for_cancel_parks_forever_when_token_is_none() {
+        // When `DefaultRuntimeClient` has no cancel token registered (rare
+        // but possible in non-runtime invocations), `wait_for_cancel` must
+        // never resolve — otherwise `tokio::select!` would immediately
+        // short-circuit the stream loop with a spurious cancel.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("tokio test runtime");
+
+        rt.block_on(async {
+            let resolved = tokio::select! {
+                biased;
+                () = wait_for_cancel(None) => true,
+                () = sleep(TokioDuration::from_millis(150)) => false,
+            };
+            assert!(
+                !resolved,
+                "wait_for_cancel(None) resolved within 150 ms — it must park forever \
+                 so the select! partner branch in stream() wins unconditionally"
+            );
+        });
     }
 }
