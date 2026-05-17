@@ -22,7 +22,10 @@ use ratatui::widgets::Paragraph;
 
 use runtime::{format_usd, pricing_for_model};
 
-use super::common::{rgb, render_completion_popup, render_model_bar, render_tab_bar};
+use super::common::{
+    rgb, render_completion_popup, render_model_bar, render_tab_bar, right_aligned_row,
+    section_header_line,
+};
 use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
 use crate::tui::helpers::{permission_mode_display, strip_ansi};
@@ -32,6 +35,20 @@ use crate::tui::layout::{
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::THINK_FRAMES;
 use crate::tui::TabHit;
+
+/// Height in rows of the inline 7-layer MEMORY block rendered above the
+/// classic footer (task #607).
+///
+/// Layout: top rule (1) + " MEMORY" header (1) + 7 layer rows + bottom rule (1)
+/// + trailing spacer (1) = 11 rows. The spacer keeps the bottom rule and the
+/// footer's own top rule visually distinct.
+const MEMORY_BLOCK_HEIGHT: u16 = 11;
+
+/// Minimum terminal height (in rows) at which the inline MEMORY block is
+/// shown. Below this we omit it entirely so the conversation log gets the
+/// full deck. The 30-row threshold was chosen by the user from an ASCII
+/// preview during task #607 sign-off.
+const MEMORY_BLOCK_MIN_HEIGHT: u16 = 30;
 
 /// The Layout A/D renderer. Instantiated with the `tabs` flag per-frame.
 pub(super) struct Renderer {
@@ -57,8 +74,15 @@ impl TuiLayoutRenderer for Renderer {
         frame.render_widget(ratatui::widgets::Clear, size);
 
         // ── Zone layout ─────────────────────────────────────────────────────────
-        // Layout D (tabs: true):  header(2) + content + [agent] + footer
-        // Layout A (tabs: false): header(1) + content + [agent] + footer
+        // Layout D (tabs: true):  header(2) + content + [agent] + [memory] + footer
+        // Layout A (tabs: false): header(1) + content + [agent] + [memory] + footer
+        //
+        // The optional `memory` chunk holds the inline 7-layer MEMORY block
+        // (task #607). It is only rendered on terminals ≥ 30 rows tall so the
+        // classic layout stays usable on small terminals where the user wanted
+        // raw conversation space. Height accounting:
+        //   top rule(1) + " MEMORY" header(1) + 7 layer rows + bottom rule(1)
+        //   + trailing spacer(1) = 11 rows.
         let header_rows = if self.tabs { 2 } else { 1 };
         let input_line_count = compute_input_lines(&snap.input_text, width);
         let status_line_count = snap.sl_config.line_count();
@@ -72,37 +96,44 @@ impl TuiLayoutRenderer for Renderer {
             0
         };
 
-        let chunks = if agent_panel_height > 0 {
-            RLayout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(header_rows),
-                    Constraint::Min(4),
-                    Constraint::Length(agent_panel_height),
-                    Constraint::Length(footer_height),
-                ])
-                .split(size)
+        let memory_height: u16 = if size.height >= MEMORY_BLOCK_MIN_HEIGHT {
+            MEMORY_BLOCK_HEIGHT
         } else {
-            let base = RLayout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(header_rows),
-                    Constraint::Min(4),
-                    Constraint::Length(footer_height),
-                ])
-                .split(size);
-            let mut v = base.to_vec();
-            v.push(v[2]);
-            v.into()
+            0
         };
+
+        // Assemble the constraint stack dynamically based on which optional
+        // chunks are present. Each chunk records its index in `chunks` so the
+        // unpack below can skip absent slots without a fragile match-tree.
+        let mut constraints: Vec<Constraint> = vec![
+            Constraint::Length(header_rows),
+            Constraint::Min(4),
+        ];
+        let agent_chunk_idx = if agent_panel_height > 0 {
+            constraints.push(Constraint::Length(agent_panel_height));
+            Some(constraints.len() - 1)
+        } else {
+            None
+        };
+        let memory_chunk_idx = if memory_height > 0 {
+            constraints.push(Constraint::Length(memory_height));
+            Some(constraints.len() - 1)
+        } else {
+            None
+        };
+        constraints.push(Constraint::Length(footer_height));
+        let footer_chunk_idx = constraints.len() - 1;
+
+        let chunks = RLayout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(size);
 
         let header_area = chunks[0];
         let content_area = chunks[1];
-        let (agent_panel_area, footer_area) = if agent_panel_height > 0 {
-            (Some(chunks[2]), chunks[3])
-        } else {
-            (None, chunks[2])
-        };
+        let agent_panel_area = agent_chunk_idx.map(|i| chunks[i]);
+        let memory_area = memory_chunk_idx.map(|i| chunks[i]);
+        let footer_area = chunks[footer_chunk_idx];
 
         // ── Header ───────────────────────────────────────────────────────────────
         if self.tabs {
@@ -252,6 +283,13 @@ impl TuiLayoutRenderer for Renderer {
             render_agent_panel(frame, panel_area, snap);
         }
 
+        // ── Inline 7-layer MEMORY block (task #607) ──────────────────────────────
+        // Visible only on terminals ≥ 30 rows tall; auto-hidden on smaller
+        // terminals so the classic layout stays usable on cramped windows.
+        if let Some(area) = memory_area {
+            render_memory_block(frame, area, snap);
+        }
+
         // ── Footer ───────────────────────────────────────────────────────────────
         render_footer(
             frame,
@@ -328,6 +366,103 @@ fn render_agent_panel(frame: &mut Frame, panel_area: Rect, snap: &LayoutSnapshot
         Paragraph::new(Text::from(panel_lines)).style(Style::default().bg(rgb(theme.bg_primary))),
         panel_area,
     );
+}
+
+/// Render the inline 7-layer MEMORY block (task #607).
+///
+/// The block mirrors the MEMORY section that the vertical-split rail renders
+/// (see `vertical_split::build_rail_bottom`), but laid out horizontally across
+/// the full deck width instead of inside a 32-column rail. Row order matches
+/// the rail verbatim so users switching between layouts see the same counts
+/// in the same order:
+///
+/// ```text
+/// ──────────────────────────────────────────────────────────────
+///  MEMORY
+///   working      6t / 2000tok
+///   episodic     12 sessions
+///   semantic     1c · 47a
+///   procedural   3s · 5p
+///   reflective   8 daily
+///   long-term    L7/QMD (active · 47 archives)
+///   permission   4 prior
+/// ──────────────────────────────────────────────────────────────
+///                                          (spacer row)
+/// ```
+///
+/// The `long-term` row threads the QMD archive state into the layer 7 cell:
+///   - `L7/QMD (active · N archives)` when `qmd_archive_count > 0`
+///   - `L7/QMD` alone when there are no archives yet
+///
+/// Height: exactly [`MEMORY_BLOCK_HEIGHT`] rows. Only invoked from `render`
+/// when the terminal is at least [`MEMORY_BLOCK_MIN_HEIGHT`] rows tall.
+fn render_memory_block(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
+    let theme = &snap.theme;
+    let w = area.width as usize;
+
+    frame.render_widget(ratatui::widgets::Clear, area);
+
+    let rule_style = Style::default().fg(rgb(theme.border));
+    let header_style = Style::default()
+        .fg(rgb(theme.accent))
+        .add_modifier(Modifier::BOLD | Modifier::DIM);
+    let value_style = Style::default().fg(Color::DarkGray);
+
+    let rule = Line::from(Span::styled("─".repeat(w), rule_style));
+
+    let working_val = format!(
+        "{}t / {}tok",
+        snap.memory_working_turns, snap.memory_working_tokens
+    );
+    let episodic_val = if snap.memory_episodic_sessions == 1 {
+        "1 session".to_string()
+    } else {
+        format!("{} sessions", snap.memory_episodic_sessions)
+    };
+    let semantic_val = format!(
+        "{}c · {}a",
+        snap.memory_semantic_collections, snap.memory_semantic_archives
+    );
+    let procedural_val = format!(
+        "{}s · {}p",
+        snap.memory_procedural_skills, snap.memory_procedural_plugins
+    );
+    let reflective_val = if snap.memory_reflective_daily == 1 {
+        "1 daily".to_string()
+    } else {
+        format!("{} daily", snap.memory_reflective_daily)
+    };
+    // Layer 7 (long-term) folds the QMD archive count inline so the classic
+    // block keeps to one row per layer. Matches the rail's wording from task
+    // #596 where QMD became a sub-row of MEMORY.
+    let long_term_val = if snap.qmd_archive_count == 0 {
+        "L7/QMD".to_string()
+    } else if snap.qmd_archive_count == 1 {
+        "L7/QMD (active · 1 archive)".to_string()
+    } else {
+        format!("L7/QMD (active · {} archives)", snap.qmd_archive_count)
+    };
+    let permission_val = if snap.memory_permission_decisions == 1 {
+        "1 prior".to_string()
+    } else {
+        format!("{} prior", snap.memory_permission_decisions)
+    };
+
+    let lines: Vec<Line<'static>> = vec![
+        rule.clone(),
+        section_header_line("MEMORY", None, w, header_style),
+        right_aligned_row("working", &working_val, w, value_style),
+        right_aligned_row("episodic", &episodic_val, w, value_style),
+        right_aligned_row("semantic", &semantic_val, w, value_style),
+        right_aligned_row("procedural", &procedural_val, w, value_style),
+        right_aligned_row("reflective", &reflective_val, w, value_style),
+        right_aligned_row("long-term", &long_term_val, w, value_style),
+        right_aligned_row("permission", &permission_val, w, value_style),
+        rule,
+        Line::from(""),
+    ];
+
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
 fn render_footer(
@@ -642,5 +777,171 @@ mod tests {
         assert_eq!(spinner_elapsed_color(4.9, 5, 15, GREEN), GREEN);
         assert_eq!(spinner_elapsed_color(5.0, 5, 15, GREEN), Color::Yellow);
         assert_eq!(spinner_elapsed_color(15.0, 5, 15, GREEN), Color::Red);
+    }
+
+    // ── Task #607: inline 7-layer MEMORY block ────────────────────────────────
+    //
+    // These tests exercise the real `classic::Renderer` (not a mirror) against
+    // a populated `LayoutSnapshot::test_default()`. They lock the user-visible
+    // contract that the classic layout grows a MEMORY section above the input
+    // when the terminal is tall enough.
+
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::tui::layouts::{LayoutLocalState, TuiLayoutRenderer};
+    use crate::tui::snapshot::LayoutSnapshot;
+
+    /// Extract the ASCII cell content (one line per row, trailing whitespace
+    /// trimmed) from a `TestBackend`-backed terminal.
+    fn extract_text(terminal: &Terminal<TestBackend>) -> String {
+        let buf = terminal.backend().buffer();
+        let (bw, bh) = (buf.area.width as usize, buf.area.height as usize);
+        let mut rows = Vec::with_capacity(bh);
+        for row in 0..bh {
+            let mut line = String::with_capacity(bw);
+            for col in 0..bw {
+                let ch = buf[(col as u16, row as u16)].symbol();
+                if ch.is_empty() || ch == "\x00" {
+                    line.push(' ');
+                } else {
+                    line.push_str(ch);
+                }
+            }
+            rows.push(line.trim_end().to_string());
+        }
+        rows.join("\n")
+    }
+
+    /// Build a snapshot with every memory field populated so the MEMORY block
+    /// renders non-trivial values for every row.
+    fn populated_snap() -> LayoutSnapshot {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.session_id = "test-session".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.input_tokens = 42;
+        snap.output_tokens = 17;
+        snap.context_max_tokens = 200_000;
+        // Layer counts.
+        snap.memory_working_turns = 6;
+        snap.memory_working_tokens = 2_000;
+        snap.memory_episodic_sessions = 12;
+        snap.memory_semantic_collections = 1;
+        snap.memory_semantic_archives = 47;
+        snap.memory_procedural_skills = 3;
+        snap.memory_procedural_plugins = 5;
+        snap.memory_reflective_daily = 8;
+        snap.memory_permission_decisions = 4;
+        snap
+    }
+
+    /// Render the real classic `Renderer` at `(width, height)` against `snap`
+    /// and return the plain-text grid.
+    fn render_real_classic(snap: &LayoutSnapshot, width: u16, height: u16, tabs: bool) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+        let mut local = LayoutLocalState::Classic;
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                super::Renderer { tabs }.render(frame, snap, &mut local, &mut hits);
+            })
+            .expect("draw");
+        extract_text(&terminal)
+    }
+
+    #[test]
+    fn classic_renders_memory_block_when_height_sufficient() {
+        let snap = populated_snap();
+        // 30 rows is exactly the threshold; verify the block is present.
+        let rendered = render_real_classic(&snap, 100, 30, true);
+        let rows: Vec<&str> = rendered.lines().collect();
+        assert!(
+            rows.iter().any(|l| l.contains(" MEMORY")),
+            "MEMORY header must render at height=30, got:\n{rendered}"
+        );
+        for label in [
+            "working",
+            "episodic",
+            "semantic",
+            "procedural",
+            "reflective",
+            "long-term",
+            "permission",
+        ] {
+            assert!(
+                rows.iter().any(|l| l.contains(label)),
+                "memory row `{label}` must render, got:\n{rendered}"
+            );
+        }
+        // Values must be present.
+        assert!(rendered.contains("12 sessions"), "episodic value must render");
+        assert!(rendered.contains("1c · 47a"), "semantic value must render");
+        assert!(rendered.contains("3s · 5p"), "procedural value must render");
+        assert!(rendered.contains("8 daily"), "reflective value must render");
+        // The block lives between two horizontal rules; verify at least one
+        // full-width rule is on screen.
+        let full_rule = "─".repeat(100);
+        assert!(
+            rows.iter().any(|l| l == &full_rule),
+            "expected at least one full-width horizontal rule"
+        );
+    }
+
+    #[test]
+    fn classic_skips_memory_block_when_height_below_30() {
+        let snap = populated_snap();
+        let rendered = render_real_classic(&snap, 100, 20, true);
+        assert!(
+            !rendered.contains(" MEMORY"),
+            "MEMORY header must NOT render below the 30-row threshold, got:\n{rendered}"
+        );
+        // The 7 layer labels are also all absent.
+        for label in [
+            "working",
+            "episodic",
+            "semantic",
+            "procedural",
+            "reflective",
+            "long-term",
+        ] {
+            assert!(
+                !rendered.contains(label),
+                "memory label `{label}` must be hidden at height<30, got:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn classic_memory_block_shows_l7_qmd_active_when_archives_present() {
+        let mut snap = populated_snap();
+        snap.qmd_archive_count = 47;
+        let rendered = render_real_classic(&snap, 100, 30, true);
+        assert!(
+            rendered.contains("L7/QMD (active · 47 archives)"),
+            "long-term row must include QMD archive count when archives > 0, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn classic_memory_block_shows_l7_only_when_no_archives() {
+        let mut snap = populated_snap();
+        snap.qmd_archive_count = 0;
+        let rendered = render_real_classic(&snap, 100, 30, true);
+        // The bare "L7/QMD" string must appear on the long-term row, but NOT
+        // the parenthesised archive suffix.
+        let long_term_row = rendered
+            .lines()
+            .find(|l| l.contains("long-term"))
+            .expect("long-term row must render");
+        assert!(
+            long_term_row.contains("L7/QMD"),
+            "long-term row must show L7/QMD, got {long_term_row:?}"
+        );
+        assert!(
+            !long_term_row.contains("active ·"),
+            "long-term row must NOT show `active ·` when there are no archives, got {long_term_row:?}"
+        );
     }
 }

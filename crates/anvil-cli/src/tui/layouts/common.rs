@@ -246,6 +246,69 @@ pub(super) fn render_completion_popup(frame: &mut Frame, anchor_area: Rect, snap
     frame.render_widget(popup_widget, popup_area);
 }
 
+// ─── Shared layout helpers (task #607) ────────────────────────────────────────
+//
+// `section_header_line`, `right_aligned_row`, and `truncate` were originally
+// private to `vertical_split.rs` where the rail uses them to paint sections
+// like MEMORY, MODEL, PERMISSIONS, etc. Task #607 (inline 7-layer MEMORY
+// block in the classic layout) needs the same row geometry, so we lift them
+// here as `pub(super)` and let both renderers call the same code. Keeping the
+// helpers in one place also means future row-layout tweaks (padding, glyphs,
+// truncation policy) don't drift between layouts.
+
+/// Truncate a string to at most `max_chars` display characters. The last
+/// character is replaced with `…` when truncation actually occurs.
+pub(super) fn truncate(s: String, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s
+    } else {
+        let t: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{t}…")
+    }
+}
+
+/// Build a section header line with an optional parenthetical qualifier.
+///
+/// Example: `" SESSIONS"` — leading space, label.
+/// Example: `" AGENTS (GLOBAL)"` — qualifier appended in parens.
+/// The line is right-padded to `w` so the styled span fills the row.
+pub(super) fn section_header_line(
+    label: &'static str,
+    qualifier: Option<&'static str>,
+    w: usize,
+    style: Style,
+) -> Line<'static> {
+    let full = if let Some(q) = qualifier {
+        format!(" {label} ({q})")
+    } else {
+        format!(" {label}")
+    };
+    let padded = truncate(
+        format!("{full}{}", " ".repeat(w.saturating_sub(full.len()))),
+        w,
+    );
+    Line::from(Span::styled(padded, style))
+}
+
+/// Build a right-aligned two-column row: label on the left, value on the right.
+///
+/// Example (w=24): `" running          3 tabs"`.
+/// The leading space + label + pad + value packs to exactly `w` columns,
+/// truncating with `…` on overflow.
+pub(super) fn right_aligned_row(
+    label: &str,
+    value: &str,
+    w: usize,
+    style: Style,
+) -> Line<'static> {
+    let prefix = format!(" {label}");
+    let total = prefix.len() + value.len();
+    let pad = if total + 1 < w { w - total } else { 1 };
+    let text = format!("{prefix}{}{value}", " ".repeat(pad));
+    let truncated = truncate(text, w);
+    Line::from(Span::styled(truncated, style))
+}
+
 // ─── Seven-layer memory + chrome helpers (task #594 / BUG-13) ────────────────
 //
 // These read on-disk caches under `~/.anvil/` to populate the

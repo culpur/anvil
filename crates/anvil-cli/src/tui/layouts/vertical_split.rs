@@ -28,7 +28,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
-use super::common::{rgb, render_completion_popup, render_tab_bar};
+use super::common::{
+    rgb, render_completion_popup, render_tab_bar, right_aligned_row, section_header_line,
+    truncate,
+};
 use super::{LayoutLocalState, RightDeckMode, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
 use crate::tui::helpers::strip_ansi;
@@ -449,25 +452,6 @@ fn parse_update_latest(msg: &str) -> Option<String> {
     Some(after_arrow.split_whitespace().next()?.to_string())
 }
 
-/// Build a section header line with an optional parenthetical qualifier.
-///
-/// Example: `SESSIONS` → ` SESSIONS`
-/// Example: `AGENTS` + `GLOBAL` → ` AGENTS (GLOBAL)`
-fn section_header_line(
-    label: &'static str,
-    qualifier: Option<&'static str>,
-    w: usize,
-    style: Style,
-) -> Line<'static> {
-    let full = if let Some(q) = qualifier {
-        format!(" {label} ({q})")
-    } else {
-        format!(" {label}")
-    };
-    let padded = truncate(format!("{full}{}", " ".repeat(w.saturating_sub(full.len()))), w);
-    Line::from(Span::styled(padded, style))
-}
-
 /// Build the CONTEXT row's progress bar — a 16-cell visual followed by
 /// `used_k/limit_k` digits. Colors echo the classic ContextBar widget:
 ///   - pct <  80 → blue fill
@@ -511,21 +495,6 @@ fn context_bar_line(used: u32, limit: u32, w: usize) -> Line<'static> {
         )];
     }
     Line::from(spans)
-}
-
-/// Build a right-aligned two-column row: label left, value right.
-///
-/// Example (w=24): `" running          3 tabs"`.
-fn right_aligned_row(label: &str, value: &str, w: usize, style: Style) -> Line<'static> {
-    // Leading space + label + gap + value, value right-aligned.
-    // Layout: ` <label><pad><value>`
-    // Total width = w.
-    let prefix = format!(" {label}");
-    let total = prefix.len() + value.len();
-    let pad = if total + 1 < w { w - total } else { 1 };
-    let text = format!("{prefix}{}{value}", " ".repeat(pad));
-    let truncated = truncate(text, w);
-    Line::from(Span::styled(truncated, style))
 }
 
 // ─── Deck renderer ────────────────────────────────────────────────────────────
@@ -903,16 +872,6 @@ fn render_footer(
 fn render_input_lines(snap: &LayoutSnapshot, width: usize) -> Vec<Line<'static>> {
     use super::classic::render_input_lines as classic_input;
     classic_input(snap, width)
-}
-
-/// Truncate a string to at most `max_chars` display characters.
-fn truncate(s: String, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        s
-    } else {
-        let t: String = s.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{t}…")
-    }
 }
 
 // ─── Golden snapshot tests ────────────────────────────────────────────────────
