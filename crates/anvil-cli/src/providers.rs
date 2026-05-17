@@ -819,6 +819,15 @@ pub(crate) struct DefaultRuntimeClient {
     /// Shared slot — when the inner value is `Some`, stream output goes to the
     /// TUI instead of stdout.
     tui_slot: TuiSenderSlot,
+    /// Cooperative cancellation flag handed in by the runtime turn executor.
+    ///
+    /// Polled between each SSE frame inside `stream()`; when the TUI's Ctrl+C
+    /// handler flips it to `true` we drop the in-flight HTTP stream and return
+    /// `RuntimeError::cancelled()` so no further deltas are appended to the
+    /// assistant message. The default-trait no-op kept the flag invisible to
+    /// every provider's stream loop (Anthropic, OpenAI, xAI, Gemini, Copilot,
+    /// Cursor, Ollama) — they all share this one path through `client.stream_message`.
+    cancel_token: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl DefaultRuntimeClient {
@@ -842,6 +851,7 @@ impl DefaultRuntimeClient {
             tool_registry,
             progress_reporter,
             tui_slot,
+            cancel_token: None,
         })
     }
 
@@ -872,6 +882,7 @@ impl DefaultRuntimeClient {
             tool_registry,
             progress_reporter,
             tui_slot,
+            cancel_token: None,
         })
     }
 }
@@ -932,6 +943,15 @@ pub(crate) fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error
 }
 
 impl ApiClient for DefaultRuntimeClient {
+    /// Store the runtime's cancel flag so the streaming loop can poll it
+    /// between SSE frames. Overrides the no-op default from the trait — without
+    /// this override, every provider (Anthropic, OpenAI, xAI, Gemini, Copilot,
+    /// Cursor, Ollama) ignored Ctrl+C and kept draining tokens until the model
+    /// finished naturally, even though the TUI showed "⏸ cancelled".
+    fn set_cancel_token(&mut self, token: Arc<std::sync::atomic::AtomicBool>) {
+        self.cancel_token = Some(token);
+    }
+
     #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         if let Some(progress_reporter) = &self.progress_reporter {
@@ -967,7 +987,19 @@ impl ApiClient for DefaultRuntimeClient {
             .ok()
             .and_then(|guard| guard.clone());
 
+        // Snapshot the cancel flag before crossing the await boundary so the
+        // poll inside the streaming loop doesn't re-borrow `self`.
+        let cancel_token = self.cancel_token.clone();
+
         self.runtime.block_on(async {
+            // Pre-stream cancel check — if the user already pressed Ctrl+C
+            // (e.g. between the runtime resetting the flag and us reaching
+            // here on a slow startup), don't even open the HTTP connection.
+            if let Some(token) = cancel_token.as_ref()
+                && token.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(RuntimeError::cancelled());
+            }
             let mut stream = self
                 .client
                 .stream_message(&message_request)
@@ -990,7 +1022,25 @@ impl ApiClient for DefaultRuntimeClient {
 
             let stall_timeout = std::time::Duration::from_secs(300); // 5 minutes
             loop {
+            // Cooperative cancellation: poll the runtime's cancel flag between
+            // every chunk. If the TUI flipped it (Ctrl+C), drop the stream and
+            // bail before appending any more deltas to the assistant message.
+            // The underlying HTTP read may continue draining for a few hundred
+            // ms after we return — that's acceptable; what matters is that no
+            // further events reach the session.
+            if let Some(token) = cancel_token.as_ref()
+                && token.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(RuntimeError::cancelled());
+            }
             let next = tokio::time::timeout(stall_timeout, stream.next_event()).await;
+            // Poll again after the await — the user may have pressed Ctrl+C
+            // while we were blocked waiting for the next SSE frame.
+            if let Some(token) = cancel_token.as_ref()
+                && token.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(RuntimeError::cancelled());
+            }
             let event = match next {
                 Ok(Ok(Some(ev))) => ev,
                 Ok(Ok(None)) => break,
@@ -2235,5 +2285,131 @@ mod mcp_timeout_tests {
         let result = mcp_tool_timeout_secs();
         unsafe { std::env::remove_var("ANVIL_MCP_TOOL_TIMEOUT"); }
         assert_eq!(result, 60);
+    }
+}
+
+#[cfg(test)]
+mod cancel_token_tests {
+    //! v2.2.14 follow-on to TUI-1: `DefaultRuntimeClient` now overrides the
+    //! `ApiClient::set_cancel_token` no-op so Ctrl+C during streaming actually
+    //! drops the connection instead of letting the model finish naturally.
+    //!
+    //! Coverage shape:
+    //!   1. `set_cancel_token_stores_token_on_default_runtime_client`
+    //!      — verifies the field is wired (was silently ignored before).
+    //!   2. `default_runtime_client_returns_cancelled_when_flag_preset`
+    //!      — verifies the pre-stream cancel check fires before any HTTP I/O,
+    //!        meaning we never hit the network when the user already cancelled.
+    //!   3. `default_runtime_client_polls_flag_set_after_construction`
+    //!      — verifies a flag flipped after `set_cancel_token` is observed by
+    //!        the streaming entrypoint (the live-cancel path).
+    //!   4. The end-to-end "cancel between frames" contract test lives in
+    //!      `crates/runtime/tests/cancellation.rs::cancel_between_frames_returns_cancelled_error`
+    //!      — that test already passes because `run_turn_inner` checks the
+    //!        flag after `stream()` returns. The bug we just fixed was that
+    //!        `DefaultRuntimeClient::stream` itself never polled — it ran to
+    //!        natural completion before the runtime got a chance to check.
+    //!        The two unit tests below close that hole.
+
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use api::ProviderKind;
+    use runtime::{ApiClient, ApiRequest, PromptSection, PromptSectionKind};
+    use tools::GlobalToolRegistry;
+
+    use super::DefaultRuntimeClient;
+    use crate::TuiSenderSlot;
+
+    fn build_test_client() -> DefaultRuntimeClient {
+        // Ollama is the only provider whose `from_env()` never errors (no
+        // credentials required), so it's the safe pick for a no-network unit
+        // test. The cancel check we're exercising fires before any HTTP I/O.
+        DefaultRuntimeClient::new_with_kind(
+            "test-model".to_string(),
+            ProviderKind::Ollama,
+            false,
+            false,
+            None,
+            GlobalToolRegistry::builtin(),
+            None,
+            TuiSenderSlot::default(),
+        )
+        .expect("Ollama DefaultRuntimeClient should build without credentials")
+    }
+
+    #[test]
+    fn set_cancel_token_stores_token_on_default_runtime_client() {
+        // Round-trip: the trait default would discard the token. With our
+        // override the field must be `Some` after the call.
+        let mut client = build_test_client();
+        assert!(
+            client.cancel_token.is_none(),
+            "freshly constructed client should have no cancel token"
+        );
+
+        let token = Arc::new(AtomicBool::new(false));
+        client.set_cancel_token(Arc::clone(&token));
+
+        let stored = client
+            .cancel_token
+            .as_ref()
+            .expect("set_cancel_token must store the token");
+        assert!(
+            Arc::ptr_eq(stored, &token),
+            "stored token should be the exact Arc handed in (no clone-into-different-allocation)"
+        );
+    }
+
+    #[test]
+    fn default_runtime_client_returns_cancelled_when_flag_preset() {
+        // If the cancel flag is already true when `stream()` is invoked, the
+        // pre-stream check must return Cancelled before any HTTP I/O happens.
+        // This is the live signal that `set_cancel_token` is no longer a no-op.
+        let mut client = build_test_client();
+        let token = Arc::new(AtomicBool::new(true));
+        client.set_cancel_token(Arc::clone(&token));
+
+        let request = ApiRequest {
+            system_prompt: vec![PromptSection::new(PromptSectionKind::System, "test")],
+            messages: Vec::new(),
+        };
+
+        let err = client
+            .stream(request)
+            .expect_err("preset cancel flag must short-circuit stream()");
+        assert!(
+            err.is_cancelled(),
+            "expected Cancelled error, got: {err} (cancelled={})",
+            err.is_cancelled()
+        );
+    }
+
+    #[test]
+    fn default_runtime_client_polls_flag_set_after_construction() {
+        // Same shape as the test above, but we set the flag *after* handing
+        // it to the client — proving the client reads through the Arc rather
+        // than snapshotting the boolean at registration time.
+        let mut client = build_test_client();
+        let token = Arc::new(AtomicBool::new(false));
+        client.set_cancel_token(Arc::clone(&token));
+
+        // Now the TUI flips the flag (simulating Ctrl+C arriving after the
+        // runtime registered the token but before `stream()` started).
+        token.store(true, Ordering::SeqCst);
+
+        let request = ApiRequest {
+            system_prompt: vec![PromptSection::new(PromptSectionKind::System, "test")],
+            messages: Vec::new(),
+        };
+
+        let err = client
+            .stream(request)
+            .expect_err("flag flipped after set_cancel_token must still short-circuit");
+        assert!(
+            err.is_cancelled(),
+            "expected Cancelled error, got: {err} (cancelled={})",
+            err.is_cancelled()
+        );
     }
 }
