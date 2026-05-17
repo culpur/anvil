@@ -1,5 +1,16 @@
-//! `anvil upgrade` — fetch the latest GitHub release, verify the SHA256
-//! signature, and atomically replace the running binary.
+//! `anvil upgrade` — fetch the latest release, verify the SHA256 signature,
+//! and atomically replace the running binary.
+//!
+//! Probe order (matches `anvil --update` and the rail banner):
+//!
+//! 1. **anvilhub `/api/version`** — preferred. Returns the exact asset filename
+//!    for the requested target, so we don't have to guess at `.exe`/`-gnu` vs
+//!    `-msvc` quirks.
+//! 2. **GitHub `/releases/latest`** — fallback only.
+//!
+//! SHA256 is still fetched out-of-band (anvilhub `/sha256/...` primary, GitHub
+//! `.sha256` sibling fallback). This stays a hard requirement: an unverified
+//! binary will not be installed.
 //!
 //! Uses the respawn infrastructure from `respawn.rs` to relaunch the new
 //! binary so the user's terminal session survives the update.
@@ -8,31 +19,37 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use runtime::update_check::{self, ReleaseMetadata};
+
 use crate::respawn::{self, RespawnOutcome};
 use crate::VERSION;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const GITHUB_API_RELEASES: &str =
-    "https://api.github.com/repos/culpur/anvil/releases/latest";
 
 const GITHUB_RELEASES_BASE: &str =
     "https://github.com/culpur/anvil/releases/download";
 
 // ── Platform target ───────────────────────────────────────────────────────────
 
-fn platform_target() -> Option<&'static str> {
+/// Map the running `OS/ARCH` pair to the rust target triple used in our
+/// release-asset filenames. Returns `None` for unsupported platforms.
+///
+/// Windows is `windows-gnu` (mingw build) to match `scripts/release.sh`; the
+/// older `windows-msvc` triple was wrong and produced 404s.
+pub(crate) fn platform_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
         ("macos", "x86_64") => Some("x86_64-apple-darwin"),
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
         ("linux", "aarch64") => Some("aarch64-unknown-linux-gnu"),
-        ("windows", "x86_64") => Some("x86_64-pc-windows-msvc"),
+        ("windows", "x86_64") => Some("x86_64-pc-windows-gnu"),
+        ("freebsd", "x86_64") => Some("x86_64-unknown-freebsd"),
+        ("netbsd", "x86_64") => Some("x86_64-unknown-netbsd"),
         _ => None,
     }
 }
 
-fn binary_name(target: &str) -> String {
+pub(crate) fn binary_name(target: &str) -> String {
     if target.contains("windows") {
         format!("anvil-{target}.exe")
     } else {
@@ -40,44 +57,33 @@ fn binary_name(target: &str) -> String {
     }
 }
 
-// ── GitHub release metadata ───────────────────────────────────────────────────
+// ── Release metadata (anvilhub-first, GitHub fallback) ───────────────────────
 
-/// Parsed information from a GitHub release.
+/// Parsed information from a release. Carries the binary download URL so the
+/// upgrade flow never has to reconstruct it from hardcoded constants.
 #[derive(Debug, Clone)]
 pub(crate) struct ReleaseInfo {
     pub tag: String,
     pub version: String,
+    pub binary_url: String,
 }
 
-/// Fetch the latest release tag from the GitHub API.
-/// Returns `None` on network error or unexpected JSON.
-pub(crate) fn fetch_latest_release() -> Option<ReleaseInfo> {
-    let out = Command::new("curl")
-        .args([
-            "-sfL",
-            "--max-time",
-            "10",
-            "-H",
-            "User-Agent: anvil-cli",
-            GITHUB_API_RELEASES,
-        ])
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        return None;
+impl From<ReleaseMetadata> for ReleaseInfo {
+    fn from(m: ReleaseMetadata) -> Self {
+        Self {
+            tag: m.tag,
+            version: m.version,
+            binary_url: m.binary_url,
+        }
     }
+}
 
-    let body = String::from_utf8_lossy(&out.stdout);
-    let tag = body
-        .split("\"tag_name\"")
-        .nth(1)?
-        .split('"')
-        .nth(1)?
-        .to_string();
-
-    let version = tag.trim_start_matches('v').to_string();
-    Some(ReleaseInfo { tag, version })
+/// Fetch release metadata for `target`.
+///
+/// Probe order: anvilhub `/api/version` → GitHub `/releases/latest`. Returns
+/// `None` only when both are unreachable or refuse to surface the target.
+pub(crate) fn fetch_latest_release(target: &str) -> Option<ReleaseInfo> {
+    update_check::fetch_release_metadata(target).map(Into::into)
 }
 
 // ── Version comparison ────────────────────────────────────────────────────────
@@ -175,14 +181,13 @@ pub(crate) fn verify_sha256(path: &PathBuf, expected: &str) -> Result<(), String
 
 // ── Download ──────────────────────────────────────────────────────────────────
 
-fn download_binary(tag: &str, binary: &str, dest: &PathBuf) -> Result<(), String> {
-    let url = format!("{GITHUB_RELEASES_BASE}/{tag}/{binary}");
+fn download_binary(url: &str, dest: &PathBuf) -> Result<(), String> {
     println!("  Downloading {url}");
 
     let status = Command::new("curl")
         .args(["-fSL", "--max-time", "180", "-o"])
         .arg(dest)
-        .arg(&url)
+        .arg(url)
         .status()
         .map_err(|e| format!("curl error: {e}"))?;
 
@@ -239,13 +244,26 @@ pub(crate) fn run_upgrade() {
     println!("  Current version: {VERSION}");
     println!();
 
-    // 1. Fetch latest release info
-    print!("  Checking GitHub for updates...");
+    // 1. Determine platform target FIRST — the anvilhub probe needs it to
+    //    look up the matching binary URL.
+    let Some(target) = platform_target() else {
+        eprintln!(
+            "  \x1b[31m\u{2718}\x1b[0m  Unsupported platform: {}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        std::process::exit(1);
+    };
+
+    // 2. Fetch latest release info (anvilhub first, GitHub fallback).
+    print!("  Checking for updates...");
     let _ = std::io::Write::flush(&mut std::io::stdout());
 
-    let Some(release) = fetch_latest_release() else {
+    let Some(release) = fetch_latest_release(target) else {
         eprintln!();
-        eprintln!("  \x1b[31m\u{2718}\x1b[0m  Cannot reach GitHub API — check network.");
+        eprintln!(
+            "  \x1b[31m\u{2718}\x1b[0m  Cannot resolve release for {target} — anvilhub and GitHub both unreachable."
+        );
         std::process::exit(1);
     };
 
@@ -257,22 +275,19 @@ pub(crate) fn run_upgrade() {
         return;
     }
 
-    println!("  \x1b[33m\u{2192}\x1b[0m  Upgrade available: {VERSION} \u{2192} {}", release.version);
+    println!(
+        "  \x1b[33m\u{2192}\x1b[0m  Upgrade available: {VERSION} \u{2192} {}",
+        release.version
+    );
     println!();
-
-    // 2. Determine platform target
-    let Some(target) = platform_target() else {
-        eprintln!("  \x1b[31m\u{2718}\x1b[0m  Unsupported platform: {}/{}", std::env::consts::OS, std::env::consts::ARCH);
-        std::process::exit(1);
-    };
 
     let binary = binary_name(target);
     let tmp_dir = std::env::temp_dir().join("anvil-upgrade");
     let _ = fs::create_dir_all(&tmp_dir);
     let new_binary = tmp_dir.join(&binary);
 
-    // 3. Download
-    if let Err(e) = download_binary(&release.tag, &binary, &new_binary) {
+    // 3. Download (URL comes from the metadata fetch — no client-side guessing)
+    if let Err(e) = download_binary(&release.binary_url, &new_binary) {
         eprintln!("  \x1b[31m\u{2718}\x1b[0m  {e}");
         std::process::exit(1);
     }
@@ -419,9 +434,21 @@ mod tests {
     // ── binary_name ───────────────────────────────────────────────────────
 
     #[test]
-    fn binary_name_windows_has_exe() {
-        let name = binary_name("x86_64-pc-windows-msvc");
-        assert!(name.ends_with(".exe"), "Windows binary must have .exe extension");
+    fn upgrade_target_for_windows_is_gnu_with_exe_extension() {
+        // Layer A: the historical bug. release.sh ships
+        // `*-windows-gnu.exe`, never `*-windows-msvc`. Both the platform map
+        // and the asset name must agree on `-gnu` + `.exe`.
+        let name = binary_name("x86_64-pc-windows-gnu");
+        assert_eq!(name, "anvil-x86_64-pc-windows-gnu.exe");
+
+        // Belt-and-suspenders: regardless of host, platform_target() must
+        // never return the broken `windows-msvc` triple.
+        if let Some(t) = platform_target() {
+            assert!(
+                !t.contains("windows-msvc"),
+                "platform_target() must not return windows-msvc"
+            );
+        }
     }
 
     #[test]
@@ -507,5 +534,98 @@ mod tests {
         assert_eq!(content, "NEW_BINARY_CONTENT");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── structural: prefer anvilhub, fall back to GitHub ─────────────────
+    //
+    // Mirrors the update.rs tests. We exercise the same runtime probe used
+    // by both `anvil --update` and `anvil upgrade` to guarantee they stay
+    // structurally aligned.
+
+    fn spawn_one_shot_http(status_line: &'static str, body: &'static str) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\r\n\
+                     {body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        format!("http://127.0.0.1:{port}/")
+    }
+
+    #[test]
+    fn upgrade_prefers_anvilhub_api_version_when_200() {
+        let body = r#"{
+            "latest_version": "2.5.0",
+            "binaries": {
+                "x86_64-unknown-linux-gnu": "https://example/anvil-x86_64-unknown-linux-gnu"
+            }
+        }"#;
+        let anvilhub = spawn_one_shot_http("200 OK", body);
+        let github = "http://127.0.0.1:1/";
+        let meta = runtime::update_check::fetch_release_metadata_from(
+            &anvilhub,
+            github,
+            "x86_64-unknown-linux-gnu",
+        )
+        .expect("anvilhub answer");
+        assert_eq!(meta.source, runtime::update_check::UpdateSource::Anvilhub);
+        assert_eq!(meta.version, "2.5.0");
+        assert_eq!(
+            meta.binary_url,
+            "https://example/anvil-x86_64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn upgrade_falls_back_to_github_releases_when_anvilhub_500() {
+        let anvilhub = spawn_one_shot_http("500 Internal Server Error", "boom");
+        let github = spawn_one_shot_http("200 OK", "{\"tag_name\":\"v2.5.1\"}");
+        let meta = runtime::update_check::fetch_release_metadata_from(
+            &anvilhub,
+            &github,
+            "x86_64-pc-windows-gnu",
+        )
+        .expect("github fallback answer");
+        assert_eq!(meta.source, runtime::update_check::UpdateSource::Github);
+        assert!(
+            meta.binary_url.ends_with("anvil-x86_64-pc-windows-gnu.exe"),
+            "windows fallback URL must end in .exe, got {}",
+            meta.binary_url
+        );
+    }
+
+    #[test]
+    fn upgrade_falls_back_to_github_when_anvilhub_missing_target_key() {
+        let body_no_target = r#"{
+            "latest_version": "2.5.2",
+            "binaries": { "x86_64-apple-darwin": "https://example/macos" }
+        }"#;
+        let anvilhub = spawn_one_shot_http("200 OK", body_no_target);
+        let github = spawn_one_shot_http("200 OK", "{\"tag_name\":\"v2.5.2\"}");
+        let meta = runtime::update_check::fetch_release_metadata_from(
+            &anvilhub,
+            &github,
+            "aarch64-unknown-linux-gnu",
+        )
+        .expect("github fallback when target missing");
+        assert_eq!(meta.source, runtime::update_check::UpdateSource::Github);
+        assert!(
+            meta.binary_url.ends_with("anvil-aarch64-unknown-linux-gnu"),
+            "fallback URL must point at requested target, got {}",
+            meta.binary_url
+        );
     }
 }

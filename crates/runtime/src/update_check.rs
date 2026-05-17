@@ -219,6 +219,124 @@ pub fn fetch_latest_with_source_from(
     Some((v, UpdateSource::Github))
 }
 
+// ── Full release metadata (version + binary URL) ─────────────────────────────
+
+/// Metadata about a release, produced by `fetch_release_metadata`. Carries the
+/// version, the original tag (with `v` prefix where applicable), the chosen
+/// binary download URL, and which upstream produced the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseMetadata {
+    /// Semver version string, no `v` prefix.
+    pub version: String,
+    /// Git tag as it appears in the release, e.g. `v2.2.16`.
+    pub tag: String,
+    /// Direct download URL for the binary matching the requested target.
+    pub binary_url: String,
+    /// Which upstream produced this answer.
+    pub source: UpdateSource,
+}
+
+/// Parse the `latest_version` + `binaries.<target>` pair out of an anvilhub
+/// `/api/version` body.
+///
+/// The anvilhub schema keys `binaries` by rust target triple. For historical
+/// reasons the Windows entry may carry a `.exe` suffix in the key
+/// (`x86_64-pc-windows-gnu.exe`), so we look up both `target` and `target.exe`.
+/// Returns `None` if either the version field or the requested target's URL is
+/// missing.
+fn parse_anvilhub_release(body: &str, target: &str) -> Option<(String, String)> {
+    let version = parse_anvilhub_version(body)?;
+
+    // Naive scan of the `binaries` block. Avoids pulling a full JSON parse on
+    // the hot path while staying tolerant of key ordering.
+    let binaries = body.split("\"binaries\"").nth(1)?;
+    let candidates = [target.to_string(), format!("{target}.exe")];
+    for key in &candidates {
+        let needle = format!("\"{key}\"");
+        if let Some(after) = binaries.split(&needle).nth(1) {
+            // After the key we expect `: "..."`. Find the URL value.
+            let url = after.split('"').nth(1)?;
+            if !url.is_empty() {
+                return Some((version, url.to_string()));
+            }
+        }
+    }
+    None
+}
+
+/// Construct the canonical GitHub Releases asset URL for the given tag and
+/// rust target triple. Appends `.exe` for Windows targets, matching
+/// `scripts/release.sh` output.
+fn github_asset_url(tag: &str, target: &str) -> String {
+    let ext = if target.contains("windows") { ".exe" } else { "" };
+    format!(
+        "https://github.com/culpur/anvil/releases/download/{tag}/anvil-{target}{ext}"
+    )
+}
+
+/// Fetch the full release metadata for `target` from a custom anvilhub URL.
+/// Returns `None` when the probe fails, the body is missing `latest_version`,
+/// or no matching key is present in `binaries`.
+pub fn fetch_release_metadata_from_anvilhub_url(
+    url: &str,
+    target: &str,
+) -> Option<ReleaseMetadata> {
+    let body = curl_get(url)?;
+    let (version, binary_url) = parse_anvilhub_release(&body, target)?;
+    // anvilhub doesn't currently echo back the git tag, but we can reconstruct
+    // it as `v<version>` — that's how every Anvil release is tagged.
+    let tag = format!("v{version}");
+    Some(ReleaseMetadata {
+        version,
+        tag,
+        binary_url,
+        source: UpdateSource::Anvilhub,
+    })
+}
+
+/// Fetch the full release metadata for `target` from a custom GitHub Releases
+/// URL. Returns `None` when the probe fails or the body is missing
+/// `tag_name`. The binary URL is synthesised from the tag using the
+/// `release.sh`-canonical asset naming.
+pub fn fetch_release_metadata_from_github_url(
+    url: &str,
+    target: &str,
+) -> Option<ReleaseMetadata> {
+    let body = curl_get(url)?;
+    let version = parse_github_tag(&body)?;
+    let tag = format!("v{version}");
+    let binary_url = github_asset_url(&tag, target);
+    Some(ReleaseMetadata {
+        version,
+        tag,
+        binary_url,
+        source: UpdateSource::Github,
+    })
+}
+
+/// Test-friendly variant of `fetch_release_metadata` taking explicit endpoints.
+/// anvilhub is tried first; on any failure (network, parse, missing
+/// `binaries.<target>` key) GitHub is tried.
+pub fn fetch_release_metadata_from(
+    anvilhub_url: &str,
+    github_url: &str,
+    target: &str,
+) -> Option<ReleaseMetadata> {
+    if let Some(m) = fetch_release_metadata_from_anvilhub_url(anvilhub_url, target) {
+        return Some(m);
+    }
+    fetch_release_metadata_from_github_url(github_url, target)
+}
+
+/// Probe the upstream stack and return full release metadata for `target`.
+///
+/// Order: anvilhub `/api/version` (preferred — returns exact asset filenames)
+/// → GitHub `/releases/latest` (fallback — URL is reconstructed). Returns
+/// `None` when both probes fail.
+pub fn fetch_release_metadata(target: &str) -> Option<ReleaseMetadata> {
+    fetch_release_metadata_from(ANVILHUB_VERSION_URL, GITHUB_RELEASES_URL, target)
+}
+
 /// Return the latest version string when newer than `current_version`, else `None`.
 ///
 /// Uses the on-disk cache when fresh (< 24h old); otherwise probes the upstream
@@ -377,5 +495,139 @@ mod tests {
             fetch_latest_with_source_from(&anvilhub_url, &github_url).expect("got a result");
         assert_eq!(version, "2.4.8");
         assert_eq!(source, UpdateSource::Github);
+    }
+
+    // ── release-metadata probe (anvilhub → GitHub) ─────────────────────────
+
+    /// Live-shape anvilhub `/api/version` body matching the prod schema
+    /// (`{"latest_version":..., "binaries": {target: url, ...}}`). The Windows
+    /// key carries `.exe` to mirror the prod quirk fixed by #610.
+    const ANVILHUB_BODY: &str = r#"{
+        "latest_version": "2.4.7",
+        "released_at": "2026-05-17T00:00:00Z",
+        "binaries": {
+            "aarch64-apple-darwin": "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-aarch64-apple-darwin",
+            "x86_64-apple-darwin": "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-apple-darwin",
+            "x86_64-unknown-linux-gnu": "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu": "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-gnu.exe": "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-pc-windows-gnu.exe"
+        }
+    }"#;
+
+    #[test]
+    fn release_metadata_prefers_anvilhub_when_200() {
+        let anvilhub_url = spawn_one_shot_http("200 OK", ANVILHUB_BODY);
+        let github_url = "http://127.0.0.1:1/"; // unroutable
+        let meta = fetch_release_metadata_from(
+            &anvilhub_url,
+            github_url,
+            "x86_64-unknown-linux-gnu",
+        )
+        .expect("anvilhub must answer");
+        assert_eq!(meta.version, "2.4.7");
+        assert_eq!(meta.tag, "v2.4.7");
+        assert_eq!(meta.source, UpdateSource::Anvilhub);
+        assert_eq!(
+            meta.binary_url,
+            "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn release_metadata_windows_key_with_exe_suffix() {
+        // Prod anvilhub keys the Windows entry as `x86_64-pc-windows-gnu.exe`.
+        // Callers pass the bare target triple — the lookup must try the
+        // `.exe`-suffixed form too.
+        let anvilhub_url = spawn_one_shot_http("200 OK", ANVILHUB_BODY);
+        let github_url = "http://127.0.0.1:1/";
+        let meta = fetch_release_metadata_from(
+            &anvilhub_url,
+            github_url,
+            "x86_64-pc-windows-gnu",
+        )
+        .expect("windows lookup must succeed via .exe-suffixed key");
+        assert_eq!(meta.source, UpdateSource::Anvilhub);
+        assert!(
+            meta.binary_url.ends_with("anvil-x86_64-pc-windows-gnu.exe"),
+            "windows URL must point at .exe asset, got {}",
+            meta.binary_url
+        );
+    }
+
+    #[test]
+    fn release_metadata_falls_back_to_github_when_anvilhub_500() {
+        let anvilhub_url = spawn_one_shot_http("500 Internal Server Error", "boom");
+        let github_url = spawn_one_shot_http("200 OK", "{\"tag_name\":\"v2.4.8\"}");
+        let meta = fetch_release_metadata_from(
+            &anvilhub_url,
+            &github_url,
+            "x86_64-unknown-linux-gnu",
+        )
+        .expect("github fallback must answer");
+        assert_eq!(meta.version, "2.4.8");
+        assert_eq!(meta.tag, "v2.4.8");
+        assert_eq!(meta.source, UpdateSource::Github);
+        assert_eq!(
+            meta.binary_url,
+            "https://github.com/culpur/anvil/releases/download/v2.4.8/anvil-x86_64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn release_metadata_falls_back_to_github_when_anvilhub_missing_target_key() {
+        // anvilhub 200 but the requested target is not in `binaries` →
+        // treat as a miss and fall through to GitHub. (Prevents serving a
+        // stale anvilhub when a new platform ships in GitHub Releases first.)
+        let body_no_target = r#"{
+            "latest_version": "2.4.7",
+            "binaries": { "x86_64-apple-darwin": "https://example/anvil-x86_64-apple-darwin" }
+        }"#;
+        let anvilhub_url = spawn_one_shot_http("200 OK", body_no_target);
+        let github_url = spawn_one_shot_http("200 OK", "{\"tag_name\":\"v2.4.7\"}");
+        let meta = fetch_release_metadata_from(
+            &anvilhub_url,
+            &github_url,
+            "aarch64-unknown-linux-gnu",
+        )
+        .expect("github fallback must answer");
+        assert_eq!(meta.source, UpdateSource::Github);
+        assert_eq!(
+            meta.binary_url,
+            "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-aarch64-unknown-linux-gnu"
+        );
+    }
+
+    #[test]
+    fn release_metadata_github_synthesises_exe_for_windows() {
+        // GitHub fallback path: we reconstruct the URL ourselves and MUST add
+        // `.exe` for Windows targets to match release.sh's asset naming.
+        let anvilhub_url = "http://127.0.0.1:1/"; // unroutable → skip anvilhub
+        let github_url = spawn_one_shot_http("200 OK", "{\"tag_name\":\"v2.4.9\"}");
+        let meta = fetch_release_metadata_from(
+            anvilhub_url,
+            &github_url,
+            "x86_64-pc-windows-gnu",
+        )
+        .expect("github must answer");
+        assert_eq!(meta.source, UpdateSource::Github);
+        assert!(
+            meta.binary_url.ends_with("anvil-x86_64-pc-windows-gnu.exe"),
+            "github fallback windows URL must end in .exe, got {}",
+            meta.binary_url
+        );
+    }
+
+    #[test]
+    fn github_asset_url_appends_exe_only_for_windows() {
+        assert_eq!(
+            github_asset_url("v2.4.7", "x86_64-unknown-linux-gnu"),
+            "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-unknown-linux-gnu"
+        );
+        assert_eq!(
+            github_asset_url("v2.4.7", "x86_64-pc-windows-gnu"),
+            "https://github.com/culpur/anvil/releases/download/v2.4.7/anvil-x86_64-pc-windows-gnu.exe"
+        );
+        // Hypothetical other windows triple — must still .exe-ify.
+        assert!(github_asset_url("v2.4.7", "aarch64-pc-windows-msvc").ends_with(".exe"));
     }
 }
