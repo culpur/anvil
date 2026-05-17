@@ -175,8 +175,12 @@ pub enum TuiLayoutKind {
 
 impl Default for TuiLayoutConfig {
     fn default() -> Self {
-        // Upgrader default: classic + tabs is pixel-identical to pre-v2.2.16.
-        Self { kind: TuiLayoutKind::Classic, tabs: true }
+        // v2.2.16: vertical-split + tabs is the new default for fresh installs
+        // and for upgraders who never set `tui_layout` explicitly.  Users who
+        // had an explicit `tui_layout` in settings.json keep their value
+        // (migration-safe — `parse_optional_tui_layout_config` only falls back
+        // to this default when the key is absent).
+        Self { kind: TuiLayoutKind::VerticalSplit, tabs: true }
     }
 }
 
@@ -186,9 +190,10 @@ impl Default for TuiLayoutConfig {
 /// config and `tui_layout_intro_seen` is false.  After displaying it, the
 /// caller writes `tui_layout_intro_seen: true` to suppress future displays.
 pub const TUI_LAYOUT_INTRO_TOAST: &str =
-    "◆ Anvil v2.2.16 introduces TUI layouts. You're on Classic + Tabs \
-     (current behaviour). Try /layout list — 8 variants. \
-     /layout vertical-split is the new rail+deck view worth trying.";
+    "◆ Anvil v2.2.16 introduces TUI layouts. You're on Vertical Split + Tabs \
+     (the new default — persistent left rail, swappable right deck). \
+     Try /layout list — 8 variants. /layout classic-tabs restores pre-v2.2.16 \
+     single-deck rendering.";
 
 /// Returns `true` when the one-time v2.2.16 layout toast should be shown.
 ///
@@ -944,7 +949,7 @@ fn parse_optional_tui_layout_config(root: &JsonValue) -> TuiLayoutConfig {
             "vertical-split" | "vertical-split-tabs" => TuiLayoutKind::VerticalSplit,
             "three-pane" | "three-pane-tabs" => TuiLayoutKind::ThreePane,
             "journal" | "journal-tabs" => TuiLayoutKind::Journal,
-            _ => TuiLayoutKind::Classic, // unknown kind → default (classic)
+            _ => TuiLayoutKind::VerticalSplit, // v2.2.16: unknown kind → default (vertical-split)
         };
         let tabs = layout_obj
             .get("tabs")
@@ -2109,11 +2114,34 @@ mod tests {
     // ── TuiLayoutConfig tests (v2.2.16) ──────────────────────────────────────
 
     #[test]
-    fn tui_layout_default_is_classic_tabs() {
+    fn tui_layout_default_is_vertical_split_tabs() {
         use crate::config::{TuiLayoutConfig, TuiLayoutKind};
         let cfg = TuiLayoutConfig::default();
-        assert_eq!(cfg.kind, TuiLayoutKind::Classic, "default kind must be Classic (upgrader compat)");
+        assert_eq!(
+            cfg.kind,
+            TuiLayoutKind::VerticalSplit,
+            "v2.2.16 default kind must be VerticalSplit"
+        );
         assert!(cfg.tabs, "default should have tabs: true");
+    }
+
+    #[test]
+    fn tui_layout_explicit_classic_in_settings_is_preserved() {
+        // Migration safety: users with explicit `tui_layout: "classic-tabs"`
+        // in settings.json must keep their value — the v2.2.16 default flip
+        // only applies when the key is absent.
+        use crate::config::TuiLayoutKind;
+        let json = crate::json::JsonValue::Object({
+            let mut m = std::collections::BTreeMap::new();
+            m.insert(
+                "tui_layout".to_string(),
+                crate::json::JsonValue::String("classic-tabs".to_string()),
+            );
+            m
+        });
+        let cfg = super::parse_optional_tui_layout_config(&json);
+        assert_eq!(cfg.kind, TuiLayoutKind::Classic, "explicit classic preserved");
+        assert!(cfg.tabs);
     }
 
     #[test]
@@ -2180,7 +2208,11 @@ mod tests {
         let json = crate::json::JsonValue::Object(std::collections::BTreeMap::new());
         let cfg = super::parse_optional_tui_layout_config(&json);
         assert_eq!(cfg, TuiLayoutConfig::default());
-        assert_eq!(cfg.kind, TuiLayoutKind::Classic, "absent tui_layout must default to Classic");
+        assert_eq!(
+            cfg.kind,
+            TuiLayoutKind::VerticalSplit,
+            "v2.2.16: absent tui_layout must default to VerticalSplit"
+        );
         assert!(cfg.tabs);
     }
 
