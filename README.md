@@ -77,9 +77,17 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
-## What's new in v2.2.15 &mdash; The largest release in Anvil's history
+## What's new in v2.2.16 &mdash; The TUI Layout System and the largest release in Anvil's history
 
-**121 commits over v2.2.13. The provider catalog grows 6x. Cursor lands as a first-class agent surface. `/model` reaches across every configured provider in one TAB-completable list. Two foundational arcs that started in v2.2.5 finish here.**
+**v2.2.15 and v2.2.16 land as a single unified arc &mdash; 130+ commits since v2.2.13.** The TUI now has four selectable layout architectures with a new vertical-split rail as the default. The provider catalog grew six-fold. The seven-layer memory system from v2.2.5 cohesion-tests end-to-end. OAuth tokens stay alive in the background. Ctrl+C interrupts every provider mid-stream. Pasting images, documents, and text follows CC parity exactly. Two foundational arcs that started in v2.2.5 finish here.
+
+### TUI Layout System
+
+Four selectable architectures &times; tabs on/off = **eight live-switchable layouts**. The new default &mdash; **Vertical Split** &mdash; gives you a persistent left rail and a swappable right deck. The rail owns all the chrome: sessions, agents, status, **the 7-layer MEMORY surface**, model, permissions, context bar, keybinds, build, optional update banner. The right deck is conversation and input only.
+
+Classic, Three-Pane, and Journal stay one keystroke away. `/layout <alias>` switches the active tab; `/layout <alias> --global` writes the new default to `~/.anvil/config.json` for every new tab. `/layout list` shows what's available, `/layout reset` returns to the wizard pick. State survives the switch &mdash; log, input, model, in-flight turns &mdash; and the terminal clears so cells from the previous renderer don't bleed through.
+
+The MEMORY surface shows live counts for all seven memory layers (working / episodic / semantic / procedural / reflective / long-term / permission decisions) plus QMD archive status, polled every 30 seconds. Classic layout also gets an inline 7-layer MEMORY block above the input on terminals &ge; 30 rows tall. The split anchor is mouse-draggable. Migration is safe: anyone with an explicit `tui_layout` setting keeps it, and upgraders without the key see the new default with a one-time intro toast.
 
 ### Provider catalog: 5 &rarr; 31
 
@@ -109,19 +117,39 @@ Cursor's public Cloud Agents API is repo-bound and uses a different UX than a ty
 
 ### `/model` cross-provider unified picker
 
-`/model<TAB>` now enumerates **every configured provider's models in one list**, provider-prefixed (`anthropic/claude-4.5-sonnet`, `groq/llama-3.3-70b`, `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0`, `cursor/claude-4-sonnet-thinking`, `ollama/qwen-coder`, ...). Picking a model performs an **atomic switch** &mdash; provider routing, system prompt identity, and TUI chrome all update together. Lists are live-fetched from each provider's `/models` endpoint (cached per session). Unconfigured providers are excluded from the picker.
+`/model<TAB>` enumerates **every configured provider's models in one list**, provider-prefixed (`anthropic/claude-4.5-sonnet`, `groq/llama-3.3-70b`, `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0`, `cursor/claude-4-sonnet-thinking`, `ollama/qwen-coder`, ...). Picking a model performs an **atomic switch** &mdash; provider routing, system prompt identity, and TUI chrome all update together. Lists are live-fetched from each provider's `/models` endpoint (cached per session). Unconfigured providers are excluded from the picker.
 
 ### Memory Cohesion Arc &mdash; completing v2.2.5
 
-The seven-layer memory system from v2.2.5 (Sensory / Working / Episodic / Semantic / Procedural / Reflective / Long-term) finally cohesion-tests end-to-end. Retrieval-order block in the system prompt, `WorkingMemorySnapshot` as `Vec<PromptSection>`, `PermissionMemory` wired into the permission gate, `/file-cache` real handler replacing the stub, egress allowlist wired into settings + `/policy view`, `/memory why` actually injecting daily summaries into the prompt.
+The seven-layer memory system from v2.2.5 (Sensory / Working / Episodic / Semantic / Procedural / Reflective / Long-term) cohesion-tests end-to-end. Retrieval-order block in the system prompt, `WorkingMemorySnapshot` as `Vec<PromptSection>`, `PermissionMemory` wired into the permission gate, `/file-cache` real handler replacing the stub, egress allowlist wired into settings + `/policy view`, `/memory why` actually injecting daily summaries into the prompt.
 
 ### Capability Cohesion Arc &mdash; 8 axes, enforced at build time
 
-Every Anvil capability now meets an 8-axis contract: **definition / registration / completion / handler / dispatch / rendering / permission gate / OTel + tests**. The cheap-drift gate enforces this at workspace build time &mdash; `every_slash_command_variant_has_a_spec` blocks bidirectional drift. Slash dispatch is unified at one site. Stub messages are banned.
+Every Anvil capability meets an 8-axis contract: **definition / registration / completion / handler / dispatch / rendering / permission gate / OTel + tests**. The cheap-drift gate enforces this at workspace build time &mdash; `every_slash_command_variant_has_a_spec` blocks bidirectional drift. Slash dispatch is unified at one site. Stub messages are banned.
 
 ### CC&rarr;Anvil migration
 
 `anvil import claude-code` brings your prior assistant's investment forward verbatim with provenance frontmatter: memory entries get `imported_from` stamps, project instruction files get merge semantics that never clobber existing files, settings get conflict detection, skills get collision handling. Past sessions (up to ~1,800 JSONL files, ~1&nbsp;GB) can be optionally summarized via your configured provider into daily records. The day-2 command `anvil memory clean` rewrites imported entries through a configurable LLM and detects duplicate-meaning entries via Jaccard similarity. The first-run setup wizard offers migration as an opt-in step.
+
+### OAuth keep-alive
+
+A strict RFC 6749 token-exchange parser captures `scope` and `expires_in` on every refresh; legacy credentials with missing metadata are auto-migrated on startup. Three layers of keep-alive run in tandem: a 5-minute safety window prevents mid-flight expiry, a transparent 1-bounded retry on HTTP 401 reissues the failed request, and a background ticker proactively refreshes between `(expires_at - now) / 2` (clamped 60s &ndash; 30min). Refresh failures surface a TUI banner instead of crashing the session.
+
+### Paste parity &mdash; text, images, documents
+
+Text, image, and document content blocks all route through one consolidated paste handler. File-path detection runs at both bracketed-paste **and** submit-time, which covers the macOS Terminal case where Cmd+V from Finder arrives as keystrokes rather than a paste event. Long pastes (more than 6 lines or 400 chars) collapse to a `[Pasted text #N +X lines, Y chars]` placeholder in history while the full content is preserved in the request. PDFs and Office docs route to first-class Anthropic `Document` content blocks with a 32&nbsp;MB cap. Drag-and-drop from Finder is detected by a keystroke-burst heuristic (20+ chars in 100ms followed by 50ms idle). Mouse capture is **off by default** so terminal-native click-drag selection and Cmd+C copy just work.
+
+### Ctrl+C aborts mid-stream &mdash; every provider
+
+A single `tokio::select!` in `DefaultRuntimeClient::stream` aborts the blocking HTTP read on cancel, dropping the reqwest future so the underlying TCP connection tears down immediately. One Ctrl+C, one cancel message, no further tokens. Anthropic, OpenAI, xAI, Gemini, Copilot, Cursor, Ollama &mdash; all seven providers covered by one fix, end-to-end verified via wiremock integration tests.
+
+### In-TUI modal OAuth login
+
+`/provider <name> login` no longer drops to the CLI for the OAuth dance. A six-screen modal handles auth-method picker, OAuth callback, API-key paste, multi-field setup, instructions, and result. Eliminates the terminal-state corruption the drop-to-CLI flow used to leave behind.
+
+### AnvilHub update probe
+
+The update check now hits `anvilhub.culpur.net/api/version` first (with a 24-hour on-disk cache at `~/.anvil/update_check.json`) and falls back to GitHub Releases on any non-200. The source is recorded in the cache so you can tell which probe served the result. The rail's `&uarr; update available` banner appears when the response is greater than the running build.
 
 ### Seven platforms
 
