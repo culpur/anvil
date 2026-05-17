@@ -5,10 +5,9 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use runtime::{
-    load_oauth_credentials, save_oauth_credentials, EffortLevel,
-    OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest,
+    load_oauth_credentials, parse_token_response_strict, save_oauth_credentials, EffortLevel,
+    OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenResponse,
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::ApiError;
@@ -95,12 +94,22 @@ impl AuthSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// In-memory representation of an exchanged OAuth bearer for the Anthropic
+/// provider.  Built from `runtime::OAuthTokenSet` after the strict wire
+/// parser (`runtime::parse_token_response_strict`) accepts the response.
+///
+/// IMPORTANT: this struct deliberately does NOT derive `Deserialize`.
+/// Direct serde-from-wire was the root cause of task #595 — Anthropic's
+/// token endpoint returns `scope` (string) and `expires_in` (seconds), not
+/// `scopes` / `expires_at`, so the lax deserialize silently dropped both
+/// fields and persisted a half-broken token that Anthropic's gate then
+/// rejected as 401 "Invalid authentication credentials".  Always parse
+/// through `parse_token_response_strict`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OAuthTokenSet {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_at: Option<u64>,
-    #[serde(default)]
     pub scopes: Vec<String>,
 }
 
@@ -284,6 +293,19 @@ impl AnvilApiClient {
         })
     }
 
+    /// Exchange an authorization code for a bearer token at `config.token_url`.
+    ///
+    /// Task #595: parses the wire response (`scope` string, `expires_in`
+    /// seconds) through `runtime::parse_token_response_strict`, which:
+    ///   * rejects the call with `ApiError::Auth(...)` if `scope` is missing
+    ///     or empty, OR `expires_in` is missing — Anthropic Max-plan gate
+    ///     requires both as token metadata, and a half-token here is the
+    ///     root cause of 401 "Invalid authentication credentials" on the
+    ///     very first /v1/messages call;
+    ///   * computes `expires_at = now() + expires_in`;
+    ///   * splits `scope` on whitespace into `Vec<String>`.
+    ///
+    /// Parity reference: `crates/runtime/src/oauth_fixtures/anthropic_token_response.json`.
     pub async fn exchange_oauth_code(
         &self,
         config: &OAuthConfig,
@@ -298,12 +320,22 @@ impl AnvilApiClient {
             .await
             .map_err(ApiError::from)?;
         let response = expect_success(response).await?;
-        response
-            .json::<OAuthTokenSet>()
+        let wire = response
+            .json::<OAuthTokenResponse>()
             .await
-            .map_err(ApiError::from)
+            .map_err(ApiError::from)?;
+        let token_set = parse_token_response_strict(&wire)
+            .map_err(ApiError::Auth)?;
+        Ok(OAuthTokenSet {
+            access_token: token_set.access_token,
+            refresh_token: token_set.refresh_token,
+            expires_at: token_set.expires_at,
+            scopes: token_set.scopes,
+        })
     }
 
+    /// Refresh an OAuth bearer using a saved refresh token.  Same strict
+    /// parsing contract as `exchange_oauth_code` — see that doc-comment.
     pub async fn refresh_oauth_token(
         &self,
         config: &OAuthConfig,
@@ -318,10 +350,18 @@ impl AnvilApiClient {
             .await
             .map_err(ApiError::from)?;
         let response = expect_success(response).await?;
-        response
-            .json::<OAuthTokenSet>()
+        let wire = response
+            .json::<OAuthTokenResponse>()
             .await
-            .map_err(ApiError::from)
+            .map_err(ApiError::from)?;
+        let token_set = parse_token_response_strict(&wire)
+            .map_err(ApiError::Auth)?;
+        Ok(OAuthTokenSet {
+            access_token: token_set.access_token,
+            refresh_token: token_set.refresh_token,
+            expires_at: token_set.expires_at,
+            scopes: token_set.scopes,
+        })
     }
 
     async fn send_with_retry(
@@ -1060,8 +1100,14 @@ mod tests {
         })
         .expect("save expired oauth credentials");
 
+        // Task #595: mock the wire shape Anthropic actually sends — `scope`
+        // (string, space-separated) and `expires_in` (seconds), NOT the
+        // misshapen `scopes`/`expires_at` keys the previous fixture used.
+        // Old fixture passed only because the lax-deserialize-into-OAuthTokenSet
+        // path silently dropped the metadata; with the strict parser this
+        // now exercises the real wire contract.
         let token_url = spawn_token_server(
-            "{\"access_token\":\"refreshed-token\",\"refresh_token\":\"fresh-refresh\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
+            "{\"access_token\":\"refreshed-token\",\"refresh_token\":\"fresh-refresh\",\"expires_in\":3600,\"scope\":\"scope:a\",\"token_type\":\"Bearer\"}",
         );
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
             .expect("resolve refreshed token")
@@ -1148,8 +1194,10 @@ mod tests {
         })
         .expect("save expired oauth credentials");
 
+        // Task #595: wire shape — `scope` (string) + `expires_in` (seconds).
+        // refresh_token intentionally omitted to exercise the preserve path.
         let token_url = spawn_token_server(
-            "{\"access_token\":\"refreshed-token\",\"expires_at\":9999999999,\"scopes\":[\"scope:a\"]}",
+            "{\"access_token\":\"refreshed-token\",\"expires_in\":3600,\"scope\":\"scope:a\",\"token_type\":\"Bearer\"}",
         );
         let resolved = resolve_saved_oauth_token(&sample_oauth_config(token_url))
             .expect("resolve refreshed token")

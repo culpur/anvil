@@ -1,0 +1,8 @@
+{
+  "_comment": "Canonical Anthropic /v1/oauth/token response shape. RFC 6749 token endpoint format. Anvil's exchange_oauth_code parser MUST handle all required fields (scope, expires_in) or refuse to write credentials. Mismatched parser is the root cause of task #595: bearer accepted by Anvil but Anthropic rejects with 401 Invalid authentication credentials because stored token metadata is empty. Daily CC parity check: diff this fixture against current Claude Code (~/.claude/projects/-Users-soulofall-projects/memory/feedback-claude-code-parity.md) and Anvil's current parser.",
+  "token_type": "Bearer",
+  "access_token": "sk-ant-oat01-EXAMPLE_ACCESS_TOKEN_108_CHARS_OF_OPAQUE_OAUTH_BEARER_VALUE_HERE_FOR_DOCUMENTATION_ONLY_AAAAAA",
+  "refresh_token": "sk-ant-ort01-EXAMPLE_REFRESH_TOKEN_108_CHARS_OF_OPAQUE_OAUTH_REFRESH_VALUE_HERE_FOR_DOCUMENTATION_ONLY_BBB",
+  "expires_in": 3600,
+  "scope": "user:profile user:inference user:sessions:claude_code"
+}

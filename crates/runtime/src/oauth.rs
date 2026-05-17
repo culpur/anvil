@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -18,6 +19,212 @@ pub struct OAuthTokenSet {
     pub refresh_token: Option<String>,
     pub expires_at: Option<u64>,
     pub scopes: Vec<String>,
+}
+
+/// Wire-format token response from an OAuth `/oauth/token` endpoint, per
+/// RFC 6749 §5.1.  Anthropic's token endpoint uses this exact shape:
+///
+/// ```json
+/// {
+///   "token_type": "Bearer",
+///   "access_token": "sk-ant-oat01-...",
+///   "refresh_token": "sk-ant-ort01-...",
+///   "expires_in": 3600,
+///   "scope": "user:profile user:inference user:sessions:claude_code"
+/// }
+/// ```
+///
+/// `expires_in` is in seconds (relative); the caller must compute
+/// `expires_at = unix_now() + expires_in`. `scope` is a space-separated
+/// string of scope names. The canonical Anthropic shape lives in the
+/// parity fixture at `crates/runtime/src/oauth_fixtures/anthropic_token_response.json`
+/// — diff it against current Claude Code / Anthropic responses during the
+/// daily parity audit (see `feedback-claude-code-parity.md`).
+///
+/// We make every metadata field except `access_token` `Option`-typed so a
+/// deserialize failure on a misshapen response surfaces as a clear `Err`
+/// from `parse_token_response_strict`, NOT as a silent half-token write.
+/// Task #595: this is the regression-critical path. Empty scopes + missing
+/// expires_at = 401 "Invalid authentication credentials" from the Anthropic
+/// Max-plan gate even when the bearer is wire-valid.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthTokenResponse {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Seconds until expiry, as returned by the token endpoint.  Required by
+    /// `parse_token_response_strict`; absence is a structural error.
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+    /// Space-separated scope list as returned by the token endpoint.
+    /// Required by `parse_token_response_strict`; absence or empty is a
+    /// structural error.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// `Bearer` for Anthropic.  Accepted for forward compat; not enforced.
+    #[serde(default)]
+    pub token_type: Option<String>,
+}
+
+/// Strictly parse a `/oauth/token` JSON body into an `OAuthTokenSet`.
+///
+/// Rejects responses where `scope` is missing/empty OR `expires_in` is
+/// missing.  Both fields are mandatory per Anthropic's Max-plan OAuth gate
+/// — without them the stored bearer is rejected at the first `/v1/messages`
+/// call with HTTP 401 `authentication_error: Invalid authentication
+/// credentials`.  Returns the canonical `OAuthTokenSet` with
+/// `expires_at = now() + expires_in` and `scopes` as a `Vec<String>` of
+/// whitespace-split tokens.
+///
+/// On error, returns a human-readable message; the caller MUST surface this
+/// to the user and refuse to persist credentials.  See task #595 + memory
+/// `feedback-anvil-max-plan-oauth-gate.md` (THIRD failure mode).
+pub fn parse_token_response_strict(
+    response: &OAuthTokenResponse,
+) -> Result<OAuthTokenSet, String> {
+    parse_token_response_strict_at(response, unix_now_seconds())
+}
+
+/// Deterministic variant of `parse_token_response_strict` that takes the
+/// "now" timestamp as a parameter — used by the regression tests so they
+/// don't depend on wall-clock time.
+pub fn parse_token_response_strict_at(
+    response: &OAuthTokenResponse,
+    now_unix: u64,
+) -> Result<OAuthTokenSet, String> {
+    let expires_in = response.expires_in.ok_or_else(|| {
+        "OAuth token-exchange response was malformed: missing `expires_in` \
+         (RFC 6749 §5.1 mandates this field). Please retry `/provider \
+         anthropic login`."
+            .to_string()
+    })?;
+    let scope_str = response.scope.as_deref().unwrap_or("").trim();
+    if scope_str.is_empty() {
+        return Err(
+            "OAuth token-exchange response was malformed: missing or empty \
+             `scope` (RFC 6749 §5.1 / Anthropic's Max-plan gate require \
+             non-empty scopes). Please retry `/provider anthropic login`."
+                .to_string(),
+        );
+    }
+    let scopes: Vec<String> = scope_str
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    if scopes.is_empty() {
+        return Err(
+            "OAuth token-exchange response was malformed: scope split to empty list. \
+             Please retry `/provider anthropic login`."
+                .to_string(),
+        );
+    }
+    let expires_at = now_unix.saturating_add(expires_in);
+    Ok(OAuthTokenSet {
+        access_token: response.access_token.clone(),
+        refresh_token: response.refresh_token.clone(),
+        expires_at: Some(expires_at),
+        scopes,
+    })
+}
+
+/// Current unix timestamp in seconds.  Used by `parse_token_response_strict`
+/// and `save_oauth_credentials` (for the migration path on startup).
+#[must_use]
+pub fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Outcome of validating a saved Anthropic OAuth credential at startup.
+///
+/// Task #595 deliverable #4: surface incomplete credentials BEFORE the user
+/// sends their first prompt and discovers the 401.  Task #595 deliverable
+/// #7: optionally migrate the broken credential in place with documented
+/// default scopes + a short expires_at so the next call triggers refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnthropicCredentialStatus {
+    /// No saved OAuth credential (user is on API key or hasn't logged in).
+    Absent,
+    /// Saved credential has non-empty scopes AND a present expires_at.
+    Ok,
+    /// Saved credential has scopes=[] or expires_at=None.  Must be migrated
+    /// or the user must re-authenticate.
+    Incomplete {
+        scopes_empty: bool,
+        expires_at_missing: bool,
+    },
+}
+
+#[must_use]
+pub fn validate_anthropic_credential(token: Option<&OAuthTokenSet>) -> AnthropicCredentialStatus {
+    let Some(token) = token else {
+        return AnthropicCredentialStatus::Absent;
+    };
+    if !token.access_token.starts_with("sk-ant-oat01-") {
+        // Only Anthropic Max-plan tokens are subject to the metadata gate.
+        // Tokens from other providers (or future shapes) get a pass.
+        return AnthropicCredentialStatus::Ok;
+    }
+    let scopes_empty = token.scopes.is_empty();
+    let expires_at_missing = token.expires_at.is_none();
+    if scopes_empty || expires_at_missing {
+        AnthropicCredentialStatus::Incomplete {
+            scopes_empty,
+            expires_at_missing,
+        }
+    } else {
+        AnthropicCredentialStatus::Ok
+    }
+}
+
+/// One-shot migration: if the saved Anthropic OAuth credential has empty
+/// scopes and/or missing expires_at but a wire-valid `sk-ant-oat01-` access
+/// token, transparently populate scopes with the documented default set
+/// (`user:profile user:inference user:sessions:claude_code`) and set
+/// expires_at to `now + 60s` so the very next `/v1/messages` call triggers
+/// the refresh path (which re-fetches a wire-valid response).  Returns true
+/// if a migration was applied.
+///
+/// Task #595 deliverable #7.  This unblocks users with the broken
+/// credentials.json from the v2.2.15/v2.2.16 timeframe without forcing them
+/// to re-OAuth.  Cross-references the documented defaults in
+/// `crates/anvil-cli/src/auth.rs::default_oauth_config`.
+pub fn migrate_incomplete_anthropic_credential() -> io::Result<bool> {
+    let Some(mut token) = load_oauth_credentials()? else {
+        return Ok(false);
+    };
+    if !matches!(
+        validate_anthropic_credential(Some(&token)),
+        AnthropicCredentialStatus::Incomplete { .. }
+    ) {
+        return Ok(false);
+    }
+    if !token.access_token.starts_with("sk-ant-oat01-") {
+        return Ok(false);
+    }
+    let mut changed = false;
+    if token.scopes.is_empty() {
+        token.scopes = vec![
+            "user:profile".to_string(),
+            "user:inference".to_string(),
+            "user:sessions:claude_code".to_string(),
+        ];
+        changed = true;
+    }
+    if token.expires_at.is_none() {
+        // Force the refresh-on-first-use path: 60 seconds in the future is
+        // already considered expired by the refresh resolver (it checks
+        // `expires_at <= now`).  We use 60s rather than the past so a
+        // currently-mid-flight request doesn't trip on a synthetic stale
+        // value; the next turn will trigger refresh.
+        token.expires_at = Some(unix_now_seconds().saturating_add(60));
+        changed = true;
+    }
+    if changed {
+        save_oauth_credentials(&token)?;
+    }
+    Ok(changed)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,6 +533,25 @@ pub fn load_oauth_credentials() -> io::Result<Option<OAuthTokenSet>> {
 }
 
 pub fn save_oauth_credentials(token_set: &OAuthTokenSet) -> io::Result<()> {
+    // Task #595 deliverable #3: invariant gate at the write boundary.
+    // An Anthropic Max-plan bearer (sk-ant-oat01-...) with empty scopes OR
+    // missing expires_at is structurally broken and will be rejected by
+    // Anthropic's gate with 401.  Refuse to persist it: debug builds panic
+    // (to catch parser regressions in tests), release builds return Err
+    // so the caller surfaces "OAuth token-exchange response was malformed".
+    if token_set.access_token.starts_with("sk-ant-oat01-") {
+        let scopes_empty = token_set.scopes.is_empty();
+        let expires_at_missing = token_set.expires_at.is_none();
+        if scopes_empty || expires_at_missing {
+            let msg = format!(
+                "refusing to persist incomplete Anthropic OAuth credentials \
+                 (scopes_empty={scopes_empty}, expires_at_missing={expires_at_missing}); \
+                 see task #595 + feedback-anvil-max-plan-oauth-gate.md"
+            );
+            debug_assert!(false, "{msg}");
+            return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+        }
+    }
     let path = credentials_path()?;
     let mut root = read_credentials_root(&path)?;
     root.insert(
@@ -607,10 +833,12 @@ mod tests {
 
     use super::{
         clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-        generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-        parse_oauth_callback_request_target, parse_pasted_oauth_code, save_oauth_credentials,
-        OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest, OAuthTokenExchangeRequest,
-        OAuthTokenSet, StoredOAuthCredentials,
+        generate_state, load_oauth_credentials, loopback_redirect_uri,
+        migrate_incomplete_anthropic_credential, parse_oauth_callback_query,
+        parse_oauth_callback_request_target, parse_pasted_oauth_code,
+        parse_token_response_strict_at, save_oauth_credentials, validate_anthropic_credential,
+        AnthropicCredentialStatus, OAuthAuthorizationRequest, OAuthConfig, OAuthRefreshRequest,
+        OAuthTokenExchangeRequest, OAuthTokenResponse, OAuthTokenSet, StoredOAuthCredentials,
     };
 
     fn sample_config() -> OAuthConfig {
@@ -900,6 +1128,238 @@ mod tests {
         let token_set = result.expect("should return Some token set");
         assert_eq!(token_set.access_token, "live-token");
         assert_eq!(token_set.scopes, Vec::<String>::new());
+
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
+        std::fs::remove_dir_all(config_home).expect("cleanup temp dir");
+    }
+
+    // ─── Task #595 regression tests — strict wire-response parser ────────
+
+    /// Well-formed Anthropic /oauth/token response — matches the parity
+    /// fixture at `crates/runtime/src/oauth_fixtures/anthropic_token_response.json`.
+    #[test]
+    fn strict_parser_accepts_well_formed_anthropic_response() {
+        let wire: OAuthTokenResponse = serde_json::from_str(
+            r#"{
+                "token_type": "Bearer",
+                "access_token": "sk-ant-oat01-AAAA",
+                "refresh_token": "sk-ant-ort01-BBBB",
+                "expires_in": 3600,
+                "scope": "user:profile user:inference user:sessions:claude_code"
+            }"#,
+        )
+        .expect("well-formed wire response should deserialize");
+        let token = parse_token_response_strict_at(&wire, 1_700_000_000)
+            .expect("well-formed response should parse");
+        assert_eq!(token.access_token, "sk-ant-oat01-AAAA");
+        assert_eq!(token.refresh_token.as_deref(), Some("sk-ant-ort01-BBBB"));
+        assert_eq!(token.expires_at, Some(1_700_003_600));
+        assert_eq!(
+            token.scopes,
+            vec![
+                "user:profile".to_string(),
+                "user:inference".to_string(),
+                "user:sessions:claude_code".to_string(),
+            ],
+        );
+        // Both REGRESSION-CRITICAL guards: non-empty scopes + present expires_at.
+        assert!(!token.scopes.is_empty(), "scopes must be populated");
+        assert!(token.expires_at.is_some(), "expires_at must be populated");
+    }
+
+    /// Loads the on-disk fixture verbatim — fails the build if the fixture
+    /// drifts from what the strict parser accepts.  Task #595 deliverable
+    /// #6 (parity fixture).
+    #[test]
+    fn strict_parser_accepts_on_disk_parity_fixture() {
+        let raw = include_str!(
+            "oauth_fixtures/anthropic_token_response.json"
+        );
+        let wire: OAuthTokenResponse =
+            serde_json::from_str(raw).expect("fixture deserializes");
+        let token = parse_token_response_strict_at(&wire, 1_700_000_000)
+            .expect("fixture parses through strict parser");
+        assert!(!token.scopes.is_empty(), "fixture must have non-empty scopes");
+        assert!(token.expires_at.is_some(), "fixture must have expires_at");
+        assert_eq!(token.expires_at, Some(1_700_003_600));
+    }
+
+    /// Missing `scope` → must return Err and NOT produce a half-token.
+    /// This is the negative branch of the regression-critical gate.
+    #[test]
+    fn strict_parser_rejects_response_missing_scope() {
+        let wire: OAuthTokenResponse = serde_json::from_str(
+            r#"{
+                "access_token": "sk-ant-oat01-AAAA",
+                "refresh_token": "sk-ant-ort01-BBBB",
+                "expires_in": 3600
+            }"#,
+        )
+        .expect("wire response should deserialize even without scope");
+        let err = parse_token_response_strict_at(&wire, 1_700_000_000)
+            .expect_err("response without scope must be rejected");
+        assert!(err.contains("scope"), "error message should mention scope: {err}");
+    }
+
+    /// Empty-string `scope` is just as broken — same as the user repro on
+    /// 2026-05-17 12:05 PM where credentials.json had scopes=[].
+    #[test]
+    fn strict_parser_rejects_response_with_empty_scope() {
+        let wire: OAuthTokenResponse = serde_json::from_str(
+            r#"{
+                "access_token": "sk-ant-oat01-AAAA",
+                "expires_in": 3600,
+                "scope": ""
+            }"#,
+        )
+        .expect("deserialize");
+        assert!(parse_token_response_strict_at(&wire, 1_700_000_000).is_err());
+    }
+
+    /// Missing `expires_in` → must Err.
+    #[test]
+    fn strict_parser_rejects_response_missing_expires_in() {
+        let wire: OAuthTokenResponse = serde_json::from_str(
+            r#"{
+                "access_token": "sk-ant-oat01-AAAA",
+                "scope": "user:profile user:inference"
+            }"#,
+        )
+        .expect("deserialize");
+        let err = parse_token_response_strict_at(&wire, 1_700_000_000)
+            .expect_err("response without expires_in must be rejected");
+        assert!(
+            err.contains("expires_in"),
+            "error message should mention expires_in: {err}"
+        );
+    }
+
+    /// `validate_anthropic_credential` classifies each saved-credential
+    /// shape correctly — covers the startup banner branches.
+    #[test]
+    fn validate_anthropic_credential_classifies_correctly() {
+        assert_eq!(
+            validate_anthropic_credential(None),
+            AnthropicCredentialStatus::Absent,
+        );
+        let healthy = OAuthTokenSet {
+            access_token: "sk-ant-oat01-OK".to_string(),
+            refresh_token: Some("sk-ant-ort01-OK".to_string()),
+            expires_at: Some(1_700_000_000),
+            scopes: vec!["user:inference".to_string()],
+        };
+        assert_eq!(
+            validate_anthropic_credential(Some(&healthy)),
+            AnthropicCredentialStatus::Ok,
+        );
+        let broken_both = OAuthTokenSet {
+            access_token: "sk-ant-oat01-BAD".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec![],
+        };
+        assert_eq!(
+            validate_anthropic_credential(Some(&broken_both)),
+            AnthropicCredentialStatus::Incomplete {
+                scopes_empty: true,
+                expires_at_missing: true,
+            },
+        );
+        // Non-Anthropic token bypasses the gate entirely.
+        let other_provider = OAuthTokenSet {
+            access_token: "ya29-google".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: vec![],
+        };
+        assert_eq!(
+            validate_anthropic_credential(Some(&other_provider)),
+            AnthropicCredentialStatus::Ok,
+        );
+    }
+
+    /// `save_oauth_credentials` invariant: refuse to persist an Anthropic
+    /// `sk-ant-oat01-` token with empty scopes or missing expires_at.
+    /// Release builds must return Err.  Debug builds panic via
+    /// `debug_assert!` — that path runs in the test profile too, so we
+    /// catch the panic with `std::panic::catch_unwind` to keep the test
+    /// crate friendly.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn save_oauth_refuses_incomplete_anthropic_credential() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        std::fs::create_dir_all(&config_home).expect("create config home");
+
+        let broken = OAuthTokenSet {
+            access_token: "sk-ant-oat01-BROKEN".to_string(),
+            refresh_token: Some("sk-ant-ort01-X".to_string()),
+            expires_at: None,
+            scopes: vec![],
+        };
+        let result = std::panic::catch_unwind(|| save_oauth_credentials(&broken));
+        match result {
+            Ok(Ok(())) => panic!("save should not succeed on incomplete Anthropic creds"),
+            Ok(Err(_)) | Err(_) => { /* expected: Err in release, panic in debug */ }
+        }
+
+        unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
+        let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    /// Migration path: incomplete Anthropic OAuth credential gets repaired
+    /// in place.  Task #595 deliverable #7.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn migrate_incomplete_anthropic_credential_populates_defaults() {
+        let _guard = env_lock();
+        let config_home = temp_config_home();
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &config_home); }
+        let path = credentials_path().expect("credentials path");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+
+        // Seed credentials.json with the exact user-repro shape from
+        // 2026-05-17: valid sk-ant-oat01- bearer, scopes=[], expiresAt=null.
+        std::fs::write(
+            &path,
+            r#"{"oauth":{
+                "accessToken":"sk-ant-oat01-USER_REPRO_TOKEN",
+                "refreshToken":"sk-ant-ort01-USER_REFRESH",
+                "scopes":[],
+                "expiresAt":null
+            }}"#,
+        )
+        .expect("seed broken credentials");
+
+        let migrated = migrate_incomplete_anthropic_credential()
+            .expect("migration should succeed");
+        assert!(migrated, "broken credential should be migrated");
+
+        let loaded = load_oauth_credentials()
+            .expect("load")
+            .expect("token set present");
+        assert_eq!(loaded.access_token, "sk-ant-oat01-USER_REPRO_TOKEN");
+        assert_eq!(
+            loaded.scopes,
+            vec![
+                "user:profile".to_string(),
+                "user:inference".to_string(),
+                "user:sessions:claude_code".to_string(),
+            ],
+        );
+        assert!(
+            loaded.expires_at.is_some(),
+            "expires_at should be populated"
+        );
+
+        // Second call must be a no-op (already healthy).
+        let migrated_again = migrate_incomplete_anthropic_credential()
+            .expect("second migration call should succeed");
+        assert!(
+            !migrated_again,
+            "healthy credential should not be re-migrated"
+        );
 
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         std::fs::remove_dir_all(config_home).expect("cleanup temp dir");

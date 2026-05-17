@@ -1922,6 +1922,98 @@ fn print_sessions_standalone() -> Result<(), Box<dyn std::error::Error>> {
 /// process environment variables so the rest of the code finds them via the
 /// standard `std::env::var` paths without further changes.
 #[allow(clippy::single_match_else)]
+/// Task #595 deliverable #4 + #7: at TUI startup, validate the saved
+/// Anthropic OAuth credential.  If it's structurally broken (scopes empty
+/// or expires_at missing — the exact failure mode caused by the v2.2.15/16
+/// token-exchange parser bug), attempt a one-shot in-place migration
+/// (populating documented default scopes + a near-expiry expires_at so the
+/// next call triggers refresh).  Always surface a banner so the user knows
+/// what happened BEFORE they send their first prompt and get the 401
+/// "Invalid authentication credentials" response.
+///
+/// Non-interactive runs (anvil -p, CI) skip the banner but still attempt
+/// the migration so subsequent interactive runs are clean.
+fn validate_and_migrate_oauth_credentials_at_startup() {
+    let token = runtime::load_oauth_credentials().ok().flatten();
+    let status = runtime::validate_anthropic_credential(token.as_ref());
+    match status {
+        runtime::AnthropicCredentialStatus::Absent
+        | runtime::AnthropicCredentialStatus::Ok => {
+            // Nothing to do.
+        }
+        runtime::AnthropicCredentialStatus::Incomplete {
+            scopes_empty,
+            expires_at_missing,
+        } => {
+            // Attempt one-shot migration.  See
+            // `runtime::migrate_incomplete_anthropic_credential`.
+            match runtime::migrate_incomplete_anthropic_credential() {
+                Ok(true) => {
+                    if io::stdout().is_terminal() {
+                        println!();
+                        println!(
+                            "\x1b[1;33mAnvil OAuth Credentials Repaired\x1b[0m"
+                        );
+                        println!("\x1b[33m{}\x1b[0m", "\u{2500}".repeat(41));
+                        if scopes_empty {
+                            println!(
+                                "  Restored default Anthropic OAuth scopes \
+                                 (user:profile user:inference user:sessions:claude_code)."
+                            );
+                        }
+                        if expires_at_missing {
+                            println!(
+                                "  Set expires_at to trigger refresh on first use."
+                            );
+                        }
+                        println!(
+                            "  If Anvil still 401s on the first prompt, run \
+                             /provider anthropic login to re-authenticate."
+                        );
+                        println!("  (Root cause + structural fix: task #595)");
+                        println!();
+                    }
+                }
+                Ok(false) => {
+                    // Either non-Anthropic token or migration not applicable.
+                    // Surface the warning so user knows.
+                    if io::stdout().is_terminal() {
+                        emit_oauth_incomplete_banner(scopes_empty, expires_at_missing);
+                    }
+                }
+                Err(e) => {
+                    if io::stdout().is_terminal() {
+                        eprintln!(
+                            "\x1b[33m[anvil] warning: could not auto-repair \
+                             OAuth credentials: {e}\x1b[0m"
+                        );
+                        emit_oauth_incomplete_banner(scopes_empty, expires_at_missing);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn emit_oauth_incomplete_banner(scopes_empty: bool, expires_at_missing: bool) {
+    println!();
+    println!("\x1b[1;31mAnvil OAuth Credentials Incomplete\x1b[0m");
+    println!("\x1b[31m{}\x1b[0m", "\u{2500}".repeat(41));
+    println!(
+        "  Your saved Anthropic OAuth credentials are missing required \
+         metadata:"
+    );
+    if scopes_empty {
+        println!("    \u{2022} scopes (Anthropic Max-plan gate requires non-empty scopes)");
+    }
+    if expires_at_missing {
+        println!("    \u{2022} expires_at (no expiry recorded \u{2192} no refresh path)");
+    }
+    println!();
+    println!("  Run `/provider anthropic login` to reauthenticate.");
+    println!();
+}
+
 fn startup_vault_init() {
     if !io::stdout().is_terminal() {
         // Non-interactive mode — skip interactive prompts.
@@ -2161,6 +2253,14 @@ fn run_repl(
     // After run_first_run_wizard the vault is already unlocked in the session
     // cache, so startup_vault_init is a no-op in that case.
     startup_vault_init();
+
+    // Task #595: validate saved Anthropic OAuth credentials before entering
+    // the REPL so the user gets a clear actionable banner BEFORE they hit
+    // 401 on their first prompt.  Also attempts a one-shot migration of
+    // half-broken credentials (empty scopes / missing expires_at) so users
+    // with the v2.2.15/v2.2.16 broken credentials.json don't have to
+    // re-OAuth.
+    validate_and_migrate_oauth_credentials_at_startup();
 
     // Enforce the admin requirements policy (requirements.toml) before
     // entering the REPL.  A violation is a hard error: print it to stderr

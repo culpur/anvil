@@ -122,10 +122,13 @@ pub use mcp_stdio::{
 };
 pub use oauth::{
     clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,
-    generate_state, load_oauth_credentials, loopback_redirect_uri, parse_oauth_callback_query,
-    parse_oauth_callback_request_target, parse_pasted_oauth_code, save_oauth_credentials,
+    generate_state, load_oauth_credentials, loopback_redirect_uri,
+    migrate_incomplete_anthropic_credential, parse_oauth_callback_query,
+    parse_oauth_callback_request_target, parse_pasted_oauth_code,
+    parse_token_response_strict, parse_token_response_strict_at, save_oauth_credentials,
+    unix_now_seconds, validate_anthropic_credential, AnthropicCredentialStatus,
     OAuthAuthorizationRequest, OAuthCallbackParams, OAuthRefreshRequest,
-    OAuthTokenExchangeRequest, OAuthTokenSet, PkceChallengeMethod, PkceCodePair,
+    OAuthTokenExchangeRequest, OAuthTokenResponse, OAuthTokenSet, PkceChallengeMethod, PkceCodePair,
 };
 pub use permissions::{
     BlockAction, PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
