@@ -25,6 +25,7 @@ pub(super) mod scrollback;
 pub(super) mod snapshot;
 pub(super) mod ssh_bridge;
 pub(super) mod modals;
+pub(super) mod oauth_flow;
 pub(super) mod provider_login;
 pub(super) mod ssh_form;
 pub(super) mod ssh_tab;
