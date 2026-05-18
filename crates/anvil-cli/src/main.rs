@@ -1997,6 +1997,7 @@ fn run_resume_command(
         | SlashCommand::Profile { .. }
         | SlashCommand::Cursor { .. }
         | SlashCommand::Chain { .. }
+        | SlashCommand::Reflect { .. }
         | SlashCommand::HubStatus { .. }
         | SlashCommand::Layout { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
@@ -4522,6 +4523,8 @@ struct LiveCli {
     /// `.anvil/settings.json` so project-local hook paths resolve
     /// correctly. None until the first turn populates it.
     last_observed_cwd: Option<PathBuf>,
+    /// Task #636 (v2.2.17): autonomous reflection loop state.
+    reflection: runtime::reflection::TurnState,
 }
 
 impl LiveCli {
@@ -4611,6 +4614,7 @@ impl LiveCli {
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
             last_observed_cwd: None,
+            reflection: runtime::reflection::TurnState::with_defaults(),
         };
         // Publish initial cross-session snapshot now that the session id is
         // known.  Subsequent updates flow from AgentManager::spawn/poll.
@@ -6417,10 +6421,49 @@ impl LiveCli {
                 (msg, false)
             }
             SlashCommand::Chain { subcommand } => {
-                // AnvilHub F2 sub-track A: skill-chain execution dispatched
-                // through the commands-crate handler (which returns a String
-                // and never writes to stdout — feedback-tui-stdout-anti-pattern).
                 let msg = commands::handlers::handle_chain_subcommand(subcommand);
+                (msg, false)
+            }
+            SlashCommand::Reflect { action } => {
+                runtime::reflection::otel_user_invoked();
+                let ts = &self.reflection;
+                let msg = match action.as_deref() {
+                    None | Some("status") => {
+                        let det = ts.detector();
+                        let pending = ts.pending_pattern()
+                            .map_or_else(|| "(none)".to_string(), |p| p.summary());
+                        format!(
+                            "Reflection status:\n  enabled: {}\n  rolling window: {} events\n  scratchpad: {} failed attempts this turn\n  pending pattern: {}\n  turn id: {}",
+                            ts.is_enabled(), det.window().len(), ts.scratchpad().len(), pending, det.current_turn_id(),
+                        )
+                    }
+                    Some("window") => {
+                        let det = ts.detector();
+                        if det.window().is_empty() {
+                            "Reflection window: (no tool events observed yet)".to_string()
+                        } else {
+                            let mut out = format!("Reflection window ({} events):\n", det.window().len());
+                            for ev in det.window() {
+                                let err = ev.error.as_deref().unwrap_or("OK");
+                                out.push_str(&format!("  - {} args#{:016x} -> {}\n", ev.tool_name, ev.args_hash, err));
+                            }
+                            out
+                        }
+                    }
+                    Some("scratchpad") => {
+                        let sp = ts.scratchpad();
+                        if sp.is_empty() {
+                            "Reflection scratchpad: (no failed attempts this turn)".to_string()
+                        } else {
+                            let mut out = format!("Reflection scratchpad ({} failed attempts):\n", sp.len());
+                            for a in sp.attempts() {
+                                out.push_str(&format!("  - {}({}) -> {}\n", a.tool, a.args_summary, a.error_summary));
+                            }
+                            out
+                        }
+                    }
+                    Some(other) => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad]."),
+                };
                 (msg, false)
             }
             SlashCommand::HubStatus { package } => {

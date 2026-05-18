@@ -717,6 +717,28 @@ pub const CHAIN_SUBCOMMANDS: &[SubcommandSpec] = &[
     },
 ];
 
+/// Subcommand grammar for `/reflect` (task #636).
+pub const REFLECT_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "status",
+        summary: "Show TurnState summary (default action)",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "window",
+        summary: "Dump the rolling tool-event window",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "scratchpad",
+        summary: "Dump the per-turn failed-attempt scratchpad",
+        args: &[],
+        subcommands: &[],
+    },
+];
+
 pub const SKILL_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec {
         name: "list",

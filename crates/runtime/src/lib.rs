@@ -21,6 +21,7 @@ pub mod private_memory;
 pub mod qmd;
 pub mod import;
 pub mod memory_clean;
+pub mod reflection;
 pub mod routines;
 pub mod skill_chain_exec;
 pub mod ollama_tune;

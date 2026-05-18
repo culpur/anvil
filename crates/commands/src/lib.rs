@@ -546,6 +546,10 @@ pub enum SlashCommand {
     Chain {
         subcommand: ChainSubcommand,
     },
+    /// `/reflect [status|window|scratchpad]` task #636
+    Reflect {
+        action: Option<String>,
+    },
     Unknown(String),
 }
 
@@ -1144,6 +1148,9 @@ impl SlashCommand {
                     }
                 }
             }
+            "reflect" => Self::Reflect {
+                action: remainder_after_command(trimmed, command),
+            },
             "import" => {
                 // `/import [claude-code] [--dry-run] [--scope=<val>] [--include-sessions]`
                 let mut source: Option<String> = None;
@@ -1805,7 +1812,8 @@ mod tests {
         // v2.2.16: +1 (/hub-status — AnvilHub verified-badge status query) = 115 total
         // v2.2.16: +1 (/layout — TUI layout selector, 8-axis contract) = 116 total
         // v2.2.14 Phase 1: +1 (/chain — AnvilHub F2 skill-chain executor) = 117 total
-        assert_eq!(slash_command_specs().len(), 117);
+        // task #636 v2.2.17: +1 (/reflect)
+        assert_eq!(slash_command_specs().len(), 118);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         // v2.2.16: +1 (/layout resume_supported=true) = 25
         assert_eq!(resume_supported_slash_commands().len(), 25);
@@ -3037,6 +3045,7 @@ mod tests {
                 SlashCommand::Import { .. } => Some("import"),
                 SlashCommand::Cursor { .. } => Some("cursor"),
                 SlashCommand::Chain { .. } => Some("chain"),
+                SlashCommand::Reflect { .. } => Some("reflect"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -3172,6 +3181,7 @@ mod tests {
             SlashCommand::Chain {
                 subcommand: ChainSubcommand::List,
             },
+            SlashCommand::Reflect { action: None },
             SlashCommand::Unknown(String::new()),
         ];
 
@@ -3423,6 +3433,7 @@ mod tests {
         "import",
         "cursor",
         "chain",
+        "reflect",
     ];
 
     /// Gate 1a: every spec name has a corresponding handler arm.

@@ -619,6 +619,16 @@ pub fn handle_slash_command(
             let message = handle_chain_subcommand(subcommand);
             Some(SlashCommandResult { message, session: session.clone() })
         }
+        SlashCommand::Reflect { action } => {
+            runtime::reflection::otel_user_invoked();
+            let message = match action.as_deref() {
+                None | Some("status") => "/reflect - reflection status requires an active session. Run `anvil` to inspect live TurnState. Subcommands: /reflect window, /reflect scratchpad.".to_string(),
+                Some("window") => "/reflect window - requires an active session. Run `anvil` and re-issue /reflect window to dump the last 20 tool events.".to_string(),
+                Some("scratchpad") => "/reflect scratchpad - requires an active session. Run `anvil` and re-issue /reflect scratchpad to list this turn's failed attempts.".to_string(),
+                Some(other) => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad]."),
+            };
+            Some(SlashCommandResult { message, session: session.clone() })
+        }
         SlashCommand::Skill { subcommand } => {
             use crate::agents::{discover_skill_roots, load_skills_from_roots};
             use crate::{format_suggestions, match_triggers, SkillSubcommand};

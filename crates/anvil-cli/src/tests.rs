@@ -1375,3 +1375,66 @@ fn run_iac_command_unconfirmed_in_tui_returns_safe_message() {
         "expected TUI-safe message, got: {out:?}"
     );
 }
+
+
+// ─── Task #636 — Autonomous reflection loop integration tests ─────────────
+
+#[test]
+fn three_identical_failing_calls_inject_stuck_reminder() {
+    use runtime::reflection::{StuckPattern, ToolEvent, TurnState};
+    let mut ts = TurnState::with_defaults();
+    ts.begin_turn();
+    for _ in 0..3 {
+        ts.observe_tool_event(ToolEvent::new(
+            "Bash", "rm -rf /missing", Some("ENOENT".into()), None,
+        ));
+        ts.record_failure("Bash", "rm -rf /missing", "ENOENT");
+    }
+    assert!(
+        matches!(ts.pending_pattern(), Some(StuckPattern::ToolLoop { .. })),
+        "expected pending ToolLoop after 3 identical erroring calls"
+    );
+    let reminder = ts.drain_reminder_for_next_call();
+    assert!(
+        reminder.contains("Stuck pattern detected"),
+        "system-reminder must contain `Stuck pattern detected`, got: {reminder}"
+    );
+    assert!(
+        reminder.contains("<system-reminder>"),
+        "must wrap in <system-reminder> tag, got: {reminder}"
+    );
+    assert!(
+        reminder.contains("Previously tried in this turn"),
+        "scratchpad block must accompany strategy reminder, got: {reminder}"
+    );
+}
+
+#[test]
+fn slash_reflect_command_emits_user_invoked_otel() {
+    use commands::SlashCommand;
+    let parsed = SlashCommand::parse("/reflect");
+    assert!(
+        matches!(parsed, Some(SlashCommand::Reflect { action: None })),
+        "/reflect must parse to Reflect with no action, got {parsed:?}"
+    );
+
+    let parsed_window = SlashCommand::parse("/reflect window");
+    let is_window = match parsed_window {
+        Some(SlashCommand::Reflect { ref action }) => action.as_deref() == Some("window"),
+        _ => false,
+    };
+    assert!(is_window, "/reflect window must parse to Reflect window");
+
+    let session = runtime::Session::default();
+    let result = commands::handle_slash_command(
+        "/reflect",
+        &session,
+        runtime::CompactionConfig::default(),
+    )
+    .expect("/reflect must dispatch to a handler");
+    assert!(
+        result.message.contains("reflection"),
+        "/reflect handler message must mention reflection, got: {}",
+        result.message
+    );
+}

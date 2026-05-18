@@ -2080,6 +2080,22 @@ crate `skill_chain_exec` module for the full schema and binding grammar.",
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // ── Autonomous reflection loop (task #636, v2.2.17) ──
+    SlashCommandSpec {
+        name: "reflect",
+        aliases: &[],
+        summary: "Show reflection loop status - failed attempts, stuck patterns, scratchpad",
+        argument_hint: Some("[status|window|scratchpad]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "/reflect - Inspect the autonomous reflection loop state (v2.2.17)",
+        subcommands: crate::subcommands::REFLECT_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
     // ── Skill dispatch (v2.2.7) ──────────────────────────────────────────────
     SlashCommandSpec {
         name: "skill",
