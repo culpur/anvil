@@ -1,0 +1,192 @@
+# release-surfaces.yaml — single source of truth for Anvil release surfaces.
+#
+# Every user-facing surface that must be version-current on every release lives
+# here. `scripts/verify-release-surfaces.sh` parses this file, substitutes the
+# {version} placeholder, and probes every surface. release.sh refuses to claim
+# success unless every entry passes.
+#
+# Why this file exists:
+#   v2.2.13 → v2.2.16, the team kept discovering ANOTHER surface that wasn't on
+#   anyone's checklist (anvilhub homepage, culpur.net/anvil hero, "31 providers"
+#   claim across 3 surfaces, Quality bar stats stuck at v2.2.12, etc). Every
+#   one of those was a "we forgot this exists" bug, not a "we tried and it
+#   failed" bug. This manifest makes forgetting impossible.
+#
+# Rule (memory: feedback-release-surface-manifest):
+#   Any new public surface added to AnvilHub or culpur.net = new entry here
+#   in the same commit. No exceptions.
+#
+# Schema:
+#   id              — unique snake_case slug for the surface
+#   type            — broad category (gh_release, github_file, wordpress_page,
+#                     nextjs_page, api_endpoint, file, anvil_repo_file,
+#                     code_constant, cross_surface_invariant)
+#   url             — public URL (templated; {version} is substituted)
+#   deploy_path     — where to edit the source (informational; printed on failure)
+#   verify_curl     — bash one-liner; {version} substituted; output compared to verify_expect
+#   verify_expect   — comparison spec:
+#                       "== <value>"            → exact string match
+#                       ">= <int>"              → numeric >= (output must be int)
+#                       "matches <regex>"       → grep -E -q
+#                       "in [a, b, c]"          → output line is one of the listed values
+#   historical_preservation — true if entry has append-only sections (changelog,
+#                             release table); the verifier checks ONLY that the
+#                             newest mention is current, never that all mentions are
+#   deferred_ok     — true if this surface can be missing on a patch release
+#                     (e.g. launch articles are skipped on patches)
+#   notes           — free-form context for humans
+
+version: 1
+
+surfaces:
+  # ─── GitHub Release (assets) ──────────────────────────────────────────────
+  - id: github_release
+    type: gh_release
+    url: "https://github.com/culpur/anvil/releases/tag/v{version}"
+    verify_curl: "gh release view v{version} --repo culpur/anvil --json assets --jq '.assets | length'"
+    verify_expect: ">= 15"
+    notes: "7 binaries + 7 .sha256 + manpage = 15 assets minimum."
+
+  # ─── Homebrew formula ─────────────────────────────────────────────────────
+  - id: homebrew_formula
+    type: github_file
+    url: "https://raw.githubusercontent.com/culpur/homebrew-anvil/main/Formula/anvil.rb"
+    deploy_path: "Formula/anvil.rb on culpur/homebrew-anvil (bumped by release.sh phase 5)"
+    verify_curl: "curl -sL --max-time 15 https://raw.githubusercontent.com/culpur/homebrew-anvil/main/Formula/anvil.rb | grep -c 'version \"{version}\"'"
+    verify_expect: ">= 1"
+
+  # ─── AnvilHub /api/version ─────────────────────────────────────────────────
+  - id: anvilhub_api_version
+    type: api_endpoint
+    url: "https://anvilhub.culpur.net/api/version"
+    deploy_path: "/opt/projects/anvilhub/packages/web/src/lib/anvil-config.ts (on dev0001)"
+    verify_curl: "curl -s --max-time 15 -H 'Cache-Control: no-cache' https://anvilhub.culpur.net/api/version | jq -r .latest_version"
+    verify_expect: "== {version}"
+    notes: "Phase 8 (verify-release.sh) does deeper checks on .binaries{} URLs."
+
+  # ─── AnvilHub homepage ────────────────────────────────────────────────────
+  - id: anvilhub_homepage
+    type: nextjs_page
+    url: "https://anvilhub.culpur.net/"
+    deploy_path: "/opt/projects/anvilhub/packages/web/src/app/page.tsx + src/lib/anvil-config.ts (dev0001)"
+    verify_curl: "curl -sL --max-time 15 https://anvilhub.culpur.net/ | grep -oE 'v?2\\.2\\.[0-9]+' | sort -uV | tail -1"
+    verify_expect: "== v{version}"
+    notes: "Newest version mention must be current. Older mentions may exist."
+    historical_preservation: true
+
+  # ─── AnvilHub /about ───────────────────────────────────────────────────────
+  - id: anvilhub_about
+    type: nextjs_page
+    url: "https://anvilhub.culpur.net/about"
+    deploy_path: "/opt/projects/anvilhub/packages/web/src/app/about/page.tsx (dev0001)"
+    verify_curl: "curl -sL --max-time 15 https://anvilhub.culpur.net/about | grep -c 'v{version}'"
+    verify_expect: ">= 1"
+    historical_preservation: true
+    notes: "Changelog block — must have ACTUAL bullets, not 'see release notes' stub. Verifier only checks presence; reviewer must check bullet quality."
+
+  # ─── AnvilHub /install ─────────────────────────────────────────────────────
+  - id: anvilhub_install
+    type: nextjs_page
+    url: "https://anvilhub.culpur.net/install"
+    deploy_path: "/opt/projects/anvilhub/packages/web/src/app/install/page.tsx + install/layout.tsx (dev0001)"
+    verify_curl: "curl -sL --max-time 15 https://anvilhub.culpur.net/install | grep -oE 'v?2\\.2\\.[0-9]+' | sort -uV | tail -1"
+    verify_expect: "== v{version}"
+
+  # ─── AnvilHub /tui-preview ────────────────────────────────────────────────
+  - id: anvilhub_tui_preview
+    type: nextjs_page
+    url: "https://anvilhub.culpur.net/tui-preview"
+    deploy_path: "/opt/projects/anvilhub/packages/web/src/app/tui-preview/page.tsx (dev0001)"
+    verify_curl: "curl -sL --max-time 15 https://anvilhub.culpur.net/tui-preview | grep -c '{version}'"
+    verify_expect: ">= 1"
+
+  # ─── AnvilHub sha256 manifest (per release) ────────────────────────────────
+  - id: anvilhub_sha256
+    type: file
+    url: "https://anvilhub.culpur.net/sha256/{version}.txt"
+    deploy_path: "/opt/projects/anvilhub/packages/web/public/sha256/{version}.txt (dev0001)"
+    verify_curl: "curl -sL --max-time 15 -o /dev/null -w '%{http_code}' https://anvilhub.culpur.net/sha256/{version}.txt"
+    verify_expect: "== 200"
+    notes: "Path must match what /api/version advertises in .sha256_url."
+
+  # ─── culpur.net/anvil/ (WordPress page 619) ────────────────────────────────
+  - id: culpur_anvil_wp
+    type: wordpress_page
+    url: "https://culpur.net/anvil/"
+    deploy_path: "WordPress page id=619; update via wpdb->update PHP script (NEVER wp post update — strips inline CSS)"
+    verify_curl: "curl -sL --max-time 15 https://culpur.net/anvil/ | grep -oE 'v?2\\.2\\.[0-9]+' | sort -uV | tail -1"
+    verify_expect: "== v{version}"
+    historical_preservation: true
+    notes: |
+      Newest version mention must be current. Additional manual checks NOT
+      automated here (reviewer responsibility):
+        - Quality bar test count card matches `cargo test --workspace` count
+        - Provider section card count == provider_label() unique count in
+          crates/api/src/providers/mod.rs ProviderKind enum (canonical 35)
+        - meta description has no "[&hellip;]" truncation
+
+  # ─── culpur.net/products/ (WordPress page 394) ─────────────────────────────
+  - id: culpur_products_wp
+    type: wordpress_page
+    url: "https://culpur.net/products/"
+    deploy_path: "WordPress page id=394; update via wpdb->update PHP script. ALSO update post_excerpt + rank_math_description."
+    verify_curl: "curl -sL --max-time 15 https://culpur.net/products/ | grep -c '{version}'"
+    verify_expect: ">= 1"
+    notes: "Missed in v2.2.13–v2.2.16. User called it 'embarrassing.' Don't miss it again."
+
+  # ─── Public README hero / What's new ──────────────────────────────────────
+  - id: github_public_readme
+    type: github_file
+    url: "https://raw.githubusercontent.com/culpur/anvil/main/README.md"
+    deploy_path: "README.md on culpur/anvil (public). Splice new entry on top; older changelog entries are byte-immutable per feedback-changelog-preserve-historical."
+    verify_curl: "curl -sf --max-time 15 -H 'Accept: application/vnd.github.raw' https://api.github.com/repos/culpur/anvil/contents/README.md | grep -m1 -oE '## What.{1,5}s new in v?[0-9]+\\.[0-9]+\\.[0-9]+'"
+    verify_expect: "matches v{version}"
+    historical_preservation: true
+    notes: "Only the hero / 'What's new in' heading must mention current version. The ### vX.Y.Z changelog entries below are byte-immutable."
+
+  # ─── Release notes file (in this repo) ─────────────────────────────────────
+  - id: release_notes_file
+    type: anvil_repo_file
+    url: "RELEASE-NOTES-v{version}.md (repo-root)"
+    deploy_path: "RELEASE-NOTES-v{version}.md at the repo root. NEVER in docs/release-vX.Y.Z/ — see feedback-release-notes-canonical-path.md."
+    verify_curl: "test -f RELEASE-NOTES-v{version}.md && grep -c 'v{version}' RELEASE-NOTES-v{version}.md || echo 0"
+    verify_expect: ">= 1"
+    notes: "release.sh reads this file in Phase 4. Missing it = hard fail in release.sh."
+
+  # ─── Launch article (WordPress post) ──────────────────────────────────────
+  - id: launch_article
+    type: wordpress_post
+    url: "https://culpur.net/?s=anvil+v{version}"
+    deploy_path: "WordPress post (HTML format, DALL-E hero image, no markdown, no influence attribution)."
+    verify_curl: "curl -sL --max-time 15 'https://culpur.net/?s=anvil+v{version}' | grep -c 'anvil-v{version}'"
+    verify_expect: ">= 1"
+    deferred_ok: true
+    notes: "Patch releases may skip the launch article. Set deferred_ok handling in verifier."
+
+  # ─── anvil-cli update target map invariant ─────────────────────────────────
+  - id: anvil_cli_update_target_map
+    type: code_constant
+    url: "crates/anvil-cli/src/{update,upgrade}.rs (source-only check)"
+    deploy_path: "crates/anvil-cli/src/update.rs + crates/anvil-cli/src/upgrade.rs"
+    verify_curl: "curl -s --max-time 15 -H 'Cache-Control: no-cache' https://anvilhub.culpur.net/api/version | jq -r '.binaries | keys | length'"
+    verify_expect: ">= 7"
+    notes: |
+      Post task #612, anvil consumes /api/version live; it does NOT hardcode targets.
+      This entry asserts /api/version still advertises >= 7 target keys (7 platforms).
+      If a target is removed deliberately, lower the threshold and document why.
+
+  # ─── Provider count invariant (cross-surface) ──────────────────────────────
+  - id: provider_count_invariant
+    type: cross_surface_invariant
+    url: "(no single URL — see surfaces_touched in notes)"
+    deploy_path: "crates/api/src/providers/mod.rs ProviderKind enum (source) + surfaces in notes"
+    verify_curl: "grep -oE 'provider_label.*=>.*\"[A-Z][a-zA-Z0-9 ]+\"' crates/api/src/providers/mod.rs 2>/dev/null | grep -oE '\"[A-Z][a-zA-Z0-9 ]+\"' | sort -u | wc -l | tr -d ' '"
+    verify_expect: ">= 1"
+    notes: |
+      Canonical count = unique provider_label() outputs in ProviderKind enum.
+      Surfaces that claim a count and MUST match:
+        - culpur.net/anvil (header + footer + card-grid count)
+        - culpur/anvil README (badge + hero + body)
+        - anvilhub /about (3 mentions in changelog bullets)
+      This verifier entry checks the source is computable. Cross-surface count
+      drift detection is left to scripts/verify-provider-count.sh (TBD task).

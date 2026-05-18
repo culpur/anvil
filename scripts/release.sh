@@ -596,27 +596,56 @@ fi
 
 # ─── Phase 8: Post-publish verification gate ────────────────────────────────
 #
-# Past bug: v2.2.16 shipped a Windows binary as `*-pc-windows-gnu.exe` but
-# the AnvilHub /api/version endpoint advertised `*-pc-windows-msvc.exe` —
-# every Windows upgrade returned HTTP 404 and the local pipeline thought it
-# had succeeded. This phase catches that class of regression by HEAD-ing
-# every URL the version endpoint advertises and asserting the announced
-# latest_version matches what we just published.
+# Two-stage verification (added task #614):
 #
-# Implementation lives in scripts/release-helpers/verify-release.sh.
-# Logic returns:
-#   0  → all green
-#   1  → /api/version unreachable, missing fields, or version mismatch
-#   2  → one or more advertised binary URLs return non-200
+#   Stage 8a — release-surfaces.yaml comprehensive check
+#     The manifest at the repo root catalogues every user-facing surface
+#     (anvilhub homepage, /about, /install, culpur.net/anvil, /products,
+#     public README "What's new", Homebrew, release notes file, etc.) and
+#     scripts/verify-release-surfaces.sh probes them all. This is the strict
+#     superset gate — if it passes, every surface is current.
+#
+#   Stage 8b — /api/version binary-URL probe (added task #611)
+#     The legacy verifier focuses on the failure mode that caused v2.2.16's
+#     Windows 404 (advertised filenames diverged from uploaded filenames).
+#     It HEADs every URL in /api/version's .binaries{} and asserts
+#     .latest_version matches.
+#
+# Both must pass. Stage 8a runs first because surface drift is more common
+# than filename mismatch; failing fast on a stale homepage is more useful
+# than waiting for the binary probe.
 if [ "$SKIP_VERIFY" = "true" ]; then
     echo
     echo "▸ Phase 8: Post-publish verification SKIPPED (--skip-verify)"
 elif [ "$DRY_RUN_VERIFY" = "true" ]; then
+    echo
+    echo "▸ Phase 8a: Surface manifest verification (dry-run)..."
+    if ! bash "$SCRIPT_DIR/verify-release-surfaces.sh" "$VERSION" --dry-run; then
+        echo "✘ Manifest dry-run reported a problem (rc=$?)." >&2
+        exit 3
+    fi
+    echo
+    echo "▸ Phase 8b: Binary-URL probe (dry-run)..."
     verify_release "$VERSION" --dry-run || {
         echo "✘ Verification dry-run reported a problem (rc=$?)." >&2
         exit 3
     }
 else
+    echo
+    echo "▸ Phase 8a: Surface manifest verification..."
+    if ! bash "$SCRIPT_DIR/verify-release-surfaces.sh" "$VERSION"; then
+        rc=$?
+        echo >&2
+        echo "✘ Surface manifest verification FAILED (rc=$rc)." >&2
+        echo "  One or more release surfaces is stale or unreachable." >&2
+        echo "  See the FAILED SURFACES list above; each entry names the" >&2
+        echo "  deploy_path so you can fix the source and re-run:" >&2
+        echo "      bash scripts/verify-release-surfaces.sh $VERSION" >&2
+        echo "  Then re-run the release with --skip-build to repeat Phase 8." >&2
+        exit "$rc"
+    fi
+    echo
+    echo "▸ Phase 8b: Binary-URL probe..."
     if ! verify_release "$VERSION"; then
         rc=$?
         echo >&2
