@@ -48,6 +48,7 @@ use std::collections::VecDeque;
 
 use super::confirm::{ConfirmModal, ConfirmChoice};
 use super::password::PasswordModal;
+use super::text_input::TextInputModal;
 
 /// One entry on the modal queue. The host pops the front, renders /
 /// drives it, and on resolution writes the answer back into the
@@ -71,6 +72,12 @@ pub(crate) enum QueuedModal {
         tag: String,
         modal: WizardChoiceModal,
     },
+    /// A single-line free-text input with optional default (task #642).
+    /// Used by the v2.2.17 wizard for "Ollama URL" and "Profile name".
+    TextInput {
+        tag: String,
+        modal: TextInputModal,
+    },
 }
 
 impl QueuedModal {
@@ -82,6 +89,7 @@ impl QueuedModal {
             Self::Confirm { tag, .. } => tag,
             Self::Password { tag, .. } => tag,
             Self::Choice { tag, .. } => tag,
+            Self::TextInput { tag, .. } => tag,
         }
     }
 }
@@ -94,10 +102,26 @@ pub(crate) enum ModalAnswer {
     /// The host consumes the password directly on resolution (e.g.
     /// `VaultManager::unlock`) before recording a boolean success.
     PasswordSubmitted(bool),
+    /// The secret submitted by a password modal — kept ONLY in the
+    /// wizard's per-step capture path; never persisted on `ModalQueue`.
+    /// The queue runner converts a successful password submit to
+    /// `PasswordSubmitted(true)` before recording; this variant is the
+    /// in-flight value the wizard reads on the call-site that needs the
+    /// raw secret (e.g. vault setup).  Always zeroized by ownership
+    /// transfer at the consumer.
+    #[allow(dead_code)]
+    PasswordValue(String),
     /// Selected index in the choice list (0-based). `Esc` records
     /// `ChoiceCancelled` so callers can detect a wizard abort.
     Choice(usize),
     ChoiceCancelled,
+    /// Free-text submission from a `TextInputModal`. Carries the value
+    /// (which may be the user's default-fallback string when the buffer
+    /// was empty on Enter / Esc).
+    TextInput(String),
+    /// `Ctrl+C` on a TextInputModal — caller should abort the step.
+    #[allow(dead_code)]
+    TextInputCancelled,
 }
 
 /// FIFO queue of pending modals plus a parallel log of recorded answers.

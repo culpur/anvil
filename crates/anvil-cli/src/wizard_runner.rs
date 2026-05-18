@@ -70,10 +70,11 @@ impl fmt::Display for RunnerError {
 impl std::error::Error for RunnerError {}
 
 use crate::tui::modals::confirm::{ConfirmAction, ConfirmModal};
-use crate::tui::modals::password::PasswordAction;
+use crate::tui::modals::password::{PasswordAction, PasswordModal};
 use crate::tui::modals::queue::{
     ChoiceAction, ModalAnswer, ModalQueue, QueuedModal, WizardChoiceModal,
 };
+use crate::tui::modals::text_input::{TextInputAction, TextInputModal};
 
 /// Source of key events for the runner. Production uses
 /// `CrosstermKeySource` which polls real terminal input; tests use
@@ -422,6 +423,66 @@ where
             .unwrap_or(ModalAnswer::Confirm(crate::tui::modals::ConfirmChoice::No)))
     }
 
+    /// Drive a single text-input modal to resolution (task #642).
+    /// Returns `ModalAnswer::TextInput(value)` with the user's input or
+    /// the configured default; on empty key source returns the default.
+    #[allow(dead_code)]
+    pub(crate) fn run_text_input(
+        &mut self,
+        tag: &str,
+        modal: TextInputModal,
+    ) -> Result<ModalAnswer, RunnerError> {
+        let default = modal.default.clone();
+        let mut q = ModalQueue::new();
+        q.push(QueuedModal::TextInput {
+            tag: tag.to_string(),
+            modal,
+        });
+        self.run_queue(&mut q)?;
+        Ok(q
+            .answer_for(tag)
+            .cloned()
+            .unwrap_or(ModalAnswer::TextInput(default)))
+    }
+
+    /// Drive a single password modal to resolution, returning the raw
+    /// secret on success. Used by the v2.2.17 wizard for vault-setup
+    /// password capture inside the alt-screen session.
+    ///
+    /// The caller is responsible for zeroizing the returned string when
+    /// done (e.g. by handing it to `VaultManager::setup` which takes it
+    /// by reference + drops it after KDF derivation).
+    #[allow(dead_code)]
+    pub(crate) fn run_password_capture(
+        &mut self,
+        modal: PasswordModal,
+    ) -> Result<Option<String>, RunnerError> {
+        // We do NOT use the queue helper here because the queue stores
+        // only `PasswordSubmitted(bool)` (intentionally never the raw
+        // secret).  Instead we mimic `drive_front`'s loop with one
+        // password modal and read the value out of the Submit action
+        // directly.
+        let mut modal = modal;
+        let accent = self.accent;
+        loop {
+            self.session
+                .terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    modal.render(frame, area, accent, ratatui::style::Color::Red);
+                })
+                .map_err(|e| RunnerError::Draw(e.to_string()))?;
+            let Some(key) = self.keys.next_key() else {
+                return Ok(None);
+            };
+            match modal.handle_key(key) {
+                PasswordAction::Continue => continue,
+                PasswordAction::Submit(pw) => return Ok(Some(pw)),
+                PasswordAction::Cancel => return Ok(None),
+            }
+        }
+    }
+
     fn drive_front(&mut self, queue: &mut ModalQueue) -> Result<ModalAnswer, RunnerError> {
         let accent = self.accent;
         loop {
@@ -442,6 +503,9 @@ where
                             QueuedModal::Password { modal, .. } => {
                                 modal.render(frame, area, accent, Color::Red);
                             }
+                            QueuedModal::TextInput { modal, .. } => {
+                                modal.render(frame, area, &modal.buffer, modal.cursor, accent);
+                            }
                         }
                     })
                     .map_err(|e| RunnerError::Draw(e.to_string()))?;
@@ -455,6 +519,9 @@ where
                         ModalAnswer::Confirm(crate::tui::modals::ConfirmChoice::No)
                     }
                     QueuedModal::Password { .. } => ModalAnswer::PasswordSubmitted(false),
+                    QueuedModal::TextInput { modal, .. } => {
+                        ModalAnswer::TextInput(modal.default.clone())
+                    }
                 });
             };
 
@@ -482,6 +549,17 @@ where
                         return Ok(ModalAnswer::PasswordSubmitted(true));
                     }
                     PasswordAction::Cancel => return Ok(ModalAnswer::PasswordSubmitted(false)),
+                },
+                QueuedModal::TextInput { modal, .. } => match modal.handle_key(key) {
+                    TextInputAction::Continue => continue,
+                    TextInputAction::Submit(value) => return Ok(ModalAnswer::TextInput(value)),
+                    TextInputAction::Cancel(default) => {
+                        // Per the spec: Esc takes the default. So we
+                        // still return the default value as a successful
+                        // TextInput rather than a Cancelled signal — the
+                        // wizard's "Esc = default" UX is the contract.
+                        return Ok(ModalAnswer::TextInput(default));
+                    }
                 },
             }
         }

@@ -45,6 +45,7 @@
 pub mod confirm;
 pub mod password;
 pub mod queue;
+pub mod text_input;
 
 pub(crate) use confirm::{ConfirmAction, ConfirmModal};
 pub(crate) use password::{PasswordAction, PasswordModal};
@@ -54,6 +55,11 @@ pub use confirm::ConfirmChoice;
 // `tui::modals::queue::ModalQueue` without an internal-path import.
 #[allow(unused_imports)]
 pub(crate) use queue::{ModalQueue, ModalAnswer, QueuedModal, WizardChoiceModal};
+// Task #642: TextInputModal for free-text wizard steps (Ollama URL,
+// profile name, etc.). Plugged into ModalQueue via QueuedModal::TextInput
+// and ModalAnswer::TextInput variants in queue.rs.
+#[allow(unused_imports)]
+pub(crate) use text_input::{TextInputAction, TextInputModal};
 
 // ─── Pending action enums (held alongside the modal on AnvilTui) ─────────────
 
