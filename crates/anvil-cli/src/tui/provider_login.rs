@@ -1570,4 +1570,119 @@ mod tests {
         modal.set_result(false, "error".to_string());
         assert!(!modal.is_active(), "modal should not be active on Result screen");
     }
+
+    // ── #582 regression: OAuth callback must drive a redraw without keypress ──
+    //
+    // Before commit eec1c54 the `OAuthWaiting` screen's background listener
+    // delivered the (code, state) pair to a `mpsc::Receiver`, but the receiver
+    // was only drained inside `handle_key`. With no keypress, the modal sat
+    // forever even though the browser had already shown "OAuth succeeded."
+    // The fix added a `poll_oauth_listener` call to the read_input frame tick.
+    //
+    // The test below directly exercises `poll_oauth_listener` — proving that
+    // a callback already sitting in the channel can be drained without any
+    // KeyEvent, which is the precondition the input_handler.rs fix relies on.
+
+    #[test]
+    fn poll_oauth_listener_returns_code_without_keypress() {
+        let mut modal = ProviderLoginModal::open(ProviderKind::AnvilApi);
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(String, String), String>>();
+        modal.screen = ProviderLoginScreen::OAuthWaiting {
+            provider: ProviderKind::AnvilApi,
+            started_at: Instant::now(),
+            port: Some(9876),
+            authorize_url: "https://example.com/authorize".to_string(),
+            fallback_url_input: String::new(),
+            fallback_cursor: 0,
+            result_rx: Some(rx),
+            expected_state: "state-xyz".to_string(),
+            pkce_verifier: "verifier-abc".to_string(),
+            redirect_uri: "http://localhost:9876/callback".to_string(),
+        };
+
+        // Simulate the background HTTP listener putting the callback into the
+        // channel. Critically, no KeyEvent is dispatched to the modal.
+        tx.send(Ok(("code-from-browser".to_string(), "state-xyz".to_string())))
+            .expect("send callback");
+
+        let action = modal
+            .poll_oauth_listener()
+            .expect("poll_oauth_listener must return an action when callback is pending");
+
+        match action {
+            ProviderLoginAction::OAuthCodeReceived { code, state, verifier, redirect_uri } => {
+                assert_eq!(code, "code-from-browser");
+                assert_eq!(state, "state-xyz");
+                assert_eq!(verifier, "verifier-abc");
+                assert_eq!(redirect_uri, "http://localhost:9876/callback");
+            }
+            other => panic!("Expected OAuthCodeReceived from poll_oauth_listener, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn poll_oauth_listener_returns_none_when_channel_empty() {
+        // Frame-tick polling must be cheap and non-blocking: an empty channel
+        // returns None so the input loop continues immediately.
+        let mut modal = ProviderLoginModal::open(ProviderKind::AnvilApi);
+        let (_tx, rx) = std::sync::mpsc::channel::<Result<(String, String), String>>();
+        modal.screen = ProviderLoginScreen::OAuthWaiting {
+            provider: ProviderKind::AnvilApi,
+            started_at: Instant::now(),
+            port: Some(9876),
+            authorize_url: "https://example.com/authorize".to_string(),
+            fallback_url_input: String::new(),
+            fallback_cursor: 0,
+            result_rx: Some(rx),
+            expected_state: "state-xyz".to_string(),
+            pkce_verifier: "verifier-abc".to_string(),
+            redirect_uri: "http://localhost:9876/callback".to_string(),
+        };
+
+        // Channel is open but empty — must not block.
+        assert!(modal.poll_oauth_listener().is_none());
+    }
+
+    #[test]
+    fn poll_oauth_listener_returns_none_outside_oauth_waiting() {
+        // Polling on a non-OAuthWaiting screen must be a no-op so the frame
+        // tick can safely call it unconditionally.
+        let mut modal = ProviderLoginModal::open(ProviderKind::AnvilApi);
+        // Default screen is AuthMethodPicker, not OAuthWaiting.
+        assert!(modal.poll_oauth_listener().is_none());
+    }
+
+    #[test]
+    fn poll_oauth_listener_surfaces_listener_error_via_result_screen() {
+        // When the listener reports a failure (e.g. state mismatch, network
+        // error) the modal must transition to the Result screen so the user
+        // sees the failure WITHOUT pressing any key. The input_handler fix
+        // converts `Continue` into a redraw request; this test verifies the
+        // modal-side state mutation that the redraw will surface.
+        let mut modal = ProviderLoginModal::open(ProviderKind::AnvilApi);
+        let (tx, rx) = std::sync::mpsc::channel::<Result<(String, String), String>>();
+        modal.screen = ProviderLoginScreen::OAuthWaiting {
+            provider: ProviderKind::AnvilApi,
+            started_at: Instant::now(),
+            port: Some(9876),
+            authorize_url: "https://example.com/authorize".to_string(),
+            fallback_url_input: String::new(),
+            fallback_cursor: 0,
+            result_rx: Some(rx),
+            expected_state: "state-xyz".to_string(),
+            pkce_verifier: "verifier".to_string(),
+            redirect_uri: "http://localhost:9876/callback".to_string(),
+        };
+        tx.send(Err("state mismatch".to_string()))
+            .expect("send error");
+
+        let action = modal
+            .poll_oauth_listener()
+            .expect("poll_oauth_listener must observe the error result");
+        assert!(matches!(action, ProviderLoginAction::Continue));
+        assert!(
+            matches!(modal.screen, ProviderLoginScreen::Result { ok: false, .. }),
+            "modal must be on the Result screen showing the listener error"
+        );
+    }
 }

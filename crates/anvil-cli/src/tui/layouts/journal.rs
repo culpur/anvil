@@ -453,3 +453,129 @@ fn render_palette(
         palette_area,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::tui::layouts::{LayoutLocalState, TuiLayoutRenderer};
+    use crate::tui::redraw::DirtyRegions;
+    use crate::tui::snapshot::LayoutSnapshot;
+
+    /// Build a snapshot tailored for the journal layout. Populates the model,
+    /// git branch, and tab list so the header has real content to render, and
+    /// pre-seeds the input buffer so the input row carries non-default text.
+    fn journal_snap() -> LayoutSnapshot {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.git_branch = "v2.2.14-phase1".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.input_text = "hello world".to_string();
+        snap.cursor_pos = 11;
+        snap
+    }
+
+    fn render_real_journal(
+        snap: &LayoutSnapshot,
+        width: u16,
+        height: u16,
+        tabs: bool,
+    ) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+        let mut local = LayoutLocalState::Journal {
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                super::Renderer { tabs }.render(frame, snap, &mut local, &mut hits);
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        let (bw, bh) = (buf.area.width as usize, buf.area.height as usize);
+        let mut rows = Vec::with_capacity(bh);
+        for row in 0..bh {
+            let mut line = String::with_capacity(bw);
+            for col in 0..bw {
+                let ch = buf[(col as u16, row as u16)].symbol();
+                if ch.is_empty() || ch == "\x00" {
+                    line.push(' ');
+                } else {
+                    line.push_str(ch);
+                }
+            }
+            rows.push(line.trim_end().to_string());
+        }
+        rows.join("\n")
+    }
+
+    /// #583 regression: with `DirtyRegions::SCROLLBACK` only (the streaming
+    /// soft-path post-flash-fix), the journal layout MUST still redraw the
+    /// header and input rows on every frame. Before commit 264c922 the
+    /// header carried stale cells from prior layouts; the fix adds a
+    /// sub-region `Clear` per band so each band is rewritten regardless of
+    /// the top-level flash gate.
+    ///
+    /// Sub-region clears are the safe option per
+    /// `feedback-tui-flash-anti-pattern.md`: "For sub-region clears
+    /// (header_area, content_area), those are OK — they're small and don't
+    /// cause perceptible flash."
+    #[test]
+    fn journal_redraws_header_and_input_on_scrollback_only_dirty() {
+        let mut snap = journal_snap();
+        snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        let rendered = render_real_journal(&snap, 100, 20, false);
+
+        // Header: model + git branch must appear on the header row.
+        assert!(
+            rendered.contains("claude-sonnet-4-6"),
+            "header model must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("v2.2.14-phase1"),
+            "header git branch must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+
+        // Input row: user-typed text must appear in the bottom row.
+        assert!(
+            rendered.contains("hello world"),
+            "input row text must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// #583 regression, paired test: with `DirtyRegions::ALL` the full-screen
+    /// `Clear` (gated behind ALL per task #622) fires, and header + input
+    /// rows still render coherently.
+    #[test]
+    fn journal_renders_header_and_input_with_dirty_all() {
+        let mut snap = journal_snap();
+        snap.dirty_regions = DirtyRegions::ALL;
+        let rendered = render_real_journal(&snap, 100, 20, false);
+        assert!(rendered.contains("claude-sonnet-4-6"));
+        assert!(rendered.contains("v2.2.14-phase1"));
+        assert!(rendered.contains("hello world"));
+    }
+
+    /// #583/#622 regression: a streaming `pending` text frame (SCROLLBACK-only)
+    /// must render the new tokens AND keep the header/input rows intact.
+    /// Before 264c922 the header would ghost; after the fix it does not.
+    #[test]
+    fn journal_streaming_pending_keeps_header_and_input_fresh() {
+        let mut snap = journal_snap();
+        snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        snap.pending = "Streaming response token".to_string();
+        let rendered = render_real_journal(&snap, 100, 20, false);
+        assert!(
+            rendered.contains("Streaming response token"),
+            "streaming pending must render; got:\n{rendered}"
+        );
+        // Header + input must still be visible — the photosensitivity-safe
+        // sub-region Clears are doing their job.
+        assert!(rendered.contains("claude-sonnet-4-6"));
+        assert!(rendered.contains("hello world"));
+    }
+}
