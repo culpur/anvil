@@ -16,13 +16,16 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 use serde_json::json;
 
 use crate::DEFAULT_MODEL;
 use crate::auth::run_anthropic_login;
+use crate::wizard_runner::{
+    CrosstermHooks, CrosstermKeySource, RunnerError, WizardModalRunner, WizardSession,
+};
 
 /// Returns true when `~/.anvil/config.json` already exists, meaning the user
 /// has already completed (or explicitly skipped) first-run setup.
@@ -232,6 +235,220 @@ pub(crate) fn wizard_parse_mouse_capture_choice(raw: &str) -> bool {
         raw.trim(),
         "2" | "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" | "true" | "True"
     )
+}
+
+/// Answers captured by the in-TUI modal portion of the wizard
+/// (steps 7 + 8: layout architecture, layout tabs, mouse capture,
+/// theme, permission mode).
+///
+/// This struct is the bridge between the modal-driven path and the
+/// stdin-based fallback path used when stdout is not a TTY.
+#[derive(Debug, Clone)]
+pub(crate) struct WizardTuiAnswers {
+    pub(crate) layout_kind: String,
+    pub(crate) layout_tabs: bool,
+    pub(crate) mouse_capture: bool,
+    pub(crate) theme: String,
+    pub(crate) permission_mode: String,
+}
+
+impl WizardTuiAnswers {
+    /// Conservative cross-platform defaults — used when ESC cancels a
+    /// step, when the queue runner short-circuits, or when stdout is
+    /// not a TTY. Mirrors the same defaults the stdin-path wizard
+    /// applies when the user just presses Enter.
+    pub(crate) fn defaults() -> Self {
+        Self {
+            layout_kind: "vertical-split".to_string(),
+            layout_tabs: true,
+            mouse_capture: false,
+            theme: "dark".to_string(),
+            permission_mode: "ask".to_string(),
+        }
+    }
+}
+
+/// Drive the four TUI-config modal steps inside a single alt-screen
+/// session. Returns the captured answers, or `Err` if the session
+/// could not enter alt-screen (e.g. non-TTY stdout). On any per-step
+/// cancel (Esc) the corresponding field falls back to the
+/// cross-platform default.
+///
+/// The session enters alt-screen exactly once at the start, renders a
+/// banner + 4 modals back-to-back without returning to inline mode,
+/// then exits alt-screen exactly once at `Drop`. See
+/// `feedback-tui-flash-anti-pattern.md` (#622) — the single-session
+/// design is the user-visible guarantee that there is no flicker.
+pub(crate) fn run_tui_config_modals_in_alt_screen() -> Result<WizardTuiAnswers, RunnerError> {
+    use crate::tui::modals::ConfirmChoice;
+    use crate::tui::modals::confirm::ConfirmModal;
+    use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use std::time::Duration;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let terminal = Terminal::new(backend).map_err(|e| RunnerError::Enter(e.to_string()))?;
+    let mut session = WizardSession::enter(terminal, CrosstermHooks::new())?;
+
+    // Initial banner — Step 7 of 8.
+    session.render_banner(
+        "Step 7 of 8 — TUI Layout",
+        &[
+            "Pick your default workspace architecture and tab visibility.",
+            "Live previews: https://anvilhub.culpur.net/tui-preview",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let keys = CrosstermKeySource {
+        poll_timeout: Duration::from_millis(50),
+    };
+    let mut runner = WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
+
+    let mut answers = WizardTuiAnswers::defaults();
+
+    // Step 7a: layout architecture
+    let layout_kind_modal = WizardChoiceModal::new(
+        "TUI Layout — pick architecture",
+        vec![
+            "Vertical Split  (default — sessions rail + swappable deck)".into(),
+            "Classic         (single-deck, pre-v2.2.16)".into(),
+            "Three-Pane      (FOCUS / LOG / CONTEXT)".into(),
+            "Journal         (timestamped column, Ctrl-K palette)".into(),
+        ],
+    );
+    let layout_kind_answer = runner.run_choice("layout-kind", layout_kind_modal)?;
+    answers.layout_kind = match layout_kind_answer {
+        ModalAnswer::Choice(0) => "vertical-split".to_string(),
+        ModalAnswer::Choice(1) => "classic".to_string(),
+        ModalAnswer::Choice(2) => "three-pane".to_string(),
+        ModalAnswer::Choice(3) => "journal".to_string(),
+        _ => "vertical-split".to_string(),
+    };
+
+    // Step 7b: tabs visibility
+    let layout_tabs_modal = ConfirmModal::new(
+        "Show workspace tabs?",
+        "Tabs let you keep multiple parallel sessions visible at once. \
+         Default = yes; press n / Esc for a single-session layout.",
+    );
+    let layout_tabs_answer = runner.run_confirm("layout-tabs", layout_tabs_modal)?;
+    answers.layout_tabs = matches!(
+        layout_tabs_answer,
+        ModalAnswer::Confirm(ConfirmChoice::Yes)
+    );
+
+    // Banner — Step 8 preferences.
+    runner.session.render_banner(
+        "Step 8 of 8 — TUI Preferences",
+        &[
+            "Mouse capture, theme, and default permission mode.",
+            "Change any of these later with /config or settings.json.",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    // Step 8a: mouse capture — default OFF (#623).
+    let mouse_modal = ConfirmModal::new(
+        "Enable mouse capture?",
+        "Default OFF. With capture OFF your terminal owns the mouse: \
+         drag-to-select + native copy work everywhere. With capture ON, \
+         Anvil intercepts mouse events for clickable tabs + wheel-scroll, \
+         but you must hold a modifier (Option on macOS, Shift elsewhere) \
+         to select text. Press y to opt in, n / Esc to keep the default.",
+    );
+    let mouse_answer = runner.run_confirm("mouse", mouse_modal)?;
+    answers.mouse_capture = matches!(
+        mouse_answer,
+        ModalAnswer::Confirm(ConfirmChoice::Yes)
+    );
+
+    // Step 8b: theme
+    let theme_modal = WizardChoiceModal::new(
+        "Theme",
+        vec![
+            "Dark   (default)".into(),
+            "Light".into(),
+            "Auto   (follow terminal background detection)".into(),
+        ],
+    );
+    let theme_answer = runner.run_choice("theme", theme_modal)?;
+    answers.theme = match theme_answer {
+        ModalAnswer::Choice(1) => "light".to_string(),
+        ModalAnswer::Choice(2) => "auto".to_string(),
+        _ => "dark".to_string(),
+    };
+
+    // Step 8c: permission mode
+    let perm_modal = WizardChoiceModal::new(
+        "Default permission mode",
+        vec![
+            "ask                  (confirm each tool call — safest, default)".into(),
+            "workspace-write      (auto-allow edits inside the workspace)".into(),
+            "danger-full-access   (no prompts — high trust required)".into(),
+        ],
+    );
+    let perm_answer = runner.run_choice("permission", perm_modal)?;
+    answers.permission_mode = match perm_answer {
+        ModalAnswer::Choice(1) => "workspace-write".to_string(),
+        ModalAnswer::Choice(2) => "danger-full-access".to_string(),
+        _ => "ask".to_string(),
+    };
+
+    // Session goes out of scope here — single LeaveAlternateScreen
+    // emitted by `WizardSession::drop`. The runner only borrows the
+    // session, so its scope-end is implicit.
+    Ok(answers)
+}
+
+/// Stdin fallback for the TUI-config steps. Used when stdout is not a
+/// TTY (CI / piped output / test fixtures). Preserves the legacy
+/// numbered-prompt UX so existing CI scripts that feed answers via
+/// stdin continue to work.
+fn run_tui_config_via_stdin() -> WizardTuiAnswers {
+    let mut answers = WizardTuiAnswers::defaults();
+
+    wizard_step_header(7, 8, "TUI Layout");
+    println!();
+    println!("    [1] Vertical Split  (default)");
+    println!("    [2] Classic");
+    println!("    [3] Three-Pane");
+    println!("    [4] Journal");
+    println!();
+    let layout_arch_choice = wizard_read_line("  Choice [1]: ");
+    answers.layout_kind = wizard_parse_layout_kind_choice(&layout_arch_choice).to_string();
+
+    println!();
+    println!("  Show workspace tabs? [1] Yes (default)  [2] No");
+    let layout_tabs_choice = wizard_read_line("  Choice [1]: ");
+    answers.layout_tabs = wizard_parse_layout_tabs_choice(&layout_tabs_choice);
+
+    wizard_step_header(8, 8, "TUI Preferences");
+    println!();
+    println!("  Enable mouse capture? [1] Off (default, recommended)  [2] On");
+    let mouse_choice = wizard_read_line("  Choice [1]: ");
+    answers.mouse_capture = wizard_parse_mouse_capture_choice(mouse_choice.trim());
+
+    println!();
+    println!("  Theme? [1] Dark (default)  [2] Light  [3] Auto");
+    let theme_choice = wizard_read_line("  Choice [1]: ");
+    answers.theme = match theme_choice.trim() {
+        "2" => "light".to_string(),
+        "3" => "auto".to_string(),
+        _ => "dark".to_string(),
+    };
+
+    println!();
+    println!("  Default permission mode? [1] ask (default)  [2] workspace-write  [3] danger-full-access");
+    let perm_choice = wizard_read_line("  Choice [1]: ");
+    answers.permission_mode = match perm_choice.trim() {
+        "2" => "workspace-write".to_string(),
+        "3" => "danger-full-access".to_string(),
+        _ => "ask".to_string(),
+    };
+
+    answers
 }
 
 /// Interactive first-run setup wizard.  Runs entirely in the plain terminal
@@ -770,97 +987,54 @@ pub(crate) fn run_first_run_wizard() {
         .cloned()
         .unwrap_or_else(|| "anthropic".to_string());
 
-    // ── Step 7: TUI Layout (v2.2.16) ─────────────────────────────────────────
-    wizard_step_header(7, 8, "TUI Layout");
-    println!();
-    println!("  Anvil offers four layouts (8 variants with/without tabs). Live previews:");
-    println!("    https://anvilhub.culpur.net/tui-preview");
-    println!();
-    println!("    [1] Vertical Split  — persistent sessions rail + swappable right deck  (default, recommended)");
-    println!("    [2] Classic         — single-deck, minimal, identical to pre-v2.2.16");
-    println!("    [3] Three-Pane      — FOCUS / LOG / CONTEXT, always-on input");
-    println!("    [4] Journal         — single-column, timestamped, Ctrl-K palette");
-    println!();
-    let layout_arch_choice = wizard_read_line("  Choice [1]: ");
-    let layout_kind_str = wizard_parse_layout_kind_choice(&layout_arch_choice);
-    println!();
-    println!("  Show workspace tabs?");
-    println!("    [1] Yes — multiple parallel sessions visible at once          (default)");
-    println!("    [2] No  — single session, tab strip hidden");
-    println!();
-    let layout_tabs_choice = wizard_read_line("  Choice [1]: ");
-    let layout_tabs = wizard_parse_layout_tabs_choice(&layout_tabs_choice);
+    // ── Steps 7 + 8: TUI Layout + Preferences (single alt-screen session) ───
+    //
+    // Task #579 v2.2.17 finisher: the four TUI-config prompts (layout
+    // architecture, layout tabs, mouse capture, theme, permission mode)
+    // render as in-TUI modals inside a SINGLE alt-screen session — the
+    // user sees no flicker, no inline transitions, and a single
+    // EnterAlternateScreen / LeaveAlternateScreen pair for the whole
+    // chunk. See `feedback-tui-flash-anti-pattern.md` (#622).
+    //
+    // Provider OAuth + vault password steps above intentionally stay on
+    // the stdin path per #578 / #627 exception — those need stdin echo
+    // control ratatui's alt-screen cannot replicate.
+    //
+    // Fallback: when stdout is not a TTY (CI / piped input), drop back
+    // to the stdin path so existing wizard-fed scripts keep working.
+    let tui_answers = if io::stdout().is_terminal() {
+        match run_tui_config_modals_in_alt_screen() {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("  Note: alt-screen unavailable ({e}); falling back to stdin prompts.");
+                run_tui_config_via_stdin()
+            }
+        }
+    } else {
+        run_tui_config_via_stdin()
+    };
+
+    let layout_kind_str = tui_answers.layout_kind.as_str();
+    let layout_tabs = tui_answers.layout_tabs;
     let layout_alias = wizard_compose_layout_alias(layout_kind_str, layout_tabs);
     let tabs_label = if layout_tabs { "tabs" } else { "no tabs" };
-    println!("  \x1b[32m✓\x1b[0m Layout = {layout_alias} ({tabs_label}). Change later with /layout or /configure layout.");
-    println!();
-
-    // ── Step 8: TUI Preferences ───────────────────────────────────────────────
-    wizard_step_header(8, 8, "TUI Preferences");
-    println!();
-    println!("  These shape the look and feel of the interactive REPL. You can");
-    println!("  change any of them later with /config or by editing settings.json.");
-    println!();
-
-    // Mouse capture (Task #623 / v2.2.14 Phase 1):
-    //
-    // **Default OFF.** Earlier wizards marked "Yes — enable mouse capture
-    // (recommended)" as default-Enter; that broke native click-drag text
-    // selection on Gnome Terminal (Ubuntu default) and on macOS Terminal.app.
-    // See `feedback-clipboard-parity.md` + `feedback-cross-platform-ux-defaults.md`.
-    //
-    // Default Enter → OFF, explicit `2` (or y/Y/yes/Yes) → ON.
-    println!("  \x1b[1;33mEnable mouse capture?\x1b[0m");
-    println!("  With capture OFF (the default) your terminal owns the mouse:");
-    println!("  drag-to-select + native copy work everywhere. With capture ON,");
-    println!("  Anvil intercepts mouse events for clickable tabs + wheel-scroll,");
-    println!("  but you must hold a modifier (Option on macOS, Shift on Linux/");
-    println!("  Windows) to select text.");
-    println!();
-    println!("    [1] Off — keyboard only, native text-selection works (recommended)");
-    println!("    [2] On  — clickable tabs + wheel-scroll (advanced)");
-    println!();
-    let mouse_choice = wizard_read_line("  Choice [1]: ");
-    let mouse_capture_enabled = wizard_parse_mouse_capture_choice(mouse_choice.trim());
-    if mouse_capture_enabled {
-        println!("  \x1b[32m✓\x1b[0m Mouse capture on. Override per-session with ANVIL_TUI_MOUSE=0.");
-    } else {
-        println!("  \x1b[32m✓\x1b[0m Mouse capture off. F2/F3 still switch tabs; /help shows all keys.");
-    }
-    println!();
-
-    // Theme
-    println!("  \x1b[1;33mTheme?\x1b[0m");
-    println!("    [1] Dark   (default)");
-    println!("    [2] Light");
-    println!("    [3] Auto   (follow terminal background detection)");
-    println!();
-    let theme_choice = wizard_read_line("  Choice [1]: ");
-    let theme_value = match theme_choice.trim() {
-        "2" => "light",
-        "3" => "auto",
-        _ => "dark",
-    };
-    println!("  \x1b[32m✓\x1b[0m Theme = {theme_value}. Change later with /theme.");
-    println!();
-
-    // Permission mode
-    println!("  \x1b[1;33mDefault permission mode?\x1b[0m");
-    println!("  Anvil asks before running tools that touch your system.");
-    println!("  Permission mode controls how much it asks vs. just acts.");
-    println!();
-    println!("    [1] ask                  — confirm each tool call (safest, default)");
-    println!("    [2] workspace-write      — auto-allow edits inside the workspace");
-    println!("    [3] danger-full-access   — no prompts (only use if you trust the model + prompt)");
-    println!();
-    let perm_choice = wizard_read_line("  Choice [1]: ");
-    let permission_mode_value = match perm_choice.trim() {
-        "2" => "workspace-write",
-        "3" => "danger-full-access",
-        _ => "ask",
-    };
     println!(
-        "  \x1b[32m✓\x1b[0m Permission mode = {permission_mode_value}. Change anytime with /permissions."
+        "  \x1b[32m\u{2713}\x1b[0m Layout = {layout_alias} ({tabs_label}). Change later with /layout or /configure layout."
+    );
+
+    let mouse_capture_enabled = tui_answers.mouse_capture;
+    if mouse_capture_enabled {
+        println!("  \x1b[32m\u{2713}\x1b[0m Mouse capture on. Override per-session with ANVIL_TUI_MOUSE=0.");
+    } else {
+        println!("  \x1b[32m\u{2713}\x1b[0m Mouse capture off. F2/F3 still switch tabs; /help shows all keys.");
+    }
+
+    let theme_value = tui_answers.theme.as_str();
+    println!("  \x1b[32m\u{2713}\x1b[0m Theme = {theme_value}. Change later with /theme.");
+
+    let permission_mode_value = tui_answers.permission_mode.as_str();
+    println!(
+        "  \x1b[32m\u{2713}\x1b[0m Permission mode = {permission_mode_value}. Change anytime with /permissions."
     );
     println!();
 
