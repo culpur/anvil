@@ -19,7 +19,9 @@ pub use skill_chaining::{
 };
 pub use skill_triggers::{filter_skills, match_triggers, whole_word_match_pub, TriggerMatch};
 pub use traits::{
-    bundled_catalogue, compose_agent, compose_agent_with_options, format_traits_listing,
+    bundled_catalogue, compose_agent, compose_agent_with_options,
+    format_agent_compose_empty_task_usage, format_agent_compose_empty_traits_usage,
+    format_agent_compose_error, format_agent_compose_summary, format_traits_listing,
     ComposeError, ComposeOptions, ComposedAgent, Trait, TraitCatalogue,
 };
 pub use git::{
@@ -127,6 +129,13 @@ pub enum SlashCommand {
     },
     Config {
         section: Option<String>,
+        /// Optional value when setting a known config key (e.g.
+        /// `/config tui_mouse_capture off`).  Read-only `/config [section]`
+        /// keeps `value == None`.  Task #623 (v2.2.14 Phase 1) added the
+        /// write path for `tui_mouse_capture` so users no longer have to
+        /// edit `~/.anvil/config.json` by hand to recover from the buggy
+        /// v2.2.13/15/16 wizard default.
+        value: Option<String>,
     },
     /// `/memory [show|inspect|promote|forget|why|budget|prune] [arg]`
     /// Inspect and manage all memory tiers (ANVIL.md, vault, nominations, cache, …).
@@ -654,6 +663,7 @@ impl SlashCommand {
             },
             "config" => Self::Config {
                 section: parts.next().map(ToOwned::to_owned),
+                value: parts.next().map(ToOwned::to_owned),
             },
             "memory" => Self::Memory {
                 action: remainder_after_command(trimmed, command),
@@ -1548,12 +1558,28 @@ mod tests {
         );
         assert_eq!(
             SlashCommand::parse("/config"),
-            Some(SlashCommand::Config { section: None })
+            Some(SlashCommand::Config { section: None, value: None })
         );
         assert_eq!(
             SlashCommand::parse("/config env"),
             Some(SlashCommand::Config {
-                section: Some("env".to_string())
+                section: Some("env".to_string()),
+                value: None,
+            })
+        );
+        // Task #623: `/config tui_mouse_capture <on|off>` write path.
+        assert_eq!(
+            SlashCommand::parse("/config tui_mouse_capture off"),
+            Some(SlashCommand::Config {
+                section: Some("tui_mouse_capture".to_string()),
+                value: Some("off".to_string()),
+            })
+        );
+        assert_eq!(
+            SlashCommand::parse("/config tui_mouse_capture on"),
+            Some(SlashCommand::Config {
+                section: Some("tui_mouse_capture".to_string()),
+                value: Some("on".to_string()),
             })
         );
         assert_eq!(
@@ -1680,7 +1706,7 @@ mod tests {
         assert!(help.contains("/clear [--confirm]"));
         assert!(help.contains("/cost"));
         assert!(help.contains("/resume <session-path>"));
-        assert!(help.contains("/config [env|hooks|model|plugins]"));
+        assert!(help.contains("/config [env|hooks|model|plugins|tui_mouse_capture] [on|off]"));
         assert!(help.contains("/memory"));
         assert!(help.contains("/init"));
         assert!(help.contains("/diff"));
@@ -2964,7 +2990,7 @@ mod tests {
             SlashCommand::Clear { confirm: false, all_tabs: false },
             SlashCommand::Cost,
             SlashCommand::Resume { session_path: None },
-            SlashCommand::Config { section: None },
+            SlashCommand::Config { section: None, value: None },
             SlashCommand::Memory { action: None },
             SlashCommand::Ollama { args: None },
             SlashCommand::Init,

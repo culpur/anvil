@@ -741,6 +741,60 @@ pub(crate) fn render_config_report(section: Option<&str>) -> Result<String, Box<
     ))
 }
 
+/// Parse a CLI-style boolean token (case-insensitive) into a real `bool`.
+///
+/// Accepted tokens: `on`/`off`, `true`/`false`, `yes`/`no`, `1`/`0`. Anything
+/// else returns `Err` so callers can surface a usage hint instead of
+/// silently treating unknown input as `false`.
+///
+/// Task #623 (v2.2.14 Phase 1): used by `/config tui_mouse_capture <on|off>`.
+pub(crate) fn parse_cli_bool(raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" | "enable" | "enabled" => Ok(true),
+        "off" | "false" | "no" | "0" | "disable" | "disabled" => Ok(false),
+        other => Err(format!(
+            "expected on/off (also true/false, yes/no, 1/0); got {other:?}"
+        )),
+    }
+}
+
+/// Write a boolean value into `~/.anvil/config.json` under `key`, preserving
+/// every other field already in the file.
+///
+/// Returns the parsed boolean on success so the caller can echo it back to
+/// the user with the canonical token. Used by the live TUI's `/config`
+/// write path (task #623 / v2.2.14 Phase 1).
+pub(crate) fn set_config_bool_value(key: &str, raw_value: &str) -> Result<bool, String> {
+    let parsed = parse_cli_bool(raw_value)?;
+    let home = dirs_next_home().ok_or_else(|| "could not determine $HOME".to_string())?;
+    let anvil_dir = home.join(".anvil");
+    std::fs::create_dir_all(&anvil_dir)
+        .map_err(|e| format!("could not create {}: {e}", anvil_dir.display()))?;
+    let config_path = anvil_dir.join("config.json");
+
+    let mut existing: serde_json::Map<String, serde_json::Value> = if config_path.exists() {
+        let raw = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("could not read {}: {e}", config_path.display()))?;
+        if raw.trim().is_empty() {
+            serde_json::Map::new()
+        } else {
+            serde_json::from_str::<serde_json::Value>(&raw)
+                .map_err(|e| format!("config.json is not valid JSON: {e}"))?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "config.json root must be an object".to_string())?
+        }
+    } else {
+        serde_json::Map::new()
+    };
+    existing.insert(key.to_string(), serde_json::Value::Bool(parsed));
+    let serialized = serde_json::to_string_pretty(&serde_json::Value::Object(existing))
+        .map_err(|e| format!("could not serialise config.json: {e}"))?;
+    std::fs::write(&config_path, serialized)
+        .map_err(|e| format!("could not write {}: {e}", config_path.display()))?;
+    Ok(parsed)
+}
+
 pub(crate) fn render_memory_report() -> Result<String, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
     let project_context = ProjectContext::discover(&cwd, DEFAULT_DATE)?;

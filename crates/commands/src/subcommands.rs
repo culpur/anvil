@@ -1827,10 +1827,15 @@ pub const PERMISSIONS_SUBCOMMANDS: &[SubcommandSpec] = &[
 
 // ─── /config subcommands (v2.2.14 — drift-prevention) ────────────────────────
 
-/// /config — inspect merged config sections.
+/// /config — inspect merged config sections or set known boolean keys.
 ///
-/// These names match the `match section` arms in `render_config_report()`
-/// (`crates/anvil-cli/src/utils.rs`).
+/// Read-only names (`env` / `hooks` / `model` / `plugins`) match the
+/// `match section` arms in `render_config_report()`
+/// (`crates/anvil-cli/src/utils.rs`). The writable key `tui_mouse_capture`
+/// is wired in the TUI dispatch at
+/// `crates/anvil-cli/src/main.rs::SlashCommand::Config { .. }` and was added
+/// for task #623 (v2.2.14 Phase 1) so users can recover from the buggy
+/// v2.2.13/15/16 wizard that left mouse capture ON by default.
 pub const CONFIG_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec {
         name: "env",
@@ -1856,7 +1861,16 @@ pub const CONFIG_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[],
         subcommands: &[],
     },
+    SubcommandSpec {
+        name: "tui_mouse_capture",
+        summary: "Toggle TUI mouse capture: /config tui_mouse_capture <on|off>",
+        args: &[ArgSpec::OneOf(CONFIG_BOOL_VALUES)],
+        subcommands: &[],
+    },
 ];
+
+/// Boolean tokens accepted by `/config <key> <value>` (task #623).
+pub const CONFIG_BOOL_VALUES: &[&str] = &["on", "off"];
 
 // ─── /effort subcommands (v2.2.14 — drift-prevention) ────────────────────────
 
@@ -2003,6 +2017,13 @@ pub const CONFIG_SUBCOMMAND_NAMES: &[&str] = &[
     "hooks",
     "model",
     "plugins",
+    "tui_mouse_capture",
+    // Value tokens accepted by `/config tui_mouse_capture <on|off>`.
+    // Listed here so the Phase 5.2c drift-prevention gate
+    // (`every_subcommand_in_hint_is_in_const`) accepts the value
+    // group in the hint string.
+    "on",
+    "off",
 ];
 
 // ── /import ────────────────────────────────────────────────────────────────

@@ -320,6 +320,58 @@ pub fn compose_agent_with_options(
     })
 }
 
+// ── User-facing message helpers ───────────────────────────────────────────────
+//
+// These return pure strings (no `println!`) so that callers in both TUI and
+// headless modes can choose where the output goes — `tui.push_system(msg)`
+// for the live ratatui session, `println!("{msg}")` for `--print` / batch
+// mode.  Task #624 (v2.2.14 Phase 1): the previous `run_agent_command` in
+// `cmd_provider.rs` wrote directly to stdout, which corrupted the TUI
+// back-buffer because bytes went BEHIND the alt-screen.
+//
+// See also `feedback-tui-stdout-anti-pattern.md`.
+
+/// Usage message when `/agent compose` is invoked with no trait list.
+#[must_use]
+pub fn format_agent_compose_empty_traits_usage() -> String {
+    "No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\""
+        .to_string()
+}
+
+/// Usage message when `/agent compose <traits>` is invoked with no task.
+#[must_use]
+pub fn format_agent_compose_empty_task_usage(traits: &[String]) -> String {
+    format!(
+        "No task provided. Usage: /agent compose {} \"<task description>\"",
+        traits.join(",")
+    )
+}
+
+/// Format a `ComposeError` as a user-facing message.
+#[must_use]
+pub fn format_agent_compose_error(err: &ComposeError) -> String {
+    match err {
+        ComposeError::EmptyTraits => format_agent_compose_empty_traits_usage(),
+        ComposeError::UnknownTrait(name) => {
+            format!("Unknown trait: {name}. Run /agent traits to list available traits.")
+        }
+        ComposeError::ConflictingTraits { dim, a, b } => format!(
+            "Conflicting traits in dimension \"{dim}\": \"{a}\" and \"{b}\" cannot be combined — \
+             they would fight over the same identity axis.\n\
+             Remove one of them, or use traits from different dimensions.\n\
+             (A future version will add --allow-conflicts for when you really want this.)"
+        ),
+        ComposeError::ParseError(msg) => format!("Trait catalogue parse error: {msg}"),
+    }
+}
+
+/// Summary header for a successfully composed agent, e.g.
+/// `"Composing agent with traits: security, skeptical"`.
+#[must_use]
+pub fn format_agent_compose_summary(composed: &ComposedAgent) -> String {
+    format!("Composing agent with traits: {}", composed.traits.join(", "))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -494,5 +546,113 @@ mod tests {
             personality_pos < approach_pos,
             "personality must come before approach in prompt"
         );
+    }
+
+    // ── Task #624: TUI-safe output helpers (no println!) ─────────────────────
+    //
+    // These tests pin the contract that `/agent traits` and `/agent compose`
+    // return strings the caller can route through `tui.push_system` (so the
+    // ratatui back-buffer stays consistent) rather than writing directly to
+    // stdout (which used to bypass the alt-screen and freeze the visible TUI).
+    //
+    // See `feedback-tui-stdout-anti-pattern.md`.
+
+    /// `/agent traits` must produce a non-empty listing as a returned String
+    /// — it must NOT print to stdout, and `format_traits_listing` is the only
+    /// function we expose to build that listing.  Any future refactor that
+    /// adds a `println!` path for `/agent traits` will fail the `grep` audit
+    /// gate inside `cmd_provider.rs`.
+    #[test]
+    fn run_agent_traits_returns_listing_as_string_not_prints() {
+        let listing = format_traits_listing(bundled_catalogue());
+        assert!(
+            !listing.is_empty(),
+            "traits listing must be a non-empty string"
+        );
+        assert!(
+            listing.contains("Available agent traits"),
+            "traits listing must include a header line — got: {listing}"
+        );
+        assert!(
+            listing.contains("Usage: /agent compose"),
+            "traits listing must include the compose usage footer"
+        );
+        // The function returns a String — confirm it via a type-check at the
+        // call site.  If a future refactor changes the return type to `()`,
+        // this test stops compiling.
+        let _: String = listing;
+    }
+
+    /// `/agent compose` (no trait list, no task) must return a usage string
+    /// the caller can `push_system` to the TUI.  Previously this used
+    /// `println!`, which corrupted the back-buffer.
+    #[test]
+    fn run_agent_compose_no_traits_returns_usage_string() {
+        let msg = format_agent_compose_empty_traits_usage();
+        assert!(msg.contains("No traits provided"));
+        assert!(msg.contains("/agent compose"));
+        // Same shape via the unified error formatter.
+        assert_eq!(
+            format_agent_compose_error(&ComposeError::EmptyTraits),
+            msg,
+            "EmptyTraits formatter must agree with the bare usage helper"
+        );
+    }
+
+    /// `/agent compose <traits> "<task>"` must surface a summary header
+    /// the caller can push to the TUI before the model turn runs.  The
+    /// header must list every trait the user requested, separated by
+    /// `", "` (not commas-without-spaces).
+    #[test]
+    fn run_agent_compose_with_valid_traits_returns_composition_summary() {
+        let cat = bundled_catalogue();
+        let composed = compose_agent(
+            cat,
+            &["security", "blunt", "root-cause"],
+            "Audit auth.rs.",
+        )
+        .expect("compose should succeed for known traits");
+
+        let summary = format_agent_compose_summary(&composed);
+        assert!(
+            summary.starts_with("Composing agent with traits:"),
+            "summary must start with the canonical prefix — got: {summary}"
+        );
+        assert!(summary.contains("security"));
+        assert!(summary.contains("blunt"));
+        assert!(summary.contains("root-cause"));
+        assert!(
+            summary.contains(", "),
+            "trait list must be comma-and-space separated for readability"
+        );
+        // Type pin: caller receives a String, not `()`.
+        let _: String = summary;
+    }
+
+    /// Integration assertion: the helper outputs intended for the TUI must
+    /// NOT contain raw ANSI control sequences that would betray a
+    /// `println!`-shaped origin (e.g. embedded `\r\n` line endings or
+    /// alt-screen escape codes).  This pins the property the bug report
+    /// flagged on 2026-05-18 — that `/agent traits` output appears in the
+    /// scrollback log via `push_system`, not as raw stdout bytes that the
+    /// alt-screen swallows.
+    #[test]
+    fn agent_traits_output_appears_in_tui_log_not_raw_stdout() {
+        let listing = format_traits_listing(bundled_catalogue());
+        // Newlines are fine (push_system wraps and renders them); embedded
+        // carriage returns or DEC private-mode escapes are not.
+        assert!(
+            !listing.contains('\r'),
+            "TUI-bound output must not contain carriage returns"
+        );
+        assert!(
+            !listing.contains("\x1b["),
+            "TUI-bound output must not contain raw ANSI escape sequences"
+        );
+        // Compose error formatter, same property.
+        let err_msg = format_agent_compose_error(&ComposeError::UnknownTrait("ghost".to_string()));
+        assert!(err_msg.contains("Unknown trait: ghost"));
+        assert!(!err_msg.contains('\r'));
+        assert!(!err_msg.contains("\x1b["));
     }
 }

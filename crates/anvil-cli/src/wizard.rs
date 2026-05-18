@@ -175,6 +175,27 @@ pub(crate) fn wizard_save_config(
     Ok(path)
 }
 
+/// Parse a wizard step-7 mouse-capture choice into a boolean.
+///
+/// **Default OFF.** Task #623 (v2.2.14 Phase 1) fixed the v2.2.13/15/16
+/// regression where the wizard offered "[1] Yes — enable mouse capture
+/// (recommended)" and an empty Enter sent the user to ON. On Gnome Terminal
+/// (Ubuntu default) and macOS Terminal.app, mouse capture ON breaks native
+/// click-drag text selection.
+///
+/// Truth table:
+/// - `""` (blank / Enter)       → `false` (OFF, the default)
+/// - `"1"` / `"n"` / `"no"`     → `false` (OFF, explicit)
+/// - `"2"` / `"y"` / `"yes"`    → `true`  (ON, opt-in)
+/// - anything else              → `false` (conservative — never silently flip ON)
+#[must_use]
+pub(crate) fn wizard_parse_mouse_capture_choice(raw: &str) -> bool {
+    matches!(
+        raw.trim(),
+        "2" | "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" | "true" | "True"
+    )
+}
+
 /// Interactive first-run setup wizard.  Runs entirely in the plain terminal
 /// before the TUI is started.
 #[allow(clippy::too_many_lines, clippy::single_match_else)]
@@ -752,21 +773,30 @@ pub(crate) fn run_first_run_wizard() {
     println!("  change any of them later with /config or by editing settings.json.");
     println!();
 
-    // Mouse capture
+    // Mouse capture (Task #623 / v2.2.14 Phase 1):
+    //
+    // **Default OFF.** Earlier wizards marked "Yes — enable mouse capture
+    // (recommended)" as default-Enter; that broke native click-drag text
+    // selection on Gnome Terminal (Ubuntu default) and on macOS Terminal.app.
+    // See `feedback-clipboard-parity.md` + `feedback-cross-platform-ux-defaults.md`.
+    //
+    // Default Enter → OFF, explicit `2` (or y/Y/yes/Yes) → ON.
     println!("  \x1b[1;33mEnable mouse capture?\x1b[0m");
-    println!("  Mouse capture lets you CLICK tab labels to switch tabs, click");
-    println!("  the × glyph to close them, and use the wheel to scroll chat.");
-    println!("  Native drag-to-select still works (Shift+Drag passes through).");
+    println!("  With capture OFF (the default) your terminal owns the mouse:");
+    println!("  drag-to-select + native copy work everywhere. With capture ON,");
+    println!("  Anvil intercepts mouse events for clickable tabs + wheel-scroll,");
+    println!("  but you must hold a modifier (Option on macOS, Shift on Linux/");
+    println!("  Windows) to select text.");
     println!();
-    println!("    [1] Yes — enable mouse capture (recommended)");
-    println!("    [2] No  — keyboard only");
+    println!("    [1] Off — keyboard only, native text-selection works (recommended)");
+    println!("    [2] On  — clickable tabs + wheel-scroll (advanced)");
     println!();
     let mouse_choice = wizard_read_line("  Choice [1]: ");
-    let mouse_capture_enabled = !matches!(mouse_choice.trim(), "2" | "n" | "N" | "no" | "No");
+    let mouse_capture_enabled = wizard_parse_mouse_capture_choice(mouse_choice.trim());
     if mouse_capture_enabled {
         println!("  \x1b[32m✓\x1b[0m Mouse capture on. Override per-session with ANVIL_TUI_MOUSE=0.");
     } else {
-        println!("  Mouse capture off. F2/F3 still switch tabs; /help shows all keys.");
+        println!("  \x1b[32m✓\x1b[0m Mouse capture off. F2/F3 still switch tabs; /help shows all keys.");
     }
     println!();
 
@@ -1024,5 +1054,49 @@ fn wizard_run_import_pipeline(claude_dir: &std::path::Path) {
             println!("  \x1b[31mMigration encountered an error: {e}\x1b[0m");
             println!("  You can retry later with `/import claude-code`.");
         }
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Task #623 / v2.2.14 Phase 1 regression gate.
+    ///
+    /// An empty wizard response (the user pressed Enter on step 7) MUST
+    /// resolve to mouse capture OFF. The buggy v2.2.16 wizard offered
+    /// "[1] Yes — enable mouse capture (recommended)" and silently flipped
+    /// the default to ON, which broke text selection on Gnome Terminal
+    /// (Ubuntu default) and macOS Terminal.app.
+    #[test]
+    fn wizard_default_enter_yields_mouse_capture_off() {
+        // Empty input == user pressed Enter on the prompt.
+        assert!(!wizard_parse_mouse_capture_choice(""));
+        // Whitespace-only input is treated the same as empty.
+        assert!(!wizard_parse_mouse_capture_choice("   "));
+        // Choice "1" (the documented default option) is also OFF.
+        assert!(!wizard_parse_mouse_capture_choice("1"));
+    }
+
+    /// Task #623 / v2.2.14 Phase 1: explicit `2` (or yes/Yes/y/Y) opts in
+    /// to mouse capture. Any other token (including unknown ones) stays
+    /// OFF — the conservative default — so a typo cannot silently enable
+    /// the regression-causing mode.
+    #[test]
+    fn wizard_explicit_2_yields_mouse_capture_on() {
+        assert!(wizard_parse_mouse_capture_choice("2"));
+        assert!(wizard_parse_mouse_capture_choice("y"));
+        assert!(wizard_parse_mouse_capture_choice("Y"));
+        assert!(wizard_parse_mouse_capture_choice("yes"));
+        assert!(wizard_parse_mouse_capture_choice("Yes"));
+        assert!(wizard_parse_mouse_capture_choice("YES"));
+        assert!(wizard_parse_mouse_capture_choice("on"));
+        assert!(wizard_parse_mouse_capture_choice("true"));
+        // Unknown tokens stay OFF — never silently flip ON.
+        assert!(!wizard_parse_mouse_capture_choice("maybe"));
+        assert!(!wizard_parse_mouse_capture_choice("3"));
+        assert!(!wizard_parse_mouse_capture_choice("foo"));
     }
 }

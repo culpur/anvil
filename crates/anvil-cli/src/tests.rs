@@ -436,7 +436,7 @@ fn repl_help_includes_shared_commands_and_exit() {
     assert!(help.contains("/clear [--confirm]"));
     assert!(help.contains("/cost"));
     assert!(help.contains("/resume <session-path>"));
-    assert!(help.contains("/config [env|hooks|model|plugins]"));
+    assert!(help.contains("/config [env|hooks|model|plugins|tui_mouse_capture] [on|off]"));
     assert!(help.contains("/memory"));
     assert!(help.contains("/init"));
     assert!(help.contains("/diff"));
@@ -729,12 +729,13 @@ fn parses_resume_and_config_slash_commands() {
     );
     assert_eq!(
         SlashCommand::parse("/config"),
-        Some(SlashCommand::Config { section: None })
+        Some(SlashCommand::Config { section: None, value: None })
     );
     assert_eq!(
         SlashCommand::parse("/config env"),
         Some(SlashCommand::Config {
-            section: Some("env".to_string())
+            section: Some("env".to_string()),
+            value: None,
         })
     );
     assert_eq!(

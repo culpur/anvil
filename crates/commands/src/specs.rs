@@ -248,8 +248,8 @@ Examples:
     SlashCommandSpec {
         name: "config",
         aliases: &[],
-        summary: "Inspect Anvil config files or merged sections",
-        argument_hint: Some("[env|hooks|model|plugins]"),
+        summary: "Inspect Anvil config files, merged sections, or set tui_mouse_capture",
+        argument_hint: Some("[env|hooks|model|plugins|tui_mouse_capture] [on|off]"),
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
         detailed_help: "",

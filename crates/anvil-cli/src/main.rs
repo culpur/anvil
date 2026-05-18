@@ -44,7 +44,7 @@ mod wizard;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
-pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, build_system_prompt_with_identity, friendly_provider_label, run_theme_command, is_local_or_git_install_source, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
+pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, set_config_bool_value, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, build_system_prompt_with_identity, friendly_provider_label, run_theme_command, is_local_or_git_install_source, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
 
 pub(crate) use configure::config_data_to_json;
 
@@ -68,10 +68,10 @@ use api::{
 };
 
 use commands::{
-    format_suggestions_hint, handle_agents_slash_command,
-    handle_plugins_slash_command, handle_skills_slash_command, load_skill_body, match_triggers,
-    render_command_detailed_help, AgentSubcommand, SkillSubcommand, SlashCommand,
-    bundled_catalogue, compose_agent, format_traits_listing, ComposeError,
+    bundled_catalogue, format_suggestions_hint, format_traits_listing,
+    handle_agents_slash_command, handle_plugins_slash_command, handle_skills_slash_command,
+    load_skill_body, match_triggers, render_command_detailed_help, AgentSubcommand,
+    SkillSubcommand, SlashCommand,
 };
 use compat_harness::{extract_manifest, UpstreamPaths};
 use render::{
@@ -1651,9 +1651,18 @@ fn run_resume_command(
                 message: Some(format_cost_report(usage)),
             })
         }
-        SlashCommand::Config { section } => Ok(ResumeCommandOutcome {
+        SlashCommand::Config { section, value } => Ok(ResumeCommandOutcome {
             session: session.clone(),
-            message: Some(render_config_report(section.as_deref())?),
+            // Write-mode is a TUI-only affordance (the resume replay path
+            // has no live config to mutate); fall back to the read-only
+            // report and surface a hint that --resume can't write.
+            message: Some(if value.is_some() {
+                "/config <key> <value> writes are only available in an interactive \
+                 session. Run `anvil` and re-issue the command."
+                    .to_string()
+            } else {
+                render_config_report(section.as_deref())?
+            }),
         }),
         SlashCommand::Memory { action } => Ok(ResumeCommandOutcome {
             session: session.clone(),
@@ -5384,9 +5393,37 @@ impl LiveCli {
             SlashCommand::Version => {
                 (format!("Anvil CLI v{VERSION}\nBuild: {BUILD_TARGET} / {GIT_SHA}"), false)
             }
-            SlashCommand::Config { section } => {
-                let report = render_config_report(section.as_deref())?;
-                (report, false)
+            SlashCommand::Config { section, value } => {
+                // Task #623 (v2.2.14 Phase 1): `/config <key> <value>` is
+                // the write path for users to recover from the buggy v2.2.13/
+                // 15/16 wizard that left `tui_mouse_capture: true` in
+                // ~/.anvil/config.json against their wishes. The only
+                // writable key today is `tui_mouse_capture`; add more here
+                // (and document them in the spec's argument_hint) as new
+                // settings need an interactive setter.
+                match (section.as_deref(), value.as_deref()) {
+                    (Some("tui_mouse_capture"), Some(v)) => {
+                        let msg = match set_config_bool_value("tui_mouse_capture", v) {
+                            Ok(new_value) => format!(
+                                "\u{2713} tui_mouse_capture = {new_value}. \
+                                 Restart Anvil for the change to take effect."
+                            ),
+                            Err(e) => format!("\u{2717} /config tui_mouse_capture: {e}"),
+                        };
+                        (msg, false)
+                    }
+                    (Some(_key), Some(_)) => (
+                        "/config: only `tui_mouse_capture` supports the write \
+                         form right now. Edit ~/.anvil/config.json for other keys, \
+                         or run `/config` without a value to see the read-only report."
+                            .to_string(),
+                        false,
+                    ),
+                    _ => {
+                        let report = render_config_report(section.as_deref())?;
+                        (report, false)
+                    }
+                }
             }
             SlashCommand::Memory { action } => {
                 // Phase 2 / Bucket 2 / L1 §4-5: dispatch `/memory <action>` to
@@ -5855,95 +5892,16 @@ impl LiveCli {
                 ("Focus mode is handled by the TUI event loop.".to_string(), false)
             }
             SlashCommand::Agent { subcommand } => {
-                // For the TUI path, /agent traits is a simple listing.
-                // /agent compose runs a full model turn via rebuild-run-restore.
-                match subcommand {
-                    AgentSubcommand::Traits => {
-                        let catalogue = bundled_catalogue();
-                        (format_traits_listing(catalogue), false)
-                    }
-                    AgentSubcommand::Compose { traits, task } => {
-                        if traits.is_empty() {
-                            return Ok(("No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\"".to_string(), false));
-                        }
-                        if task.trim().is_empty() {
-                            return Ok((format!("No task provided. Usage: /agent compose {} \"<task description>\"", traits.join(",")), false));
-                        }
-                        let catalogue = bundled_catalogue();
-                        let trait_refs: Vec<&str> = traits.iter().map(String::as_str).collect();
-                        match compose_agent(catalogue, &trait_refs, &task) {
-                            Err(ComposeError::EmptyTraits) => ("No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\"".to_string(), false),
-                            Err(ComposeError::UnknownTrait(name)) => (format!("Unknown trait: {name}. Run /agent traits to list available traits."), false),
-                            Err(ComposeError::ConflictingTraits { dim, a, b }) => (
-                                format!(
-                                    "Conflicting traits in dimension \"{dim}\": \"{a}\" and \"{b}\" cannot be combined.\nRemove one, or use traits from different dimensions.\n(A future version will add --allow-conflicts.)"
-                                ),
-                                false,
-                            ),
-                            Err(ComposeError::ParseError(msg)) => (format!("Trait catalogue parse error: {msg}"), false),
-                            Ok(composed) => {
-                                let header = format!("Composing agent with traits: {}", composed.traits.join(", "));
-                                let original_system_prompt = self.system_prompt.clone();
-                                // The composed trait body is a single text fragment.
-                                // Tag it as Custom so it survives serialization but
-                                // sits at the top of the prompt, mirroring the old
-                                // "insert(0, composed.prompt)" behavior.
-                                let mut composed_system_prompt: Vec<runtime::PromptSection> = vec![
-                                    runtime::PromptSection::new(
-                                        runtime::PromptSectionKind::Custom,
-                                        composed.prompt.clone(),
-                                    ),
-                                ];
-                                composed_system_prompt.extend(original_system_prompt.iter().cloned());
-
-                                let rebuild = build_runtime_with_tui_slot(
-                                    self.active_runtime().session().clone(),
-                                    self.model.clone(),
-                                    composed_system_prompt,
-                                    true,
-                                    true,
-                                    self.allowed_tools.clone(),
-                                    self.permission_mode,
-                                    None,
-                                    self.active_tui_slot(),
-                                    self.agent_manager.clone(),
-                                );
-                                match rebuild {
-                                    Err(e) => (format!("agent compose: failed to build runtime: {e}"), false),
-                                    Ok(new_runtime) => {
-                                        self.install_active_runtime(new_runtime);
-                                        let turn_result = self.run_turn(&task);
-                                        let restore = build_runtime_with_tui_slot(
-                                            self.active_runtime().session().clone(),
-                                            self.model.clone(),
-                                            original_system_prompt.clone(),
-                                            true,
-                                            true,
-                                            self.allowed_tools.clone(),
-                                            self.permission_mode,
-                                            None,
-                                            self.active_tui_slot(),
-                                            self.agent_manager.clone(),
-                                        );
-                                        self.system_prompt = original_system_prompt;
-                                        if let Ok(restored) = restore {
-                                            self.install_active_runtime(restored);
-                                        }
-                                        if let Err(e) = turn_result {
-                                            (format!("{header}\nagent compose turn failed: {e}"), false)
-                                        } else {
-                                            (header, false)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    AgentSubcommand::Install { slug } => {
-                        let msg = self.run_hub_install_typed(&slug, Some("agent"), false);
-                        (msg, false)
-                    }
-                }
+                // Task #624 (v2.2.14 Phase 1): all `/agent` user-facing output
+                // is produced by the canonical handler `run_agent_command` in
+                // `cmd_provider.rs`, which returns `Result<String, _>` instead
+                // of writing to stdout.  The TUI caller pushes the returned
+                // string through `tui.push_system` (via `run_command_for_tui`'s
+                // caller wrapper) so the line lands in the ratatui scrollback
+                // and the back-buffer stays consistent.  See
+                // `feedback-tui-stdout-anti-pattern.md`.
+                let msg = self.run_agent_command(subcommand)?;
+                (msg, false)
             }
             SlashCommand::Skill { subcommand } => {
                 match subcommand {

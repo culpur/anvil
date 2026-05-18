@@ -27,7 +27,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use api::{detect_provider_kind, provider_display_name, ProviderKind};
-use commands::{AgentSubcommand, bundled_catalogue, compose_agent, format_traits_listing, ComposeError};
+use commands::{
+    bundled_catalogue, compose_agent, format_agent_compose_empty_task_usage,
+    format_agent_compose_empty_traits_usage, format_agent_compose_error,
+    format_agent_compose_summary, format_traits_listing, AgentSubcommand,
+};
 use runtime::{format_package_detail, format_package_list, BlockingHubClient, pricing_for_model};
 
 use crate::{
@@ -886,73 +890,50 @@ impl LiveCli {
 
     /// Handle `/agent compose <traits> "<task>"` and `/agent traits`.
     ///
-    /// For `compose`: loads the bundled catalogue, calls `compose_agent`, then
-    /// runs the task as a subagent turn.  The turn runs through the existing
-    /// runtime with the composed system prompt prepended — using the same path
-    /// as `/fast` mode (rebuild runtime with modified prompt, run one turn,
-    /// restore).  This keeps it on the `build_runtime_with_tui_slot` path and
-    /// inside the existing `AgentManager`.
+    /// Returns a user-facing message as `Ok(String)`.  The caller decides
+    /// where the message goes:
+    /// * TUI mode → `tui.push_system(msg)` so the line lands in the
+    ///   ratatui scrollback and the back-buffer stays consistent.
+    /// * Headless `--print` / batch mode → `println!("{msg}")`.
     ///
-    /// For `traits`: prints `format_traits_listing` to stdout.
+    /// Task #624 (v2.2.14 Phase 1): the previous version of this function
+    /// wrote directly to stdout with `println!`, which corrupted the visible
+    /// TUI because bytes went behind the alt-screen and ratatui's diff
+    /// renderer never saw them.  Subsequent input/output stopped rendering
+    /// until the TUI exited.  See `feedback-tui-stdout-anti-pattern.md`.
+    ///
+    /// For `compose`: loads the bundled catalogue, calls `compose_agent`,
+    /// runs the task as a subagent turn (via `run_turn`, which already
+    /// routes through the TUI event stream when active), and returns the
+    /// pre-turn summary header.  Validation errors return their own message.
+    ///
+    /// For `traits`: returns `format_traits_listing(catalogue)`.
+    ///
+    /// For `install`: returns the hub install report.
     pub(crate) fn run_agent_command(
         &mut self,
         subcommand: AgentSubcommand,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<String, Box<dyn std::error::Error>> {
         match subcommand {
             AgentSubcommand::Traits => {
                 let catalogue = bundled_catalogue();
-                println!("{}", format_traits_listing(catalogue));
-                Ok(())
+                Ok(format_traits_listing(catalogue))
             }
             AgentSubcommand::Compose { traits, task } => {
                 if traits.is_empty() {
-                    println!(
-                        "No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\""
-                    );
-                    return Ok(());
+                    return Ok(format_agent_compose_empty_traits_usage());
                 }
                 if task.trim().is_empty() {
-                    println!(
-                        "No task provided. Usage: /agent compose {} \"<task description>\"",
-                        traits.join(",")
-                    );
-                    return Ok(());
+                    return Ok(format_agent_compose_empty_task_usage(&traits));
                 }
 
                 let catalogue = bundled_catalogue();
                 let trait_refs: Vec<&str> = traits.iter().map(String::as_str).collect();
 
                 match compose_agent(catalogue, &trait_refs, &task) {
-                    Err(ComposeError::EmptyTraits) => {
-                        println!(
-                            "No traits provided. Usage: /agent compose security,skeptical,first-principles \"audit auth.rs\""
-                        );
-                        Ok(())
-                    }
-                    Err(ComposeError::UnknownTrait(name)) => {
-                        println!(
-                            "Unknown trait: {name}. Run /agent traits to list available traits."
-                        );
-                        Ok(())
-                    }
-                    Err(ComposeError::ConflictingTraits { dim, a, b }) => {
-                        println!(
-                            "Conflicting traits in dimension \"{dim}\": \"{a}\" and \"{b}\" \
-                             cannot be combined — they would fight over the same identity axis.\n\
-                             Remove one of them, or use traits from different dimensions.\n\
-                             (A future version will add --allow-conflicts for when you really want this.)"
-                        );
-                        Ok(())
-                    }
-                    Err(ComposeError::ParseError(msg)) => {
-                        println!("Trait catalogue parse error: {msg}");
-                        Ok(())
-                    }
+                    Err(err) => Ok(format_agent_compose_error(&err)),
                     Ok(composed) => {
-                        println!(
-                            "Composing agent with traits: {}\n",
-                            composed.traits.join(", ")
-                        );
+                        let header = format_agent_compose_summary(&composed);
 
                         // Rebuild runtime with composed system prompt prepended,
                         // run one turn, then restore — same pattern as /fast mode.
@@ -999,14 +980,15 @@ impl LiveCli {
                             self.install_active_runtime(restored);
                         }
 
-                        turn_result
+                        match turn_result {
+                            Ok(()) => Ok(header),
+                            Err(e) => Ok(format!("{header}\nagent compose turn failed: {e}")),
+                        }
                     }
                 }
             }
             AgentSubcommand::Install { slug } => {
-                let msg = self.run_hub_install_typed(&slug, Some("agent"), false);
-                println!("{msg}");
-                Ok(())
+                Ok(self.run_hub_install_typed(&slug, Some("agent"), false))
             }
         }
     }
