@@ -43,6 +43,12 @@ done
 # orchestration, the verify logic lives in its own file).
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/release-helpers/verify-release.sh"
+# Source the AnvilHub sha256-manifest publisher. release.sh used to leave
+# /sha256/<version>.txt unpublished, which broke /api/version's advertised
+# sha256_url (#620, v2.2.16 incident). The helper assembles + uploads the
+# combined manifest after Phase 4.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/release-helpers/upload-sha256-manifest.sh"
 
 echo "╔══════════════════════════════════════════════╗"
 echo "║  Anvil Release Pipeline — v${VERSION}              ║"
@@ -407,6 +413,34 @@ else
             --notes "$NOTES" \
             "$OUTPUT_DIR"/anvil-*
     fi
+fi
+
+
+# ─── Phase 4.5: Publish AnvilHub sha256 manifest ────────────────────────────
+#
+# /api/version advertises sha256_url=https://anvilhub.culpur.net/sha256/<ver>.txt
+# but pre-#620 release.sh never wrote that file — v2.2.16 shipped with the URL
+# returning 404. Users running `sha256sum -c` after `curl … binary` hit the
+# 404 and reasonably assumed the project was broken.
+#
+# Skipped on --skip-build because it depends on Phase 1.5 having written the
+# .sha256 sidecars to $OUTPUT_DIR; --skip-build callers should backfill via
+#   bash scripts/release-helpers/upload-sha256-manifest.sh <ver> <output_dir>
+echo
+echo "▸ Phase 4.5: Publish AnvilHub sha256 manifest..."
+if [ "$SKIP_BUILD" = false ]; then
+    if ! upload_sha256_manifest "$VERSION" "$OUTPUT_DIR"; then
+        rc=$?
+        echo "✘ sha256 manifest publish FAILED (rc=$rc) — /sha256/$VERSION.txt may 404" >&2
+        echo "  Re-run manually:" >&2
+        echo "    bash $SCRIPT_DIR/release-helpers/upload-sha256-manifest.sh $VERSION $OUTPUT_DIR" >&2
+        echo "  …then re-run scripts/release.sh --skip-build for Phase 8." >&2
+        exit "$rc"
+    fi
+else
+    echo "  ⊘ Skipped (--skip-build: sidecars in $OUTPUT_DIR may be stale)"
+    echo "    Run manually if needed:"
+    echo "      bash $SCRIPT_DIR/release-helpers/upload-sha256-manifest.sh $VERSION $OUTPUT_DIR"
 fi
 
 echo
