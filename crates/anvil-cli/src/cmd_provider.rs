@@ -1313,6 +1313,14 @@ impl LiveCli {
         match client.install(&pkg, &install_dir, require_verified, allow_unverified) {
             Ok(dest) => {
                 runtime::otel::hub_package_install(&pkg.pkg_type, slug_trim, "ok");
+                // v2.2.17 / task #569: persist the publisher trust snapshot
+                // from the AnvilHub package detail into the on-disk hub
+                // registry so subsequent plugin-loads can surface the
+                // verified badge.  We swallow errors here — failing the
+                // user-visible install just because the trust cache is
+                // unwritable would be a regression on offline / read-only
+                // filesystems.
+                let _ = write_hub_registry_entry(&install_dir, slug_trim, &pkg);
                 format!(
                     "Installed {} v{} ({}) to {}",
                     pkg.name,
@@ -1335,4 +1343,41 @@ impl LiveCli {
             }
         }
     }
+}
+
+/// Write the AnvilHub trust snapshot for `slug` into the on-disk hub
+/// registry at `<install_dir>/hub-registry.json` (v2.2.17 / task #569).
+///
+/// The registry is the source the plugin loader reads from to populate
+/// `PluginMetadata.hub_trust_level`.  This is best-effort — callers
+/// should swallow errors so a read-only filesystem doesn't break the
+/// user-visible install.
+fn write_hub_registry_entry(
+    install_dir: &std::path::Path,
+    slug: &str,
+    pkg: &runtime::HubPackage,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = install_dir.join("hub-registry.json");
+    let mut registry = plugins::HubRegistry::load(&path).unwrap_or_default();
+    // Map the runtime TrustLevel to PluginTrustLevel (re-declared in the
+    // plugins crate to avoid the runtime↔plugins circular dep — see the
+    // doc comment on `PluginTrustLevel`).
+    let trust_level = pkg.publisher.as_ref().map(|pub_info| {
+        match pub_info.trust_level {
+            runtime::TrustLevel::Verified => plugins::PluginTrustLevel::Verified,
+            runtime::TrustLevel::Unverified => plugins::PluginTrustLevel::Unverified,
+            runtime::TrustLevel::Revoked => plugins::PluginTrustLevel::Revoked,
+            runtime::TrustLevel::CulpurOfficial => plugins::PluginTrustLevel::CulpurOfficial,
+        }
+    });
+    registry.packages.insert(
+        slug.to_string(),
+        plugins::HubRegistryEntry {
+            trust_level,
+            verified_publisher: Some(pkg.verified_publisher),
+            highest_verified_version: pkg.highest_verified_version.clone(),
+        },
+    );
+    registry.store(&path)?;
+    Ok(())
 }

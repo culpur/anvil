@@ -116,6 +116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "anvil-sandbox-runner"
+version = "2.2.16"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"

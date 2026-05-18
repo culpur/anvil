@@ -175,8 +175,18 @@ pub fn render_plugins_report(plugins: &[PluginSummary]) -> String {
         } else {
             "disabled"
         };
+        // v2.2.17 / #569: render a "verified" / "culpur-official" / "REVOKED"
+        // badge from the populated `hub_trust_level` field.  Plugins with
+        // no trust info (None) render nothing — preserving the v2.2.16 output
+        // shape for users who never installed from AnvilHub.
+        let badge = match plugin.metadata.hub_trust_level.as_ref() {
+            Some(plugins::PluginTrustLevel::Verified) => " [verified]",
+            Some(plugins::PluginTrustLevel::CulpurOfficial) => " [culpur-official]",
+            Some(plugins::PluginTrustLevel::Revoked) => " [REVOKED]",
+            Some(plugins::PluginTrustLevel::Unverified) | None => "",
+        };
         lines.push(format!(
-            "  {name:<20} v{version:<10} {enabled}",
+            "  {name:<20} v{version:<10} {enabled}{badge}",
             name = plugin.metadata.name,
             version = plugin.metadata.version,
         ));

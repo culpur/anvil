@@ -1,0 +1,21 @@
+[package]
+name = "anvil-sandbox-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Detonator: runs a hub-install command inside a tmpfs/landlock/sandbox-exec sandbox and prints a JSON report (task #570 / v2.2.17)."
+
+[[bin]]
+name = "anvil-sandbox-runner"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -46,6 +46,10 @@ const BUNDLED_FINGERPRINT_FILE: &str = ".fingerprint";
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
 const REGISTRY_FILE_NAME: &str = "installed.json";
+/// On-disk AnvilHub trust registry filename, sibling of `settings.json`.
+/// Lives directly under `<config_home>/` (i.e. `~/.anvil/hub-registry.json`
+/// for the default config home) so the file is easy to inspect and back up.
+const HUB_REGISTRY_FILE_NAME: &str = "hub-registry.json";
 
 // ---------------------------------------------------------------------------
 // Config and outcome types
@@ -59,6 +63,9 @@ pub struct PluginManagerConfig {
     pub install_root: Option<PathBuf>,
     pub registry_path: Option<PathBuf>,
     pub bundled_root: Option<PathBuf>,
+    /// Override path for the AnvilHub on-disk trust registry (v2.2.17 / #569).
+    /// `None` resolves to `<config_home>/hub-registry.json`.
+    pub hub_registry_path: Option<PathBuf>,
 }
 
 impl PluginManagerConfig {
@@ -71,6 +78,7 @@ impl PluginManagerConfig {
             install_root: None,
             registry_path: None,
             bundled_root: None,
+            hub_registry_path: None,
         }
     }
 }
@@ -181,6 +189,25 @@ impl PluginManager {
         self.config.config_home.join(SETTINGS_FILE_NAME)
     }
 
+    /// Path to the AnvilHub on-disk trust registry (v2.2.17 / #569).
+    ///
+    /// Defaults to `<config_home>/hub-registry.json` (i.e. `~/.anvil/hub-registry.json`
+    /// in production).  Override via `PluginManagerConfig.hub_registry_path` for tests.
+    #[must_use]
+    pub fn hub_registry_path(&self) -> PathBuf {
+        self.config.hub_registry_path.clone().unwrap_or_else(|| {
+            self.config.config_home.join(HUB_REGISTRY_FILE_NAME)
+        })
+    }
+
+    /// Load the on-disk hub registry — never refuses to load a plugin
+    /// because the trust cache is corrupt.  Always returns a value (empty
+    /// when the file is missing).
+    #[must_use]
+    pub fn load_hub_registry(&self) -> crate::registry::HubRegistry {
+        crate::registry::HubRegistry::load_or_empty(&self.hub_registry_path())
+    }
+
     // -----------------------------------------------------------------------
     // Discovery
     // -----------------------------------------------------------------------
@@ -217,7 +244,42 @@ impl PluginManager {
         let mut plugins = builtin_plugins();
         plugins.extend(self.discover_installed_plugins()?);
         plugins.extend(self.discover_external_directory_plugins(&plugins)?);
+        // v2.2.17 / #569: populate `hub_trust_level` from the on-disk
+        // hub registry (`~/.anvil/hub-registry.json` by default).  This is a
+        // pure disk read — no network call at plugin-load time.
+        self.apply_hub_trust_levels(&mut plugins);
         Ok(plugins)
+    }
+
+    /// Back-fill `PluginMetadata.hub_trust_level` for every discovered
+    /// plugin using the on-disk `~/.anvil/hub-registry.json` cache and,
+    /// where applicable, the `installed.json` record (the in-record level
+    /// from the install-time snapshot).
+    ///
+    /// Precedence: the live hub-registry entry **wins** over the install-time
+    /// snapshot when present, so a publisher whose badge was revoked after
+    /// install will surface as REVOKED on the next plugin-list refresh.
+    /// When neither source has a level, `hub_trust_level` stays `None`.
+    fn apply_hub_trust_levels(&self, plugins: &mut [PluginDefinition]) {
+        let hub_registry = self.load_hub_registry();
+        // Fall back to the install-time snapshot when the live hub registry
+        // has nothing — this preserves v2.2.16 behaviour for plugins
+        // installed before the on-disk hub registry existed.
+        let installed_registry = self.load_registry().unwrap_or_default();
+        for plugin in plugins.iter_mut() {
+            let meta = plugin.metadata();
+            // Hub registry is keyed by the AnvilHub slug == manifest name.
+            if let Some(level) = hub_registry.trust_level_for(&meta.name) {
+                plugin.set_hub_trust_level(Some(level));
+                continue;
+            }
+            // installed.json is keyed by the synthetic plugin id.
+            if let Some(record) = installed_registry.plugins.get(&meta.id) {
+                if let Some(level) = record.hub_trust_level.clone() {
+                    plugin.set_hub_trust_level(Some(level));
+                }
+            }
+        }
     }
 
     pub fn aggregated_hooks(&mut self) -> Result<PluginHooks, PluginError> {
@@ -496,7 +558,11 @@ impl PluginManager {
 
     fn installed_plugin_registry(&mut self) -> Result<PluginRegistry, PluginError> {
         self.sync_bundled_plugins()?;
-        let plugins = self.discover_installed_plugins()?;
+        let mut plugins = self.discover_installed_plugins()?;
+        // v2.2.17 / #569: keep the `/plugin list` output consistent with
+        // `discover_plugins` — the verified badge surfaces in the installed
+        // list as well, not just the workspace-wide list.
+        self.apply_hub_trust_levels(&mut plugins);
         Ok(PluginRegistry::new(
             plugins
                 .into_iter()

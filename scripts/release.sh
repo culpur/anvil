@@ -140,10 +140,17 @@ if [ "$SKIP_BUILD" = false ]; then
     echo "▸ Phase 1: Building all targets..."
     echo
 
+    # v2.2.17 / task #570: each platform also ships the sandbox-runner binary
+    # next to `anvil`.  Cargo builds both binaries when we run
+    # `cargo build --release --target <triple>` (workspace default-members
+    # picks up the new `anvil-sandbox-runner` crate), so the only change
+    # below is the extra `cp` of the second binary into the artifacts dir.
+
     # 1a. macOS ARM (native)
     echo "  [1/7] macOS ARM (aarch64-apple-darwin)..."
     cargo build --release --target aarch64-apple-darwin
     cp target/aarch64-apple-darwin/release/anvil "$OUTPUT_DIR/anvil-aarch64-apple-darwin"
+    cp target/aarch64-apple-darwin/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-aarch64-apple-darwin"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $5}')"
 
     # 1b. macOS Intel (native cross)
@@ -151,6 +158,7 @@ if [ "$SKIP_BUILD" = false ]; then
     rustup target add x86_64-apple-darwin 2>/dev/null || true
     cargo build --release --target x86_64-apple-darwin
     cp target/x86_64-apple-darwin/release/anvil "$OUTPUT_DIR/anvil-x86_64-apple-darwin"
+    cp target/x86_64-apple-darwin/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-x86_64-apple-darwin"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-apple-darwin" | awk '{print $5}')"
 
     # 1c. Linux x86_64 (Docker)
@@ -164,6 +172,7 @@ DOCKERFILE
     docker run --platform linux/amd64 --rm -v "$PROJECT_DIR:/build" anvil-builder-linux \
         cargo build --release --target x86_64-unknown-linux-gnu
     cp target/x86_64-unknown-linux-gnu/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu"
+    cp target/x86_64-unknown-linux-gnu/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-x86_64-unknown-linux-gnu"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-linux-gnu" | awk '{print $5}')"
 
     # 1d. Linux ARM64 (Docker cross)
@@ -175,6 +184,7 @@ DOCKERFILE
         anvil-builder-linux \
         cargo build --release --target aarch64-unknown-linux-gnu
     cp target/aarch64-unknown-linux-gnu/release/anvil "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu"
+    cp target/aarch64-unknown-linux-gnu/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-aarch64-unknown-linux-gnu"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu" | awk '{print $5}')"
 
     # 1e. Windows x86_64 (Docker cross with mingw)
@@ -190,6 +200,7 @@ DOCKERFILE
         anvil-builder-win \
         cargo build --release --target x86_64-pc-windows-gnu
     cp target/x86_64-pc-windows-gnu/release/anvil.exe "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe"
+    cp target/x86_64-pc-windows-gnu/release/anvil-sandbox-runner.exe "$OUTPUT_DIR/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-pc-windows-gnu.exe" | awk '{print $5}')"
 
     # 1f. FreeBSD x86_64 (local builder image — Tier-2, hard fail on error)
@@ -202,6 +213,7 @@ DOCKERFILE
         "${BUILDER_FREEBSD_X86_64}" \
         cargo build --release --target x86_64-unknown-freebsd
     cp target/x86_64-unknown-freebsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd"
+    cp target/x86_64-unknown-freebsd/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-x86_64-unknown-freebsd"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-freebsd" | awk '{print $5}')"
 
     # 1g. NetBSD x86_64 (local builder image — Tier-3, soft fail on error)
@@ -213,6 +225,7 @@ DOCKERFILE
         "${BUILDER_NETBSD_X86_64}" \
         cargo build --release --target x86_64-unknown-netbsd; then
         cp target/x86_64-unknown-netbsd/release/anvil "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd"
+        cp target/x86_64-unknown-netbsd/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-x86_64-unknown-netbsd"
         echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-x86_64-unknown-netbsd" | awk '{print $5}')"
     else
         echo "        ⚠ NetBSD build skipped (Tier-3 target — toolchain may have drifted)"
@@ -239,11 +252,20 @@ fi
 
 echo
 echo "▸ Phase 1.5: Regenerate sha256 manifests..."
+# v2.2.17 / #570: sandbox-runner binaries get the same per-platform manifest
+# treatment as `anvil` itself so `anvil upgrade` can verify them too.
 for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
          "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
          "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
          "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd; do
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
     if [ ! -f "$f" ]; then continue; fi
     name=$(basename "$f")
     shasum -a 256 "$f" | awk -v n="$name" '{print $1"  "n}' > "$f.sha256"
@@ -272,7 +294,14 @@ for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-app
          "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
          "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
          "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd; do
+         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
+         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
     if [ ! -f "$f" ]; then continue; fi
     actual=$(shasum -a 256 "$f" | awk '{print $1}')
     expected=$(awk '{print $1}' "$f.sha256")
