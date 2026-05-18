@@ -325,6 +325,96 @@ fn parses_login_and_logout_subcommands() {
 }
 
 #[test]
+fn parses_chain_list_via_anvil_subcommand() {
+    use commands::ChainSubcommand;
+    assert_eq!(
+        parse_args(&["chain".to_string()]).expect("chain should parse"),
+        CliAction::Chain { subcommand: ChainSubcommand::List }
+    );
+    assert_eq!(
+        parse_args(&["chain".to_string(), "list".to_string()]).expect("chain list should parse"),
+        CliAction::Chain { subcommand: ChainSubcommand::List }
+    );
+}
+
+#[test]
+fn parses_chain_install_with_slug() {
+    use commands::ChainSubcommand;
+    assert_eq!(
+        parse_args(&[
+            "chain".to_string(),
+            "install".to_string(),
+            "my-chain".to_string()
+        ])
+        .expect("chain install should parse"),
+        CliAction::Chain {
+            subcommand: ChainSubcommand::Install { slug: "my-chain".to_string() }
+        }
+    );
+    let err = parse_args(&["chain".to_string(), "install".to_string()])
+        .expect_err("missing slug must surface a friendly error");
+    assert!(err.contains("missing <slug>"), "{err}");
+}
+
+#[test]
+fn parses_chain_run_with_target_and_extra_args() {
+    use commands::ChainSubcommand;
+    assert_eq!(
+        parse_args(&[
+            "chain".to_string(),
+            "run".to_string(),
+            "path/to/chain.yaml".to_string()
+        ])
+        .expect("chain run should parse"),
+        CliAction::Chain {
+            subcommand: ChainSubcommand::Run {
+                target: "path/to/chain.yaml".to_string(),
+                args: Vec::new(),
+            }
+        }
+    );
+    assert_eq!(
+        parse_args(&[
+            "chain".to_string(),
+            "run".to_string(),
+            "slug".to_string(),
+            "extra1".to_string(),
+            "extra2".to_string()
+        ])
+        .expect("chain run with args should parse"),
+        CliAction::Chain {
+            subcommand: ChainSubcommand::Run {
+                target: "slug".to_string(),
+                args: vec!["extra1".to_string(), "extra2".to_string()],
+            }
+        }
+    );
+}
+
+#[test]
+fn parses_direct_chain_slash_command() {
+    use commands::ChainSubcommand;
+    assert_eq!(
+        parse_args(&["/chain".to_string()]).expect("/chain should parse"),
+        CliAction::Chain { subcommand: ChainSubcommand::List }
+    );
+    assert_eq!(
+        parse_args(&[
+            "/chain".to_string(),
+            "run".to_string(),
+            "some/path/chain.yaml".to_string()
+        ])
+        .expect("/chain run should parse"),
+        CliAction::Chain {
+            subcommand: ChainSubcommand::Run {
+                target: "some/path/chain.yaml".to_string(),
+                args: Vec::new(),
+            }
+        }
+    );
+}
+
+#[test]
 fn parses_direct_agents_and_skills_slash_commands() {
     assert_eq!(
         parse_args(&["/agents".to_string()]).expect("/agents should parse"),

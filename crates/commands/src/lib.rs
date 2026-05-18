@@ -29,7 +29,11 @@ pub use git::{
     handle_commit_slash_command, handle_worktree_slash_command, CommitPushPrRequest,
 };
 pub use dispatch::{dispatch_slash_command, DispatchContext, DispatchError, DispatchOutcome};
-pub use handlers::{handle_memory_clean, handle_memory_command, handle_slash_command, MemoryContext, SlashCommandResult};
+pub use handlers::{
+    handle_chain_install, handle_chain_list, handle_chain_run, handle_chain_subcommand,
+    handle_memory_clean, handle_memory_command, handle_slash_command, MemoryContext,
+    SlashCommandResult,
+};
 pub use plugins::{handle_plugins_slash_command, render_plugins_report, PluginsCommandResult};
 pub use specs::{
     render_command_detailed_help, render_slash_command_help, resume_supported_slash_commands,
@@ -39,8 +43,8 @@ pub use specs::{
 pub use subcommands::{
     ArgSpec, ArgSpecValue, Completion, CompletionContext, DynamicEnumSource, NoopCompletionContext,
     RestartRequirement, StaticDefaultCompletionContext, SubcommandSpec,
-    MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES, CONFIG_SUBCOMMAND_NAMES,
-    IMPORT_SUBCOMMAND_NAMES, CURSOR_SUBCOMMAND_NAMES, LAYOUT_SUBCOMMANDS,
+    CHAIN_SUBCOMMANDS, MEMORY_SUBCOMMAND_NAMES, SKILLS_SUBCOMMAND_NAMES,
+    CONFIG_SUBCOMMAND_NAMES, IMPORT_SUBCOMMAND_NAMES, CURSOR_SUBCOMMAND_NAMES, LAYOUT_SUBCOMMANDS,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -531,6 +535,17 @@ pub enum SlashCommand {
     Cursor {
         subcommand: CursorSubcommand,
     },
+    /// `/chain <subcommand> …` — AnvilHub skill-chain execution (F2 sub-track A).
+    ///
+    /// v0.1 subcommands:
+    ///   * `list`                — list installed chains under `~/.anvil/chains/`
+    ///   * `install <slug>`      — fetch a chain from AnvilHub (backend stub
+    ///                             until sub-track B lands)
+    ///   * `run <slug-or-path>`  — run a chain by installed slug or by direct
+    ///                             path to a `chain.yaml` manifest
+    Chain {
+        subcommand: ChainSubcommand,
+    },
     Unknown(String),
 }
 
@@ -573,6 +588,27 @@ pub enum AgentSubcommand {
     /// Routes through `HubClient::install` with a `pkg_type=agent` type guard
     /// and writes to `~/.anvil/agents/<slug>/`.
     Install { slug: String },
+}
+
+/// Sub-commands for `/chain` (AnvilHub Feature 2 — sub-track A).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainSubcommand {
+    /// `/chain list` — list installed chain manifests under `~/.anvil/chains/`.
+    List,
+    /// `/chain install <slug>` — fetch a chain from AnvilHub.
+    ///
+    /// Sub-track A landed without the backend route (sub-track B will add it),
+    /// so this currently returns a stub message pointing users to
+    /// `/chain run <local-path>`.
+    Install { slug: String },
+    /// `/chain run <slug-or-path> [args…]` — execute a chain manifest.
+    ///
+    /// `target` is resolved as: first as a filesystem path; falling back to
+    /// `~/.anvil/chains/<target>/chain.yaml` when the path doesn't exist.
+    Run {
+        target: String,
+        args: Vec<String>,
+    },
 }
 
 /// Sub-commands for `/skill`.
@@ -1068,6 +1104,42 @@ impl SlashCommand {
                         };
                         Self::Cursor {
                             subcommand: CursorSubcommand::Launch { prompt: rest },
+                        }
+                    }
+                }
+            }
+            "chain" | "chains" => {
+                let sub = parts.next().unwrap_or("");
+                match sub {
+                    "list" | "ls" | "" => Self::Chain { subcommand: ChainSubcommand::List },
+                    "install" => {
+                        let slug = parts.collect::<Vec<_>>().join(" ").trim().to_string();
+                        Self::Chain { subcommand: ChainSubcommand::Install { slug } }
+                    }
+                    "run" => {
+                        let target = parts.next().unwrap_or("").to_string();
+                        let args: Vec<String> = parts.map(ToOwned::to_owned).collect();
+                        Self::Chain { subcommand: ChainSubcommand::Run { target, args } }
+                    }
+                    other => {
+                        // Treat path-shaped tokens as a `run` target so
+                        // `/chain ./local/chain.yaml` works without typing
+                        // `run`.  Bare unknown tokens fall back to List so
+                        // the user sees what's available.
+                        if other.starts_with('/')
+                            || other.contains('/')
+                            || other.ends_with(".yaml")
+                            || other.ends_with(".yml")
+                        {
+                            let args: Vec<String> = parts.map(ToOwned::to_owned).collect();
+                            Self::Chain {
+                                subcommand: ChainSubcommand::Run {
+                                    target: other.to_string(),
+                                    args,
+                                },
+                            }
+                        } else {
+                            Self::Chain { subcommand: ChainSubcommand::List }
                         }
                     }
                 }
@@ -1732,7 +1804,8 @@ mod tests {
         // v2.2.15: +1 (/cursor — Cursor Cloud Agents) = 114 total
         // v2.2.16: +1 (/hub-status — AnvilHub verified-badge status query) = 115 total
         // v2.2.16: +1 (/layout — TUI layout selector, 8-axis contract) = 116 total
-        assert_eq!(slash_command_specs().len(), 116);
+        // v2.2.14 Phase 1: +1 (/chain — AnvilHub F2 skill-chain executor) = 117 total
+        assert_eq!(slash_command_specs().len(), 117);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         // v2.2.16: +1 (/layout resume_supported=true) = 25
         assert_eq!(resume_supported_slash_commands().len(), 25);
@@ -2838,7 +2911,7 @@ mod tests {
     #[test]
     fn every_slash_command_variant_has_a_spec() {
         use super::specs::slash_command_specs;
-        use super::{AgentSubcommand, CursorSubcommand, SkillSubcommand, SlashCommand};
+        use super::{AgentSubcommand, ChainSubcommand, CursorSubcommand, SkillSubcommand, SlashCommand};
         use std::collections::HashSet;
 
         // Exhaustive match — no `_ =>` wildcard. Compiler enforces every
@@ -2963,6 +3036,7 @@ mod tests {
                 SlashCommand::ScrollSpeed { .. } => Some("scroll-speed"),
                 SlashCommand::Import { .. } => Some("import"),
                 SlashCommand::Cursor { .. } => Some("cursor"),
+                SlashCommand::Chain { .. } => Some("chain"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -3094,6 +3168,9 @@ mod tests {
             },
             SlashCommand::Cursor {
                 subcommand: CursorSubcommand::Launch { prompt: String::new() },
+            },
+            SlashCommand::Chain {
+                subcommand: ChainSubcommand::List,
             },
             SlashCommand::Unknown(String::new()),
         ];
@@ -3345,6 +3422,7 @@ mod tests {
         "scroll-speed",
         "import",
         "cursor",
+        "chain",
     ];
 
     /// Gate 1a: every spec name has a corresponding handler arm.

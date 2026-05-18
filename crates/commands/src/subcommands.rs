@@ -696,6 +696,27 @@ pub const SKILLS_SUBCOMMANDS: &[SubcommandSpec] = &[
     },
 ];
 
+pub const CHAIN_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec {
+        name: "list",
+        summary: "List installed skill chains",
+        args: &[],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "install",
+        summary: "Install a skill chain from AnvilHub by slug",
+        args: &[ArgSpec::FreeText { hint: "<slug>" }],
+        subcommands: &[],
+    },
+    SubcommandSpec {
+        name: "run",
+        summary: "Run a skill chain by installed slug or by path to chain.yaml",
+        args: &[ArgSpec::FreeText { hint: "<slug-or-path>" }],
+        subcommands: &[],
+    },
+];
+
 pub const SKILL_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec {
         name: "list",

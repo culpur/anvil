@@ -2041,6 +2041,45 @@ Usage:
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // ── Chain dispatch (v2.2.14 Phase 1 — AnvilHub F2 sub-track A) ───────────
+    //
+    // 8-axis capability contract for `/chain`:
+    //   1. Definition — SlashCommand::Chain { subcommand: ChainSubcommand } in lib.rs
+    //   2. Registration — parser arm matches "chain" / "chains" in lib.rs::parse
+    //   3. Completion — CHAIN_SUBCOMMANDS in subcommands.rs (list, install, run)
+    //   4. Handler — handle_chain_list/install/run in handlers.rs
+    //   5. Dispatch — Chain match arm in dispatch.rs via handle_slash_command
+    //   6. Rendering — handlers return Result<String, _>; TUI routes through push_system
+    //   7. Gate — no special gate for v0.1 (vault optional, no network in run path)
+    //   8. OTel — execute_chain emits chain.start / chain.node_complete / chain.end;
+    //      tests live in runtime::skill_chain_exec::executor::tests
+    SlashCommandSpec {
+        name: "chain",
+        aliases: &["chains"],
+        summary: "Run, list, or install AnvilHub skill chains",
+        argument_hint: Some("[list|install <slug>|run <slug-or-path>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/chain — AnvilHub skill chain execution (Feature 2 sub-track A)
+
+Usage:
+  /chain                           Alias for `/chain list`
+  /chain list                      List installed chains under ~/.anvil/chains/
+  /chain install <slug>            Install a chain from AnvilHub (backend stub
+                                   until sub-track B ships)
+  /chain run <slug>                Run an installed chain
+  /chain run <path/to/chain.yaml>  Run a chain manifest from a local file
+
+Manifests use the `anvil.culpur.net/chain/v1` apiVersion.  See the runtime
+crate `skill_chain_exec` module for the full schema and binding grammar.",
+        subcommands: crate::subcommands::CHAIN_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
     // ── Skill dispatch (v2.2.7) ──────────────────────────────────────────────
     SlashCommandSpec {
         name: "skill",

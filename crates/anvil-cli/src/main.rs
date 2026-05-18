@@ -482,8 +482,95 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &config,
             )?;
         }
+        CliAction::Chain { subcommand } => {
+            // CI-friendly headless `chain run`: exit 1 when any node failed.
+            let exit_failed = run_chain_cli(&subcommand);
+            if exit_failed {
+                std::process::exit(1);
+            }
+        }
     }
     Ok(())
+}
+
+/// Headless dispatch for `anvil chain ...`.
+///
+/// Prints handler output to stdout and returns `true` when a `run` execution
+/// surfaced a `Failed` node so the caller can exit non-zero for CI.
+///
+/// `list` and `install` always return `false`.
+fn run_chain_cli(subcommand: &commands::ChainSubcommand) -> bool {
+    match subcommand {
+        commands::ChainSubcommand::List => {
+            println!("{}", commands::handle_chain_list());
+            false
+        }
+        commands::ChainSubcommand::Install { slug } => {
+            println!("{}", commands::handle_chain_install(slug));
+            false
+        }
+        commands::ChainSubcommand::Run { target, args } => {
+            // Resolve the manifest path so we can capture the result and
+            // base the exit code on `had_failure()`.  Falls back to the
+            // commands-crate handler for the user-friendly error path.
+            let trimmed = target.trim();
+            if trimmed.is_empty() {
+                println!("{}", commands::handle_chain_run(target, args));
+                return false;
+            }
+            let path = chain_target_path(trimmed);
+            match runtime::skill_chain_exec::read_manifest(&path) {
+                Ok(manifest) => {
+                    let mut runner = runtime::skill_chain_exec::StaticEchoRunner;
+                    match runtime::skill_chain_exec::execute_chain(&manifest, &mut runner) {
+                        Ok(result) => {
+                            println!("{}", result.render_summary());
+                            result.had_failure()
+                        }
+                        Err(e) => {
+                            println!("anvil chain run {target}: cannot execute: {e}");
+                            true
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!(
+                        "anvil chain run {target}: cannot load manifest at `{}`: {e}",
+                        path.display()
+                    );
+                    true
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a chain target to a manifest path (same rules as the commands
+/// crate's `resolve_chain_path`).
+fn chain_target_path(target: &str) -> std::path::PathBuf {
+    let raw = std::path::PathBuf::from(target);
+    if raw.is_file() {
+        return raw;
+    }
+    if raw.is_dir() {
+        return raw.join("chain.yaml");
+    }
+    if target.contains('/')
+        || target.contains('\\')
+        || target.ends_with(".yaml")
+        || target.ends_with(".yml")
+    {
+        return raw;
+    }
+    let home = std::env::var_os("ANVIL_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|h| std::path::PathBuf::from(h).join(".anvil"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(".anvil"));
+    home.join("chains").join(target).join("chain.yaml")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +641,13 @@ enum CliAction {
         read_only: bool,
         /// When Some, restrict published tools to exactly this list of names.
         tools_filter: Option<Vec<String>>,
+    },
+    /// `anvil chain <subcommand> …` — AnvilHub skill-chain execution.
+    ///
+    /// Headless surface for the v0.1 chain executor.  `run` exits non-zero
+    /// when any node ends in `Failed` so CI can pipeline it.
+    Chain {
+        subcommand: commands::ChainSubcommand,
     },
 }
 
@@ -943,6 +1037,7 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 None => Err("missing action for `anvil project` (try: purge)".to_string()),
             }
         }
+        "chain" | "chains" => parse_chain_args(&rest[1..]),
         "mcp-server" => parse_mcp_server_args(&rest[1..]),
         "prompt" => {
             let prompt = rest[1..].join(" ");
@@ -972,6 +1067,42 @@ fn join_optional_args(args: &[String]) -> Option<String> {
     let joined = args.join(" ");
     let trimmed = joined.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Parse arguments for `anvil chain <subcommand> ...`.
+///
+/// Subcommands:
+///   * `anvil chain list`                  → ChainSubcommand::List
+///   * `anvil chain install <slug>`        → ChainSubcommand::Install
+///   * `anvil chain run <slug-or-path>`    → ChainSubcommand::Run
+fn parse_chain_args(args: &[String]) -> Result<CliAction, String> {
+    use commands::ChainSubcommand;
+    let Some(sub) = args.first().map(String::as_str) else {
+        return Ok(CliAction::Chain { subcommand: ChainSubcommand::List });
+    };
+    match sub {
+        "list" | "ls" => Ok(CliAction::Chain { subcommand: ChainSubcommand::List }),
+        "install" => {
+            let slug = args.get(1).cloned().unwrap_or_default();
+            if slug.is_empty() {
+                return Err("anvil chain install: missing <slug>".to_string());
+            }
+            Ok(CliAction::Chain { subcommand: ChainSubcommand::Install { slug } })
+        }
+        "run" => {
+            let target = args.get(1).cloned().unwrap_or_default();
+            if target.is_empty() {
+                return Err("anvil chain run: missing <slug-or-path>".to_string());
+            }
+            let extra: Vec<String> = args.iter().skip(2).cloned().collect();
+            Ok(CliAction::Chain {
+                subcommand: ChainSubcommand::Run { target, args: extra },
+            })
+        }
+        other => Err(format!(
+            "anvil chain: unknown subcommand `{other}` (expected: list | install | run)"
+        )),
+    }
 }
 
 /// Parse arguments for `anvil mcp-server [--read-only] [--tools <list>]`.
@@ -1047,6 +1178,7 @@ fn parse_direct_slash_cli_action(rest: &[String]) -> Result<CliAction, String> {
         Some(SlashCommand::Help { .. }) => Ok(CliAction::Help),
         Some(SlashCommand::Agents { args }) => Ok(CliAction::Agents { args }),
         Some(SlashCommand::Skills { args }) => Ok(CliAction::Skills { args }),
+        Some(SlashCommand::Chain { subcommand }) => Ok(CliAction::Chain { subcommand }),
         Some(SlashCommand::Agent {
             subcommand: AgentSubcommand::Traits,
         }) => {
@@ -1864,6 +1996,7 @@ fn run_resume_command(
         | SlashCommand::Import { .. }
         | SlashCommand::Profile { .. }
         | SlashCommand::Cursor { .. }
+        | SlashCommand::Chain { .. }
         | SlashCommand::HubStatus { .. }
         | SlashCommand::Layout { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
@@ -6260,6 +6393,13 @@ impl LiveCli {
                 // subcommands that need a live response (launch, stream, etc.).
                 // For now, dispatch to the guidance handler.
                 let msg = commands::handlers::handle_cursor_command(&subcommand);
+                (msg, false)
+            }
+            SlashCommand::Chain { subcommand } => {
+                // AnvilHub F2 sub-track A: skill-chain execution dispatched
+                // through the commands-crate handler (which returns a String
+                // and never writes to stdout — feedback-tui-stdout-anti-pattern).
+                let msg = commands::handlers::handle_chain_subcommand(subcommand);
                 (msg, false)
             }
             SlashCommand::HubStatus { package } => {

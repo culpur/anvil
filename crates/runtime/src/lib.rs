@@ -22,6 +22,7 @@ pub mod qmd;
 pub mod import;
 pub mod memory_clean;
 pub mod routines;
+pub mod skill_chain_exec;
 pub mod ollama_tune;
 pub mod scroll_speed;
 pub mod agent_ctx;

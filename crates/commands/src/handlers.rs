@@ -615,6 +615,10 @@ pub fn handle_slash_command(
             },
             session: session.clone(),
         }),
+        SlashCommand::Chain { subcommand } => {
+            let message = handle_chain_subcommand(subcommand);
+            Some(SlashCommandResult { message, session: session.clone() })
+        }
         SlashCommand::Skill { subcommand } => {
             use crate::agents::{discover_skill_roots, load_skills_from_roots};
             use crate::{format_suggestions, match_triggers, SkillSubcommand};
@@ -3359,6 +3363,267 @@ pub fn handle_layout_command(action: Option<&str>) -> String {
                 }
             }
         }
+    }
+}
+
+// ─── /chain command — AnvilHub F2 sub-track A ──────────────────────────────
+
+use crate::ChainSubcommand;
+
+/// Dispatch a parsed `ChainSubcommand` to its matching handler.
+///
+/// Handlers ALWAYS return a `String` so the TUI caller can route output
+/// through `push_system` rather than printing to stdout (which would corrupt
+/// the ratatui back-buffer; see feedback-tui-stdout-anti-pattern.md).
+#[must_use]
+pub fn handle_chain_subcommand(subcommand: ChainSubcommand) -> String {
+    match subcommand {
+        ChainSubcommand::List => handle_chain_list(),
+        ChainSubcommand::Install { slug } => handle_chain_install(&slug),
+        ChainSubcommand::Run { target, args } => handle_chain_run(&target, &args),
+    }
+}
+
+/// `/chain list` — enumerate installed manifests under `~/.anvil/chains/`.
+///
+/// Discovery rule: a directory `~/.anvil/chains/<slug>/` containing a
+/// `chain.yaml` file is one installed chain.  Walk one level deep only.
+#[must_use]
+pub fn handle_chain_list() -> String {
+    let root = chains_root();
+    if !root.exists() {
+        return format!(
+            "No chains installed (looked for `{}`).\nUse `/chain install <slug>` to fetch from AnvilHub, or `/chain run <path/to/chain.yaml>` to run a local manifest.",
+            root.display()
+        );
+    }
+    let mut found = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&root) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let manifest_path = path.join("chain.yaml");
+            if !manifest_path.exists() {
+                continue;
+            }
+            let slug = path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
+            let summary = match runtime::skill_chain_exec::read_manifest(&manifest_path) {
+                Ok(m) => format!(
+                    "{slug:<28} v{version}  {nodes} node(s)  {description}",
+                    slug = slug,
+                    version = m.version,
+                    nodes = m.nodes.len(),
+                    description = m.description,
+                ),
+                Err(e) => format!("{slug:<28} (manifest error: {e})"),
+            };
+            found.push(summary);
+        }
+    }
+    if found.is_empty() {
+        return format!(
+            "No chains installed under `{}`.\nUse `/chain install <slug>` to fetch from AnvilHub, or `/chain run <path/to/chain.yaml>` to run a local manifest.",
+            root.display()
+        );
+    }
+    found.sort();
+    let mut out = vec![format!("Installed chains ({}):", found.len())];
+    for line in found {
+        out.push(format!("  {line}"));
+    }
+    out.join("\n")
+}
+
+/// `/chain install <slug>` — fetch from AnvilHub.
+///
+/// Sub-track A landed without the AnvilHub backend route (which sub-track B
+/// will add).  For now this returns an actionable stub.  Note: this still
+/// returns helpful text rather than the banned "not yet implemented" string.
+#[must_use]
+pub fn handle_chain_install(slug: &str) -> String {
+    let slug = slug.trim();
+    if slug.is_empty() {
+        return "Usage: /chain install <slug>".to_string();
+    }
+    format!(
+        "/chain install {slug}: AnvilHub chain registry backend is pending (sub-track B).\nFor now, fetch the chain.yaml manually and run it with:\n  /chain run <path/to/chain.yaml>\nor place it at ~/.anvil/chains/{slug}/chain.yaml and run `/chain run {slug}`."
+    )
+}
+
+/// `/chain run <target>` — execute a chain manifest.
+///
+/// `target` resolves first as a filesystem path, then as
+/// `~/.anvil/chains/<target>/chain.yaml`.  Returns the rendered summary
+/// from `ChainRunResult::render_summary`.
+#[must_use]
+pub fn handle_chain_run(target: &str, _args: &[String]) -> String {
+    let target = target.trim();
+    if target.is_empty() {
+        return "Usage: /chain run <slug-or-path/to/chain.yaml>".to_string();
+    }
+    let path = resolve_chain_path(target);
+    let manifest = match runtime::skill_chain_exec::read_manifest(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            return format!(
+                "/chain run {target}: cannot load manifest at `{}`: {e}",
+                path.display()
+            );
+        }
+    };
+    let mut runner = runtime::skill_chain_exec::StaticEchoRunner;
+    match runtime::skill_chain_exec::execute_chain(&manifest, &mut runner) {
+        Ok(result) => result.render_summary(),
+        Err(e) => format!("/chain run {target}: cannot execute: {e}"),
+    }
+}
+
+/// Resolve a chain target to a manifest path.
+///
+/// Priority order:
+/// 1. If `target` exists on the filesystem as a file → use it.
+/// 2. If `target` exists as a directory → use `<target>/chain.yaml`.
+/// 3. If `target` looks like a path (contains `/`, `\`, or ends in `.yaml`/
+///    `.yml`) → return as-is so the caller surfaces a clean "not found"
+///    error rather than misleading `<target>/chain.yaml` fallback.
+/// 4. Otherwise (bare slug) → `~/.anvil/chains/<target>/chain.yaml`.
+fn resolve_chain_path(target: &str) -> std::path::PathBuf {
+    let raw = std::path::PathBuf::from(target);
+    if raw.is_file() {
+        return raw;
+    }
+    if raw.is_dir() {
+        return raw.join("chain.yaml");
+    }
+    if target.contains('/')
+        || target.contains('\\')
+        || target.ends_with(".yaml")
+        || target.ends_with(".yml")
+    {
+        return raw;
+    }
+    chains_root().join(target).join("chain.yaml")
+}
+
+/// Path to the `~/.anvil/chains/` install root.
+fn chains_root() -> std::path::PathBuf {
+    let home = std::env::var_os("ANVIL_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| dirs_next_home_dir().map(|h| h.join(".anvil")))
+        .unwrap_or_else(|| std::path::PathBuf::from(".anvil"));
+    home.join("chains")
+}
+
+/// Resolve the user home dir without pulling in the `dirs-next` crate at
+/// the commands layer.
+fn dirs_next_home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+    use serial_test::serial;
+    use std::fs;
+
+    fn temp_root() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("anvil-chain-handler-{nanos}"))
+    }
+
+    fn write_manifest(dir: &std::path::Path, slug: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let body = format!(
+            "apiVersion: anvil.culpur.net/chain/v1\nslug: {slug}\nversion: 0.1.0\ndescription: sample\nnodes:\n  - id: only\n    skill: noop@1\n"
+        );
+        fs::write(dir.join("chain.yaml"), body).unwrap();
+    }
+
+    #[test]
+    fn chain_install_empty_slug_shows_usage() {
+        let msg = handle_chain_install("");
+        assert!(msg.contains("Usage:"), "{msg}");
+    }
+
+    #[test]
+    fn chain_install_known_slug_returns_actionable_stub() {
+        let msg = handle_chain_install("my-chain");
+        assert!(msg.contains("my-chain"), "{msg}");
+        // Must not return the banned "not yet implemented" phrase.
+        assert!(!msg.contains("not yet implemented"), "{msg}");
+        // Must not contain "(stub)" per gate 2.
+        assert!(!msg.contains("(stub)"), "{msg}");
+    }
+
+    #[test]
+    #[serial(anvil_home_env)]
+    fn chain_list_no_root_returns_friendly_message() {
+        let prev_home = std::env::var_os("ANVIL_HOME");
+        let root = temp_root();
+        // SAFETY: test-only env manipulation; serial via serial_test.
+        unsafe {
+            std::env::set_var("ANVIL_HOME", &root);
+        }
+        let msg = handle_chain_list();
+        assert!(msg.contains("No chains installed"), "{msg}");
+        // Restore env.
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("ANVIL_HOME", v),
+                None => std::env::remove_var("ANVIL_HOME"),
+            }
+        }
+    }
+
+    #[test]
+    fn chain_run_with_local_path_executes() {
+        let root = temp_root();
+        write_manifest(&root, "local-test");
+        let manifest_path = root.join("chain.yaml");
+        let msg = handle_chain_run(manifest_path.to_str().unwrap(), &[]);
+        assert!(msg.contains("Chain `local-test`"), "{msg}");
+        assert!(msg.contains("[ok]      only"), "{msg}");
+        // Cleanup.
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[serial(anvil_home_env)]
+    fn chain_run_resolves_slug_under_chains_root() {
+        let prev_home = std::env::var_os("ANVIL_HOME");
+        let root = temp_root();
+        let slug_dir = root.join("chains").join("by-slug");
+        write_manifest(&slug_dir, "by-slug");
+        // SAFETY: test-only env manipulation.
+        unsafe {
+            std::env::set_var("ANVIL_HOME", &root);
+        }
+        let msg = handle_chain_run("by-slug", &[]);
+        assert!(msg.contains("Chain `by-slug`"), "{msg}");
+        // Restore env.
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("ANVIL_HOME", v),
+                None => std::env::remove_var("ANVIL_HOME"),
+            }
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn chain_run_with_missing_target_returns_error_message() {
+        let msg = handle_chain_run("/nonexistent/path/chain.yaml", &[]);
+        assert!(msg.contains("cannot load manifest"), "{msg}");
     }
 }
 
