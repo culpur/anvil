@@ -29,7 +29,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use super::common::{
-    rebuild_tab_hits, rgb, render_completion_popup, render_tab_bar, right_aligned_row,
+    rgb, render_completion_popup, render_tab_bar, right_aligned_row,
     section_header_line, truncate,
 };
 use super::{LayoutLocalState, RightDeckMode, TuiLayoutRenderer};
@@ -122,14 +122,26 @@ impl TuiLayoutRenderer for Renderer {
 
         let rail_w = rail_width(width);
 
-        // Task #574 region gating: rail and deck repaint independently.
-        //   - RAIL bit → repaint left rail
-        //   - FOCUS / SCROLLBACK / CONTEXT bits → repaint deck content
-        //   - HEADER / TAB_STRIP bits → repaint deck header
-        //   - INPUT / STATUS bits → repaint deck footer
-        // `DirtyRegions::ALL` always paints everything (first-frame contract).
-        let render_rail_now = snap.dirty_regions.contains(DirtyRegions::RAIL)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        // Task #648 (release-blocker fix): ratatui's `Terminal::draw` API
+        // contract is "fully render the entire frame on every call" — the
+        // back-buffer is reset between draws (see `Terminal::swap_buffers`
+        // in `ratatui-core`), so any region we skip becomes a *blank* cell
+        // in the new buffer and ratatui's diff against the previous frame
+        // emits ANSI writes that ERASE the on-terminal content for that
+        // region. Symptom: left rail goes empty/black mid-session after
+        // any non-RAIL repaint (TextDelta, keystroke, spinner).
+        //
+        // The previous region-gating (task #574) treated dirty bits as
+        // "skip this region's paint entirely" — that violates the ratatui
+        // API. The cell-level optimization that gating was supposed to
+        // provide ALREADY lives in ratatui's frame diff at the backend
+        // layer; widget-construction cost is negligible compared to that.
+        //
+        // What remains gated on `DirtyRegions::ALL`: the top-level
+        // full-screen `Clear` widget that causes the photosensitivity
+        // flash on Gnome Terminal / kitty (task #622). That gate is
+        // correct because skipping a `Clear` widget does NOT erase the
+        // back-buffer — we still paint every region underneath.
 
         // ── Global vertical split: left rail | right deck ───────────────────────
         // When rail_w == 0 (narrow terminal) we skip the rail entirely.
@@ -165,10 +177,11 @@ impl TuiLayoutRenderer for Renderer {
         let sep_area = horiz[1];
         let deck_area = horiz[2];
 
-        if render_rail_now {
-            render_rail(frame, rail_area, snap);
-            render_separator(frame, sep_area, snap);
-        }
+        // Task #648: always paint rail + separator + deck (see ratatui
+        // API contract above). Cell-level efficiency comes from the
+        // frame diff in `Terminal::flush`, not from skipping widgets.
+        render_rail(frame, rail_area, snap);
+        render_separator(frame, sep_area, snap);
         render_deck(frame, deck_area, snap, local, tab_hits_out, self.tabs, deck_mode);
     }
 }
@@ -608,7 +621,7 @@ fn render_deck(
     frame: &mut Frame,
     area: Rect,
     snap: &LayoutSnapshot,
-    local: &mut LayoutLocalState,
+    _local: &mut LayoutLocalState,
     tab_hits_out: &mut Vec<TabHit>,
     tabs: bool,
     deck_mode: RightDeckMode,
@@ -648,23 +661,12 @@ fn render_deck(
     let content_area = chunks[1];
     let footer_area = chunks[2];
 
-    // Task #574 region gating for the deck.
-    let render_header = snap.dirty_regions.contains(DirtyRegions::HEADER)
-        || snap.dirty_regions.contains(DirtyRegions::ALL);
-    let render_tab_strip = snap.dirty_regions.contains(DirtyRegions::TAB_STRIP)
-        || snap.dirty_regions.contains(DirtyRegions::ALL);
-    let render_content = snap.dirty_regions.contains(DirtyRegions::SCROLLBACK)
-        || snap.dirty_regions.contains(DirtyRegions::FOCUS)
-        || snap.dirty_regions.contains(DirtyRegions::ALL);
-    let render_input = snap.dirty_regions.contains(DirtyRegions::INPUT)
-        || snap.dirty_regions.contains(DirtyRegions::ALL);
-    let render_status = snap.dirty_regions.contains(DirtyRegions::STATUS)
-        || snap.dirty_regions.contains(DirtyRegions::ALL);
+    // Task #648 (release-blocker fix): always paint the deck header,
+    // tab strip, content, footer (input + status). See render() above
+    // for the full ratatui API rationale — skipping a region erases
+    // it on the terminal via the back-buffer diff.
 
     // ── Header: [optional tab strip] + deck mode label ────────────────────────
-    if render_header || render_tab_strip {
-        frame.render_widget(ratatui::widgets::Clear, header_area);
-    }
     if tabs && tab_strip_height > 0 {
         // Tab strip occupies the first row of the header area.
         let tab_area = Rect {
@@ -673,13 +675,9 @@ fn render_deck(
             width: header_area.width,
             height: 1,
         };
-        if render_tab_strip {
-            render_tab_bar(frame, tab_area, snap, tab_hits_out);
-        } else {
-            rebuild_tab_hits(tab_area, snap, tab_hits_out);
-        }
+        render_tab_bar(frame, tab_area, snap, tab_hits_out);
         // Deck mode header on next row.
-        if render_header && header_area.height > 1 {
+        if header_area.height > 1 {
             let mode_area = Rect {
                 x: header_area.x,
                 y: header_area.y + 1,
@@ -688,16 +686,14 @@ fn render_deck(
             };
             render_deck_header(frame, mode_area, snap, deck_mode);
         }
-    } else if render_header {
+    } else {
         render_deck_header(frame, header_area, snap, deck_mode);
     }
 
     // ── Content ───────────────────────────────────────────────────────────────
     let configure_state = &snap.configure_state;
     let content_width = content_area.width;
-    if render_content {
-        frame.render_widget(ratatui::widgets::Clear, content_area);
-    }
+    let render_content = true;
 
     if render_content && snap.is_ssh_tab {
         if let Some((ref grid_lines, ref footer_lines)) = snap.ssh_screen {
@@ -763,10 +759,8 @@ fn render_deck(
     // The rail owns ALL chrome; the deck footer is separator + queued + input.
     // No status_lines call, no keybind row.
     //
-    // Task #574: gate on INPUT or STATUS dirty.
-    if render_input || render_status {
-        render_footer(frame, footer_area, snap, width, queued_indicator_height);
-    }
+    // Task #648: always paint (see ratatui API contract in render()).
+    render_footer(frame, footer_area, snap, width, queued_indicator_height);
 
     // ── Completion popup ──────────────────────────────────────────────────────
     render_completion_popup(frame, footer_area, snap);
@@ -952,7 +946,7 @@ fn render_footer(
     footer_area: Rect,
     snap: &LayoutSnapshot,
     width: usize,
-    queued_indicator_height: usize,
+    _queued_indicator_height: usize,
 ) {
     let theme = &snap.theme;
     let configure_state = &snap.configure_state;
@@ -1526,26 +1520,38 @@ mod tests {
         extract_text(&terminal)
     }
 
+    /// Task #648 (v2.2.17 release-blocker fix). With ANY non-ALL dirty
+    /// set the renderer must STILL paint every region every frame.
+    /// Previous task-#574 behavior was: skip rail/deck paints on narrow
+    /// dirty bits. That violates the ratatui `Terminal::draw` contract
+    /// ("fully render every frame") — `swap_buffers` resets the back-
+    /// buffer between draws, so any region we skip becomes blank in the
+    /// new buffer and ratatui's frame diff against the previous frame
+    /// emits ANSI writes that ERASE the on-terminal content for that
+    /// region.  Symptom: rail vanishes mid-session after the first
+    /// streaming TextDelta or keystroke.
+    ///
+    /// The flash anti-pattern fix (#622) lives ONLY in the top-level
+    /// full-screen `Clear` widget gate (skipped on narrow dirty), which
+    /// does not affect whether regions are painted underneath.
     #[test]
-    fn vertical_split_skips_full_screen_clear_when_no_flash_set() {
-        // #622 + #574 contract: SCROLLBACK-only dirty must skip the
-        // full-screen Clear AND the rail / chrome paints. In the
-        // TestBackend buffer the rail cells should NOT be written.
+    fn vertical_split_renders_rail_on_scrollback_only_dirty() {
         let mut snap = LayoutSnapshot::test_default();
         snap.model = "claude-sonnet-4-6".to_string();
         snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         let rendered = render_real_vsplit(&snap, 120, 30, true);
         assert!(
-            !rendered.contains("SESSIONS"),
-            "rail must NOT repaint on SCROLLBACK-only dirty; got:\n{rendered}"
+            rendered.contains("SESSIONS"),
+            "rail SESSIONS header MUST repaint every frame (task #648 fix); got:\n{rendered}"
         );
     }
 
-    /// Task #574: RAIL-only repaint paints the left rail but not the
-    /// deck content or deck header.
+    /// Task #648: RAIL-only dirty still paints rail AND deck — both
+    /// every frame regardless of which bit is set. The flash gate
+    /// applies only to the top-level `Clear` widget.
     #[test]
-    fn vertical_split_renders_only_rail_on_rail_dirty() {
+    fn vertical_split_renders_rail_and_deck_on_rail_dirty() {
         let mut snap = LayoutSnapshot::test_default();
         snap.model = "claude-sonnet-4-6".to_string();
         snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
@@ -1553,17 +1559,18 @@ mod tests {
         let rendered = render_real_vsplit(&snap, 120, 30, true);
         assert!(
             rendered.contains("SESSIONS"),
-            "rail SESSIONS header must render with RAIL-only dirty; got:\n{rendered}"
+            "rail SESSIONS header must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("DECK: "),
-            "deck header must NOT render with RAIL-only dirty; got:\n{rendered}"
+            rendered.contains("DECK: "),
+            "deck header must ALSO render (task #648); got:\n{rendered}"
         );
     }
 
-    /// Task #574: HEADER-only repaint paints just the deck header strip.
+    /// Task #648: HEADER-only dirty still paints rail AND deck — both
+    /// every frame regardless of which bit is set.
     #[test]
-    fn vertical_split_renders_only_deck_header_on_header_dirty() {
+    fn vertical_split_renders_rail_and_deck_on_header_dirty() {
         let mut snap = LayoutSnapshot::test_default();
         snap.model = "claude-sonnet-4-6".to_string();
         snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
@@ -1571,11 +1578,62 @@ mod tests {
         let rendered = render_real_vsplit(&snap, 120, 30, true);
         assert!(
             rendered.contains("DECK: "),
-            "deck header must render with HEADER-only dirty; got:\n{rendered}"
+            "deck header must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("SESSIONS"),
-            "rail must NOT render with HEADER-only dirty; got:\n{rendered}"
+            rendered.contains("SESSIONS"),
+            "rail must ALSO render (task #648); got:\n{rendered}"
+        );
+    }
+
+    /// Task #648 regression: the wizard-to-TUI handoff bug. Two
+    /// consecutive frames against the SAME `Terminal<TestBackend>`:
+    /// frame 1 paints with ALL dirty (rail visible), frame 2 paints
+    /// with SCROLLBACK-only dirty (simulating the first TextDelta).
+    /// The rail SESSIONS header must still be present in the final
+    /// backend buffer — proving the ratatui frame-diff doesn't erase
+    /// it. Bug repros if frame 2 skips the rail paint.
+    #[test]
+    fn wizard_to_tui_handoff_renders_rail_on_first_frame() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+
+        // Frame 1: ALL dirty — rail painted, like the first read_input
+        // draw after `AnvilTui::new()` returns.
+        snap.dirty_regions = DirtyRegions::ALL;
+        let mut local = LayoutLocalState::VerticalSplit {
+            right_deck_mode: super::super::RightDeckMode::Conversation,
+            rail_selected: 0,
+        };
+        let mut hits = Vec::new();
+        terminal.draw(|frame| {
+            super::Renderer { tabs: true }.render(frame, &snap, &mut local, &mut hits);
+        }).expect("frame 1 draw");
+
+        // Frame 2: SCROLLBACK only — simulating the first TextDelta
+        // from the user's "test" prompt. Before task #648 this frame
+        // skipped the rail render, the back-buffer cells went blank,
+        // and ratatui's diff against the previous (rail-rendered)
+        // frame emitted ANSI writes that erased the rail.
+        snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        snap.pending = "test response streaming…".to_string();
+        terminal.draw(|frame| {
+            super::Renderer { tabs: true }.render(frame, &snap, &mut local, &mut hits);
+        }).expect("frame 2 draw");
+
+        let rendered = extract_text(&terminal);
+        assert!(
+            rendered.contains("SESSIONS"),
+            "rail SESSIONS header MUST still be visible after a \
+             SCROLLBACK-only second frame (task #648 release-blocker); got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("test response streaming"),
+            "deck content MUST also be visible; got:\n{rendered}"
         );
     }
 

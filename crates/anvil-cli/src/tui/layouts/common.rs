@@ -137,13 +137,15 @@ pub(super) fn render_tab_bar(
 
 /// Task #574: rebuild `tab_hits_out` without repainting the tab bar.
 ///
-/// Used by the region-gated render path when the TAB_STRIP dirty bit is
-/// not set on this frame. Click hit-testing requires up-to-date geometry
-/// even when the strip's pixels are not being repainted, so we walk the
-/// same span sequence as `render_tab_bar` and emit the `TabHit` entries
-/// without writing into the frame buffer. Keeping the two walkers in
-/// lockstep is enforced by the `tab_hits_match_render_tab_bar` regression
-/// test in `tui/layouts/common.rs`.
+/// Originally used by the region-gated render path when the TAB_STRIP
+/// dirty bit was not set on this frame. After task #648 removed the
+/// "skip paint on narrow dirty" approach (the ratatui frame-diff erased
+/// regions we skipped — see `vertical_split.rs::render`), this helper
+/// no longer has a production caller but stays in tree so the
+/// `tab_hits_match_render_tab_bar` regression test below keeps
+/// guarding the click-hit geometry in case a future render path needs
+/// the shape again.
+#[allow(dead_code)]
 pub(super) fn rebuild_tab_hits(
     area: Rect,
     snap: &LayoutSnapshot,

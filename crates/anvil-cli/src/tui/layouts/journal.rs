@@ -69,20 +69,10 @@ impl TuiLayoutRenderer for Renderer {
             _ => (false, String::new(), 0),
         };
 
-        // Task #574 region gating: each band repaints independently.
-        //   - TAB_STRIP → thread switcher row
-        //   - HEADER → version/model header band
-        //   - SCROLLBACK → timestamped journal body
-        //   - INPUT → input row
-        // `DirtyRegions::ALL` paints everything (first-frame / structural).
-        let render_tab_strip = snap.dirty_regions.contains(DirtyRegions::TAB_STRIP)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        let render_header = snap.dirty_regions.contains(DirtyRegions::HEADER)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        let render_body = snap.dirty_regions.contains(DirtyRegions::SCROLLBACK)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        let render_input = snap.dirty_regions.contains(DirtyRegions::INPUT)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        // Task #648 (release-blocker fix): paint every band every frame.
+        // See vertical_split.rs / classic.rs for the full ratatui API
+        // rationale — skipping a region erases it on terminal via the
+        // back-buffer diff.
 
         // ── Row allocation ────────────────────────────────────────────────────
         // Layout F: row 0 = thread switcher; rest = header + body + input row.
@@ -95,15 +85,7 @@ impl TuiLayoutRenderer for Renderer {
                 width: size.width,
                 height: 1,
             };
-            // The thread switcher populates tab_hits_out — same trick as
-            // classic/vertical_split: render only when dirty, but always
-            // rebuild click hit-test geometry so clicks route correctly on
-            // narrow-dirty frames.
-            if render_tab_strip {
-                render_thread_switcher(frame, anchor_area, snap, tab_hits_out);
-            } else {
-                rebuild_thread_switcher_hits(anchor_area, snap, tab_hits_out);
-            }
+            render_thread_switcher(frame, anchor_area, snap, tab_hits_out);
             y_offset = 1;
         }
 
@@ -129,7 +111,7 @@ impl TuiLayoutRenderer for Renderer {
         let input_area = bands[2];
 
         // ── Header ────────────────────────────────────────────────────────────
-        if render_header {
+        {
             let version = env!("CARGO_PKG_VERSION");
             let header_text = format!(
                 " {} · v{} · {}",
@@ -150,12 +132,10 @@ impl TuiLayoutRenderer for Renderer {
         }
 
         // ── Body (timestamped journal entries) ────────────────────────────────
-        if render_body {
-            render_journal_body(frame, body_area, snap);
-        }
+        render_journal_body(frame, body_area, snap);
 
         // ── Input row ─────────────────────────────────────────────────────────
-        if render_input {
+        {
             let input_line = if snap.input_text.is_empty() {
                 Line::from(Span::styled(
                     " ▌ ctrl-k for command palette · ↑ history · enter to send",
@@ -201,8 +181,11 @@ impl TuiLayoutRenderer for Renderer {
 
 /// Task #574: rebuild journal thread-switcher click hit-test geometry
 /// without repainting the band. Walks the same `tab_infos` sequence with
-/// identical column arithmetic as `render_thread_switcher`. Used when
-/// `DirtyRegions::TAB_STRIP` is not set on this frame.
+/// identical column arithmetic as `render_thread_switcher`.  After
+/// task #648 the production path always paints the thread switcher; this
+/// helper is retained for any future render variant that wants to
+/// rebuild hits without painting.
+#[allow(dead_code)]
 fn rebuild_thread_switcher_hits(
     area: Rect,
     snap: &LayoutSnapshot,
@@ -568,45 +551,48 @@ mod tests {
         rows.join("\n")
     }
 
-    /// Task #574 region gating: a SCROLLBACK-only frame must NOT repaint
-    /// the header or input bands. In `TestBackend` land each new frame's
-    /// buffer starts empty, so "unrepainted" is observable as "blank
-    /// cells". (At the terminal-emulator level the previous frame's
-    /// pixels are preserved because ratatui only emits cell diffs.)
+    /// Task #648 (v2.2.17 release-blocker fix): every band paints every
+    /// frame. The previous task-#574 "skip if not dirty" behavior left
+    /// blank cells in ratatui's back-buffer; the frame diff against the
+    /// previous-frame buffer then emitted writes that ERASED on-terminal
+    /// content for the skipped regions. New contract — paint everything,
+    /// rely on ratatui's cell diff for efficiency.
     #[test]
-    fn journal_redraws_only_body_on_scrollback_dirty() {
+    fn journal_paints_every_band_on_scrollback_only_dirty() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         snap.pending = "Streaming token".to_string();
         let rendered = render_real_journal(&snap, 100, 20, false);
         assert!(
-            !rendered.contains("claude-sonnet-4-6"),
-            "header model must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
+            rendered.contains("claude-sonnet-4-6"),
+            "header model MUST render every frame (task #648); got:\n{rendered}"
+        );
+        // journal_snap has input_text="hello world" so the input row
+        // renders the typed text, not the placeholder. Either form
+        // proves the input row is painted.
+        assert!(
+            rendered.contains("hello world"),
+            "input row MUST render every frame (task #648); got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("v2.2.14-phase1"),
-            "header git branch must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
-        );
-        assert!(
-            !rendered.contains("ctrl-k for command palette"),
-            "input prompt placeholder must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
+            rendered.contains("Streaming token"),
+            "streaming pending text must still render; got:\n{rendered}"
         );
     }
 
-    /// Task #574: HEADER-only repaint paints just the header band — body
-    /// content and input row stay blank.
+    /// Task #648: HEADER-only dirty still paints input row.
     #[test]
-    fn journal_renders_only_header_on_header_dirty() {
+    fn journal_paints_every_band_on_header_dirty() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::HEADER;
         let rendered = render_real_journal(&snap, 100, 20, false);
         assert!(
             rendered.contains("claude-sonnet-4-6"),
-            "header model must render with HEADER-only dirty; got:\n{rendered}"
+            "header model must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("ctrl-k for command palette"),
-            "input prompt placeholder must NOT render with HEADER-only dirty; got:\n{rendered}"
+            rendered.contains("hello world"),
+            "input row text must ALSO render (task #648); got:\n{rendered}"
         );
     }
 
@@ -621,11 +607,11 @@ mod tests {
         assert!(rendered.contains("hello world"));
     }
 
-    /// Task #574 streaming contract: a streaming `pending` text frame
-    /// (SCROLLBACK-only dirty) paints the new tokens into the journal
-    /// body but leaves the header / input rows untouched.
+    /// Task #648 streaming contract: a streaming `pending` text frame
+    /// (SCROLLBACK-only dirty) paints the new tokens AND keeps the
+    /// header + input bands visible (no terminal-side erasure).
     #[test]
-    fn journal_streaming_pending_renders_only_body() {
+    fn journal_streaming_pending_keeps_every_band_visible() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         snap.pending = "Streaming response token".to_string();
@@ -635,8 +621,8 @@ mod tests {
             "streaming pending must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("claude-sonnet-4-6"),
-            "header must NOT repaint on streaming SCROLLBACK frame; got:\n{rendered}"
+            rendered.contains("claude-sonnet-4-6"),
+            "header must STAY visible on streaming SCROLLBACK frame (task #648); got:\n{rendered}"
         );
     }
 

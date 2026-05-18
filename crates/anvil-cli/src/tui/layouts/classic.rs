@@ -23,7 +23,7 @@ use ratatui::widgets::Paragraph;
 use runtime::{format_usd, pricing_for_model};
 
 use super::common::{
-    rebuild_tab_hits, rgb, render_completion_popup, render_model_bar, render_tab_bar,
+    rgb, render_completion_popup, render_model_bar, render_tab_bar,
     right_aligned_row, section_header_line,
 };
 use super::{LayoutLocalState, TuiLayoutRenderer};
@@ -162,17 +162,20 @@ impl TuiLayoutRenderer for Renderer {
 
         // ── Header ───────────────────────────────────────────────────────────────
         //
-        // Task #574 region gating: the HEADER + TAB_STRIP bands repaint only
-        // when the corresponding dirty bit is set. `DirtyRegions::ALL` (set on
-        // the first frame after layout-switch / resize / modal close) repaints
-        // both, preserving correctness. Narrow dirty sets (e.g. SCROLLBACK
-        // during streaming) skip both — ratatui's cell diff leaves the
-        // previous frame's header cells in place. Tab-hit metadata is rebuilt
-        // every frame regardless so click hit-testing remains accurate.
-        let render_header = snap.dirty_regions.contains(DirtyRegions::HEADER)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        let render_tab_strip = snap.dirty_regions.contains(DirtyRegions::TAB_STRIP)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        // Task #648 (release-blocker fix): paint every region every frame.
+        // The previous task #574 region-gating violated ratatui's
+        // `Terminal::draw` contract ("fully render the entire frame on
+        // every call" — see `swap_buffers` reset in `ratatui-core`).
+        // Skipping a paint left the back-buffer cells blank, so ratatui's
+        // diff against the previous frame emitted ANSI writes that ERASED
+        // the on-terminal content for that region. The cell-level
+        // efficiency that gating was supposed to provide already lives in
+        // ratatui's frame diff at the backend layer.
+        //
+        // The flash gate (`force_full_clear` above) stays — it gates the
+        // top-level full-screen `Clear` widget, not whether regions get
+        // painted at all. Skipping that `Clear` is safe because we still
+        // paint every region underneath.
         if self.tabs {
             // Split header into tab bar (row 0) + model bar (row 1).
             let header_split = RLayout::default()
@@ -181,33 +184,15 @@ impl TuiLayoutRenderer for Renderer {
                 .split(header_area);
             let tab_bar_area = header_split[0];
             let model_bar_area = header_split[1];
-
-            // The tab bar populates `tab_hits_out` as a side effect even when
-            // we don't paint — pull just the hit-test calculation out so click
-            // routing keeps working on frames that don't repaint the strip.
-            if render_tab_strip {
-                render_tab_bar(frame, tab_bar_area, snap, tab_hits_out);
-            } else {
-                rebuild_tab_hits(tab_bar_area, snap, tab_hits_out);
-            }
-            if render_header {
-                render_model_bar(frame, model_bar_area, snap);
-            }
+            render_tab_bar(frame, tab_bar_area, snap, tab_hits_out);
+            render_model_bar(frame, model_bar_area, snap);
         } else {
             // Single-row header: model bar only.
-            if render_header {
-                render_model_bar(frame, header_area, snap);
-            }
+            render_model_bar(frame, header_area, snap);
         }
 
         // ── Content ──────────────────────────────────────────────────────────────
-        //
-        // Task #574: SCROLLBACK gates the chat log / SSH grid. On narrow
-        // dirty sets that exclude SCROLLBACK (e.g. a HEADER-only spinner
-        // tick), this branch is skipped entirely and the previous frame's
-        // content cells survive. `DirtyRegions::ALL` always paints.
-        let render_content = snap.dirty_regions.contains(DirtyRegions::SCROLLBACK)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        let render_content = true;
         let configure_state = &snap.configure_state;
         let theme = &snap.theme;
         let content_width = content_area.width;
@@ -335,54 +320,28 @@ impl TuiLayoutRenderer for Renderer {
 
         // ── Agent panel ──────────────────────────────────────────────────────────
         //
-        // Task #574: AGENT_PANEL gates the subagent tree repaint.
-        let render_agent = snap.dirty_regions.contains(DirtyRegions::AGENT_PANEL)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        if render_agent {
-            if let Some(panel_area) = agent_panel_area {
-                render_agent_panel(frame, panel_area, snap);
-            }
+        // Task #648: always paint (see render() rationale).
+        if let Some(panel_area) = agent_panel_area {
+            render_agent_panel(frame, panel_area, snap);
         }
 
         // ── Inline 7-layer MEMORY block (task #607) ──────────────────────────────
-        // Visible only on terminals ≥ 30 rows tall; auto-hidden on smaller
-        // terminals so the classic layout stays usable on cramped windows.
-        //
-        // Task #574: the memory block is informational (no animation) so it
-        // is folded into SCROLLBACK for gating purposes — repainting only
-        // when the conversation area below it also repaints.
-        if render_content {
-            if let Some(area) = memory_area {
-                render_memory_block(frame, area, snap);
-            }
+        // Visible only on terminals ≥ 30 rows tall.
+        if let Some(area) = memory_area {
+            render_memory_block(frame, area, snap);
         }
 
         // ── Footer ───────────────────────────────────────────────────────────────
         //
-        // Task #574: INPUT or STATUS bit triggers the footer paint. The
-        // cursor position is set inside `render_footer` and must still be
-        // updated every frame (it tracks key events, not a paintable region),
-        // so even when neither bit is set we still need to set the cursor
-        // position. We do that by calling `render_footer` with a "cursor only"
-        // flag.
-        let render_input = snap.dirty_regions.contains(DirtyRegions::INPUT)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        let render_status = snap.dirty_regions.contains(DirtyRegions::STATUS)
-            || snap.dirty_regions.contains(DirtyRegions::ALL);
-        if render_input || render_status {
-            render_footer(
-                frame,
-                footer_area,
-                snap,
-                width,
-                queued_indicator_height,
-                input_line_count,
-            );
-        } else {
-            // Cursor-only refresh — keep the on-screen cursor in lockstep
-            // with the input buffer even when no painted region changed.
-            set_footer_cursor(frame, footer_area, snap, width, queued_indicator_height);
-        }
+        // Task #648: always paint.
+        render_footer(
+            frame,
+            footer_area,
+            snap,
+            width,
+            queued_indicator_height,
+            input_line_count,
+        );
 
         // ── Completion popup ─────────────────────────────────────────────────────
         // Always rendered when visible (it's the OVERLAY region, never gated
@@ -1091,64 +1050,59 @@ mod tests {
     // visible output is identical to the legacy path (no regression) when
     // ALL is set, and remains coherent when only SCROLLBACK is set.
 
+    /// Task #648 (v2.2.17 release-blocker fix). The previous task-#574
+    /// region-gating violated ratatui's `Terminal::draw` contract — see
+    /// vertical_split.rs for the full rationale. The classic layout had
+    /// the same bug; this test pins the new contract: SCROLLBACK-only
+    /// dirty still paints every band.
     #[test]
-    fn classic_skips_full_screen_clear_when_no_flash_set() {
-        // #622 + #574 contract: SCROLLBACK-only dirty must skip the
-        // top-level full-screen Clear AND skip the header / footer paints.
-        // In the TestBackend buffer, "skipped" is observable as "blank
-        // cells" — model bar text and input prompt MUST NOT appear.
+    fn classic_paints_every_band_on_scrollback_only_dirty() {
         let mut snap = populated_snap();
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         let rendered = render_real_classic(&snap, 100, 30, true);
         assert!(
-            !rendered.contains("claude-sonnet-4-6"),
-            "model bar must NOT repaint on SCROLLBACK-only dirty; got:\n{rendered}"
+            rendered.contains("claude-sonnet-4-6"),
+            "model bar MUST repaint every frame (task #648); got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("❯"),
-            "input prompt must NOT repaint on SCROLLBACK-only dirty; got:\n{rendered}"
+            rendered.contains("❯"),
+            "input prompt MUST repaint every frame (task #648); got:\n{rendered}"
         );
     }
 
-    /// Task #574: HEADER-only repaint paints just the model bar — content
-    /// + footer stay blank.
+    /// Task #648: HEADER-only dirty still paints content + footer.
     #[test]
-    fn classic_renders_only_header_on_header_dirty() {
+    fn classic_paints_every_band_on_header_dirty() {
         let mut snap = populated_snap();
         snap.dirty_regions = DirtyRegions::HEADER;
         let rendered = render_real_classic(&snap, 100, 30, true);
         assert!(
             rendered.contains("claude-sonnet-4-6"),
-            "model bar must render with HEADER-only dirty; got:\n{rendered}"
+            "model bar must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("❯"),
-            "input prompt must NOT render with HEADER-only dirty; got:\n{rendered}"
+            rendered.contains("❯"),
+            "input prompt must ALSO render (task #648); got:\n{rendered}"
         );
     }
 
-    /// Task #574: INPUT-only repaint paints just the footer.
-    ///
-    /// Note: the footer status line repeats the model name, so the model
-    /// string appears even though we are not repainting the top header
-    /// bar. To pin "header didn't paint", we look for the `⚒ Anvil v...`
-    /// prefix that ONLY lives in the header band's model bar.
+    /// Task #648: INPUT-only dirty still paints header + content.
     #[test]
-    fn classic_renders_only_footer_on_input_dirty() {
+    fn classic_paints_every_band_on_input_dirty() {
         let mut snap = populated_snap();
         snap.dirty_regions = DirtyRegions::INPUT;
         let rendered = render_real_classic(&snap, 100, 30, true);
         assert!(
             rendered.contains("❯"),
-            "input prompt must render with INPUT-only dirty; got:\n{rendered}"
+            "input prompt must render; got:\n{rendered}"
         );
         assert!(
-            !rendered.contains("⚒ Anvil v"),
-            "header model bar must NOT render with INPUT-only dirty; got:\n{rendered}"
+            rendered.contains("⚒ Anvil v"),
+            "header model bar must ALSO render (task #648); got:\n{rendered}"
         );
         assert!(
-            !rendered.contains(" MEMORY"),
-            "MEMORY block must NOT render with INPUT-only dirty; got:\n{rendered}"
+            rendered.contains(" MEMORY"),
+            "MEMORY block must ALSO render (task #648); got:\n{rendered}"
         );
     }
 
