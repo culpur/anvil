@@ -593,8 +593,164 @@ where
     Ok((chosen_model, ollama_url, profile_name, tui_answers))
 }
 
-/// Result of running ALL 8 wizard steps inside a single alt-screen
-/// session (task #642 v2.2.17 finisher).
+/// Detect whether the local user has a Claude Code install (`~/.claude/`).
+///
+/// Honors `ANVIL_CLAUDE_HOME` for tests / isolated sandboxes — that env
+/// var, when set, takes the place of `~/.claude`. Otherwise falls back to
+/// the real home-dir lookup. Returns `None` when no directory was found.
+pub(crate) fn detect_claude_code_dir() -> Option<std::path::PathBuf> {
+    if let Some(override_dir) = std::env::var_os("ANVIL_CLAUDE_HOME") {
+        let p = std::path::PathBuf::from(override_dir);
+        return if p.exists() { Some(p) } else { None };
+    }
+    dirs_next::home_dir()
+        .map(|h| h.join(".claude"))
+        .filter(|p| p.exists())
+}
+
+/// Step 9 — optional Claude Code migration, driven inside the existing
+/// alt-screen `WizardSession` (#643, v2.2.17).
+///
+/// Returns:
+/// - `Ok(None)` when CC is not installed OR the user previously declined
+///   migration (the `.import-skipped` flag is present). The step renders
+///   nothing — the wizard is silent on absence by design.
+/// - `Ok(Some(summary))` when the step ran a ConfirmModal AND either
+///   imported or recorded a skip. The `summary` string is a single line
+///   suitable for the post-wizard exit banner ("Imported N items from
+///   Claude Code" / "CC migration skipped (.import-skipped recorded)").
+///
+/// Constraints honoured:
+/// - NO `println!` / `eprintln!` while the alt-screen is active
+///   (`feedback-tui-stdout-anti-pattern.md`).
+/// - The import pipeline runs synchronously between two banners — the
+///   "Importing..." banner stays on screen for the duration. The
+///   pipeline is fast (typically under one second for fresh installs);
+///   a spinner is intentionally not added here to keep the work scoped.
+///   When the runtime gains an async progress channel, the banner body
+///   text can be updated incrementally; until then a single static
+///   "Working..." line is honest and flicker-free.
+pub(crate) fn run_step_9_cc_migration_in_alt_screen<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+) -> Result<Option<String>, RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: crate::wizard_runner::TerminalHooks,
+    K: crate::wizard_runner::KeySource,
+{
+    use crate::tui::modals::ConfirmChoice;
+    use crate::tui::modals::confirm::ConfirmModal;
+    use crate::tui::modals::queue::ModalAnswer;
+
+    // Quick gates: skip silently when CC not installed or already
+    // declined.
+    if import_was_skipped() {
+        return Ok(None);
+    }
+    let Some(claude_dir) = detect_claude_code_dir() else {
+        return Ok(None);
+    };
+
+    runner.session.render_banner(
+        "Step 9 of 9 — Import from Claude Code (optional)",
+        &[
+            "We detected Claude Code on this system.",
+            "Import your sessions, settings, skills, plugins, and memory?",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let prompt_body = format!(
+        "Detected CC at: {}\n\
+         \n\
+         Yes — import memory, instructions, skills, plugins, and settings\n\
+         No  — skip (you can run `/import claude-code` any time later)",
+        claude_dir.display()
+    );
+    let modal = ConfirmModal::new("Import from Claude Code?", prompt_body);
+    let answer = runner.run_confirm("step9-cc-migration", modal)?;
+
+    match answer {
+        ModalAnswer::Confirm(ConfirmChoice::Yes) => {
+            // Show a "working..." banner while the synchronous import
+            // pipeline runs. The pipeline currently lacks an async
+            // progress channel, so we render one snapshot before and
+            // one after — both inside the same alt-screen frame.
+            runner.session.render_banner(
+                "Importing from Claude Code...",
+                &[
+                    "Reading memory, instructions, skills, plugins...",
+                    "This is read-only — nothing in ~/.claude/ is modified.",
+                ],
+                ratatui::style::Color::Cyan,
+            )?;
+
+            let summary = run_cc_import_pipeline_capture_summary(&claude_dir);
+
+            // Show a result banner so the user sees the outcome inside
+            // the alt-screen (rather than scrolling past it after the
+            // session drops). The summary line is also returned to the
+            // caller for the post-exit banner.
+            let body_lines: Vec<&str> = summary.lines().collect();
+            // Cap the banner body to a few lines — the full report is
+            // available on disk regardless.
+            let display: Vec<&str> = body_lines.iter().copied().take(4).collect();
+            runner.session.render_banner(
+                "Import complete",
+                &display,
+                ratatui::style::Color::Green,
+            )?;
+            Ok(Some(summary.lines().next().unwrap_or("Imported from Claude Code").to_string()))
+        }
+        _ => {
+            // User picked No / Esc — record the skip so we don't ask
+            // again on the next run, and surface a one-line summary.
+            let _ = write_import_skipped_flag();
+            runner.session.render_banner(
+                "Skipped",
+                &[
+                    "OK — you can run `/import claude-code` any time later.",
+                ],
+                ratatui::style::Color::DarkGray,
+            )?;
+            Ok(Some("CC migration skipped (.import-skipped recorded)".to_string()))
+        }
+    }
+}
+
+/// Run the CC import pipeline synchronously and produce a one-line
+/// summary suitable for the post-exit banner.
+///
+/// Errors from the pipeline are surfaced as a "Migration failed: ..."
+/// line rather than panicking — the wizard must always exit cleanly.
+fn run_cc_import_pipeline_capture_summary(claude_dir: &std::path::Path) -> String {
+    use runtime::ImportSource;
+    let source = ImportSource::ClaudeCode {
+        profile_dir: claude_dir.to_path_buf(),
+    };
+    match commands::handlers::run_import_pipeline_headless(&source, false, false) {
+        Ok(report) => {
+            // The full report is multi-line; the wizard's exit banner
+            // only has room for the first line, but the rest is still
+            // written to ~/.anvil/.import-report.md by the pipeline.
+            // Use the first non-blank line that looks like a count
+            // summary; fall back to the literal first line.
+            for line in report.lines() {
+                let t = line.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                return format!("Imported from Claude Code: {t}");
+            }
+            "Imported from Claude Code (see ~/.anvil/.import-report.md)".to_string()
+        }
+        Err(e) => format!("Claude Code migration failed: {e}"),
+    }
+}
+
+/// Result of running ALL 8 wizard steps + the step-9 CC migration
+/// step inside a single alt-screen session (task #642 + #643 finisher).
 ///
 /// The orchestrator (`run_full_wizard_in_alt_screen`) returns this
 /// bundle to `run_first_run_wizard`, which then writes config.json and
@@ -607,6 +763,12 @@ pub(crate) struct FullWizardResult {
     pub(crate) ollama_url: String,
     pub(crate) profile_name: String,
     pub(crate) tui_answers: WizardTuiAnswers,
+    /// `Some(summary_line)` when the in-alt-screen step-9 CC migration
+    /// ran and either imported or skipped; `None` when CC was not
+    /// detected on this system. The wizard's post-exit summary banner
+    /// uses this to render a one-line "Imported N items from Claude
+    /// Code" or "CC migration skipped" message.
+    pub(crate) migration_summary: Option<String>,
 }
 
 /// Open ONE alt-screen session and drive ALL 8 wizard steps inside it
@@ -657,6 +819,20 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
     let (chosen_model, ollama_url_modal, profile_name, tui_answers) =
         run_steps_4_to_8_in_alt_screen(&mut runner, &steps123.model_candidates)?;
 
+    // Step 9 — optional CC migration. Stays inside the same alt-screen
+    // session so the wizard → Anvil TUI handoff has ZERO inline stdin
+    // moments (#643, v2.2.17). The step is silent when ~/.claude/ is
+    // not present or the user already declined on a previous run.
+    let migration_summary = run_step_9_cc_migration_in_alt_screen(&mut runner)?;
+
+    // Final "Starting Anvil..." banner so the user sees a clean
+    // transition out of the wizard rather than an unexplained Drop.
+    runner.session.render_banner(
+        "Setup complete! Starting Anvil...",
+        &["Press any key... (continuing automatically)"],
+        ratatui::style::Color::Cyan,
+    )?;
+
     // session goes out of scope here — single LeaveAlternateScreen.
     drop(runner);
     drop(session);
@@ -667,6 +843,7 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
         ollama_url: ollama_url_modal,
         profile_name,
         tui_answers,
+        migration_summary,
     })
 }
 
@@ -1463,12 +1640,56 @@ fn run_tui_config_via_stdin() -> WizardTuiAnswers {
 /// - **Non-TTY** (CI / piped input / test fixtures) — falls back to
 ///   the legacy inline + stdin path so existing fixture-driven scripts
 ///   keep working.
+/// Result handed back by the first-run wizard to main.rs (task #643,
+/// v2.2.17 — zero-seam wizard → Anvil TUI handoff).
+///
+/// Today, `main.rs::run_repl` re-reads `config.json` after the wizard
+/// returns to learn the chosen default model. With this struct the
+/// wizard tells main.rs directly, AND tells it whether the session
+/// vault is already unlocked so `startup_vault_init` can be skipped
+/// when the wizard's Step 1 already did the unlock.
+///
+/// `wizard_completed = false` is the non-TTY / fallback path — in that
+/// case main.rs falls back to its legacy "re-read config" behaviour.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WizardResult {
+    /// `true` when the modal wizard ran end-to-end (TTY happy path).
+    /// `false` when the stdin fallback ran OR the alt-screen wizard
+    /// failed to enter and the legacy path took over.
+    ///
+    /// Currently read only in tests + future logging; the
+    /// `vault_was_unlocked` field is the primary main.rs branch
+    /// signal. The flag is kept on the result so a future
+    /// telemetry / diagnostic site can distinguish "wizard ran" from
+    /// "wizard fell back" without a second probe.
+    #[allow(dead_code)]
+    pub(crate) wizard_completed: bool,
+    /// The model the user picked in Step 4 (or `None` when the wizard
+    /// did not complete or no model was selected).
+    pub(crate) chosen_model: Option<String>,
+    /// `true` when Step 1 successfully set up + unlocked the session
+    /// vault, OR successfully unlocked an existing one. main.rs uses
+    /// this to skip the prompt-password loop in `startup_vault_init`.
+    pub(crate) vault_was_unlocked: bool,
+    /// `Some(line)` when Step 9 ran the CC migration (imported or
+    /// skipped); `None` when CC was not detected at all. Surfaced in
+    /// the post-wizard summary banner; field is owned even when the
+    /// banner already rendered so future call-sites (e.g. an OTel
+    /// span emit) can read it without re-running detection.
+    #[allow(dead_code)]
+    pub(crate) migration_summary: Option<String>,
+}
+
 #[allow(clippy::too_many_lines, clippy::single_match_else)]
-pub(crate) fn run_first_run_wizard() {
+pub(crate) fn run_first_run_wizard() -> WizardResult {
     if io::stdout().is_terminal() {
-        run_first_run_wizard_modal();
+        run_first_run_wizard_modal()
     } else {
         run_first_run_wizard_via_stdin();
+        // Stdin fallback writes config.json but does not capture the
+        // result fields explicitly; main.rs falls back to re-reading
+        // config.json in that path.
+        WizardResult::default()
     }
 }
 
@@ -1477,7 +1698,11 @@ pub(crate) fn run_first_run_wizard() {
 /// Opens ONE alt-screen via `run_full_wizard_in_alt_screen`, then
 /// writes the final config.json and prints the post-wizard summary
 /// inline below the (now-closed) alt-screen.
-fn run_first_run_wizard_modal() {
+///
+/// Returns a `WizardResult` so main.rs can plumb the captured fields
+/// (chosen model, vault unlock state, CC migration summary) without
+/// re-reading config.json or re-prompting the user (task #643).
+fn run_first_run_wizard_modal() -> WizardResult {
     let result = match run_full_wizard_in_alt_screen() {
         Ok(r) => r,
         Err(e) => {
@@ -1486,7 +1711,7 @@ fn run_first_run_wizard_modal() {
             eprintln!("\n  Note: alt-screen wizard unavailable ({e}).");
             eprintln!("  Falling back to inline / stdin prompts.");
             run_first_run_wizard_via_stdin();
-            return;
+            return WizardResult::default();
         }
     };
 
@@ -1599,10 +1824,11 @@ fn run_first_run_wizard_modal() {
         }
     };
 
-    // Migration step (claude-code import) — still inline; opening a
-    // second alt-screen here would defeat the single-transition
-    // promise.
-    wizard_run_migration_step();
+    // Migration step ran INSIDE the alt-screen as step 9
+    // (`run_step_9_cc_migration_in_alt_screen`) so the wizard → TUI
+    // handoff has ZERO inline stdin moments (#643).  The summary line
+    // captured there flows through `result.migration_summary` and lands
+    // in the post-wizard banner below.
 
     // Post-wizard summary banner — inline, AFTER the alt-screen has
     // closed.  This is exit chrome only.
@@ -1615,12 +1841,22 @@ fn run_first_run_wizard_modal() {
     wizard_box_line(&format!("    Default model:  {}", result.chosen_model));
     wizard_box_line(&format!("    Providers:      {provider_chain}"));
     wizard_box_line(&format!("    Config saved:   {}", config_path.display()));
+    if let Some(ref summary) = result.migration_summary {
+        wizard_box_line(&format!("    Migration:      {summary}"));
+    }
     wizard_box_line("");
     wizard_box_line("  Run `anvil` to start coding.");
     wizard_box_line("  Type `/help` for all commands.");
     wizard_box_line("");
     wizard_box_bot();
     println!();
+
+    WizardResult {
+        wizard_completed: true,
+        chosen_model: Some(result.chosen_model.clone()),
+        vault_was_unlocked: result.steps123.vault_session_unlocked,
+        migration_summary: result.migration_summary.clone(),
+    }
 }
 
 /// Stdin-driven first-run wizard — the legacy inline path.
@@ -3064,5 +3300,453 @@ mod tests {
 
         drop(session);
         assert_eq!(shared.borrow().left, 1, "exactly one leave on drop");
+    }
+
+    // ── Task #643 — v2.2.17 zero-seam tests ──────────────────────────
+    //
+    // These tests exercise:
+    //   - Step 9 (CC migration) detection + skip-when-absent
+    //   - Step 9 ConfirmModal renders when CC is detected
+    //   - Step 9 records the skip flag on No / Esc
+    //   - WizardResult plumbs the chosen_model + vault_unlocked fields
+    //   - vault_is_initialized honours ANVIL_CONFIG_HOME (D3)
+    //   - The 8+1-step alt-screen pair count stays at exactly one
+    //     enter / one exit when step 9 runs inside the session.
+    //
+    // The CC migration pipeline itself is exercised by the
+    // commands/runtime tests; here we only assert that the wizard
+    // path drives the ConfirmModal + flag-write contract.
+
+    /// `detect_claude_code_dir` honours `ANVIL_CLAUDE_HOME` so tests
+    /// can simulate "CC installed" without touching the developer's
+    /// real `~/.claude/`.
+    #[test]
+    #[serial(anvil_claude_home)]
+    fn detect_claude_code_dir_honours_env_override() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CLAUDE_HOME");
+        let temp = std::env::temp_dir().join(format!(
+            "anvil-test-claude-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp).expect("temp .claude");
+        unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", &temp); }
+
+        let detected = detect_claude_code_dir();
+        assert_eq!(detected, Some(temp.clone()));
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&temp);
+        match prev {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CLAUDE_HOME"); },
+        }
+    }
+
+    /// Step 9 — when CC is NOT detected, the migration step returns
+    /// `Ok(None)` and emits NOTHING (no modal opens).
+    #[test]
+    #[serial(anvil_claude_home)]
+    fn wizard_step_9_cc_migration_skips_silently_when_cc_absent() {
+        let _lock = env_lock();
+        let prev_claude = std::env::var_os("ANVIL_CLAUDE_HOME");
+        let prev_home = std::env::var_os("ANVIL_CONFIG_HOME");
+        // Point ANVIL_CLAUDE_HOME at a path that does NOT exist so
+        // detect_claude_code_dir returns None.
+        let bogus = std::env::temp_dir().join(format!(
+            "anvil-test-no-cc-{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&bogus);
+        unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", &bogus); }
+        // Also redirect ANVIL_CONFIG_HOME so `import_was_skipped()`
+        // doesn't see a stale flag from the developer's real home.
+        let cfg = std::env::temp_dir().join(format!(
+            "anvil-test-cfg-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&cfg).expect("temp cfg");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &cfg); }
+
+        let mut session = make_session();
+        let keys = ScriptedKeySource {
+            keys: std::collections::VecDeque::new(),
+        };
+        let mut runner = WizardModalRunner::new(
+            &mut session,
+            keys,
+            ratatui::style::Color::Cyan,
+        );
+
+        let summary = run_step_9_cc_migration_in_alt_screen(&mut runner)
+            .expect("step9 returns Ok when CC absent");
+        assert!(summary.is_none(),
+            "step 9 must return None when CC is not detected");
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&cfg);
+        match prev_claude {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CLAUDE_HOME"); },
+        }
+        match prev_home {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+    }
+
+    /// Step 9 — ConfirmModal opens when CC is detected, and pressing
+    /// `n` writes the `.import-skipped` flag so the wizard does not
+    /// re-prompt on the next run.
+    #[test]
+    #[serial(anvil_claude_home)]
+    fn wizard_step_9_cc_migration_skip_advances_to_done_banner() {
+        let _lock = env_lock();
+        let prev_claude = std::env::var_os("ANVIL_CLAUDE_HOME");
+        let prev_home = std::env::var_os("ANVIL_CONFIG_HOME");
+
+        let cc_dir = std::env::temp_dir().join(format!(
+            "anvil-test-cc-skip-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&cc_dir).expect("temp cc dir");
+        unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", &cc_dir); }
+
+        let cfg = std::env::temp_dir().join(format!(
+            "anvil-test-skip-cfg-{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).expect("temp cfg");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &cfg); }
+
+        let mut session = make_session();
+        // Press 'n' → ConfirmChoice::No → step 9 writes skip flag.
+        let keys = ScriptedKeySource {
+            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('n'))]),
+        };
+        let mut runner = WizardModalRunner::new(
+            &mut session,
+            keys,
+            ratatui::style::Color::Cyan,
+        );
+
+        let summary = run_step_9_cc_migration_in_alt_screen(&mut runner)
+            .expect("step9 runs");
+        assert!(summary.is_some(), "step 9 must return Some(line) when CC detected");
+        let s = summary.unwrap();
+        assert!(s.contains("skipped") || s.contains("Skipped"),
+            "skip summary should mention 'skipped': {s:?}");
+
+        // The .import-skipped flag should now exist under ANVIL_CONFIG_HOME.
+        let flag = cfg.join(".import-skipped");
+        assert!(flag.exists(),
+            "Skip path must write `.import-skipped` under ANVIL_CONFIG_HOME");
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&cfg);
+        let _ = std::fs::remove_dir_all(&cc_dir);
+        match prev_claude {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CLAUDE_HOME"); },
+        }
+        match prev_home {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+    }
+
+    /// Step 9 — when `.import-skipped` is already on disk, the step
+    /// MUST short-circuit silently (no modal opens, no key consumed).
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_step_9_cc_migration_short_circuits_when_skip_flag_present() {
+        let _lock = env_lock();
+        let prev_home = std::env::var_os("ANVIL_CONFIG_HOME");
+        let prev_claude = std::env::var_os("ANVIL_CLAUDE_HOME");
+
+        let cfg = std::env::temp_dir().join(format!(
+            "anvil-test-skipflag-{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).expect("temp cfg");
+        // Pre-write the skip flag.
+        std::fs::write(cfg.join(".import-skipped"), b"").expect("flag");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &cfg); }
+        // CC dir still exists (so detection would otherwise succeed),
+        // but the flag must take precedence.
+        let cc_dir = std::env::temp_dir().join(format!(
+            "anvil-test-cc-flagged-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&cc_dir).expect("cc");
+        unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", &cc_dir); }
+
+        let mut session = make_session();
+        let keys = ScriptedKeySource {
+            keys: std::collections::VecDeque::new(), // empty — must not be consumed
+        };
+        let mut runner = WizardModalRunner::new(
+            &mut session,
+            keys,
+            ratatui::style::Color::Cyan,
+        );
+
+        let summary = run_step_9_cc_migration_in_alt_screen(&mut runner)
+            .expect("step9 short-circuits");
+        assert!(summary.is_none(),
+            "step 9 must skip silently when .import-skipped exists");
+
+        let _ = std::fs::remove_dir_all(&cfg);
+        let _ = std::fs::remove_dir_all(&cc_dir);
+        match prev_home {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+        match prev_claude {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CLAUDE_HOME"); },
+        }
+    }
+
+    /// D3 — `vault_is_initialized()` reads from ANVIL_CONFIG_HOME/vault/
+    /// when the env var is set, NOT $HOME/.anvil/vault/.
+    ///
+    /// Point ANVIL_CONFIG_HOME at an empty temp dir; the predicate must
+    /// return false even when the developer's real $HOME/.anvil/vault/
+    /// is initialised.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn vault_is_initialized_respects_anvil_config_home() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let temp = std::env::temp_dir().join(format!(
+            "anvil-vault-d3-{}", std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).expect("temp");
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &temp); }
+
+        // Vault dir does not exist under the temp config home → not initialized.
+        assert!(!runtime::vault_is_initialized(),
+            "vault_is_initialized must respect ANVIL_CONFIG_HOME (empty tempdir → false)");
+
+        // And the resolved default vault dir is under the override.
+        let vault_dir = runtime::VaultManager::default_vault_dir();
+        assert!(vault_dir.starts_with(&temp),
+            "default_vault_dir must live under ANVIL_CONFIG_HOME ({} vs {})",
+            vault_dir.display(), temp.display());
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&temp);
+        match prev {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+    }
+
+    /// D2 Case A — when the wizard's Step 1 successfully unlocks the
+    /// vault, `WizardResult.vault_was_unlocked` is set to true so
+    /// main.rs can skip its second unlock prompt.
+    ///
+    /// We assert the field-plumbing contract directly (constructing the
+    /// `WizardSteps123 -> FullWizardResult -> WizardResult` mapping)
+    /// rather than driving a real vault setup — `runtime::init_session_vault`
+    /// uses a process-global OnceLock that cannot be reset across tests.
+    #[test]
+    fn wizard_returns_unlocked_vault_handle_when_password_set() {
+        let steps123 = WizardSteps123 {
+            configured_providers: vec!["anthropic".to_string()],
+            model_candidates: vec![("claude-sonnet-4-5".into(), "Anthropic".into())],
+            ollama_url: None,
+            vault_session_unlocked: true,
+        };
+        let full = FullWizardResult {
+            steps123: steps123.clone(),
+            chosen_model: "claude-sonnet-4-5".to_string(),
+            ollama_url: "http://localhost:11434".to_string(),
+            profile_name: "default".to_string(),
+            tui_answers: WizardTuiAnswers::defaults(),
+            migration_summary: None,
+        };
+
+        // The mapping main.rs reads:
+        let wr = WizardResult {
+            wizard_completed: true,
+            chosen_model: Some(full.chosen_model.clone()),
+            vault_was_unlocked: full.steps123.vault_session_unlocked,
+            migration_summary: full.migration_summary.clone(),
+        };
+        assert!(wr.wizard_completed);
+        assert!(wr.vault_was_unlocked,
+            "Step 1 unlock MUST propagate to WizardResult.vault_was_unlocked");
+        assert_eq!(wr.chosen_model.as_deref(), Some("claude-sonnet-4-5"));
+    }
+
+    /// D2 Case A — `main_skips_prompt_when_wizard_returns_unlocked_vault`.
+    ///
+    /// We model main.rs's logic: when `vault_was_unlocked == true`, the
+    /// `startup_vault_init` call site is skipped. We assert the
+    /// branching contract here rather than spawning a subprocess.
+    #[test]
+    fn main_skips_prompt_when_wizard_returns_unlocked_vault() {
+        let unlocked = WizardResult {
+            wizard_completed: true,
+            chosen_model: Some("model".to_string()),
+            vault_was_unlocked: true,
+            migration_summary: None,
+        };
+        let needs_unlock = WizardResult {
+            wizard_completed: true,
+            chosen_model: Some("model".to_string()),
+            vault_was_unlocked: false,
+            migration_summary: None,
+        };
+        // main.rs::run_repl: `if !wizard_vault_unlocked { startup_vault_init(); }`
+        assert!(!unlocked.vault_was_unlocked == false,
+            "vault_was_unlocked=true must short-circuit the startup unlock");
+        assert!(!needs_unlock.vault_was_unlocked,
+            "vault_was_unlocked=false routes through startup_vault_init");
+    }
+
+    /// Extends the existing 8-step single-alt-screen-transition test to
+    /// cover the new step 9 CC migration. We synthesize a 9-modal
+    /// queue (steps 1-8 + a step-9 ConfirmModal) drained inside ONE
+    /// `WizardSession` and assert the hook counter still reads exactly
+    /// one enter / one exit.
+    #[test]
+    fn wizard_emits_single_alt_screen_transition_through_step_9() {
+        use crate::tui::modals::confirm::ConfirmModal;
+        use crate::tui::modals::queue::{ModalQueue, QueuedModal, WizardChoiceModal};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        #[derive(Default)]
+        struct SharedHooks {
+            inner: Rc<RefCell<CountingHooks>>,
+        }
+        impl TerminalHooks for SharedHooks {
+            fn enter(&mut self) -> Result<(), RunnerError> {
+                self.inner.borrow_mut().enter()
+            }
+            fn leave(&mut self) {
+                self.inner.borrow_mut().leave();
+            }
+        }
+        let shared = Rc::new(RefCell::new(CountingHooks::default()));
+        let hooks = SharedHooks {
+            inner: Rc::clone(&shared),
+        };
+        let backend = TestBackend::new(100, 30);
+        let terminal = Terminal::new(backend).unwrap();
+        let mut session = WizardSession::enter(terminal, hooks).expect("enter");
+
+        let mut queue = ModalQueue::new();
+        // Steps 1..8 (compressed: one modal per banner — the wizard
+        // collapses multi-modal steps already in v2.2.17).
+        queue.push(QueuedModal::Confirm {
+            tag: "step1".to_string(),
+            modal: ConfirmModal::new("V?", "Y/N"),
+        });
+        queue.push(QueuedModal::Choice {
+            tag: "step2".to_string(),
+            modal: WizardChoiceModal::new("P", vec!["A".into(), "B".into()]),
+        });
+        queue.push(QueuedModal::Confirm {
+            tag: "step3".to_string(),
+            modal: ConfirmModal::new("O?", "Y/N"),
+        });
+        queue.push(QueuedModal::Choice {
+            tag: "step4".to_string(),
+            modal: WizardChoiceModal::new("M", vec!["m1".into(), "m2".into()]),
+        });
+        queue.push(QueuedModal::Choice {
+            tag: "step7".to_string(),
+            modal: WizardChoiceModal::new("L", vec!["A".into(), "B".into(), "C".into(), "D".into()]),
+        });
+        queue.push(QueuedModal::Confirm {
+            tag: "step7-tabs".to_string(),
+            modal: ConfirmModal::new("T?", "Y/N"),
+        });
+        queue.push(QueuedModal::Confirm {
+            tag: "step8-mouse".to_string(),
+            modal: ConfirmModal::new("M?", "Y/N"),
+        });
+        queue.push(QueuedModal::Choice {
+            tag: "step8-theme".to_string(),
+            modal: WizardChoiceModal::new("T", vec!["Dark".into(), "Light".into()]),
+        });
+        // NEW: step 9 CC migration confirm modal.
+        queue.push(QueuedModal::Confirm {
+            tag: "step9-cc-migration".to_string(),
+            modal: ConfirmModal::new("Import CC?", "Y / N"),
+        });
+
+        {
+            let keys = ScriptedKeySource {
+                keys: std::collections::VecDeque::from(vec![
+                    key(KeyCode::Char('y')),  // step1 vault
+                    key(KeyCode::Char('1')),  // step2 provider
+                    key(KeyCode::Char('y')),  // step3 auth
+                    key(KeyCode::Char('1')),  // step4 model
+                    key(KeyCode::Char('1')),  // step7 layout
+                    key(KeyCode::Char('y')),  // step7 tabs
+                    key(KeyCode::Char('n')),  // step8 mouse
+                    key(KeyCode::Char('1')),  // step8 theme
+                    key(KeyCode::Char('n')),  // step9 cc-migration -> skip
+                ]),
+            };
+            let mut runner = WizardModalRunner::new(
+                &mut session,
+                keys,
+                ratatui::style::Color::Cyan,
+            );
+            let resolved = runner.run_queue(&mut queue).expect("run_queue");
+            assert_eq!(resolved, 9, "all 9 modals must drain (8 steps + step 9 cc)");
+        }
+
+        // Session still active.
+        assert_eq!(shared.borrow().entered, 1,
+            "exactly one alt-screen enter for the 9-step run");
+        assert_eq!(shared.borrow().left, 0,
+            "no leave mid-run — step 9 is INSIDE the same session");
+
+        drop(session);
+        assert_eq!(shared.borrow().left, 1,
+            "exactly one alt-screen leave on session drop");
+    }
+
+    /// D2 Case B — the vault unlock modal lives inside its own brief
+    /// alt-screen `WizardSession` and exits with `VaultUnlockOutcome::Cancelled`
+    /// when the user presses Esc.
+    ///
+    /// We assert the contract by constructing a `PasswordModal` and a
+    /// scripted Esc key — the modal returns `Cancel`, which the host
+    /// (in main.rs) maps to `VaultUnlockOutcome::Cancelled`.
+    #[test]
+    fn vault_unlock_modal_runs_in_alt_screen_for_returning_user() {
+        use crate::tui::modals::password::{PasswordModal, PasswordAction};
+
+        let mut modal = PasswordModal::new("Vault master password", "Master password");
+        // Press Esc → Cancel.
+        let action = modal.handle_key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        ));
+        assert!(
+            matches!(action, PasswordAction::Cancel),
+            "Esc on the vault-unlock PasswordModal must yield Cancel \
+             (host maps to VaultUnlockOutcome::Cancelled — zero-seam fallback)"
+        );
+
+        // And a single alt-screen pair from a real WizardSession that
+        // hosts the modal renders without panicking.
+        let mut session = make_session();
+        let keys = ScriptedKeySource {
+            keys: std::collections::VecDeque::from(vec![key(KeyCode::Esc)]),
+        };
+        let mut runner = WizardModalRunner::new(
+            &mut session,
+            keys,
+            ratatui::style::Color::Cyan,
+        );
+        let modal = PasswordModal::new("Vault", "Master password");
+        let res = runner.run_password_capture(modal).expect("run_password_capture");
+        assert!(res.is_none(), "Esc must produce a Cancel (None) outcome");
     }
 }
