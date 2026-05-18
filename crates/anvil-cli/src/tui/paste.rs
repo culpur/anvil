@@ -748,22 +748,84 @@ pub fn resolve_mouse_capture_default(
     config_value.unwrap_or(false)
 }
 
+/// Host operating-system family for surface-hint dispatching.
+///
+/// Task #623 (v2.2.14 Phase 1): the copy-shortcut hint must vary by OS
+/// because the conventional native copy chord differs across platforms.
+/// See `feedback-cross-platform-ux-defaults.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsKind {
+    /// macOS — `Cmd+C` is the native copy chord.
+    Macos,
+    /// Linux / FreeBSD / NetBSD — `Ctrl+Shift+C` is the gnome-terminal,
+    /// konsole, and xterm convention (Ctrl+C is reserved for SIGINT).
+    Linux,
+    /// Windows Terminal — `Ctrl+C` is the native copy chord by default.
+    Windows,
+}
+
+impl OsKind {
+    /// Resolve the host OS family at compile time. Prefer this over the
+    /// runtime `std::env::consts::OS` lookup so behavior is pinned to
+    /// the target the binary was built for.
+    #[must_use]
+    pub fn host() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Macos
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+
+    /// Native copy-chord text for this OS family.
+    #[must_use]
+    pub fn copy_shortcut(self) -> &'static str {
+        match self {
+            Self::Macos => "Cmd+C",
+            Self::Linux => "Ctrl+Shift+C",
+            Self::Windows => "Ctrl+C",
+        }
+    }
+}
+
 /// Status-line hint shown at TUI startup, telling the user how to select
 /// text in the current mouse-capture mode.
 ///
 /// Task #599: tied to the mouse-capture resolution above so the docs
 /// match the behavior. When mouse capture is OFF (the default), the
 /// terminal owns drag-select. When ON, the user must hold a modifier.
+///
+/// Task #623 (v2.2.14 Phase 1): the copy shortcut is now OS-aware. On
+/// macOS we show `Cmd+C`; on Linux/BSD we show `Ctrl+Shift+C` (the
+/// gnome-terminal / konsole / xterm convention — `Ctrl+C` is reserved
+/// for SIGINT); on Windows Terminal we show `Ctrl+C`.
+///
+/// Task #625 (v2.2.14 Phase 1): when the active layout is vertical-split
+/// AND mouse capture is OFF, the hint warns the user to drag _within
+/// the conversation_ to avoid pulling rail content into the clipboard.
+/// Terminal emulators do native selection at pixel coordinates and have
+/// no concept of Anvil's column structure, so we can't bound the
+/// selection at the terminal layer — but we can surface the boundary
+/// in words AND with a visible separator column (see
+/// `vertical_split.rs::render_separator`).
 #[must_use]
-pub fn mouse_selection_hint(mouse_enabled: bool, is_macos: bool) -> String {
+pub fn mouse_selection_hint(mouse_enabled: bool, os: OsKind, is_vertical_split: bool) -> String {
     if mouse_enabled {
-        if is_macos {
-            "Hold Option and drag to select text".to_string()
-        } else {
-            "Hold Shift and drag to select text".to_string()
+        match os {
+            OsKind::Macos => "Hold Option and drag to select text".to_string(),
+            OsKind::Linux | OsKind::Windows => {
+                "Hold Shift and drag to select text".to_string()
+            }
         }
+    } else if is_vertical_split {
+        format!(
+            "Drag within conversation to select text  \u{2022}  {} to copy",
+            os.copy_shortcut()
+        )
     } else {
-        "Drag to select text  •  Cmd+C to copy".to_string()
+        format!("Drag to select text  \u{2022}  {} to copy", os.copy_shortcut())
     }
 }
 
@@ -1004,19 +1066,146 @@ mod tests {
     #[test]
     fn banner_says_cmd_c_when_mouse_off() {
         // Brief verbatim: "Drag to select text · Cmd+C to copy".
-        let hint = mouse_selection_hint(false, true);
+        // Classic layout (is_vertical_split = false).
+        let hint = mouse_selection_hint(false, OsKind::Macos, false);
         assert!(hint.contains("Drag to select text"), "got {hint:?}");
         assert!(hint.contains("Cmd+C to copy"), "got {hint:?}");
     }
 
     #[test]
     fn banner_says_option_or_shift_when_mouse_on() {
-        let mac = mouse_selection_hint(true, true);
+        // Mouse-ON branch ignores is_vertical_split — the modifier-key
+        // instruction is universal across classic vs. vertical-split.
+        let mac = mouse_selection_hint(true, OsKind::Macos, false);
         assert!(mac.contains("Option"), "got {mac:?}");
         assert!(mac.contains("drag to select text"), "got {mac:?}");
-        let linux = mouse_selection_hint(true, false);
+        let mac_vs = mouse_selection_hint(true, OsKind::Macos, true);
+        assert_eq!(mac, mac_vs, "vertical-split must not change mouse-ON hint");
+        let linux = mouse_selection_hint(true, OsKind::Linux, false);
         assert!(linux.contains("Shift"), "got {linux:?}");
         assert!(linux.contains("drag to select text"), "got {linux:?}");
+        let windows = mouse_selection_hint(true, OsKind::Windows, false);
+        assert!(windows.contains("Shift"), "got {windows:?}");
+        assert!(windows.contains("drag to select text"), "got {windows:?}");
+    }
+
+    /// Task #623: OS-aware copy hint, macOS branch.
+    ///
+    /// macOS Terminal.app + iTerm2 use `Cmd+C` for copy. The mouse-OFF
+    /// banner must show `Cmd+C` here. Regression gate against the v2.2.13
+    /// flow that hard-coded `Cmd+C` for all platforms — broke on Linux
+    /// where the gnome-terminal/konsole convention is `Ctrl+Shift+C`.
+    #[test]
+    fn selection_hint_says_cmd_c_on_macos() {
+        let hint = mouse_selection_hint(false, OsKind::Macos, false);
+        assert!(hint.contains("Cmd+C"), "macOS hint should say Cmd+C, got {hint:?}");
+        assert!(
+            !hint.contains("Ctrl+Shift+C"),
+            "macOS hint should not say Ctrl+Shift+C, got {hint:?}"
+        );
+    }
+
+    /// Task #623: OS-aware copy hint, Linux/BSD branch.
+    ///
+    /// Gnome Terminal, KDE Konsole, and xterm all reserve `Ctrl+C` for
+    /// SIGINT, so the conventional copy chord is `Ctrl+Shift+C`. The
+    /// fresh-Ubuntu-install bug that triggered task #623 was the wizard
+    /// shipping a `Cmd+C`-only hint on Linux.
+    #[test]
+    fn selection_hint_says_ctrl_shift_c_on_linux() {
+        let hint = mouse_selection_hint(false, OsKind::Linux, false);
+        assert!(
+            hint.contains("Ctrl+Shift+C"),
+            "Linux hint should say Ctrl+Shift+C, got {hint:?}"
+        );
+        assert!(
+            !hint.contains("Cmd+C"),
+            "Linux hint should not say Cmd+C, got {hint:?}"
+        );
+    }
+
+    /// Task #623: OS-aware copy hint, Windows branch.
+    ///
+    /// Windows Terminal (the default since Windows 11) maps `Ctrl+C` to
+    /// copy when there's a selection and to SIGINT otherwise, so the
+    /// banner shows `Ctrl+C`.
+    #[test]
+    fn selection_hint_says_ctrl_c_on_windows() {
+        let hint = mouse_selection_hint(false, OsKind::Windows, false);
+        assert!(
+            hint.contains("Ctrl+C"),
+            "Windows hint should say Ctrl+C, got {hint:?}"
+        );
+        assert!(
+            !hint.contains("Cmd+C"),
+            "Windows hint should not say Cmd+C, got {hint:?}"
+        );
+        assert!(
+            !hint.contains("Ctrl+Shift+C"),
+            "Windows hint should not say Ctrl+Shift+C, got {hint:?}"
+        );
+    }
+
+    /// Task #625 (v2.2.14 Phase 1): in vertical-split with mouse capture
+    /// OFF, the banner must scope the user's drag to the conversation deck.
+    /// Terminal-native selection at pixel coordinates doesn't know about
+    /// Anvil's rail+deck column structure, so a drag from the deck into
+    /// the rail pulls rail content into the clipboard. The verbal scope
+    /// ("within conversation") + the visible separator column rendered by
+    /// `vertical_split.rs::render_separator` together surface this
+    /// boundary to the user. The hint must NOT lose the OS-aware copy
+    /// chord (Task #623 contract).
+    #[test]
+    fn vertical_split_banner_says_within_conversation_when_mouse_off() {
+        // macOS path.
+        let mac = mouse_selection_hint(false, OsKind::Macos, true);
+        assert!(
+            mac.contains("Drag within conversation to select text"),
+            "vertical-split macOS hint must scope drag to conversation; got {mac:?}"
+        );
+        assert!(
+            mac.contains("Cmd+C to copy"),
+            "vertical-split macOS hint must preserve Task #623 copy chord; got {mac:?}"
+        );
+        // Linux path.
+        let linux = mouse_selection_hint(false, OsKind::Linux, true);
+        assert!(
+            linux.contains("Drag within conversation to select text"),
+            "vertical-split Linux hint must scope drag to conversation; got {linux:?}"
+        );
+        assert!(
+            linux.contains("Ctrl+Shift+C to copy"),
+            "vertical-split Linux hint must preserve Task #623 copy chord; got {linux:?}"
+        );
+        // Windows path.
+        let windows = mouse_selection_hint(false, OsKind::Windows, true);
+        assert!(
+            windows.contains("Drag within conversation to select text"),
+            "vertical-split Windows hint must scope drag to conversation; got {windows:?}"
+        );
+        assert!(
+            windows.contains("Ctrl+C to copy"),
+            "vertical-split Windows hint must preserve Task #623 copy chord; got {windows:?}"
+        );
+    }
+
+    /// Task #625: classic / non-vertical-split layouts MUST keep the
+    /// short "Drag to select text" hint — the rail-boundary warning is
+    /// only meaningful when a rail actually exists. Regression gate
+    /// against accidentally widening the scope-to-conversation copy to
+    /// all layouts.
+    #[test]
+    fn classic_banner_keeps_short_drag_hint_when_mouse_off() {
+        let hint = mouse_selection_hint(false, OsKind::Macos, false);
+        assert!(
+            !hint.contains("within conversation"),
+            "classic hint must not scope to conversation; got {hint:?}"
+        );
+        assert_eq!(
+            hint,
+            format!("Drag to select text  \u{2022}  {} to copy", OsKind::Macos.copy_shortcut()),
+            "classic hint must match the verbatim brief; got {hint:?}"
+        );
     }
 
     #[test]

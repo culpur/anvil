@@ -113,16 +113,65 @@ impl TuiLayoutRenderer for Renderer {
             return;
         }
 
+        // Task #625 (v2.2.14 Phase 1): a thin separator column between
+        // the rail and the deck. Terminal emulators do native click-drag
+        // selection in pixel space and have no concept of Anvil's columns —
+        // a user dragging from the deck into the rail will end up with rail
+        // content in their clipboard. We cannot prevent that at the terminal
+        // layer, but a visible 1-column separator gives the eye an
+        // unambiguous boundary so users naturally stop the drag there.
+        //
+        // Layout: [Length(rail_w - 1), Length(1), Fill(1)]. When the rail
+        // is at its MIN_RAIL=16 minimum we still render a usable 15-col
+        // rail + the separator. The banner in mod.rs / paste.rs tells the
+        // user "Drag within conversation to select text" so the limitation
+        // is also surfaced in words. See feedback-clipboard-parity.md.
+        let rail_content_w = rail_w.saturating_sub(1);
         let horiz = RLayout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(rail_w), Constraint::Fill(1)])
+            .constraints([
+                Constraint::Length(rail_content_w),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
             .split(size);
         let rail_area = horiz[0];
-        let deck_area = horiz[1];
+        let sep_area = horiz[1];
+        let deck_area = horiz[2];
 
         render_rail(frame, rail_area, snap);
+        render_separator(frame, sep_area, snap);
         render_deck(frame, deck_area, snap, local, tab_hits_out, self.tabs, deck_mode);
     }
+}
+
+// ─── Vertical rail/deck separator ─────────────────────────────────────────────
+//
+// Task #625 (v2.2.14 Phase 1). A 1-column vertical line painted with the
+// active theme's `border` color, sitting between the rail and the deck.
+//
+// Honest limitation: this DOES NOT prevent the user from selecting across
+// the boundary. Terminal emulators do mouse selection at pixel coordinates
+// and have no concept of Anvil's column structure. Proper bounded selection
+// (mouse capture ON + Anvil-side highlight + OSC 52 write) is v2.3 scope.
+// What this DOES is make the boundary visually unambiguous — the user's
+// eye stops at the line rather than dragging through it.
+fn render_separator(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
+    if area.width == 0 {
+        return;
+    }
+    let theme = &snap.theme;
+    let lines: Vec<Line<'static>> = (0..area.height)
+        .map(|_| {
+            Line::from(Span::styled(
+                "\u{2502}", // U+2502 BOX DRAWINGS LIGHT VERTICAL
+                Style::default()
+                    .fg(rgb(theme.border))
+                    .bg(rgb(theme.bg_primary)),
+            ))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(Text::from(lines)), area);
 }
 
 // ─── Rail renderer ────────────────────────────────────────────────────────────
@@ -1448,6 +1497,104 @@ mod tests {
         assert!(
             rendered.contains("Token stream incoming"),
             "streaming pending text must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// Task #625 (v2.2.14 Phase 1): a thin separator column sits between
+    /// the rail and the deck so the user's eye stops at the boundary when
+    /// they drag-select. Terminal-native selection can't be _prevented_
+    /// from crossing the boundary, but the visible line + the banner hint
+    /// in `paste::mouse_selection_hint` together make the limitation
+    /// obvious.
+    ///
+    /// This test pins the column position of the `\u{2502}` glyph at
+    /// `rail_w - 1` (zero-indexed), where `rail_w` is the value returned
+    /// by `super::rail_width`. Regenerated snapshots reflect the new
+    /// column structure; this test is the algebraic check that doesn't
+    /// rely on snapshot bytes.
+    #[test]
+    fn vertical_split_renders_separator_column_between_rail_and_deck() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        // ALL dirty path so the renderer paints every cell — makes the
+        // separator visible to the TestBackend buffer reader.
+        snap.dirty_regions = DirtyRegions::ALL;
+
+        let width: u16 = 120;
+        let height: u16 = 30;
+        let rendered = render_real_vsplit(&snap, width, height, true);
+
+        // Compute the rail width and the separator column the renderer
+        // will use. Both come from the same `rail_width` helper so the
+        // test is deterministic against any future tuning of the
+        // MIN/MAX/DEFAULT rail constants.
+        let rail_w = super::rail_width(width);
+        assert!(rail_w > 0, "test fixture must be wide enough for a rail");
+        let sep_col = (rail_w - 1) as usize;
+
+        // Walk every line and confirm the separator glyph appears at
+        // column `sep_col` on at least the majority of rows. (The footer
+        // / header rows that the deck owns paint over neighbours, so we
+        // tolerate a small number of misses near the top/bottom chrome.)
+        let mut sep_hits = 0_usize;
+        let mut total_rows = 0_usize;
+        for line in rendered.lines() {
+            total_rows += 1;
+            // String byte index ≠ column index for multi-byte chars; the
+            // rail content above the separator is ASCII-only in the
+            // fixture, so byte-index == column-index up through sep_col.
+            if line.chars().nth(sep_col) == Some('\u{2502}') {
+                sep_hits += 1;
+            }
+        }
+        assert!(
+            sep_hits * 2 > total_rows,
+            "expected the U+2502 separator at column {sep_col} on a \
+             majority of {total_rows} rows; got {sep_hits} hits. Full \
+             render:\n{rendered}"
+        );
+    }
+
+    /// Task #625: when the terminal is too narrow for a rail (rail_w == 0)
+    /// the layout collapses to deck-only. There is no separator to render
+    /// in that fallback because there's no rail boundary to mark. This
+    /// test pins that behaviour so the separator never bleeds into the
+    /// narrow-terminal classic fallback.
+    #[test]
+    fn vertical_split_skips_separator_when_rail_collapsed() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::ALL;
+
+        // Narrow terminal: rail_width returns 0 below MIN_RAIL+20 = 36.
+        let width: u16 = 30;
+        let height: u16 = 20;
+        assert_eq!(
+            super::rail_width(width),
+            0,
+            "rail_width must be 0 at width {width} for this test to be meaningful"
+        );
+        let rendered = render_real_vsplit(&snap, width, height, true);
+
+        // In the deck-only fallback, no full-height column of U+2502
+        // should exist. Stale separators from the un-collapsed path
+        // would manifest as the glyph appearing on most rows.
+        let mut sep_hits = 0_usize;
+        let mut total_rows = 0_usize;
+        for line in rendered.lines() {
+            total_rows += 1;
+            if line.contains('\u{2502}') {
+                sep_hits += 1;
+            }
+        }
+        // Allow a few incidental U+2502 glyphs from deck content; the
+        // separator path would produce >= height-2 hits.
+        assert!(
+            sep_hits * 2 <= total_rows,
+            "narrow terminal must not paint a full separator column; \
+             got {sep_hits} hits over {total_rows} rows. Full render:\n{rendered}"
         );
     }
 }

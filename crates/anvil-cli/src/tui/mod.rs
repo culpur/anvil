@@ -421,11 +421,26 @@ impl AnvilTui {
         // Printed once at startup so users know the key conventions without
         // reading documentation. With mouse capture off (the default), normal
         // drag-to-select works in every terminal — no modifier required.
-        let is_macos = cfg!(target_os = "macos");
-        let sel_hint = paste::mouse_selection_hint(mouse_capture, is_macos);
+        //
+        // Task #623 (v2.2.14 Phase 1): the copy-shortcut text now varies by
+        // OS — Cmd+C (macOS), Ctrl+Shift+C (Linux/BSD), Ctrl+C (Windows).
+        //
+        // Task #625 (v2.2.14 Phase 1): in vertical-split layouts with mouse
+        // capture OFF, the hint also tells the user to drag _within the
+        // conversation deck_ so a sloppy drag doesn't pull rail content
+        // into their clipboard. Terminal-native selection can't be bounded
+        // at Anvil's column structure — we surface the boundary in words
+        // (here) AND with a 1-column separator (see
+        // vertical_split.rs::render_separator).
+        let host_os = paste::OsKind::host();
+        let is_vertical_split = matches!(
+            Tab::load_default_layout().kind,
+            runtime::TuiLayoutKind::VerticalSplit
+        );
+        let sel_hint = paste::mouse_selection_hint(mouse_capture, host_os, is_vertical_split);
 
         initial_tab.log.push(LogEntry::System(format!(
-            "{sel_hint}  •  PageUp to scroll back  •  End to return to live view"
+            "{sel_hint}  \u{2022}  PageUp to scroll back  \u{2022}  End to return to live view"
         )));
 
         Ok((
