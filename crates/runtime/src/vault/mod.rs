@@ -206,12 +206,20 @@ pub struct VaultManager {
 }
 
 impl VaultManager {
-    /// Return the default vault directory (`~/.anvil/vault/`).
+    /// Return the default vault directory (`<config-home>/vault/`).
+    ///
+    /// Honors `ANVIL_CONFIG_HOME` — task #643 (v2.2.17). When that env var
+    /// is set, the vault lives at `$ANVIL_CONFIG_HOME/vault/` so per-profile
+    /// installs, tests, and isolated dev sandboxes all stay sealed inside
+    /// their own config root. Falls back to `~/.anvil/vault/` when unset.
     #[must_use]
     pub fn default_vault_dir() -> PathBuf {
-        dirs_next::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".anvil")
+        std::env::var_os("ANVIL_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                dirs_next::home_dir().map(|h| h.join(".anvil"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."))
             .join("vault")
     }
 
