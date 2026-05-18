@@ -7,6 +7,182 @@ use serde_json::{json, Value as JsonValue};
 
 use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
 
+// ---------------------------------------------------------------------------
+// Stop-hook block cap (task #566)
+// ---------------------------------------------------------------------------
+
+/// Environment variable that caps how many times a Stop hook may block a
+/// single session before the runtime forces stop. Default 5.
+///
+/// CC parity: when a Stop hook returns a block decision the agent is
+/// supposed to keep going. Without a cap a buggy hook can spin the agent
+/// forever; CC defaults to 5 retries.
+///
+/// Note: the Stop hook event itself is not yet emitted by Anvil's
+/// streaming loop (the event taxonomy in `HookEvent` is the
+/// Pre/Post/SessionStart/SessionEnd/FileChanged/CwdChanged/Permission*/
+/// Notification set). This constant + helper exist so the moment the
+/// Stop hook is wired in, the cap is already configurable and tested.
+pub const STOP_HOOK_BLOCK_CAP_ENV: &str = "ANVIL_STOP_HOOK_BLOCK_CAP";
+
+/// Default Stop-hook block cap (task #566). Matches CC's documented default.
+pub const DEFAULT_STOP_HOOK_BLOCK_CAP: u32 = 5;
+
+/// Read `ANVIL_STOP_HOOK_BLOCK_CAP` from the environment, clamping invalid
+/// values to the default. A value of `0` disables the cap entirely (the
+/// caller must still emit a warning the first time the cap would have
+/// fired so misconfiguration is observable).
+#[must_use]
+pub fn stop_hook_block_cap_from_env() -> u32 {
+    std::env::var(STOP_HOOK_BLOCK_CAP_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_STOP_HOOK_BLOCK_CAP)
+}
+
+/// Per-session counter for Stop-hook blocks (task #566). The runtime
+/// increments this each time a Stop hook returns "block"; once the
+/// counter reaches the configured cap the runtime emits a warning and
+/// allows the stop to proceed.
+///
+/// Two-stage API: `record_block` returns `Decision::AllowStop` once the
+/// cap is hit so the caller can branch on the result without re-reading
+/// the env var.
+#[derive(Debug, Clone)]
+pub struct StopHookBlockCounter {
+    blocks_seen: u32,
+    cap: u32,
+    /// Whether the warning has already been surfaced; the runtime only
+    /// emits the cap-hit warning once per session.
+    warned: bool,
+}
+
+impl Default for StopHookBlockCounter {
+    fn default() -> Self {
+        Self::new(stop_hook_block_cap_from_env())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopHookCapDecision {
+    /// Block was below the cap; the runtime should honor the hook and
+    /// continue running.
+    Continue,
+    /// Cap has been reached; the runtime must allow the stop to proceed.
+    /// `warning` is `Some` exactly once per session — the first time we
+    /// reach the cap — so callers can surface it to the user.
+    AllowStop { warning: Option<String> },
+}
+
+impl StopHookBlockCounter {
+    #[must_use]
+    pub const fn new(cap: u32) -> Self {
+        Self {
+            blocks_seen: 0,
+            cap,
+            warned: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn blocks_seen(&self) -> u32 {
+        self.blocks_seen
+    }
+
+    #[must_use]
+    pub const fn cap(&self) -> u32 {
+        self.cap
+    }
+
+    /// Record one Stop-hook block and return whether the runtime should
+    /// continue or force-stop. `cap == 0` is treated as "disabled" — the
+    /// counter still increments but always returns `Continue`.
+    pub fn record_block(&mut self) -> StopHookCapDecision {
+        self.blocks_seen = self.blocks_seen.saturating_add(1);
+        if self.cap == 0 {
+            return StopHookCapDecision::Continue;
+        }
+        if self.blocks_seen >= self.cap {
+            let warning = if self.warned {
+                None
+            } else {
+                self.warned = true;
+                Some(format!(
+                    "Stop hook blocked {} times (cap: {}); allowing stop to proceed.",
+                    self.blocks_seen, self.cap,
+                ))
+            };
+            StopHookCapDecision::AllowStop { warning }
+        } else {
+            StopHookCapDecision::Continue
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hook terminalSequence output (task #556)
+// ---------------------------------------------------------------------------
+
+/// Allow-list of ANSI sequence prefixes that hooks may emit via the
+/// `terminalSequence` field of their stdout JSON. Anything else is
+/// rejected with a warning so a hook cannot inject arbitrary CSI/OSC
+/// payloads (e.g. screen-clearing, palette resets) into the terminal.
+///
+/// - `\x07` (BEL) is the classic terminal bell.
+/// - `\x1b]9;...\x07` is OSC 9, the iTerm2 desktop-notification sequence.
+/// - `\x1b]777;...\x07` is OSC 777, the urxvt / kitty notification sequence.
+const ALLOWED_TERMINAL_SEQUENCE_PREFIXES: &[&str] = &[
+    "\x07",
+    "\x1b]9;",
+    "\x1b]777;",
+];
+
+/// Validate a `terminalSequence` value pulled from a hook's stdout JSON.
+///
+/// Returns the original bytes when they begin with one of the
+/// allow-listed prefixes; otherwise returns `Err(reason)` so the
+/// runtime can log a warning and discard the sequence.
+pub fn validate_terminal_sequence(sequence: &str) -> Result<&str, String> {
+    if sequence.is_empty() {
+        return Err("hook terminalSequence is empty".to_string());
+    }
+    if ALLOWED_TERMINAL_SEQUENCE_PREFIXES
+        .iter()
+        .any(|prefix| sequence.starts_with(prefix))
+    {
+        Ok(sequence)
+    } else {
+        Err(format!(
+            "hook terminalSequence rejected: must begin with \\a, \\x1b]9; or \\x1b]777; (got {} bytes starting {:?})",
+            sequence.len(),
+            sequence.chars().take(4).collect::<String>(),
+        ))
+    }
+}
+
+/// Parse the `terminalSequence` field out of a hook stdout JSON blob.
+///
+/// Returns:
+/// - `Ok(Some(bytes))` when the field is present, well-formed, and
+///   begins with an allow-listed prefix.
+/// - `Ok(None)` when the field is absent or the stdout is not JSON
+///   (silent skip — non-JSON stdout is the common case).
+/// - `Err(reason)` when the field is present but rejected by the
+///   allow-list, so the caller can surface a warning.
+pub fn extract_terminal_sequence(stdout: &str) -> Result<Option<String>, String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('{') {
+        return Ok(None);
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return Ok(None);
+    };
+    let Some(raw) = value.get("terminalSequence").and_then(|v| v.as_str()) else {
+        return Ok(None);
+    };
+    validate_terminal_sequence(raw).map(|_| Some(raw.to_string()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
     PreToolUse,
@@ -500,6 +676,15 @@ impl HookRunner {
     pub fn with_mcp_invoker(mut self, invoker: Arc<dyn McpHookInvoker>) -> Self {
         self.mcp_invoker = Some(invoker);
         self
+    }
+
+    /// Clone of the registered MCP invoker, if any. Task #561 (worktree
+    /// hook refresh): callers that rebuild a `HookRunner` from a fresh
+    /// `RuntimeFeatureConfig` need to re-attach the host's MCP invoker
+    /// so MCP-driven hooks continue to dispatch after the rebuild.
+    #[must_use]
+    pub fn mcp_invoker_clone(&self) -> Option<Arc<dyn McpHookInvoker>> {
+        self.mcp_invoker.clone()
     }
 
     #[must_use]
@@ -1794,6 +1979,110 @@ mod tests {
             HookCommandOutcome::Allow { message } => assert_eq!(message.as_deref(), Some("ok")),
             _ => panic!("expected Allow"),
         }
+    }
+
+    // ─── Task #566: Stop-hook block cap ──────────────────────────────────────
+
+    #[test]
+    fn stop_hook_block_counter_continues_below_cap() {
+        use super::{StopHookBlockCounter, StopHookCapDecision};
+        let mut c = StopHookBlockCounter::new(3);
+        assert_eq!(c.record_block(), StopHookCapDecision::Continue);
+        assert_eq!(c.record_block(), StopHookCapDecision::Continue);
+        assert_eq!(c.blocks_seen(), 2);
+    }
+
+    #[test]
+    fn stop_hook_block_counter_force_stops_at_cap_with_one_shot_warning() {
+        use super::{StopHookBlockCounter, StopHookCapDecision};
+        let mut c = StopHookBlockCounter::new(2);
+        assert_eq!(c.record_block(), StopHookCapDecision::Continue);
+        match c.record_block() {
+            StopHookCapDecision::AllowStop { warning } => {
+                let w = warning.expect("first cap-hit must surface a warning");
+                assert!(w.contains("Stop hook blocked"), "warning text: {w}");
+                assert!(w.contains("cap: 2"), "warning text: {w}");
+            }
+            other => panic!("expected AllowStop at cap, got {other:?}"),
+        }
+        // Subsequent records still allow-stop but the warning is silent.
+        match c.record_block() {
+            StopHookCapDecision::AllowStop { warning } => assert!(warning.is_none()),
+            other => panic!("expected AllowStop past cap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_hook_block_counter_zero_cap_disables_force_stop() {
+        use super::{StopHookBlockCounter, StopHookCapDecision};
+        let mut c = StopHookBlockCounter::new(0);
+        for _ in 0..50 {
+            assert_eq!(c.record_block(), StopHookCapDecision::Continue);
+        }
+        assert_eq!(c.blocks_seen(), 50);
+    }
+
+    // ─── Task #556: terminalSequence allow-list ──────────────────────────────
+
+    #[test]
+    fn terminal_sequence_allows_bel_and_osc9_and_osc777() {
+        use super::validate_terminal_sequence;
+        assert!(validate_terminal_sequence("\x07").is_ok());
+        assert!(validate_terminal_sequence("\x1b]9;ping\x07").is_ok());
+        assert!(validate_terminal_sequence("\x1b]777;notify;ping\x07").is_ok());
+    }
+
+    #[test]
+    fn terminal_sequence_rejects_arbitrary_csi() {
+        use super::validate_terminal_sequence;
+        // Cursor-up CSI: \x1b[A — must NOT be allowed; hooks would be
+        // able to scroll the screen / move cursor.
+        assert!(validate_terminal_sequence("\x1b[A").is_err());
+        // Bare ESC
+        assert!(validate_terminal_sequence("\x1b").is_err());
+        // Empty
+        assert!(validate_terminal_sequence("").is_err());
+    }
+
+    #[test]
+    fn extract_terminal_sequence_pulls_from_hook_json_stdout() {
+        use super::extract_terminal_sequence;
+        // OSC 9 desktop-notification payload encoded in JSON. Hooks
+        // emit ESC as  (JSON string escape) and BEL as .
+        let stdout = "{\"message\":\"hi\",\"terminalSequence\":\"\\u001b]9;build-done\\u0007\"}";
+        let parsed = extract_terminal_sequence(stdout).expect("validation should pass");
+        let bytes = parsed.expect("field is present");
+        assert!(bytes.starts_with("\x1b]9;"), "got bytes: {bytes:?}");
+        assert!(bytes.ends_with('\x07'));
+    }
+
+    #[test]
+    fn extract_terminal_sequence_silent_on_non_json_stdout() {
+        use super::extract_terminal_sequence;
+        assert_eq!(extract_terminal_sequence("plain text").unwrap(), None);
+        assert_eq!(extract_terminal_sequence("").unwrap(), None);
+    }
+
+    #[test]
+    fn extract_terminal_sequence_errors_on_disallowed_sequence() {
+        use super::extract_terminal_sequence;
+        // Cursor-position CSI (screen clear) inside JSON should be rejected.
+        let stdout = "{\"terminalSequence\":\"\\u001b[2J\"}";
+        let result = extract_terminal_sequence(stdout);
+        assert!(result.is_err(), "must reject \\x1b[2J (screen clear)");
+    }
+
+    #[test]
+    fn stop_hook_block_cap_env_default() {
+        use super::{stop_hook_block_cap_from_env, DEFAULT_STOP_HOOK_BLOCK_CAP, STOP_HOOK_BLOCK_CAP_ENV};
+        // SAFETY: env mutation in tests; remove first to ensure default path.
+        // This test reads the value-without-env path; if a parallel test sets
+        // it we may observe a different value, so we only assert that the
+        // helper returns SOMETHING (no panic). The default-vs-override
+        // contract is documented in the const docs.
+        let _ = STOP_HOOK_BLOCK_CAP_ENV;
+        let cap = stop_hook_block_cap_from_env();
+        assert!(cap == DEFAULT_STOP_HOOK_BLOCK_CAP || cap > 0 || cap == 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

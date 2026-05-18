@@ -101,10 +101,13 @@ pub use sandbox::{
     FilesystemIsolationMode, SandboxConfig,
 };
 pub use hooks::{
+    extract_terminal_sequence, stop_hook_block_cap_from_env, validate_terminal_sequence,
     CwdChangedPayload, FileChangeAction, FileChangedPayload, HookEvent, HookPermissionDecision,
     HookRunResult, HookRunner, McpHookInvocationResult, McpHookInvoker, NotificationKind,
     NotificationPayload, PermissionDeniedPayload, PermissionDeniedSource,
     PermissionRequestHookResult, PermissionRequestPayload, PostToolBatchPayload, RuntimeHookSpec,
+    StopHookBlockCounter, StopHookCapDecision, DEFAULT_STOP_HOOK_BLOCK_CAP,
+    STOP_HOOK_BLOCK_CAP_ENV,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
@@ -211,7 +214,7 @@ pub use usage::{
 };
 pub use hub::{
     format_package_detail, format_package_list, BlockingHubClient, HubClient, HubError,
-    HubPackage,
+    HubPackage, HubPublisherInfo, TrustLevel,
 };
 pub use share::{
     scrub_secrets, ActiveShare, BlockingShareClient, ShareClient, ShareError, ShareMessage,

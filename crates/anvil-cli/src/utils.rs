@@ -22,6 +22,39 @@ use crate::{
 use crate::init::initialize_repo;
 
 
+/// Task #567 — CC parity: when `NO_COLOR=1` or `FORCE_COLOR=0` is set the
+/// Anvil headless / `--print` paths must strip ANSI colors, but the
+/// interactive TUI is a graphical application surface — it must keep its
+/// UI chrome regardless. Pass `tui_active = true` from inside the TUI
+/// runtime so the env vars never strip the layout's accent colors,
+/// borders, or syntax highlight.
+///
+/// Resolution order (high → low priority):
+/// 1. `tui_active == true` → always `true` (TUI keeps its colors).
+/// 2. `FORCE_COLOR` set to a non-`0`, non-empty value → `true`.
+/// 3. `NO_COLOR` set to any non-empty value → `false`.
+/// 4. `FORCE_COLOR=0` → `false`.
+/// 5. Default → `true`.
+#[allow(dead_code, reason = "task #567 v2.2.17: helper exposed for future headless callers; gate exercised by color_env_tests")]
+#[must_use]
+pub fn should_use_color(tui_active: bool) -> bool {
+    if tui_active {
+        return true;
+    }
+    if let Ok(force) = env::var("FORCE_COLOR") {
+        let trimmed = force.trim();
+        if !trimmed.is_empty() {
+            return trimmed != "0";
+        }
+    }
+    if let Ok(no) = env::var("NO_COLOR") {
+        if !no.trim().is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
 pub(crate) fn render_repl_help() -> String {
     [
         "Interactive REPL".to_string(),
@@ -1599,5 +1632,87 @@ pub(crate) fn build_system_prompt_with_identity(
     Ok(sections)
 }
 
+// ─── Task #567: NO_COLOR / FORCE_COLOR must not strip TUI colors ─────────
+#[cfg(test)]
+#[allow(unsafe_code)] // env::set_var/remove_var require unsafe in edition 2024
+mod color_env_tests {
+    use super::should_use_color;
+    use serial_test::serial;
 
+    /// Helper that scopes env mutations to this test only.
+    fn with_env<F: FnOnce()>(no_color: Option<&str>, force_color: Option<&str>, f: F) {
+        let prev_no = std::env::var("NO_COLOR").ok();
+        let prev_force = std::env::var("FORCE_COLOR").ok();
+        unsafe {
+            match no_color {
+                Some(v) => std::env::set_var("NO_COLOR", v),
+                None => std::env::remove_var("NO_COLOR"),
+            }
+            match force_color {
+                Some(v) => std::env::set_var("FORCE_COLOR", v),
+                None => std::env::remove_var("FORCE_COLOR"),
+            }
+        }
+        f();
+        unsafe {
+            match prev_no {
+                Some(v) => std::env::set_var("NO_COLOR", v),
+                None => std::env::remove_var("NO_COLOR"),
+            }
+            match prev_force {
+                Some(v) => std::env::set_var("FORCE_COLOR", v),
+                None => std::env::remove_var("FORCE_COLOR"),
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn tui_always_keeps_color_regardless_of_no_color() {
+        with_env(Some("1"), None, || {
+            assert!(should_use_color(true), "TUI must keep color even with NO_COLOR=1");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn tui_always_keeps_color_regardless_of_force_color_zero() {
+        with_env(None, Some("0"), || {
+            assert!(should_use_color(true), "TUI must keep color even with FORCE_COLOR=0");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn headless_strips_color_under_no_color() {
+        with_env(Some("1"), None, || {
+            assert!(!should_use_color(false), "headless must respect NO_COLOR=1");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn headless_strips_color_under_force_color_zero() {
+        with_env(None, Some("0"), || {
+            assert!(!should_use_color(false), "headless must respect FORCE_COLOR=0");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn headless_default_keeps_color() {
+        with_env(None, None, || {
+            assert!(should_use_color(false), "default headless must keep color");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn force_color_one_overrides_no_color() {
+        // FORCE_COLOR is checked first so explicit force wins.
+        with_env(Some("1"), Some("1"), || {
+            assert!(should_use_color(false), "FORCE_COLOR=1 must beat NO_COLOR=1");
+        });
+    }
+}
 

@@ -3407,6 +3407,14 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     // Post-turn work for the active tab.
                     cli.persist_session()?;
+                    // Task #561: if the model called EnterWorktree /
+                    // ExitWorktree during this turn the process cwd has
+                    // moved. Rebuild the hook runner against the new
+                    // workspace so project-local hook paths in the new
+                    // root resolve correctly on the next turn.
+                    if let Some(notice) = cli.maybe_refresh_hooks_for_cwd() {
+                        tui.push_system(notice);
+                    }
                     if let Some(msg) = cli.maybe_auto_compact() {
                         tui.push_system(msg);
                     }
@@ -4091,6 +4099,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     // Post-turn work for the active tab: persist session,
                     // auto-compact, notification hooks, skill hints.
                     cli.persist_session()?;
+                    // Task #561: refresh hooks if EnterWorktree / ExitWorktree
+                    // moved the process cwd during this turn.
+                    if let Some(notice) = cli.maybe_refresh_hooks_for_cwd() {
+                        tui.push_system(notice);
+                    }
                     if let Some(msg) = cli.maybe_auto_compact() {
                         tui.push_system(msg);
                     }
@@ -4502,6 +4515,13 @@ struct LiveCli {
     /// Populated lazily on first turn; on each subsequent turn we re-stat
     /// the same paths and rebuild the system prompt if any mtime changed.
     instructions_mtime: std::collections::HashMap<PathBuf, std::time::SystemTime>,
+    /// Task #561: cwd snapshot used to detect mid-session worktree
+    /// hops. When the process cwd changes between turns (after the
+    /// model calls `EnterWorktree` / `ExitWorktree`), the active
+    /// runtime's `HookRunner` is rebuilt from the new project's
+    /// `.anvil/settings.json` so project-local hook paths resolve
+    /// correctly. None until the first turn populates it.
+    last_observed_cwd: Option<PathBuf>,
 }
 
 impl LiveCli {
@@ -4590,6 +4610,7 @@ impl LiveCli {
             share_manager: share::ShareManager::new(),
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
+            last_observed_cwd: None,
         };
         // Publish initial cross-session snapshot now that the session id is
         // known.  Subsequent updates flow from AgentManager::spawn/poll.
@@ -7120,6 +7141,34 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         // as `<id>.meta.json`. Failures here are non-fatal — exiting with a
         // saved conversation is more important than the model hint.
         let _ = session_meta::set_session_model(&self.session.id, &self.model);
+
+        // Task #580: auto-derive a session title from the first user message
+        // once the first turn has completed (we have at least one user
+        // message AND one assistant message in the conversation log).
+        // Gated inside `auto_set_title_if_missing` so renames stick: if the
+        // user already ran `/name foo`, this is a no-op.
+        let runtime_ref = self.active_runtime();
+        let session = runtime_ref.session();
+        let first_user_text: Option<String> = session
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, runtime::MessageRole::User))
+            .and_then(|m| {
+                m.blocks.iter().find_map(|b| match b {
+                    runtime::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+            });
+        let has_assistant = session
+            .messages
+            .iter()
+            .any(|m| matches!(m.role, runtime::MessageRole::Assistant));
+        session_meta::auto_set_title_if_missing(
+            &self.session.id,
+            first_user_text.as_deref(),
+            has_assistant,
+        );
+
         Ok(())
     }
 
@@ -7953,6 +8002,36 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         Some(format!(
             "Auto-compact\n  Reason           Context at {threshold_pct}% ({estimated}/{context_max} tokens)\n  Removed          {} messages\n{archive_note}  Tip              Previous conversation searchable via /history-archive",
             result.removed_message_count,
+        ))
+    }
+
+    /// Task #561: refresh the active tab's `HookRunner` if the process
+    /// cwd has changed since the last turn boundary (e.g. because the
+    /// model called `EnterWorktree`).
+    ///
+    /// Returns `Some(notice)` when a refresh actually fired so the
+    /// caller can surface a status line; `None` otherwise.
+    fn maybe_refresh_hooks_for_cwd(&mut self) -> Option<String> {
+        let current_cwd = std::env::current_dir().ok()?;
+        let changed = match &self.last_observed_cwd {
+            Some(prev) => prev != &current_cwd,
+            None => false,
+        };
+        // Always seed the snapshot — first call records, subsequent
+        // calls compare against it.
+        let first_call = self.last_observed_cwd.is_none();
+        self.last_observed_cwd = Some(current_cwd.clone());
+        if first_call || !changed {
+            return None;
+        }
+        // Cwd changed; rebuild the runner from the new project's config.
+        let config = ConfigLoader::default_for(&current_cwd).load().ok()?;
+        let feature_config = config.feature_config().clone();
+        self.active_runtime_mut()
+            .refresh_hooks_from_feature_config(&feature_config);
+        Some(format!(
+            "Refreshed hooks for new cwd: {}",
+            current_cwd.display(),
         ))
     }
 

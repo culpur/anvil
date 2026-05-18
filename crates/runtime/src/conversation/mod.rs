@@ -347,6 +347,46 @@ where
         estimate_session_tokens(&self.session)
     }
 
+    /// Per-tab autocompact threshold check (task #560).
+    ///
+    /// Returns `true` when this runtime's *own* `estimated_tokens()` is
+    /// at or above `threshold_pct` of `context_max`. Reads no shared
+    /// singleton — every tab calls this on its own `ConversationRuntime`
+    /// so a tab at 90% triggers compaction without affecting a sibling
+    /// tab at 30%. The threshold percentage and context window are
+    /// passed in by the caller (the CLI reads them per-call from env +
+    /// model metadata, also per-tab).
+    #[must_use]
+    pub fn should_auto_compact(&self, threshold_pct: usize, context_max: usize) -> bool {
+        let threshold = context_max.saturating_mul(threshold_pct) / 100;
+        self.estimated_tokens() >= threshold
+    }
+
+    /// Task #561: rebuild the in-session `HookRunner` from a freshly-loaded
+    /// `RuntimeFeatureConfig` so that hook paths registered in the new
+    /// project's `.anvil/settings.json` resolve against the new workspace
+    /// root after `EnterWorktree` (or any other mid-session `cd`).
+    ///
+    /// The CLI invokes this after `EnterWorktree` /  `ExitWorktree` returns
+    /// so that relative paths like `./hooks/preToolUse.sh` registered in
+    /// the new workspace's settings.json fire correctly. Runtime-only
+    /// `_extra` specs (e.g. McpTool entries injected by the host) are NOT
+    /// preserved across the refresh — they live on the active runner
+    /// because they were registered programmatically against a specific
+    /// MCP invoker. If a session needs them across worktree boundaries,
+    /// the host must re-register after refresh.
+    pub fn refresh_hooks_from_feature_config(
+        &mut self,
+        feature_config: &RuntimeFeatureConfig,
+    ) {
+        let mcp_invoker = self.hook_runner.mcp_invoker_clone();
+        let mut runner = HookRunner::from_feature_config(feature_config);
+        if let Some(invoker) = mcp_invoker {
+            runner = runner.with_mcp_invoker(invoker);
+        }
+        self.hook_runner = runner;
+    }
+
     #[must_use]
     pub const fn usage(&self) -> &UsageTracker {
         &self.usage_tracker
@@ -482,7 +522,7 @@ mod tests {
     };
     use crate::prompt::{ProjectContext, SystemPromptBuilder};
     use crate::prompt_section::{PromptSection, PromptSectionKind, PromptSectionsExt};
-    use crate::session::{ContentBlock, MessageRole, Session};
+    use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
     use crate::usage::TokenUsage;
     use std::path::PathBuf;
 
@@ -865,6 +905,114 @@ mod tests {
             result.compacted_session.messages[0].role,
             MessageRole::System
         );
+    }
+
+    // ─── Task #561: refresh hooks for new cwd ──────────────────────────────
+
+    /// After `refresh_hooks_from_feature_config` the runner advertises
+    /// the new hook config (verified by running a SessionStart hook from
+    /// the new config and seeing its stdout in the result).
+    #[test]
+    fn refresh_hooks_from_feature_config_swaps_in_new_runner() {
+        struct NullApi;
+        impl ApiClient for NullApi {
+            fn stream(&mut self, _r: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![AssistantEvent::MessageStop])
+            }
+        }
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            NullApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        // Before: no hooks, so the message list is empty.
+        assert!(runtime.run_session_start_hooks().is_empty());
+
+        // Build a feature config with a SessionStart command hook by
+        // parsing settings JSON — the public, documented surface.
+        use crate::config::hooks::parse_optional_hooks_config;
+        use crate::json::JsonValue;
+        let parsed = JsonValue::parse(
+            r#"{"hooks":{"SessionStart":[{"type":"command","body":"printf 'fresh-runner'"}]}}"#,
+        ).expect("seed JSON");
+        let hook_cfg = parse_optional_hooks_config(&parsed)
+            .expect("hook config parses");
+        let feature_cfg = RuntimeFeatureConfig::default().with_hooks(hook_cfg);
+        runtime.refresh_hooks_from_feature_config(&feature_cfg);
+
+        // Skip on Windows: the shell snippet uses POSIX `printf`.
+        #[cfg(not(windows))]
+        {
+            let msgs = runtime.run_session_start_hooks();
+            assert!(
+                msgs.iter().any(|m| m.contains("fresh-runner")),
+                "refreshed runner should fire the new SessionStart hook; got {msgs:?}"
+            );
+        }
+    }
+
+    // ─── Task #560: per-tab autocompact threshold isolation ────────────────
+
+    /// Tab A with high estimated tokens triggers `should_auto_compact`
+    /// while Tab B at the same moment with low estimated tokens does not.
+    /// Both runtimes share *no* mutable state — they each carry their own
+    /// `Session` and read the threshold per-call from the caller.
+    #[test]
+    fn per_tab_autocompact_threshold_isolation() {
+        struct NullApi;
+        impl ApiClient for NullApi {
+            fn stream(&mut self, _r: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![AssistantEvent::MessageStop])
+            }
+        }
+
+        // Tab A: many large user turns so estimated_tokens crosses the bar.
+        let mut tab_a = ConversationRuntime::new(
+            Session::new(),
+            NullApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        for _ in 0..6 {
+            tab_a.session.messages.push(ConversationMessage::user_text(
+                "x".repeat(2_000),
+            ));
+        }
+
+        // Tab B: tiny session.
+        let tab_b = ConversationRuntime::new(
+            Session::new(),
+            NullApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+
+        // Threshold + context window picked so Tab A's estimate is above
+        // and Tab B's is well below.
+        let context_max = 8_000_usize; // small synthetic window
+        let threshold_pct = 30_usize;
+
+        assert!(
+            tab_a.should_auto_compact(threshold_pct, context_max),
+            "Tab A at high estimate must trigger autocompact"
+        );
+        assert!(
+            !tab_b.should_auto_compact(threshold_pct, context_max),
+            "Tab B at low estimate must NOT trigger autocompact"
+        );
+
+        // Compacting Tab A must not change Tab B's estimate (no shared state).
+        let pre_b = tab_b.estimated_tokens();
+        let _result = tab_a.compact(CompactionConfig {
+            preserve_recent_messages: 2,
+            max_estimated_tokens: 1,
+        });
+        let post_b = tab_b.estimated_tokens();
+        assert_eq!(pre_b, post_b, "Tab B token estimate must be unaffected by Tab A's compaction");
     }
 
     #[cfg(windows)]
