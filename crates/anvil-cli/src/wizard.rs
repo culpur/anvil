@@ -27,11 +27,15 @@ use crate::wizard_runner::{
     CrosstermHooks, CrosstermKeySource, RunnerError, WizardModalRunner, WizardSession,
 };
 
-/// Returns true when `~/.anvil/config.json` already exists, meaning the user
-/// has already completed (or explicitly skipped) first-run setup.
+/// Returns true when `<config-home>/config.json` already exists, meaning the
+/// user has already completed (or explicitly skipped) first-run setup.
+///
+/// **Honors `ANVIL_CONFIG_HOME`** — task #641 (v2.2.17). The vault, file_cache,
+/// qmd, and config loaders all read from `ANVIL_CONFIG_HOME` when set; the
+/// wizard gate must check the same directory or `ANVIL_CONFIG_HOME=/tmp/foo
+/// anvil` would skip the wizard and load the live profile instead.
 pub(crate) fn anvil_config_json_exists() -> bool {
-    let Some(home) = dirs_next::home_dir() else { return true };
-    home.join(".anvil").join("config.json").exists()
+    runtime::default_config_home().join("config.json").exists()
 }
 
 /// Print a boxed banner line using a fixed-width inner area.
@@ -149,9 +153,10 @@ pub(crate) const CONFIG_SCHEMA_URL: &str = "https://anvilhub.culpur.net/config-s
 pub(crate) fn wizard_save_config(
     config: &serde_json::Map<String, serde_json::Value>,
 ) -> io::Result<PathBuf> {
-    let dir = dirs_next::home_dir()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-        .join(".anvil");
+    // Task #641: honour ANVIL_CONFIG_HOME so the wizard writes to the same
+    // directory `anvil_config_json_exists` reads from (and the rest of the
+    // runtime loads from).
+    let dir = runtime::default_config_home();
     fs::create_dir_all(&dir)?;
     let path = dir.join("config.json");
     let is_new_config = !path.exists();
@@ -1160,8 +1165,11 @@ pub(crate) fn run_first_run_wizard() {
 ///
 /// When this file exists, the wizard migration step is silently skipped.
 /// The user can still run `/import claude-code` manually.
+///
+/// Honours `ANVIL_CONFIG_HOME` (task #641) so isolated test/dev profiles do
+/// not collide with the real `~/.anvil/`.
 pub(crate) fn import_skipped_flag_path() -> Option<std::path::PathBuf> {
-    dirs_next::home_dir().map(|h| h.join(".anvil").join(".import-skipped"))
+    Some(runtime::default_config_home().join(".import-skipped"))
 }
 
 /// Return `true` if the user has previously declined the migration prompt.
@@ -1265,6 +1273,124 @@ fn wizard_run_import_pipeline(claude_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // ── #641 / v2.2.17: ANVIL_CONFIG_HOME helpers ─────────────────────────
+    //
+    // The wizard gate (`anvil_config_json_exists`) used to read
+    // `$HOME/.anvil/config.json` unconditionally. The vault, file_cache,
+    // qmd, and config loaders all honour `ANVIL_CONFIG_HOME`; the gate
+    // must, too. These tests pin that invariant.
+    //
+    // All three tests mutate the process env, so they share the
+    // `anvil_config_home` serial token (per
+    // `feedback-test-isolation-three-causes.md`).
+
+    /// Process-local lock for `ANVIL_CONFIG_HOME`-mutating tests. Mirrors
+    /// `runtime::file_cache::tests::l5_env_lock` so the two crates'
+    /// mutations cannot race even though `#[serial]` only orders within
+    /// one binary.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// SAFETY: `env::set_var` is unsafe in Rust 2024. Callers serialise
+    /// on `env_lock()` + the `anvil_config_home` serial token so the
+    /// mutation is race-free.
+    fn set_anvil_config_home(path: &std::path::Path) {
+        unsafe { std::env::set_var("ANVIL_CONFIG_HOME", path); }
+    }
+
+    fn restore_anvil_config_home(prev: Option<std::ffi::OsString>) {
+        match prev {
+            Some(p) => unsafe { std::env::set_var("ANVIL_CONFIG_HOME", p); },
+            None => unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); },
+        }
+    }
+
+    /// #641: `anvil_config_json_exists` must read from
+    /// `$ANVIL_CONFIG_HOME/config.json`, NOT `$HOME/.anvil/config.json`.
+    ///
+    /// Point ANVIL_CONFIG_HOME at an empty temp dir — the gate must
+    /// return false even though the real `$HOME/.anvil/config.json`
+    /// may exist on the developer's machine.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_config_exists_respects_anvil_config_home_env() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        set_anvil_config_home(tmp.path());
+
+        // No config.json yet — gate must say "not configured".
+        assert!(
+            !anvil_config_json_exists(),
+            "gate must check ANVIL_CONFIG_HOME, not $HOME/.anvil"
+        );
+
+        restore_anvil_config_home(prev);
+    }
+
+    /// #641: when `$ANVIL_CONFIG_HOME` is set but empty, the first-run
+    /// wizard MUST trigger. This is the user-visible bug from the task
+    /// brief: `ANVIL_CONFIG_HOME=/tmp/foo anvil` was loading the live
+    /// profile instead of starting setup.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_first_run_triggers_when_anvil_config_home_is_empty() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        set_anvil_config_home(tmp.path());
+
+        // Sanity: directory exists but contains no config.json.
+        assert!(tmp.path().exists());
+        assert!(!tmp.path().join("config.json").exists());
+
+        // anvil_config_json_exists() == false → main.rs runs the wizard.
+        assert!(!anvil_config_json_exists());
+
+        // After a config.json lands at that path, the gate flips.
+        std::fs::write(tmp.path().join("config.json"), "{}").unwrap();
+        assert!(anvil_config_json_exists());
+
+        restore_anvil_config_home(prev);
+    }
+
+    /// #641: `wizard_save_config` must WRITE to the same directory the
+    /// gate READS. Otherwise on the next run the gate sees no config and
+    /// the wizard fires a second time.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_writes_config_to_anvil_config_home_not_real_home() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        set_anvil_config_home(tmp.path());
+
+        let mut cfg = serde_json::Map::new();
+        cfg.insert(
+            "default_model".to_string(),
+            serde_json::Value::String("test-model".to_string()),
+        );
+
+        let written = wizard_save_config(&cfg).expect("save");
+        assert_eq!(
+            written,
+            tmp.path().join("config.json"),
+            "wizard must write into ANVIL_CONFIG_HOME, not $HOME/.anvil"
+        );
+        assert!(written.exists());
+
+        // Round-trip: the gate now reports "configured".
+        assert!(anvil_config_json_exists());
+
+        restore_anvil_config_home(prev);
+    }
 
     /// Task #623 / v2.2.14 Phase 1 regression gate.
     ///
