@@ -513,6 +513,103 @@ pub(crate) struct SkillFrontmatter {
     pub(crate) triggers: Vec<String>,
     /// Chain entries declared with `chains_to:`.
     pub(crate) chains_to: Vec<crate::skill_chaining::ChainEntry>,
+    /// Input slots declared with the `inputs:` block list.  Empty when the
+    /// key is absent — existing skills keep working unchanged.
+    ///
+    /// Consumed by the v2.2.17 skill-chain builder (React Flow canvas,
+    /// sub-track D) which renders valid input handles for each node. Until
+    /// that wiring lands the field is parsed but unread, hence the explicit
+    /// allow.
+    #[allow(dead_code)]
+    pub(crate) inputs: Vec<SkillSlot>,
+    /// Output slots declared with the `outputs:` block list.  Empty when the
+    /// key is absent.
+    #[allow(dead_code)]
+    pub(crate) outputs: Vec<SkillSlot>,
+}
+
+/// A single input or output slot on a skill.
+///
+/// Surfaced by `GET /v1/hub/packages/:slug` so the AnvilHub builder UI can
+/// render handles for each side of a skill node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillSlot {
+    /// Slot identifier, e.g. `user_query`.  Must match `^[a-z][a-z0-9_]*$`
+    /// and be at most 32 characters.  Duplicate names within the same list
+    /// (inputs or outputs) cause the slot to be skipped.
+    pub name: String,
+    /// Slot data kind — defaults to `Text` when omitted.
+    pub kind: SkillSlotKind,
+    /// Optional human-readable description shown in the builder UI.
+    pub description: Option<String>,
+    /// Whether the slot must be wired before the chain can execute.
+    /// Defaults to `true` when omitted.
+    pub required: bool,
+}
+
+/// The data kind carried by a skill slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillSlotKind {
+    /// Free-form text (default when `kind:` is omitted).
+    Text,
+    /// A file path or file content.
+    File,
+    /// Structured JSON payload.
+    Json,
+    /// An image (path or inline data).
+    Image,
+    /// Boolean flag.
+    Boolean,
+}
+
+impl SkillSlotKind {
+    /// Lowercase tag used in YAML and JSON serialisation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::File => "file",
+            Self::Json => "json",
+            Self::Image => "image",
+            Self::Boolean => "boolean",
+        }
+    }
+
+    /// Parse a `kind:` value.  Unknown / empty values are treated as a
+    /// "kind missing" signal (caller substitutes the `Text` default).
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "text" | "string" | "str" => Some(Self::Text),
+            "file" | "path" => Some(Self::File),
+            "json" | "object" => Some(Self::Json),
+            "image" | "img" => Some(Self::Image),
+            "boolean" | "bool" => Some(Self::Boolean),
+            _ => None,
+        }
+    }
+}
+
+/// Maximum allowed length of a slot `name:`.
+pub(crate) const SKILL_SLOT_NAME_MAX_LEN: usize = 32;
+
+/// Validate that a slot name matches `^[a-z][a-z0-9_]*$` and is within the
+/// length budget.  Returns `true` when the name is valid.
+pub(crate) fn is_valid_skill_slot_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > SKILL_SLOT_NAME_MAX_LEN {
+        return false;
+    }
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    for c in chars {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+            return false;
+        }
+    }
+    true
 }
 
 /// Parse the YAML front-matter block at the top of a skill markdown file.
@@ -529,21 +626,30 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
             description: None,
             triggers: vec![],
             chains_to: vec![],
+            inputs: vec![],
+            outputs: vec![],
         };
+    }
+
+    // Collect frontmatter body so we can do a second pass for the
+    // multi-line inputs/outputs block lists.
+    let mut fm_lines: Vec<String> = Vec::new();
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        fm_lines.push(line.to_string());
     }
 
     let mut name = None;
     let mut description = None;
     let mut triggers: Vec<String> = vec![];
-    // When Some we are inside a `triggers:` block list.
+    // When true we are inside a `triggers:` block list.
     let mut in_triggers = false;
     let chains_to = crate::skill_chaining::parse_chains_to(contents);
 
-    for line in lines {
+    for line in &fm_lines {
         let trimmed = line.trim();
-        if trimmed == "---" {
-            break;
-        }
 
         // Detect whether this line starts a new top-level key (not indented).
         let is_new_key = !line.starts_with(' ') && !line.starts_with('\t');
@@ -594,12 +700,143 @@ pub(crate) fn parse_skill_frontmatter(contents: &str) -> SkillFrontmatter {
         }
     }
 
+    let inputs = parse_skill_slot_block(&fm_lines, "inputs");
+    let outputs = parse_skill_slot_block(&fm_lines, "outputs");
+
     SkillFrontmatter {
         name,
         description,
         triggers,
         chains_to,
+        inputs,
+        outputs,
     }
+}
+
+/// Parse a single `inputs:` / `outputs:` block-list section out of the
+/// frontmatter line buffer.
+///
+/// Recognised YAML shape (the only one we support — flow-style `[…]` lists
+/// for inputs/outputs would land in a future revision):
+///
+/// ```yaml
+/// inputs:
+///   - name: target_url
+///     kind: text
+///     description: "API endpoint to scan"
+///     required: true
+///   - name: auth_token
+///     required: false
+/// ```
+///
+/// Defaults applied per slot:
+///   * `kind:` absent or unrecognised → `Text`
+///   * `required:` absent → `true`
+///   * `description:` absent → `None`
+///
+/// Validation:
+///   * `name:` must match `^[a-z][a-z0-9_]*$` and be ≤32 chars; invalid
+///     names cause the slot to be silently dropped.
+///   * Duplicate `name:` values inside the same list cause the later
+///     occurrence to be dropped.  Cross-list duplicates (input/output sharing
+///     a name) are permitted.
+fn parse_skill_slot_block(fm_lines: &[String], key: &str) -> Vec<SkillSlot> {
+    // Locate the `key:` line at top-level indentation.
+    let header_index = fm_lines.iter().position(|line| {
+        !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && line.trim() == format!("{key}:")
+    });
+    let Some(start) = header_index else {
+        return Vec::new();
+    };
+
+    // Walk subsequent indented lines, splitting into per-slot groups on
+    // each `- ` marker.
+    let mut groups: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in fm_lines.iter().skip(start + 1) {
+        // A non-indented line ends the block.
+        let is_top_level = !line.starts_with(' ') && !line.starts_with('\t');
+        if is_top_level && !line.trim().is_empty() {
+            break;
+        }
+        let trimmed = line.trim_start();
+        if let Some(after_dash) = trimmed.strip_prefix("- ") {
+            if !current.is_empty() {
+                groups.push(std::mem::take(&mut current));
+            }
+            current.push(after_dash);
+        } else if trimmed == "-" {
+            if !current.is_empty() {
+                groups.push(std::mem::take(&mut current));
+            }
+            // Empty slot opener — first key/value lands on the next line.
+        } else if !trimmed.is_empty() {
+            current.push(trimmed);
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut slots: Vec<SkillSlot> = Vec::new();
+    for group in &groups {
+        let mut slot_name: Option<String> = None;
+        let mut slot_kind: Option<SkillSlotKind> = None;
+        let mut slot_desc: Option<String> = None;
+        let mut slot_required: Option<bool> = None;
+
+        for raw in group {
+            let line = raw.trim();
+            if let Some(value) = line.strip_prefix("name:") {
+                let value = unquote_frontmatter_value(value.trim());
+                if !value.is_empty() {
+                    slot_name = Some(value);
+                }
+            } else if let Some(value) = line.strip_prefix("kind:") {
+                let value = unquote_frontmatter_value(value.trim());
+                if !value.is_empty() {
+                    slot_kind = SkillSlotKind::parse(&value);
+                }
+            } else if let Some(value) = line.strip_prefix("description:") {
+                let value = unquote_frontmatter_value(value.trim());
+                if !value.is_empty() {
+                    slot_desc = Some(value);
+                }
+            } else if let Some(value) = line.strip_prefix("required:") {
+                let value = unquote_frontmatter_value(value.trim()).to_ascii_lowercase();
+                slot_required = match value.as_str() {
+                    "true" | "yes" => Some(true),
+                    "false" | "no" => Some(false),
+                    _ => None,
+                };
+            }
+        }
+
+        let Some(name) = slot_name else {
+            // Slot without a name — skip silently; the chain builder UI
+            // surfaces a "malformed slot" indicator at lint time.
+            continue;
+        };
+        if !is_valid_skill_slot_name(&name) {
+            continue;
+        }
+        if !seen_names.insert(name.clone()) {
+            // Duplicate inside the same list — keep the first occurrence.
+            continue;
+        }
+
+        slots.push(SkillSlot {
+            name,
+            kind: slot_kind.unwrap_or(SkillSlotKind::Text),
+            description: slot_desc,
+            required: slot_required.unwrap_or(true),
+        });
+    }
+
+    slots
 }
 
 /// Public wrapper for `unquote_frontmatter_value` — used by `skill_chaining.rs` (W13).
@@ -1044,6 +1281,187 @@ mod tests {
         assert!(
             roots.iter().any(|r| r.path == skills_path),
             "plugin skills dir {skills_path:?} must appear in discover_skill_roots output; got: {roots:?}",
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Sub-track C — inputs/outputs frontmatter (task #529, v2.2.17 F2-C)
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_skill_with_inputs_outputs() {
+        let body = "---\n\
+name: vulnapi-scanner\n\
+inputs:\n  \
+- name: target_url\n    \
+kind: text\n    \
+description: \"API endpoint to scan\"\n    \
+required: true\n  \
+- name: auth_token\n    \
+kind: text\n    \
+required: false\n\
+outputs:\n  \
+- name: report\n    \
+kind: json\n    \
+description: \"OWASP findings\"\n\
+---\n\
+\n\
+Body.\n";
+        let fm = parse_skill_frontmatter(body);
+
+        assert_eq!(fm.inputs.len(), 2);
+        assert_eq!(fm.inputs[0].name, "target_url");
+        assert_eq!(fm.inputs[0].kind, SkillSlotKind::Text);
+        assert_eq!(
+            fm.inputs[0].description.as_deref(),
+            Some("API endpoint to scan")
+        );
+        assert!(fm.inputs[0].required);
+
+        assert_eq!(fm.inputs[1].name, "auth_token");
+        assert!(!fm.inputs[1].required);
+
+        assert_eq!(fm.outputs.len(), 1);
+        assert_eq!(fm.outputs[0].name, "report");
+        assert_eq!(fm.outputs[0].kind, SkillSlotKind::Json);
+        assert!(fm.outputs[0].required, "required defaults to true");
+    }
+
+    #[test]
+    fn parse_skill_missing_inputs_outputs_defaults_empty() {
+        let body = "---\nname: legacy\ndescription: existing skill\n---\n\nBody.\n";
+        let fm = parse_skill_frontmatter(body);
+        assert!(
+            fm.inputs.is_empty(),
+            "absent inputs: must yield empty vec for backwards-compat"
+        );
+        assert!(
+            fm.outputs.is_empty(),
+            "absent outputs: must yield empty vec for backwards-compat"
+        );
+        assert_eq!(fm.name.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn parse_skill_rejects_invalid_slot_name() {
+        // Names violating `^[a-z][a-z0-9_]*$` or the 32-char budget must
+        // be dropped from the parsed slot list.
+        let body = "---\n\
+name: bad-names\n\
+inputs:\n  \
+- name: 1starts_with_digit\n    \
+kind: text\n  \
+- name: Capitalised\n    \
+kind: text\n  \
+- name: has-hyphen\n    \
+kind: text\n  \
+- name: way_too_long_a_name_that_exceeds_the_thirty_two_char_budget\n    \
+kind: text\n  \
+- name: valid_one\n    \
+kind: text\n\
+---\n";
+        let fm = parse_skill_frontmatter(body);
+        assert_eq!(
+            fm.inputs.len(),
+            1,
+            "only the single valid slot should survive; got {:?}",
+            fm.inputs
+        );
+        assert_eq!(fm.inputs[0].name, "valid_one");
+
+        // Direct unit-level validation of the helper.
+        assert!(is_valid_skill_slot_name("user_query"));
+        assert!(is_valid_skill_slot_name("q"));
+        assert!(!is_valid_skill_slot_name(""));
+        assert!(!is_valid_skill_slot_name("1bad"));
+        assert!(!is_valid_skill_slot_name("Bad"));
+        assert!(!is_valid_skill_slot_name("has-hyphen"));
+        assert!(!is_valid_skill_slot_name("has space"));
+    }
+
+    #[test]
+    fn parse_skill_rejects_duplicate_input_names() {
+        // Two inputs share the name `query`; the second must be dropped.
+        // A separate output named `query` is permitted — cross-list
+        // duplicates do not collide.
+        let body = "---\n\
+name: dup-test\n\
+inputs:\n  \
+- name: query\n    \
+kind: text\n  \
+- name: query\n    \
+kind: file\n  \
+- name: other\n    \
+kind: text\n\
+outputs:\n  \
+- name: query\n    \
+kind: json\n\
+---\n";
+        let fm = parse_skill_frontmatter(body);
+        assert_eq!(fm.inputs.len(), 2, "duplicate input must be dropped");
+        assert_eq!(fm.inputs[0].name, "query");
+        assert_eq!(
+            fm.inputs[0].kind,
+            SkillSlotKind::Text,
+            "first occurrence wins"
+        );
+        assert_eq!(fm.inputs[1].name, "other");
+
+        assert_eq!(fm.outputs.len(), 1, "output `query` is allowed alongside input");
+        assert_eq!(fm.outputs[0].kind, SkillSlotKind::Json);
+    }
+
+    #[test]
+    fn parse_skill_kind_defaults_to_text() {
+        let body = "---\n\
+name: defaults\n\
+inputs:\n  \
+- name: q\n    \
+description: \"no kind specified\"\n  \
+- name: bogus\n    \
+kind: not_a_real_kind\n\
+---\n";
+        let fm = parse_skill_frontmatter(body);
+        assert_eq!(fm.inputs.len(), 2);
+        assert_eq!(
+            fm.inputs[0].kind,
+            SkillSlotKind::Text,
+            "absent kind: must default to Text"
+        );
+        assert_eq!(
+            fm.inputs[1].kind,
+            SkillSlotKind::Text,
+            "unknown kind: value must default to Text"
+        );
+    }
+
+    #[test]
+    fn parse_skill_required_defaults_to_true() {
+        let body = "---\n\
+name: required-defaults\n\
+inputs:\n  \
+- name: must_have\n    \
+kind: text\n  \
+- name: optional_flag\n    \
+kind: boolean\n    \
+required: false\n  \
+- name: weird_value\n    \
+kind: text\n    \
+required: maybe\n\
+---\n";
+        let fm = parse_skill_frontmatter(body);
+        assert_eq!(fm.inputs.len(), 3);
+        assert!(
+            fm.inputs[0].required,
+            "absent required: must default to true"
+        );
+        assert!(
+            !fm.inputs[1].required,
+            "explicit required: false must be honoured"
+        );
+        assert!(
+            fm.inputs[2].required,
+            "unparseable required: value must fall back to the true default"
         );
     }
 }
