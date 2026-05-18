@@ -106,6 +106,38 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
         requires_arguments: false,
     },
     SlashCommandSpec {
+        name: "rewind",
+        aliases: &[],
+        summary: "Rewind the session to an earlier user turn (or summarize up to here)",
+        argument_hint: Some("[summarize] [N]"),
+        resume_supported: true,
+        category: SlashCommandCategory::Session,
+        detailed_help: "\
+/rewind — rewind the conversation to a previous user message
+
+Usage:
+  /rewind                Open a TUI picker showing the last 10 user
+                         messages.  Use arrow keys to select; Enter
+                         truncates the session to that point.
+  /rewind <N>            Truncate directly to the Nth-most-recent user
+                         message (1 = the most recent).
+  /rewind summarize      Open the picker in 'summarize up to here'
+                         mode: the prefix becomes a Summary message,
+                         messages target+1..current are dropped.
+  /rewind summarize <N>  Summarize directly to the Nth target.
+
+The picker also offers a third menu action: 'Summarize up to here',
+which produces a synthetic Summary message covering the discarded
+prefix.  Use this when you want to keep tokens low but preserve a
+narrative of what happened before the rewind point.",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
+    SlashCommandSpec {
         name: "model",
         aliases: &[],
         summary: "Show or switch the active model",

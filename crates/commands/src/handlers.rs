@@ -101,6 +101,18 @@ pub fn handle_slash_command(
                 session: result.compacted_session,
             })
         }
+        // Task #557: /rewind picks a user message to roll the session back
+        // to.  Without a target the TUI host runs the picker modal; the
+        // headless path lists the candidate user messages so scripted
+        // callers can choose by index.
+        SlashCommand::Rewind { target, summarize } => {
+            let (result_session, message) =
+                apply_rewind(session, target, summarize, compaction);
+            Some(SlashCommandResult {
+                message,
+                session: result_session,
+            })
+        }
         SlashCommand::Help { ref command } => Some(SlashCommandResult {
             message: if let Some(cmd) = command {
                 render_command_detailed_help(cmd)
@@ -3691,6 +3703,335 @@ mod layout_tests {
             let result = handle_layout_command(Some(kind));
             assert!(!result.contains("Unknown layout"), "bare kind {kind} should parse: {result}");
         }
+    }
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::{
+        rewind_summarize, rewind_truncate, rewind_user_message_indices,
+        REWIND_DEFAULT_PICKER_SIZE,
+    };
+    use crate::SlashCommand;
+    use runtime::{
+        CompactionConfig, ContentBlock, ConversationMessage, MessageRole, Session,
+    };
+
+    fn synthetic_session(user_turns: usize) -> Session {
+        let mut s = Session::new();
+        for i in 0..user_turns {
+            s.messages
+                .push(ConversationMessage::user_text(format!("user turn {i}")));
+            s.messages.push(ConversationMessage {
+                role: MessageRole::Assistant,
+                blocks: vec![ContentBlock::Text {
+                    text: format!("assistant reply {i}"),
+                }],
+                usage: None,
+            });
+        }
+        s
+    }
+
+    #[test]
+    fn slash_rewind_parses() {
+        // Bare /rewind opens the picker (target=None, summarize=false).
+        assert_eq!(
+            SlashCommand::parse("/rewind"),
+            Some(SlashCommand::Rewind {
+                target: None,
+                summarize: false,
+            })
+        );
+        // /rewind 3 → direct truncate to the 3rd-most-recent user msg.
+        assert_eq!(
+            SlashCommand::parse("/rewind 3"),
+            Some(SlashCommand::Rewind {
+                target: Some(3),
+                summarize: false,
+            })
+        );
+        // /rewind summarize → open picker in summarize mode.
+        assert_eq!(
+            SlashCommand::parse("/rewind summarize"),
+            Some(SlashCommand::Rewind {
+                target: None,
+                summarize: true,
+            })
+        );
+        // /rewind summarize 2 → direct summarize-to.
+        assert_eq!(
+            SlashCommand::parse("/rewind summarize 2"),
+            Some(SlashCommand::Rewind {
+                target: Some(2),
+                summarize: true,
+            })
+        );
+    }
+
+    #[test]
+    fn rewind_truncates_session() {
+        let s = synthetic_session(5);
+        // 5 user turns at indices 0, 2, 4, 6, 8 (the assistant replies
+        // sit at 1, 3, 5, 7, 9). After picking the 3rd-most-recent user
+        // turn (index 4 — "user turn 2") the session should end there.
+        let indices = rewind_user_message_indices(&s);
+        // Most-recent-first ordering.
+        assert_eq!(indices.len(), 5);
+        let target = indices[2]; // 3rd-most-recent (rank 3 = "user turn 2").
+        let new = rewind_truncate(&s, target);
+        assert_eq!(new.messages.len(), target + 1);
+        match &new.messages.last().unwrap().blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "user turn 2"),
+            other => panic!("expected Text block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rewind_picker_shows_n_messages() {
+        // With more than 10 user turns the headless picker only lists 10.
+        let s = synthetic_session(12);
+        let result = crate::handlers::handle_slash_command(
+            "/rewind",
+            &s,
+            CompactionConfig::default(),
+        )
+        .expect("handler must respond");
+        // The picker header + 10 enumerated entries + an "N more" line = 12 lines.
+        let lines: Vec<&str> = result.message.lines().collect();
+        let numbered = lines.iter().filter(|l| l.trim_start().starts_with(|c: char| c.is_ascii_digit())).count();
+        assert_eq!(
+            numbered, REWIND_DEFAULT_PICKER_SIZE,
+            "picker should show {REWIND_DEFAULT_PICKER_SIZE} candidates, got {numbered} in: {result:?}",
+            result = result.message,
+        );
+        assert!(
+            result.message.contains("more user messages"),
+            "should mention overflow remainder"
+        );
+    }
+
+    #[test]
+    fn rewind_summarize_creates_summary_message() {
+        // 8 user turns + 8 assistant replies = 16 messages.  Pick the
+        // 4th-most-recent user turn (preserving recent context, dropping
+        // earlier turns).  After summarize, message[0] should be a
+        // System-role summary.
+        let s = synthetic_session(8);
+        let indices = rewind_user_message_indices(&s);
+        let target = indices[3]; // 4th-most-recent.
+        let new = rewind_summarize(&s, target, CompactionConfig::default());
+        assert!(!new.messages.is_empty());
+        // First message should be the synthetic Summary (System role).
+        assert_eq!(new.messages[0].role, MessageRole::System);
+        let text_blocks: Vec<&str> = new.messages[0]
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text_blocks.is_empty()
+                && text_blocks[0].contains("session is being continued"),
+            "expected summary continuation preamble, got: {text_blocks:?}"
+        );
+    }
+
+    #[test]
+    fn rewind_summarize_clears_messages_after_target() {
+        // After rewind+summarize the post-target messages MUST be gone.
+        let s = synthetic_session(6);
+        let indices = rewind_user_message_indices(&s);
+        let target = indices[2]; // 3rd-most-recent.
+        let new = rewind_summarize(&s, target, CompactionConfig::default());
+        // The original had 6 assistant replies after various user
+        // turns; check none of them remain by walking blocks.
+        let assistant_5_present = new.messages.iter().any(|m| {
+            m.blocks.iter().any(|b| match b {
+                ContentBlock::Text { text } => text.contains("assistant reply 5"),
+                _ => false,
+            })
+        });
+        assert!(
+            !assistant_5_present,
+            "messages after the rewind target must be dropped"
+        );
+        // Old prefix turns (0, 1) shouldn't appear verbatim either
+        // (they should be summarized).
+        let user_turn_0_verbatim = new.messages.iter().any(|m| {
+            m.role == MessageRole::User
+                && m.blocks.iter().any(|b| match b {
+                    ContentBlock::Text { text } => text == "user turn 0",
+                    _ => false,
+                })
+        });
+        assert!(
+            !user_turn_0_verbatim,
+            "early user messages should be summarized, not preserved verbatim"
+        );
+    }
+}
+
+// ─── Task #557: /rewind shared logic ──────────────────────────────────────────
+
+/// Number of user-message candidates the picker offers by default.
+pub const REWIND_DEFAULT_PICKER_SIZE: usize = 10;
+
+/// Walk `session.messages` and return the indices of user-role
+/// messages, most-recent first.  Used by the picker (TUI host) and by
+/// `apply_rewind` for direct-target resolution.
+#[must_use]
+pub fn rewind_user_message_indices(session: &Session) -> Vec<usize> {
+    let mut out: Vec<usize> = session
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == runtime::MessageRole::User)
+        .map(|(i, _)| i)
+        .collect();
+    out.reverse();
+    out
+}
+
+/// Truncate `session.messages` so the last retained message is the
+/// user message at `session.messages[target_index]`.  All messages
+/// AFTER the target are dropped.  Returns the truncated session.
+#[must_use]
+pub fn rewind_truncate(session: &Session, target_index: usize) -> Session {
+    let mut new_session = session.clone();
+    if target_index >= new_session.messages.len() {
+        return new_session;
+    }
+    new_session.messages.truncate(target_index + 1);
+    new_session
+}
+
+/// Summarize the prefix up to (and including) `target_index`, then drop
+/// every message that came after.  The result is a session whose first
+/// message is a synthetic Summary (from `compact_session`) and whose
+/// tail matches the chosen rewind point — i.e. a "rewind + summarize
+/// the discarded prefix" composite.
+///
+/// Behavior:
+/// - We isolate `messages[0..=target_index]` as the prefix.
+/// - Run `compact_session(prefix, compaction)` on it.  When the prefix
+///   is too small to compact (below the threshold), the prefix is
+///   returned as-is (no summary is generated, matching the proactive
+///   `compact_session` contract).
+/// - Drop everything from `target_index + 1` onward.
+#[must_use]
+pub fn rewind_summarize(
+    session: &Session,
+    target_index: usize,
+    compaction: CompactionConfig,
+) -> Session {
+    if target_index >= session.messages.len() {
+        return session.clone();
+    }
+    // Build the prefix session (everything up through target_index).
+    let prefix_session = Session {
+        version: session.version,
+        messages: session.messages[..=target_index].to_vec(),
+    };
+    // Force compaction even when proactive `should_compact` would skip,
+    // by lowering the threshold to 1 (the helper still preserves the
+    // most-recent N messages).
+    let aggressive = CompactionConfig {
+        preserve_recent_messages: 1,
+        max_estimated_tokens: 1,
+        ..compaction
+    };
+    let result = compact_session(&prefix_session, aggressive);
+    result.compacted_session
+}
+
+/// Shared dispatch for the `/rewind` command (TUI + headless).
+/// Headless path with no target lists the available user messages so
+/// scripted callers can choose by index in a follow-up call.
+fn apply_rewind(
+    session: &Session,
+    target: Option<usize>,
+    summarize: bool,
+    compaction: CompactionConfig,
+) -> (Session, String) {
+    let user_indices = rewind_user_message_indices(session);
+    if user_indices.is_empty() {
+        return (
+            session.clone(),
+            "/rewind: no user messages in this session.".to_string(),
+        );
+    }
+    match target {
+        None => {
+            // No target: list the last N user messages so the caller
+            // (TUI picker host OR scripted caller) can choose.
+            let mut lines = vec![if summarize {
+                "/rewind summarize: pick a user message to summarize-up-to:".to_string()
+            } else {
+                "/rewind: pick a user message to rewind to:".to_string()
+            }];
+            for (rank, &idx) in user_indices
+                .iter()
+                .take(REWIND_DEFAULT_PICKER_SIZE)
+                .enumerate()
+            {
+                let preview = rewind_message_preview(&session.messages[idx]);
+                lines.push(format!("  {} : {preview}", rank + 1));
+            }
+            if user_indices.len() > REWIND_DEFAULT_PICKER_SIZE {
+                lines.push(format!(
+                    "  … ({} more user messages — pass /rewind <N> with a larger index)",
+                    user_indices.len() - REWIND_DEFAULT_PICKER_SIZE
+                ));
+            }
+            (session.clone(), lines.join("\n"))
+        }
+        Some(n) => {
+            // 1-based: 1 = most-recent user message.
+            let Some(&idx) = user_indices.get(n.saturating_sub(1)) else {
+                return (
+                    session.clone(),
+                    format!(
+                        "/rewind: target {n} is out of range (only {} user messages)",
+                        user_indices.len()
+                    ),
+                );
+            };
+            let preview = rewind_message_preview(&session.messages[idx]);
+            if summarize {
+                let new = rewind_summarize(session, idx, compaction);
+                (
+                    new,
+                    format!("Summarized session up to user turn {n}: {preview}"),
+                )
+            } else {
+                let new = rewind_truncate(session, idx);
+                (new, format!("Rewound to user turn {n}: {preview}"))
+            }
+        }
+    }
+}
+
+/// Render a short, single-line preview of a user message (first 80 chars
+/// of the first Text block).  Used by both the picker view and the
+/// confirmation message.
+fn rewind_message_preview(message: &runtime::ConversationMessage) -> String {
+    let raw = message
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            runtime::ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let collapsed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= 80 {
+        collapsed
+    } else {
+        let truncated: String = collapsed.chars().take(77).collect();
+        format!("{truncated}…")
     }
 }
 

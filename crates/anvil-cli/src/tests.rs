@@ -568,11 +568,12 @@ fn resume_supported_command_list_matches_expected_surface() {
         .collect::<Vec<_>>();
     // v2.2.6: productivity, knowledge, daily added as resume-supported
     // v2.2.16: layout added as resume-supported
+    // v2.2.17 task #557: rewind added as resume-supported (CC parity)
     assert_eq!(
         names,
         vec![
-            "help", "status", "compact", "clear", "cost", "config", "memory", "init", "diff",
-            "version", "export", "agents", "skills", "qmd", "history", "doctor", "tokens",
+            "help", "status", "compact", "rewind", "clear", "cost", "config", "memory", "init",
+            "diff", "version", "export", "agents", "skills", "qmd", "history", "doctor", "tokens",
             "history-archive", "configure", "language", "sleep", "productivity", "knowledge",
             "daily", "layout",
         ]

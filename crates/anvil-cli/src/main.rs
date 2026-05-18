@@ -1797,6 +1797,37 @@ fn run_resume_command(
                 )),
             })
         }
+        SlashCommand::Rewind { target, summarize } => {
+            // Task #557: --resume /rewind path.  Route through the
+            // shared handler.  If a target was given the handler returns
+            // a truncated/summarized session; persist it back to disk
+            // (same contract as /compact above).
+            let mut input = String::from("/rewind");
+            if *summarize {
+                input.push_str(" summarize");
+            }
+            if let Some(n) = target {
+                input.push(' ');
+                input.push_str(&n.to_string());
+            }
+            let result = commands::handle_slash_command(
+                &input,
+                session,
+                CompactionConfig::default(),
+            );
+            let result = result.unwrap_or_else(|| commands::SlashCommandResult {
+                message: "/rewind: handler unavailable".to_string(),
+                session: session.clone(),
+            });
+            // Only re-save if the session actually changed.
+            if &result.session != session {
+                result.session.save_to_path(session_path)?;
+            }
+            Ok(ResumeCommandOutcome {
+                session: result.session,
+                message: Some(result.message),
+            })
+        }
         SlashCommand::Status => {
             let tracker = UsageTracker::from_session(session);
             let usage = tracker.cumulative_usage();
@@ -5811,6 +5842,43 @@ impl LiveCli {
                 // ratatui's alt-screen.
                 let report = self.compact()?;
                 (report, false)
+            }
+            SlashCommand::Rewind { target, summarize } => {
+                // Task #557: TUI side just routes through the shared
+                // handler so the rewind/summarize logic (and the picker
+                // listing in headless mode) is symmetrical.  When the
+                // user runs `/rewind` with no target the handler returns
+                // the candidate list; the TUI host can later be extended
+                // to surface a modal picker on top of this.
+                let runtime = self.active_runtime();
+                let session_snapshot = runtime.session().clone();
+                let compaction = *runtime.compaction_config();
+                drop(runtime);
+                // Rebuild a canonical /rewind input so the central
+                // handle_slash_command dispatcher does the work.
+                let mut input = String::from("/rewind");
+                if summarize {
+                    input.push_str(" summarize");
+                }
+                if let Some(n) = target {
+                    input.push(' ');
+                    input.push_str(&n.to_string());
+                }
+                let result = commands::handle_slash_command(
+                    &input,
+                    &session_snapshot,
+                    compaction,
+                );
+                if let Some(r) = result {
+                    if r.session != session_snapshot {
+                        self.active_runtime_mut().replace_session(r.session);
+                        (r.message, true)
+                    } else {
+                        (r.message, false)
+                    }
+                } else {
+                    ("/rewind: handler unavailable".to_string(), false)
+                }
             }
             SlashCommand::Agents { args } => {
                 // Route subcommands that target the live agent manager

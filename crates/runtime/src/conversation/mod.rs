@@ -390,6 +390,13 @@ where
         self.compaction_config = config;
     }
 
+    /// Task #557 (`/rewind`): replace the live session wholesale.  Used
+    /// by the rewind handler when the user truncates the history; the
+    /// next `run_turn` sees only the retained prefix.
+    pub fn replace_session(&mut self, session: Session) {
+        self.session = session;
+    }
+
     #[must_use]
     pub const fn compaction_config(&self) -> &CompactionConfig {
         &self.compaction_config

@@ -550,6 +550,20 @@ pub enum SlashCommand {
     Reflect {
         action: Option<String>,
     },
+    /// `/rewind` — CC parity: open a TUI picker showing the last N user
+    /// messages and let the user truncate the session to that point.
+    /// Optional positional integer selects directly (`/rewind 3`).
+    /// Optional `summarize` keyword swaps the action: truncate the
+    /// prefix in place but append a summary covering the discarded
+    /// turns (task #557).
+    Rewind {
+        /// Direct selection (1-based; 1 = most recent user message).
+        /// `None` opens the picker modal.
+        target: Option<usize>,
+        /// When `true`, the selected target becomes a "summarize up to
+        /// here" operation rather than a hard truncate.
+        summarize: bool,
+    },
     Unknown(String),
 }
 
@@ -649,6 +663,21 @@ impl SlashCommand {
             },
             "status" => Self::Status,
             "compact" => Self::Compact,
+            "rewind" => {
+                // /rewind                 → open picker (target=None)
+                // /rewind 3               → direct truncate to 3rd-to-last user msg
+                // /rewind summarize       → open picker in summarize mode
+                // /rewind summarize 3     → summarize to 3rd-to-last user msg
+                let first = parts.next();
+                let (summarize, target_str) = match first {
+                    Some("summarize") => (true, parts.next()),
+                    other => (false, other),
+                };
+                let target = target_str
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .filter(|n| *n >= 1);
+                Self::Rewind { target, summarize }
+            }
             "branch" => Self::Branch {
                 action: parts.next().map(ToOwned::to_owned),
                 target: parts.next().map(ToOwned::to_owned),
@@ -1812,11 +1841,13 @@ mod tests {
         // v2.2.16: +1 (/hub-status — AnvilHub verified-badge status query) = 115 total
         // v2.2.16: +1 (/layout — TUI layout selector, 8-axis contract) = 116 total
         // v2.2.14 Phase 1: +1 (/chain — AnvilHub F2 skill-chain executor) = 117 total
-        // task #636 v2.2.17: +1 (/reflect)
-        assert_eq!(slash_command_specs().len(), 118);
+        // task #636 v2.2.17: +1 (/reflect) = 118 total
+        // task #557 v2.2.17: +1 (/rewind) = 119 total
+        assert_eq!(slash_command_specs().len(), 119);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         // v2.2.16: +1 (/layout resume_supported=true) = 25
-        assert_eq!(resume_supported_slash_commands().len(), 25);
+        // v2.2.17 task #557: +1 (/rewind resume_supported=true) = 26
+        assert_eq!(resume_supported_slash_commands().len(), 26);
     }
 
     #[test]
@@ -3046,6 +3077,7 @@ mod tests {
                 SlashCommand::Cursor { .. } => Some("cursor"),
                 SlashCommand::Chain { .. } => Some("chain"),
                 SlashCommand::Reflect { .. } => Some("reflect"),
+                SlashCommand::Rewind { .. } => Some("rewind"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -3182,6 +3214,7 @@ mod tests {
                 subcommand: ChainSubcommand::List,
             },
             SlashCommand::Reflect { action: None },
+            SlashCommand::Rewind { target: None, summarize: false },
             SlashCommand::Unknown(String::new()),
         ];
 
@@ -3318,6 +3351,7 @@ mod tests {
     const HANDLER_NAMES: &[&str] = &[
         "help",
         "compact",
+        "rewind",
         "status",
         "branch",
         "bughunter",
