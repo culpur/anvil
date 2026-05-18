@@ -446,7 +446,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Login { provider } => run_login(provider.as_deref())?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
-        CliAction::FirstRunWizard => run_first_run_wizard(),
+        CliAction::FirstRunWizard => { let _ = run_first_run_wizard(); }
         CliAction::Setup => run_setup_wizard(),
         CliAction::Check => {
             let fails = run_check();
@@ -2329,58 +2329,199 @@ fn startup_vault_init() {
     }
 
     // ── Unlock existing vault ─────────────────────────────────────────────────
-    // BUG-1 fix: retry up to 3 times. On each wrong password print the
-    // remaining-attempts count. After all 3 fail (or the user submits an empty
-    // password / presses Ctrl+C), set VAULT_UNLOCK_PENDING=true so the TUI
-    // can surface a pre-filled `/vault unlock ` prompt rather than silently
-    // dropping the user into a locked-vault session.
+    // Task #643 (v2.2.17): the legacy `rpassword::read_password` loop
+    // here painted prompts to stderr while ratatui was about to take
+    // over stdin, producing a visible inline seam between the existing
+    // vault gate and the main TUI.  The unlock now runs inside a
+    // short-lived `WizardSession` (alt-screen PasswordModal with up to
+    // 3 retries on wrong password). The session exits before the main
+    // TUI's alt-screen starts — so the user sees one modal swap, not a
+    // stdin echo.
     if vault_initialized && !runtime::vault_is_session_unlocked() {
-        let max_attempts: u8 = 3;
-        let mut unlocked = false;
-        'vault_retry: for attempt in 0..max_attempts {
-            let remaining = max_attempts - attempt;
-            eprint!("  Vault master password: ");
-            // Use rpassword; on Ctrl+C rpassword returns an Err — treat that
-            // as a deliberate abort and break immediately.
-            let pw = match rpassword::read_password() {
-                Ok(p) => p,
-                Err(_) => {
-                    // Ctrl+C or EOF during password read — stop retrying.
-                    eprintln!();
-                    break 'vault_retry;
-                }
-            };
-            if pw.is_empty() {
-                // Empty = skip vault (user explicitly skipped).
-                break 'vault_retry;
+        let outcome = unlock_existing_vault_via_modal();
+        match outcome {
+            VaultUnlockOutcome::Unlocked => { /* ready for TUI */ }
+            VaultUnlockOutcome::Cancelled | VaultUnlockOutcome::ExhaustedRetries => {
+                // Signal the TUI to pre-fill `/vault unlock ` in the input box.
+                VAULT_UNLOCK_PENDING.store(true, std::sync::atomic::Ordering::Release);
             }
-            match runtime::init_session_vault(&pw) {
-                Ok(true) => {
-                    unlocked = true;
-                    break 'vault_retry;
-                }
-                Ok(false) => {
-                    eprintln!("  Vault not initialized.");
-                    break 'vault_retry;
-                }
-                Err(_) => {
-                    if remaining > 1 {
-                        eprintln!("  Wrong password. {} attempt{} remaining.",
-                            remaining - 1,
-                            if remaining - 1 == 1 { "" } else { "s" });
-                    } else {
-                        eprintln!("  Wrong password. No attempts remaining.");
-                    }
-                }
+            VaultUnlockOutcome::ModalUnavailable => {
+                // Alt-screen could not be entered (rare — raw mode
+                // disabled by parent process). Fall back to the
+                // legacy inline rpassword loop so the user can still
+                // unlock without losing functionality. This path is
+                // SAFE-PREWIZARD per the println-audit (#626) — no
+                // ratatui is active yet.
+                unlock_existing_vault_via_stdin();
             }
-        }
-        if !unlocked {
-            // Signal the TUI to pre-fill `/vault unlock ` in the input box.
-            VAULT_UNLOCK_PENDING.store(true, std::sync::atomic::Ordering::Release);
         }
     }
 
     load_credentials_to_env();
+}
+
+/// Outcome of the alt-screen vault-unlock modal flow (#643).
+enum VaultUnlockOutcome {
+    /// Password accepted and `init_session_vault` succeeded.
+    Unlocked,
+    /// User pressed Esc or `Ctrl+C` on the modal before unlocking.
+    Cancelled,
+    /// Three wrong attempts in a row.
+    ExhaustedRetries,
+    /// The alt-screen failed to enter (raw-mode disabled, etc.). The
+    /// caller falls back to the inline stdin path.
+    ModalUnavailable,
+}
+
+/// Drive a `PasswordModal` inside a brief `WizardSession` to unlock the
+/// vault for the running session (#643, v2.2.17 Case B).
+///
+/// Up to 3 attempts; on wrong password the modal stays open with the
+/// buffer cleared + an inline error banner. Esc / Ctrl+C exits as
+/// `Cancelled` so the caller can switch to the deferred `/vault unlock`
+/// path in the TUI.
+///
+/// SAFE-PREWIZARD per the println audit (#626) — runs before
+/// `run_repl_tui` enters the main alt-screen. Its own alt-screen is
+/// fully released before the function returns.
+fn unlock_existing_vault_via_modal() -> VaultUnlockOutcome {
+    use crate::tui::modals::password::PasswordModal;
+    use crate::wizard_runner::{
+        CrosstermHooks, CrosstermKeySource, WizardModalRunner, WizardSession,
+    };
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use std::time::Duration;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let Ok(terminal) = Terminal::new(backend) else {
+        return VaultUnlockOutcome::ModalUnavailable;
+    };
+    let mut session = match WizardSession::enter(terminal, CrosstermHooks::new()) {
+        Ok(s) => s,
+        Err(_) => return VaultUnlockOutcome::ModalUnavailable,
+    };
+
+    let keys = CrosstermKeySource {
+        poll_timeout: Duration::from_millis(50),
+    };
+    let mut runner = WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
+
+    if runner
+        .session
+        .render_banner(
+            "Unlock vault",
+            &[
+                "Anvil is locked. Enter your master password to continue.",
+                "Esc to skip (the TUI's /vault unlock can finish the job).",
+            ],
+            ratatui::style::Color::Cyan,
+        )
+        .is_err()
+    {
+        drop(runner);
+        drop(session);
+        return VaultUnlockOutcome::ModalUnavailable;
+    }
+
+    let mut modal = PasswordModal::new("Vault master password", "Master password");
+    const MAX_ATTEMPTS: u32 = 3;
+
+    loop {
+        // Drive ONE password capture; on failure we re-open the modal
+        // with `set_error` so it stays inside the same WizardSession.
+        let captured = runner.run_password_capture(modal.clone());
+        let pw = match captured {
+            Ok(Some(pw)) => pw,
+            Ok(None) => {
+                drop(runner);
+                drop(session);
+                return VaultUnlockOutcome::Cancelled;
+            }
+            Err(_) => {
+                drop(runner);
+                drop(session);
+                return VaultUnlockOutcome::ModalUnavailable;
+            }
+        };
+
+        if pw.is_empty() {
+            drop(runner);
+            drop(session);
+            return VaultUnlockOutcome::Cancelled;
+        }
+
+        match runtime::init_session_vault(&pw) {
+            Ok(true) => {
+                drop(runner);
+                drop(session);
+                return VaultUnlockOutcome::Unlocked;
+            }
+            Ok(false) => {
+                // Vault not initialised — should not happen since the
+                // caller gates on `vault_is_initialized` already, but
+                // treat as cancel so we surface the TUI prompt.
+                drop(runner);
+                drop(session);
+                return VaultUnlockOutcome::Cancelled;
+            }
+            Err(_) => {
+                modal.set_error("Wrong password.");
+                if modal.attempts >= MAX_ATTEMPTS {
+                    drop(runner);
+                    drop(session);
+                    return VaultUnlockOutcome::ExhaustedRetries;
+                }
+                // loop back to re-run the modal with the error banner.
+            }
+        }
+    }
+}
+
+/// Legacy inline stdin unlock path — used ONLY when the alt-screen
+/// modal cannot be entered (raw mode disabled by parent process /
+/// non-TTY stdout). SAFE-PREWIZARD per the println audit.
+fn unlock_existing_vault_via_stdin() {
+    let max_attempts: u8 = 3;
+    let mut unlocked = false;
+    'vault_retry: for attempt in 0..max_attempts {
+        let remaining = max_attempts - attempt;
+        eprint!("  Vault master password: ");
+        let pw = match rpassword::read_password() {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!();
+                break 'vault_retry;
+            }
+        };
+        if pw.is_empty() {
+            break 'vault_retry;
+        }
+        match runtime::init_session_vault(&pw) {
+            Ok(true) => {
+                unlocked = true;
+                break 'vault_retry;
+            }
+            Ok(false) => {
+                eprintln!("  Vault not initialized.");
+                break 'vault_retry;
+            }
+            Err(_) => {
+                if remaining > 1 {
+                    eprintln!(
+                        "  Wrong password. {} attempt{} remaining.",
+                        remaining - 1,
+                        if remaining - 1 == 1 { "" } else { "s" }
+                    );
+                } else {
+                    eprintln!("  Wrong password. No attempts remaining.");
+                }
+            }
+        }
+    }
+    if !unlocked {
+        VAULT_UNLOCK_PENDING.store(true, std::sync::atomic::Ordering::Release);
+    }
 }
 
 /// Migrate plaintext credentials.json entries into the session vault.
@@ -2449,30 +2590,44 @@ fn run_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Auto-detect first run: if ~/.anvil/config.json does not exist yet,
     // guide the user through the setup wizard before entering the REPL.
-    let model = if io::stdout().is_terminal() && !anvil_config_json_exists() {
-        run_first_run_wizard();
-        // Re-read the config to pick up the user's chosen default model
-        let config_path = anvil_home_dir().join("config.json");
-        if let Ok(data) = fs::read_to_string(&config_path) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                val.get("default_model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&model)
-                    .to_string()
-            } else {
-                model
+    //
+    // Task #643 (v2.2.17): the wizard now returns a `WizardResult` so
+    // we can use the chosen model + vault-unlock state directly,
+    // without re-reading config.json or re-prompting the user.
+    let (model, wizard_vault_unlocked) = if io::stdout().is_terminal()
+        && !anvil_config_json_exists()
+    {
+        let result = run_first_run_wizard();
+        // Prefer the wizard's captured model; fall back to re-reading
+        // config.json for the legacy stdin path that doesn't populate
+        // `WizardResult.chosen_model`.
+        let model = result.chosen_model.unwrap_or_else(|| {
+            let config_path = anvil_home_dir().join("config.json");
+            if let Ok(data) = fs::read_to_string(&config_path)
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&data)
+                && let Some(name) = val.get("default_model").and_then(|v| v.as_str())
+            {
+                return name.to_string();
             }
-        } else {
-            model
-        }
+            model.clone()
+        });
+        (model, result.vault_was_unlocked)
     } else {
-        model
+        (model, false)
     };
 
     // Unlock the vault (or offer migration) once before the REPL starts.
-    // After run_first_run_wizard the vault is already unlocked in the session
-    // cache, so startup_vault_init is a no-op in that case.
-    startup_vault_init();
+    //
+    // Task #643: when the wizard's Step 1 already set up + unlocked the
+    // vault, skip the startup unlock path entirely so the user does
+    // not see a second password prompt (zero-seam wizard → TUI
+    // handoff).  When the wizard did NOT run (returning user) we still
+    // go through `startup_vault_init` — Case B in #643 turns the
+    // inline rpassword loop there into an alt-screen PasswordModal so
+    // the prompt is itself flicker-free.
+    if !wizard_vault_unlocked {
+        startup_vault_init();
+    }
 
     // Task #595: validate saved Anthropic OAuth credentials before entering
     // the REPL so the user gets a clear actionable banner BEFORE they hit
