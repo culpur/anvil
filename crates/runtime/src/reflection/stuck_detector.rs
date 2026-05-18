@@ -143,6 +143,14 @@ impl StuckDetector {
         &self.window
     }
 
+    /// Read-only view of the detector's compiled-in config. Used by the
+    /// config-tests and by `/reflect` introspection to verify the
+    /// settings.json overrides reached the detector.
+    #[must_use]
+    pub const fn config(&self) -> &StuckDetectorConfig {
+        &self.config
+    }
+
     #[must_use]
     pub const fn current_turn_id(&self) -> u32 {
         self.current_turn_id

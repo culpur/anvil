@@ -103,6 +103,89 @@ impl WorktreeConfig {
     }
 }
 
+/// Task #636 (v2.2.17): autonomous reflection loop settings.
+///
+/// Parsed from the `reflection` block of `settings.json`. All fields are
+/// optional — `enabled` defaults to true so the loop is active for fresh
+/// installs, and threshold/timeout overrides fall back to the
+/// `StuckDetectorConfig::default()` values when absent.
+///
+/// Example:
+/// ```json
+/// {
+///   "reflection": {
+///     "enabled": true,
+///     "stuck_threshold_calls": 3,
+///     "stall_timeout_secs": 600,
+///     "quiet_window_turns": 3
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReflectionConfig {
+    enabled: bool,
+    stuck_threshold_calls: Option<u32>,
+    stall_timeout_secs: Option<u64>,
+    quiet_window_turns: Option<u32>,
+}
+
+impl Default for ReflectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            stuck_threshold_calls: None,
+            stall_timeout_secs: None,
+            quiet_window_turns: None,
+        }
+    }
+}
+
+impl ReflectionConfig {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn stuck_threshold_calls(&self) -> Option<u32> {
+        self.stuck_threshold_calls
+    }
+
+    #[must_use]
+    pub const fn stall_timeout_secs(&self) -> Option<u64> {
+        self.stall_timeout_secs
+    }
+
+    #[must_use]
+    pub const fn quiet_window_turns(&self) -> Option<u32> {
+        self.quiet_window_turns
+    }
+
+    #[must_use]
+    pub const fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_stuck_threshold_calls(mut self, calls: u32) -> Self {
+        self.stuck_threshold_calls = Some(calls);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_stall_timeout_secs(mut self, secs: u64) -> Self {
+        self.stall_timeout_secs = Some(secs);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_quiet_window_turns(mut self, turns: u32) -> Self {
+        self.quiet_window_turns = Some(turns);
+        self
+    }
+}
+
 /// Egress allowlist settings loaded from settings.json.
 ///
 /// Controls which domains tools may contact over the network.  Disabled by
@@ -355,6 +438,10 @@ pub struct RuntimeFeatureConfig {
     /// v2.2.16 first-launch toast suppression flag.
     /// When `true`, the one-time upgrade toast has already been shown.
     tui_layout_intro_seen: bool,
+    /// v2.2.17 task #636: autonomous reflection loop settings
+    /// (`reflection` block in settings.json). Default: enabled with
+    /// `StuckDetectorConfig::default()` thresholds.
+    reflection: ReflectionConfig,
 }
 
 #[derive(Debug)]
@@ -495,6 +582,7 @@ impl ConfigLoader {
             hub: parse_optional_hub_config(&merged_value),
             tui_layout: parse_optional_tui_layout_config(&merged_value),
             tui_layout_intro_seen: parse_tui_layout_intro_seen(&merged_value),
+            reflection: parse_optional_reflection_config(&merged_value),
         };
 
         // Profile section — partial-tolerance: malformed individual profiles
@@ -796,6 +884,12 @@ impl RuntimeConfig {
     pub const fn tui_layout_intro_seen(&self) -> bool {
         self.feature_config.tui_layout_intro_seen
     }
+
+    /// v2.2.17 (task #636): reflection settings (`reflection` block).
+    #[must_use]
+    pub const fn reflection(&self) -> &ReflectionConfig {
+        &self.feature_config.reflection
+    }
 }
 
 impl RuntimeFeatureConfig {
@@ -905,6 +999,20 @@ impl RuntimeFeatureConfig {
     pub const fn hub(&self) -> &HubConfig {
         &self.hub
     }
+
+    /// v2.2.17 (task #636): autonomous reflection loop settings
+    /// (`reflection` block in settings.json).
+    #[must_use]
+    pub const fn reflection(&self) -> &ReflectionConfig {
+        &self.reflection
+    }
+
+    /// Test/CLI helper: install a fully-formed reflection config.
+    #[must_use]
+    pub const fn with_reflection(mut self, reflection: ReflectionConfig) -> Self {
+        self.reflection = reflection;
+        self
+    }
 }
 
 /// Parse `tui_layout` from the merged config JSON (v2.2.16).
@@ -993,6 +1101,69 @@ fn parse_optional_hub_config(root: &JsonValue) -> HubConfig {
         .and_then(JsonValue::as_bool)
         .unwrap_or(false);
     HubConfig { require_verified }
+}
+
+/// Parse the `reflection` block from the merged config JSON (v2.2.17,
+/// task #636).
+///
+/// Recognised shape:
+/// ```json
+/// {
+///   "reflection": {
+///     "enabled": true,
+///     "stuck_threshold_calls": 3,
+///     "stall_timeout_secs": 600,
+///     "quiet_window_turns": 3
+///   }
+/// }
+/// ```
+///
+/// All keys are optional. Bad / invalid values silently fall back to the
+/// defaults — reflection is a non-fatal observability layer, so a typo
+/// must never crash the load. `enabled` defaults to true.
+///
+/// Snake-case and camelCase keys are both accepted to stay consistent
+/// with the rest of the settings.json parsers.
+fn parse_optional_reflection_config(root: &JsonValue) -> ReflectionConfig {
+    let Some(obj) = root
+        .as_object()
+        .and_then(|o| o.get("reflection"))
+        .and_then(JsonValue::as_object)
+    else {
+        return ReflectionConfig::default();
+    };
+
+    let enabled = obj
+        .get("enabled")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true);
+
+    let stuck_threshold_calls = obj
+        .get("stuck_threshold_calls")
+        .or_else(|| obj.get("stuckThresholdCalls"))
+        .and_then(JsonValue::as_i64)
+        .and_then(|v| u32::try_from(v).ok())
+        .filter(|v| *v > 0);
+
+    let stall_timeout_secs = obj
+        .get("stall_timeout_secs")
+        .or_else(|| obj.get("stallTimeoutSecs"))
+        .and_then(JsonValue::as_i64)
+        .and_then(|v| u64::try_from(v).ok())
+        .filter(|v| *v > 0);
+
+    let quiet_window_turns = obj
+        .get("quiet_window_turns")
+        .or_else(|| obj.get("quietWindowTurns"))
+        .and_then(JsonValue::as_i64)
+        .and_then(|v| u32::try_from(v).ok());
+
+    ReflectionConfig {
+        enabled,
+        stuck_threshold_calls,
+        stall_timeout_secs,
+        quiet_window_turns,
+    }
 }
 
 #[must_use]
@@ -2290,6 +2461,176 @@ mod tests {
 
         let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
         assert!(loaded.tui_layout_intro_seen());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    // ─── Task #636 (v2.2.17): reflection config parsing ─────────────────
+
+    #[test]
+    fn reflection_config_parses_defaults_when_absent() {
+        // No `reflection` block in settings.json → defaults: enabled = true,
+        // all threshold overrides None (the runtime falls back to the
+        // `StuckDetectorConfig::default()` values when applying these).
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(home.join("settings.json"), r#"{}"#).expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        let r = loaded.reflection();
+        assert!(r.enabled(), "default `enabled` must be true");
+        assert_eq!(r.stuck_threshold_calls(), None);
+        assert_eq!(r.stall_timeout_secs(), None);
+        assert_eq!(r.quiet_window_turns(), None);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reflection_config_disabled_via_settings_disables_turn_state() {
+        // `"reflection": {"enabled": false}` in settings.json must flow all
+        // the way through to the per-conversation TurnState: a fresh
+        // ConversationRuntime built from this config has `is_enabled() == false`.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"reflection": {"enabled": false}}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        assert!(!loaded.reflection().enabled());
+
+        // End-to-end: a ConversationRuntime built from this feature config
+        // has its TurnState gate flipped to off.
+        use crate::conversation::{
+            ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError,
+            StaticToolExecutor,
+        };
+        use crate::permissions::{PermissionMode, PermissionPolicy};
+        use crate::prompt_section::{PromptSection, PromptSectionKind};
+        use crate::session::Session;
+
+        struct NullApi;
+        impl ApiClient for NullApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![AssistantEvent::MessageStop])
+            }
+        }
+
+        let runtime = ConversationRuntime::new_with_features(
+            Session::new(),
+            NullApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+            loaded.feature_config().clone(),
+        );
+        assert!(
+            !runtime.reflection().is_enabled(),
+            "TurnState must inherit `enabled: false` from settings"
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reflection_config_threshold_overrides_apply() {
+        // Non-default threshold overrides flow into the StuckDetectorConfig
+        // on the per-conversation TurnState.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"reflection": {
+                "enabled": true,
+                "stuck_threshold_calls": 7,
+                "stall_timeout_secs": 1200,
+                "quiet_window_turns": 5
+            }}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        let r = loaded.reflection();
+        assert_eq!(r.stuck_threshold_calls(), Some(7));
+        assert_eq!(r.stall_timeout_secs(), Some(1200));
+        assert_eq!(r.quiet_window_turns(), Some(5));
+
+        use crate::conversation::{
+            ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError,
+            StaticToolExecutor,
+        };
+        use crate::permissions::{PermissionMode, PermissionPolicy};
+        use crate::prompt_section::{PromptSection, PromptSectionKind};
+        use crate::session::Session;
+        struct NullApi;
+        impl ApiClient for NullApi {
+            fn stream(
+                &mut self,
+                _request: ApiRequest,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                Ok(vec![AssistantEvent::MessageStop])
+            }
+        }
+        let runtime = ConversationRuntime::new_with_features(
+            Session::new(),
+            NullApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+            loaded.feature_config().clone(),
+        );
+        let cfg = runtime.reflection().detector().config();
+        assert_eq!(cfg.stuck_threshold_calls, 7);
+        assert_eq!(cfg.stall_timeout_secs, 1200);
+        assert_eq!(cfg.quiet_window_turns, 5);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn reflection_config_invalid_value_falls_back_to_default() {
+        // Invalid types and zero / negative numerics silently drop back to
+        // the default thresholds — reflection is a non-fatal observability
+        // layer, so a typo in settings.json must never break load.
+        let root = temp_dir();
+        let cwd = root.join("project");
+        let home = root.join("home").join(".anvil");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&cwd).expect("project");
+        fs::write(
+            home.join("settings.json"),
+            r#"{"reflection": {
+                "enabled": "yes-please",
+                "stuck_threshold_calls": "three",
+                "stall_timeout_secs": 0,
+                "quiet_window_turns": -1
+            }}"#,
+        )
+        .expect("write settings");
+
+        let loaded = ConfigLoader::new(&cwd, &home).load().expect("load");
+        let r = loaded.reflection();
+        // Invalid "enabled" string → falls back to default true.
+        assert!(r.enabled());
+        // Non-numeric / zero / negative thresholds drop to None (defaults).
+        assert_eq!(r.stuck_threshold_calls(), None);
+        assert_eq!(r.stall_timeout_secs(), None);
+        assert_eq!(r.quiet_window_turns(), None);
 
         fs::remove_dir_all(root).expect("cleanup");
     }

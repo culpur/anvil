@@ -1,9 +1,11 @@
 //! Turn execution logic: drives the API request/tool-use loop for a single turn.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::prompt_section::PromptSection;
+use crate::reflection::{ToolEvent, TurnState};
 use crate::session::{ContentBlock, ConversationMessage};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -44,10 +46,61 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     cancel_token: &Arc<AtomicBool>,
     stop_hook_counter: &mut StopHookBlockCounter,
     compaction_config: &CompactionConfig,
+    reflection: &mut TurnState,
 ) -> Result<TurnSummary, RuntimeError> {
-    let mut assistant_messages = Vec::new();
-    let mut tool_results = Vec::new();
-    let mut iterations = 0;
+    // v2.2.17 (task #636): begin the reflection turn. Bumps the
+    // detector turn id (used for quiet-window suppression) and clears
+    // the per-turn scratchpad / pending pattern.
+    reflection.begin_turn();
+
+    let result = run_turn_inner_body(
+        session,
+        api_client,
+        tool_executor,
+        permission_policy,
+        system_prompt,
+        max_iterations,
+        usage_tracker,
+        hook_runner,
+        prompter,
+        reviewer,
+        auto_mode,
+        permission_memory,
+        cancel_token,
+        stop_hook_counter,
+        compaction_config,
+        reflection,
+    );
+
+    // v2.2.17 (task #636): end the reflection turn (clears scratchpad).
+    // Rolling window + pending pattern survive across turns by design —
+    // a stuck pattern detected on turn N must influence turn N+1.
+    reflection.end_turn();
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_turn_inner_body<C: ApiClient, T: ToolExecutor>(
+    session: &mut Session,
+    api_client: &mut C,
+    tool_executor: &mut T,
+    permission_policy: &PermissionPolicy,
+    system_prompt: &[PromptSection],
+    max_iterations: usize,
+    usage_tracker: &mut UsageTracker,
+    hook_runner: &HookRunner,
+    prompter: &mut Option<&mut dyn PermissionPrompter>,
+    reviewer: &Reviewer,
+    auto_mode: &AutoModeConfig,
+    permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
+    cancel_token: &Arc<AtomicBool>,
+    stop_hook_counter: &mut StopHookBlockCounter,
+    compaction_config: &CompactionConfig,
+    reflection: &mut TurnState,
+) -> Result<TurnSummary, RuntimeError> {
+    let mut assistant_messages: Vec<ConversationMessage> = Vec::new();
+    let mut tool_results: Vec<ConversationMessage> = Vec::new();
+    let mut iterations = 0_usize;
     // Task #564: per-turn counter of reactive compactions, capped by
     // `compaction_config.reactive_max_retries`.  Reset for every new
     // call to run_turn_inner.
@@ -63,6 +116,19 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             return Err(RuntimeError::new(
                 "conversation loop exceeded the maximum number of iterations",
             ));
+        }
+
+        // v2.2.17 (task #636): before the next inference call, drain any
+        // pending strategy reminder + scratchpad block and inject it as
+        // a user-role message. The model treats <system-reminder> tags
+        // as system framing; this is how we surface "you've been stuck
+        // and previously tried these things — try a different approach"
+        // without taking the autonomy axis away from the model.
+        let reminder = reflection.drain_reminder_for_next_call();
+        if !reminder.is_empty() {
+            session
+                .messages
+                .push(ConversationMessage::user_text(reminder));
         }
 
         let request = ApiRequest {
@@ -188,14 +254,32 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             durations_ms.push(elapsed_ms);
 
             // Determine success/failure from the result message.
-            let is_err = result_message
-                .blocks
-                .iter()
-                .any(|b| matches!(b, ContentBlock::ToolResult { is_error, .. } if *is_error));
+            let (is_err, error_output) = extract_tool_result_status(&result_message);
             if is_err {
                 failure_count += 1;
             } else {
                 success_count += 1;
+            }
+
+            // v2.2.17 (task #636): feed the reflection module. The
+            // detector consumes every event (so it can see error
+            // density across the rolling 20-event window); the
+            // scratchpad only sees failures (so the "previously
+            // tried" reminder lists dead ends only).
+            let touched_file = detect_touched_file(&tool_name, &input);
+            let reflection_error = if is_err { error_output.clone() } else { None };
+            reflection.observe_tool_event(ToolEvent::new(
+                tool_name.clone(),
+                &input,
+                reflection_error,
+                touched_file,
+            ));
+            if is_err {
+                reflection.record_failure(
+                    &tool_name,
+                    &input,
+                    error_output.as_deref().unwrap_or("(tool error)"),
+                );
             }
 
             // Emit tool_result event (no-op when OTel is disabled).
@@ -229,6 +313,48 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
         iterations,
         usage: usage_tracker.cumulative_usage(),
     })
+}
+
+/// Pull `is_error` and the error output text out of a tool result message,
+/// for both PostToolBatch accounting and reflection scratchpad feeding.
+fn extract_tool_result_status(msg: &ConversationMessage) -> (bool, Option<String>) {
+    for block in &msg.blocks {
+        if let ContentBlock::ToolResult { is_error, output, .. } = block {
+            return (*is_error, if *is_error { Some(output.clone()) } else { None });
+        }
+    }
+    (false, None)
+}
+
+/// Heuristic: infer the `touched_file` for the reflection detector's
+/// oscillation check. Only specific edit-shaped tools count — Bash /
+/// generic shell tools don't claim a single file even when they touch
+/// one, so the oscillation signal would be too noisy otherwise.
+///
+/// We try `serde_json` first (most edit tools serialize a JSON object
+/// with a `file_path` / `path` / `notebook_path` field); on parse failure
+/// we silently return `None`. Bad input is non-fatal for reflection —
+/// the observe_tool_event call still records the args hash + error so
+/// the other three detectors (ToolLoop, Thrashing, InferenceStall) work.
+fn detect_touched_file(tool_name: &str, input: &str) -> Option<PathBuf> {
+    let is_edit_shaped = matches!(
+        tool_name,
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" | "edit_file" | "write_file"
+    );
+    if !is_edit_shaped {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(input).ok()?;
+    let obj = value.as_object()?;
+    for key in ["file_path", "path", "notebook_path"] {
+        if let Some(s) = obj.get(key).and_then(serde_json::Value::as_str) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
 }
 
 /// Build a `ConversationMessage` from a stream of `AssistantEvent`s.

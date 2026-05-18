@@ -4559,8 +4559,6 @@ struct LiveCli {
     /// `.anvil/settings.json` so project-local hook paths resolve
     /// correctly. None until the first turn populates it.
     last_observed_cwd: Option<PathBuf>,
-    /// Task #636 (v2.2.17): autonomous reflection loop state.
-    reflection: runtime::reflection::TurnState,
 }
 
 impl LiveCli {
@@ -4650,7 +4648,6 @@ impl LiveCli {
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
             last_observed_cwd: None,
-            reflection: runtime::reflection::TurnState::with_defaults(),
         };
         // Publish initial cross-session snapshot now that the session id is
         // known.  Subsequent updates flow from AgentManager::spawn/poll.
@@ -6499,7 +6496,8 @@ impl LiveCli {
             }
             SlashCommand::Reflect { action } => {
                 runtime::reflection::otel_user_invoked();
-                let ts = &self.reflection;
+                let rt = self.active_runtime();
+                let ts = rt.reflection();
                 let msg = match action.as_deref() {
                     None | Some("status") => {
                         let det = ts.detector();

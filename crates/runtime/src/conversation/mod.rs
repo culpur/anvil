@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
-use crate::config::RuntimeFeatureConfig;
+use crate::config::{ReflectionConfig, RuntimeFeatureConfig};
 use crate::hooks::{
     CwdChangedPayload, HookRunResult, HookRunner, NotificationPayload,
 };
@@ -20,6 +20,7 @@ use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::auto_mode::AutoModeConfig;
 use crate::permissions::reviewer::Reviewer;
 use crate::prompt_section::PromptSection;
+use crate::reflection::{StuckDetectorConfig, TurnState};
 use crate::session::{ContentBlock, ConversationMessage, Session};
 use crate::usage::{TokenUsage, UsageTracker};
 
@@ -200,6 +201,11 @@ pub struct ConversationRuntime<C, T> {
     /// `CompactionConfig::default()`; hosts can replace it via
     /// [`Self::set_compaction_config`].
     compaction_config: CompactionConfig,
+    /// v2.2.17 (task #636): autonomous reflection loop state.
+    /// Singleton per `ConversationRuntime` — the rolling 20-event
+    /// stuck-detector window survives across turns while the per-turn
+    /// scratchpad is cleared at `end_turn`.
+    reflection: TurnState,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -281,6 +287,7 @@ where
         } else {
             None
         };
+        let reflection = build_turn_state_from_config(feature_config.reflection());
         Self {
             session,
             api_client,
@@ -296,6 +303,7 @@ where
             cancel_token: Arc::new(AtomicBool::new(false)),
             stop_hook_counter: crate::hooks::StopHookBlockCounter::default(),
             compaction_config: CompactionConfig::default(),
+            reflection,
         }
     }
 
@@ -310,6 +318,30 @@ where
     #[must_use]
     pub fn permission_memory(&self) -> Option<&Arc<Mutex<PermissionMemory>>> {
         self.permission_memory.as_ref()
+    }
+
+    /// v2.2.17 (task #636): read-only access to the per-conversation
+    /// reflection state. Slash handlers and the TUI status row read this
+    /// to surface the rolling window, the scratchpad, and the current
+    /// pending pattern (if any).
+    #[must_use]
+    pub const fn reflection(&self) -> &TurnState {
+        &self.reflection
+    }
+
+    /// Mutable access to the reflection state. Used by the slash command
+    /// handler (`/reflect`) and by hot-reload paths to re-apply a fresh
+    /// [`ReflectionConfig`] when settings.json changes.
+    pub fn reflection_mut(&mut self) -> &mut TurnState {
+        &mut self.reflection
+    }
+
+    /// Re-derive the reflection [`TurnState`] from a fresh
+    /// [`ReflectionConfig`]. Called by the CLI on settings.json hot-reload
+    /// so the new gate / thresholds apply on the next turn. Discards any
+    /// in-flight rolling-window state — the next turn starts clean.
+    pub fn refresh_reflection_from_config(&mut self, cfg: &ReflectionConfig) {
+        self.reflection = build_turn_state_from_config(cfg);
     }
 
     /// Clone of the per-runtime cancel flag. External code (TUI Ctrl+C
@@ -379,6 +411,7 @@ where
             &self.cancel_token,
             &mut self.stop_hook_counter,
             &self.compaction_config,
+            &mut self.reflection,
         )
     }
 
@@ -559,6 +592,23 @@ where
     pub fn run_notification_hooks(&self, payload: &NotificationPayload) -> HookRunResult {
         self.hook_runner.run_notification(payload)
     }
+}
+
+/// v2.2.17 (task #636): construct a [`TurnState`] from the settings.json
+/// [`ReflectionConfig`]. Threshold overrides feed into the
+/// [`StuckDetectorConfig`]; the `enabled` field is set verbatim.
+fn build_turn_state_from_config(cfg: &ReflectionConfig) -> TurnState {
+    let mut detector_cfg = StuckDetectorConfig::default();
+    if let Some(v) = cfg.stuck_threshold_calls() {
+        detector_cfg.stuck_threshold_calls = v;
+    }
+    if let Some(v) = cfg.stall_timeout_secs() {
+        detector_cfg.stall_timeout_secs = v;
+    }
+    if let Some(v) = cfg.quiet_window_turns() {
+        detector_cfg.quiet_window_turns = v;
+    }
+    TurnState::new(detector_cfg, cfg.enabled())
 }
 
 type ToolHandler = Box<dyn FnMut(&str) -> Result<String, ToolError>>;
@@ -1298,6 +1348,73 @@ mod tests {
         }
     }
 
+    // ─── Task #636 (v2.2.17): turn_executor + reflection wiring ──────────────
+
+    /// One-shot scripted API client: emits a single ToolUse on the first
+    /// call (with caller-controlled tool name / input), then a plain text
+    /// reply on the second call. Used by the wiring tests below so a
+    /// single tool outcome can be observed by the reflection module.
+    struct OneTurnToolClient {
+        tool_name: &'static str,
+        input: &'static str,
+        call_count: usize,
+    }
+
+    impl ApiClient for OneTurnToolClient {
+        fn stream(
+            &mut self,
+            _request: ApiRequest,
+        ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.call_count += 1;
+            match self.call_count {
+                1 => Ok(vec![
+                    AssistantEvent::ToolUse {
+                        id: format!("tu-{}", self.call_count),
+                        name: self.tool_name.to_string(),
+                        input: self.input.to_string(),
+                    },
+                    AssistantEvent::MessageStop,
+                ]),
+                _ => Ok(vec![
+                    AssistantEvent::TextDelta("done".to_string()),
+                    AssistantEvent::MessageStop,
+                ]),
+            }
+        }
+    }
+
+    /// Scripted client that emits THREE identical erroring tool calls, one
+    /// per turn-internal inference round, so the run-turn loop reaches a
+    /// ToolLoop stuck pattern. After the third tool call we end the model
+    /// reply with plain text so the loop terminates.
+    struct ThreeFailuresThenStopClient {
+        tool_name: &'static str,
+        input: &'static str,
+        call_count: usize,
+    }
+    impl ApiClient for ThreeFailuresThenStopClient {
+        fn stream(
+            &mut self,
+            _request: ApiRequest,
+        ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.call_count += 1;
+            match self.call_count {
+                1 | 2 | 3 => Ok(vec![
+                    AssistantEvent::ToolUse {
+                        id: format!("tu-{}", self.call_count),
+                        name: self.tool_name.to_string(),
+                        input: self.input.to_string(),
+                    },
+                    AssistantEvent::MessageStop,
+                ]),
+                _ => Ok(vec![
+                    AssistantEvent::TextDelta("giving up".to_string()),
+                    AssistantEvent::MessageStop,
+                ]),
+            }
+        }
+    }
+
     #[test]
     fn turn_loop_retries_after_reactive_compact() {
         use crate::compact::CompactionConfig;
@@ -1398,6 +1515,208 @@ mod tests {
         assert!(
             runtime.stop_hook_counter().blocks_seen() >= 2,
             "block counter should have recorded the blocks"
+        );
+    }
+
+    #[test]
+    fn turn_executor_records_failure_on_tool_error() {
+        let api = OneTurnToolClient {
+            tool_name: "Bash",
+            input: "rm -rf /missing",
+            call_count: 0,
+        };
+        let tools = StaticToolExecutor::new().register("Bash", |_input| {
+            Err(crate::conversation::ToolError::new("ENOENT: missing"))
+        });
+        let mut rt = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tools,
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        rt.run_turn("try it", None).expect("turn runs");
+
+        // Pending pattern survives across end_turn (rolling-window state),
+        // scratchpad is cleared at end_turn — so we verify by re-running
+        // begin_turn isn't necessary here. We just assert the rolling
+        // window saw the error.
+        let win = rt.reflection().detector().window();
+        assert_eq!(win.len(), 1, "window must see the tool event");
+        assert!(
+            win.iter().any(|e| e.is_error()),
+            "the recorded event must be an error",
+        );
+    }
+
+    #[test]
+    fn turn_executor_does_not_record_failure_on_tool_success() {
+        let api = OneTurnToolClient {
+            tool_name: "Bash",
+            input: "echo ok",
+            call_count: 0,
+        };
+        let tools = StaticToolExecutor::new()
+            .register("Bash", |_input| Ok("ok".to_string()));
+        let mut rt = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tools,
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        rt.run_turn("try it", None).expect("turn runs");
+
+        let win = rt.reflection().detector().window();
+        assert_eq!(win.len(), 1, "window sees the successful event");
+        assert!(
+            !win.iter().any(|e| e.is_error()),
+            "no event must be marked as an error on a successful tool call",
+        );
+        assert!(rt.reflection().pending_pattern().is_none());
+    }
+
+    #[test]
+    fn turn_executor_clears_scratchpad_at_turn_end() {
+        // After a tool failure during a turn, run_turn must call
+        // TurnState::end_turn() which clears the scratchpad. The rolling
+        // window persists across turns (by design) but scratchpad does
+        // not, so the next turn starts with a clean "Previously tried"
+        // block.
+        let api = OneTurnToolClient {
+            tool_name: "Bash",
+            input: "false",
+            call_count: 0,
+        };
+        let tools = StaticToolExecutor::new().register("Bash", |_input| {
+            Err(crate::conversation::ToolError::new("exit 1"))
+        });
+        let mut rt = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tools,
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        rt.run_turn("try it", None).expect("turn runs");
+        assert!(
+            rt.reflection().scratchpad().is_empty(),
+            "scratchpad must be cleared by end_turn after the run_turn returns",
+        );
+    }
+
+    #[test]
+    fn turn_executor_prepends_stuck_reminder_when_pattern_detected() {
+        // Three identical failing calls in the SAME turn → ToolLoop
+        // pattern detected → before the model's next inference call the
+        // run_turn loop drains the reminder and prepends it as a
+        // user-role message. We verify by inspecting the session's
+        // message history: a system-reminder user message must appear
+        // between the third tool-result and the final "giving up"
+        // assistant reply.
+        let api = ThreeFailuresThenStopClient {
+            tool_name: "Bash",
+            input: "false",
+            call_count: 0,
+        };
+        let tools = StaticToolExecutor::new().register("Bash", |_input| {
+            Err(crate::conversation::ToolError::new("exit 1"))
+        });
+        let mut rt = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tools,
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        rt.run_turn("retry retry retry", None).expect("turn runs");
+
+        // The injected reminder lives as a user-role message containing
+        // "<system-reminder>" + "Stuck pattern detected".
+        let session = rt.session();
+        let saw_reminder = session.messages.iter().any(|m| {
+            m.role == MessageRole::User
+                && m.blocks.iter().any(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        text.contains("<system-reminder>")
+                            && text.contains("Stuck pattern detected")
+                    } else {
+                        false
+                    }
+                })
+        });
+        assert!(
+            saw_reminder,
+            "expected a user-role <system-reminder> with 'Stuck pattern detected' \
+             after three identical failing tool calls in the same turn"
+        );
+    }
+
+    #[test]
+    fn three_failing_tool_calls_in_one_session_trigger_stuck_reminder_in_next_inference() {
+        // End-to-end: drives ConversationRuntime::run_turn through three
+        // erroring Bash invocations and verifies the strategy reminder
+        // surfaces before the fourth inference. Mirrors the integration
+        // path the production CLI uses (build_runtime_with_tui_slot ->
+        // run_turn) minus the TUI / wire-format machinery.
+        let api = ThreeFailuresThenStopClient {
+            tool_name: "Bash",
+            input: "ls /nope",
+            call_count: 0,
+        };
+        let tools = StaticToolExecutor::new().register("Bash", |_input| {
+            Err(crate::conversation::ToolError::new("ENOENT"))
+        });
+        let mut rt = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tools,
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+
+        let summary = rt
+            .run_turn("ls the missing dir", None)
+            .expect("turn must run end-to-end");
+
+        // Three iterations of tool_use happened in this turn.
+        // (The fourth iteration is the bail-out assistant text.)
+        assert!(
+            summary.tool_results.len() >= 3,
+            "expected at least 3 tool result messages, got {}",
+            summary.tool_results.len()
+        );
+
+        // After three identical errors the detector must have either
+        // observed all three errors in the rolling window OR fired a
+        // pattern (which would have been drained into a user-role
+        // system-reminder injected just before the fourth stream call).
+        let win_errs = rt
+            .reflection()
+            .detector()
+            .window()
+            .iter()
+            .filter(|e| e.is_error())
+            .count();
+        assert!(
+            win_errs >= 3,
+            "rolling window must contain at least 3 error events, got {win_errs}"
+        );
+
+        let saw_reminder = rt.session().messages.iter().any(|m| {
+            m.role == MessageRole::User
+                && m.blocks.iter().any(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        text.contains("<system-reminder>")
+                    } else {
+                        false
+                    }
+                })
+        });
+        assert!(
+            saw_reminder,
+            "the strategy reminder must have been injected as a user-role \
+             <system-reminder> before the next inference call",
         );
     }
 }
