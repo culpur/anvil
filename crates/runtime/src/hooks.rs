@@ -183,6 +183,81 @@ pub fn extract_terminal_sequence(stdout: &str) -> Result<Option<String>, String>
     validate_terminal_sequence(raw).map(|_| Some(raw.to_string()))
 }
 
+/// Sink trait for delivering a hook-emitted terminal-control sequence to
+/// the user's terminal. Implementations decide how to route the bytes:
+///
+/// - **Headless** (no TUI): write directly to stdout (the default sink
+///   when nothing else is installed).
+/// - **TUI active**: queue the bytes through the TUI's redraw pipeline so
+///   the alt-screen back-buffer stays consistent (must not bypass ratatui
+///   while the alt-screen owns the terminal).
+///
+/// The runtime owns no terminal state; the CLI host installs a sink via
+/// `set_terminal_sequence_sink` at startup so [`run_command`] /
+/// [`run_exec`] can deliver bytes without dragging crossterm into the
+/// runtime crate.
+pub trait TerminalSequenceSink: Send + Sync {
+    /// Deliver `sequence` to the terminal.  The bytes are guaranteed by
+    /// [`validate_terminal_sequence`] to begin with one of the
+    /// allow-listed prefixes (`\x07`, `\x1b]9;`, `\x1b]777;`).
+    fn emit(&self, sequence: &str);
+}
+
+/// Default headless sink: writes raw bytes to stdout via the libc-level
+/// file descriptor so it never goes through `println!`.  This is the
+/// sink in effect when no other sink has been installed and matches the
+/// headless contract (stdout is fine when no TUI owns the terminal).
+struct StdoutTerminalSequenceSink;
+
+impl TerminalSequenceSink for StdoutTerminalSequenceSink {
+    fn emit(&self, sequence: &str) {
+        // SAFE: stdout writes are the right sink in headless mode.  We
+        // route through `io::stdout()` rather than `println!` so the bytes
+        // are emitted verbatim (no trailing newline) and the call site is
+        // grep-able for the task #556 audit.
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(sequence.as_bytes());
+        let _ = out.flush();
+    }
+}
+
+static TERMINAL_SEQUENCE_SINK: std::sync::OnceLock<
+    std::sync::RwLock<std::sync::Arc<dyn TerminalSequenceSink>>,
+> = std::sync::OnceLock::new();
+
+fn terminal_sequence_sink_slot()
+    -> &'static std::sync::RwLock<std::sync::Arc<dyn TerminalSequenceSink>>
+{
+    TERMINAL_SEQUENCE_SINK.get_or_init(|| {
+        std::sync::RwLock::new(
+            std::sync::Arc::new(StdoutTerminalSequenceSink) as std::sync::Arc<dyn TerminalSequenceSink>,
+        )
+    })
+}
+
+/// Install a custom terminal-sequence sink.  Called once at CLI startup
+/// to route hook-emitted bytes through the TUI's redraw pipeline (when a
+/// TUI is active) or through any other host-specific routing.
+///
+/// Replaces any previously installed sink.
+pub fn set_terminal_sequence_sink(sink: std::sync::Arc<dyn TerminalSequenceSink>) {
+    let slot = terminal_sequence_sink_slot();
+    if let Ok(mut guard) = slot.write() {
+        *guard = sink;
+    }
+}
+
+/// Emit a validated hook terminal sequence through the installed sink.
+/// Bytes that didn't pass [`validate_terminal_sequence`] never reach this
+/// function — the call site checks first and logs a warning on rejection.
+fn dispatch_terminal_sequence(sequence: &str) {
+    let slot = terminal_sequence_sink_slot();
+    if let Ok(guard) = slot.read() {
+        guard.emit(sequence);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
     PreToolUse,
@@ -1177,8 +1252,17 @@ impl HookRunner {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                // Task #556: pull `terminalSequence` out of hook stdout JSON
+                // (if any) and route it through the installed sink.  Invalid
+                // sequences surface as a warning message that is appended to
+                // the hook's outcome below.
+                let terminal_sequence_warning = process_terminal_sequence_from_stdout(
+                    &stdout,
+                    request.event,
+                    command,
+                );
                 let message = (!stdout.is_empty()).then_some(stdout);
-                match output.status.code() {
+                let outcome = match output.status.code() {
                     Some(0) => HookCommandOutcome::Allow { message },
                     Some(2) => HookCommandOutcome::Deny { message },
                     Some(code) => HookCommandOutcome::Warn {
@@ -1196,7 +1280,8 @@ impl HookRunner {
                             request.tool_name
                         ),
                     },
-                }
+                };
+                append_terminal_sequence_warning(outcome, terminal_sequence_warning)
             }
             Err(error) => HookCommandOutcome::Warn {
                 message: format!(
@@ -1280,8 +1365,12 @@ impl HookRunner {
         };
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // Task #556: pull `terminalSequence` out of hook stdout JSON (if
+        // any) and route it through the installed sink.
+        let terminal_sequence_warning =
+            process_terminal_sequence_from_stdout(&stdout, request.event, program);
         let message = (!stdout.is_empty()).then_some(stdout);
-        match output.status.code() {
+        let outcome = match output.status.code() {
             Some(0) => HookCommandOutcome::Allow { message },
             Some(2) => HookCommandOutcome::Deny { message },
             Some(code) => HookCommandOutcome::Warn {
@@ -1294,7 +1383,61 @@ impl HookRunner {
                     request.tool_name
                 ),
             },
+        };
+        append_terminal_sequence_warning(outcome, terminal_sequence_warning)
+    }
+}
+
+/// Extract a `terminalSequence` value from hook stdout JSON, emit it
+/// through the installed sink if valid, and return a warning string when
+/// the value was present but rejected by the allow-list.  `Ok(None)`
+/// branches (no field present, non-JSON stdout, valid + dispatched) all
+/// return `None`.
+fn process_terminal_sequence_from_stdout(
+    stdout: &str,
+    event: HookEvent,
+    source: &str,
+) -> Option<String> {
+    match extract_terminal_sequence(stdout) {
+        Ok(Some(seq)) => {
+            dispatch_terminal_sequence(&seq);
+            None
         }
+        Ok(None) => None,
+        Err(reason) => Some(format!(
+            "{} hook `{source}` terminalSequence dropped: {reason}",
+            event.as_str()
+        )),
+    }
+}
+
+/// Fold a terminal-sequence allow-list warning into an existing outcome.
+/// `Allow` outcomes upgrade to `Warn`; `Deny` outcomes pick up an
+/// appended note in their message; `Warn` outcomes concatenate.
+fn append_terminal_sequence_warning(
+    outcome: HookCommandOutcome,
+    warning: Option<String>,
+) -> HookCommandOutcome {
+    let Some(warning) = warning else {
+        return outcome;
+    };
+    match outcome {
+        HookCommandOutcome::Allow { message } => {
+            let combined = match message {
+                Some(m) if !m.is_empty() => format!("{m}\n{warning}"),
+                _ => warning,
+            };
+            HookCommandOutcome::Warn { message: combined }
+        }
+        HookCommandOutcome::Deny { message } => HookCommandOutcome::Deny {
+            message: Some(match message {
+                Some(m) if !m.is_empty() => format!("{m}\n{warning}"),
+                _ => warning,
+            }),
+        },
+        HookCommandOutcome::Warn { message } => HookCommandOutcome::Warn {
+            message: format!("{message}\n{warning}"),
+        },
     }
 }
 
@@ -2070,6 +2213,139 @@ mod tests {
         let stdout = "{\"terminalSequence\":\"\\u001b[2J\"}";
         let result = extract_terminal_sequence(stdout);
         assert!(result.is_err(), "must reject \\x1b[2J (screen clear)");
+    }
+
+    // ─── Task #556: terminal sequence sink wiring through run_command ────────
+
+    /// In-process sink that records every emit() call so tests can assert
+    /// what reached the terminal (without actually writing to stdout).
+    struct RecordingTerminalSink {
+        bytes: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl super::TerminalSequenceSink for RecordingTerminalSink {
+        fn emit(&self, sequence: &str) {
+            self.bytes
+                .lock()
+                .expect("sink lock")
+                .push(sequence.to_string());
+        }
+    }
+
+    impl RecordingTerminalSink {
+        fn new() -> std::sync::Arc<Self> {
+            std::sync::Arc::new(Self {
+                bytes: std::sync::Mutex::new(Vec::new()),
+            })
+        }
+
+        fn snapshot(&self) -> Vec<String> {
+            self.bytes.lock().expect("sink lock").clone()
+        }
+    }
+
+    /// Headless path: hook prints `{"terminalSequence":"<OSC9 ...>"}` and
+    /// the runtime routes those bytes through the installed sink (which
+    /// stands in for "stdout when no TUI is active").
+    #[test]
+    #[serial_test::serial(terminal_sequence_sink)]
+    fn terminal_sequence_emitted_on_headless() {
+        let sink = RecordingTerminalSink::new();
+        super::set_terminal_sequence_sink(sink.clone());
+
+        // OSC 9 desktop-notification payload printed as JSON by a hook.
+        // ]9;build-done in the JSON string, which extract_*
+        // decodes back to the raw ESC]9;...\x07 bytes.
+        let runner = HookRunner::new(RuntimeHookConfig::new(
+            vec![HookSpec::Command(shell_snippet(
+                "cat <<'EOF'\n{\"terminalSequence\":\"\\u001b]9;build-done\\u0007\"}\nEOF",
+            ))],
+            Vec::new(),
+        ));
+        let _ = runner.run_pre_tool_use("Read", r#"{"path":"README.md"}"#);
+
+        let captured = sink.snapshot();
+        assert_eq!(captured.len(), 1, "exactly one terminalSequence dispatched");
+        assert!(
+            captured[0].starts_with("\x1b]9;"),
+            "OSC9 prefix expected, got {:?}",
+            captured[0]
+        );
+        assert!(captured[0].ends_with('\x07'));
+
+        // Re-install the default sink so the global slot doesn't leak a
+        // recording sink to unrelated tests in this run.
+        super::set_terminal_sequence_sink(
+            std::sync::Arc::new(super::StdoutTerminalSequenceSink),
+        );
+    }
+
+    /// TUI path: a custom sink stands in for "queue through the TUI's
+    /// redraw pipeline". The sink receives the bytes; nothing is written
+    /// to stdout directly by run_command.  Verifies that custom sinks are
+    /// honored and that the runtime never bypasses them.
+    #[test]
+    #[serial_test::serial(terminal_sequence_sink)]
+    fn terminal_sequence_queued_through_tui_channel_when_tui_active() {
+        let tui_sink = RecordingTerminalSink::new();
+        super::set_terminal_sequence_sink(tui_sink.clone());
+
+        let runner = HookRunner::new(RuntimeHookConfig::new(
+            vec![HookSpec::Command(shell_snippet(
+                // BEL alone — valid by allow-list.
+                "cat <<'EOF'\n{\"terminalSequence\":\"\\u0007\"}\nEOF",
+            ))],
+            Vec::new(),
+        ));
+        let result = runner.run_pre_tool_use("Read", r#"{"path":"README.md"}"#);
+
+        assert!(!result.is_denied(), "hook should not deny");
+        let captured = tui_sink.snapshot();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0], "\x07", "BEL byte routed to TUI sink verbatim");
+
+        super::set_terminal_sequence_sink(
+            std::sync::Arc::new(super::StdoutTerminalSequenceSink),
+        );
+    }
+
+    /// Runtime rejection path: a hook that tries to emit a disallowed CSI
+    /// (e.g. `\x1b[2J` screen clear) must NOT dispatch the bytes through
+    /// the sink, and the outcome must carry a warning message naming the
+    /// rejection.  Guards against allow-list bypass.
+    #[test]
+    #[serial_test::serial(terminal_sequence_sink)]
+    fn terminal_sequence_rejected_for_disallowed_csi_at_runtime() {
+        let sink = RecordingTerminalSink::new();
+        super::set_terminal_sequence_sink(sink.clone());
+
+        let runner = HookRunner::new(RuntimeHookConfig::new(
+            vec![HookSpec::Command(shell_snippet(
+                // ESC[2J — full-screen clear — must be rejected.
+                "cat <<'EOF'\n{\"terminalSequence\":\"\\u001b[2J\"}\nEOF",
+            ))],
+            Vec::new(),
+        ));
+        let result = runner.run_pre_tool_use("Read", r#"{"path":"README.md"}"#);
+
+        assert!(
+            sink.snapshot().is_empty(),
+            "disallowed sequence must NOT reach the sink"
+        );
+        // The runtime upgrades a successful-but-bad-payload hook to a
+        // warning so the user can see the rejection.
+        assert!(
+            result
+                .messages()
+                .iter()
+                .any(|m| m.contains("terminalSequence dropped")),
+            "expected rejection warning, got: {:?}",
+            result.messages()
+        );
+
+        super::set_terminal_sequence_sink(
+            std::sync::Arc::new(super::StdoutTerminalSequenceSink),
+        );
     }
 
     #[test]
