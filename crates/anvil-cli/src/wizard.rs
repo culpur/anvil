@@ -273,17 +273,12 @@ impl WizardTuiAnswers {
     }
 }
 
-/// Drive the four TUI-config modal steps inside a single alt-screen
-/// session. Returns the captured answers, or `Err` if the session
-/// could not enter alt-screen (e.g. non-TTY stdout). On any per-step
-/// cancel (Esc) the corresponding field falls back to the
-/// cross-platform default.
-///
-/// The session enters alt-screen exactly once at the start, renders a
-/// banner + 4 modals back-to-back without returning to inline mode,
-/// then exits alt-screen exactly once at `Drop`. See
-/// `feedback-tui-flash-anti-pattern.md` (#622) — the single-session
-/// design is the user-visible guarantee that there is no flicker.
+/// Legacy: drive only the four TUI-config modal steps inside a single
+/// alt-screen session. Superseded by `run_post_auth_modals_in_alt_screen`
+/// (task #642) which extends the same single-session design to steps
+/// 4..8.  Retained as a fallback for tools that need only the layout +
+/// preference slice and as the regression contract for #579/#622.
+#[allow(dead_code)]
 pub(crate) fn run_tui_config_modals_in_alt_screen() -> Result<WizardTuiAnswers, RunnerError> {
     use crate::tui::modals::ConfirmChoice;
     use crate::tui::modals::confirm::ConfirmModal;
@@ -405,6 +400,212 @@ pub(crate) fn run_tui_config_modals_in_alt_screen() -> Result<WizardTuiAnswers, 
     // emitted by `WizardSession::drop`. The runner only borrows the
     // session, so its scope-end is implicit.
     Ok(answers)
+}
+
+/// Drive **all** modal-friendly wizard steps inside a single alt-screen
+/// session. Returns the captured answers on success. The OAuth step is
+/// handled by the caller via the inline path BEFORE this function is
+/// invoked — steps 4..8 run unified inside one alt-screen.
+///
+/// Step layout inside this single session:
+///   - Banner: "Step 4 of 8 — Default Model" → ChoiceModal
+///   - Banner: "Step 5 of 8 — Ollama Endpoint" → TextInputModal
+///   - Banner: "Step 6 of 8 — Profile" → TextInputModal
+///   - Banner: "Step 7 of 8 — TUI Layout" → ChoiceModal + ConfirmModal
+///   - Banner: "Step 8 of 8 — TUI Preferences" → ConfirmModal + 2 ChoiceModals
+///   - Banner: "Done — saving config"
+///
+/// Steps 1/2/3 run BEFORE this function via the inline + alt-screen
+/// mix in `run_first_run_wizard` — vault password capture uses
+/// `run_password_capture` against its own session; provider choice
+/// uses its own session; OAuth uses the existing stdin-based flow.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_post_auth_modals_in_alt_screen(
+    model_candidates: &[(String, String)],
+) -> Result<(String, String, String, WizardTuiAnswers), RunnerError> {
+    use crate::tui::modals::ConfirmChoice;
+    use crate::tui::modals::confirm::ConfirmModal;
+    use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
+    use crate::tui::modals::text_input::TextInputModal;
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use std::time::Duration;
+
+    let backend = CrosstermBackend::new(io::stdout());
+    let terminal = Terminal::new(backend).map_err(|e| RunnerError::Enter(e.to_string()))?;
+    let mut session = WizardSession::enter(terminal, CrosstermHooks::new())?;
+
+    let keys = CrosstermKeySource {
+        poll_timeout: Duration::from_millis(50),
+    };
+    let mut runner = WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
+
+    // ── Step 4: Default Model ────────────────────────────────────────────
+    runner.session.render_banner(
+        "Step 4 of 8 — Default Model",
+        &[
+            "Pick the model Anvil uses by default. Change later with /model.",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let chosen_model = if model_candidates.is_empty() {
+        DEFAULT_MODEL.to_string()
+    } else {
+        let labels: Vec<String> = model_candidates
+            .iter()
+            .map(|(id, label)| format!("{id}  ({label})"))
+            .collect();
+        let modal = WizardChoiceModal::new("Default Model", labels);
+        let ans = runner.run_choice("step4-model", modal)?;
+        match ans {
+            ModalAnswer::Choice(idx) if idx < model_candidates.len() => {
+                model_candidates[idx].0.clone()
+            }
+            _ => model_candidates
+                .first()
+                .map(|(id, _)| id.clone())
+                .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        }
+    };
+
+    // ── Step 5: Ollama Endpoint ──────────────────────────────────────────
+    runner.session.render_banner(
+        "Step 5 of 8 — Ollama Endpoint",
+        &[
+            "Local Ollama URL. Press Enter to accept the default.",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let ollama_modal = TextInputModal::new("Ollama URL", "Endpoint")
+        .with_default("http://localhost:11434");
+    let ollama_url = match runner.run_text_input("step5-ollama-url", ollama_modal)? {
+        ModalAnswer::TextInput(v) => v,
+        _ => "http://localhost:11434".to_string(),
+    };
+
+    // ── Step 6: Profile Name ─────────────────────────────────────────────
+    runner.session.render_banner(
+        "Step 6 of 8 — Profile",
+        &[
+            "Name this Anvil profile. Switch later with `anvil --profile <name>`.",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let profile_modal = TextInputModal::new("Profile name", "Profile")
+        .with_default("default");
+    let profile_name = match runner.run_text_input("step6-profile", profile_modal)? {
+        ModalAnswer::TextInput(v) => v,
+        _ => "default".to_string(),
+    };
+
+    // ── Step 7: TUI Layout ───────────────────────────────────────────────
+    runner.session.render_banner(
+        "Step 7 of 8 — TUI Layout",
+        &[
+            "Pick your default workspace architecture and tab visibility.",
+            "Live previews: https://anvilhub.culpur.net/tui-preview",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let mut tui_answers = WizardTuiAnswers::defaults();
+
+    let layout_kind_modal = WizardChoiceModal::new(
+        "TUI Layout — pick architecture",
+        vec![
+            "Vertical Split  (default — sessions rail + swappable deck)".into(),
+            "Classic         (single-deck, pre-v2.2.16)".into(),
+            "Three-Pane      (FOCUS / LOG / CONTEXT)".into(),
+            "Journal         (timestamped column, Ctrl-K palette)".into(),
+        ],
+    );
+    let layout_kind_answer = runner.run_choice("step7-layout-kind", layout_kind_modal)?;
+    tui_answers.layout_kind = match layout_kind_answer {
+        ModalAnswer::Choice(0) => "vertical-split".to_string(),
+        ModalAnswer::Choice(1) => "classic".to_string(),
+        ModalAnswer::Choice(2) => "three-pane".to_string(),
+        ModalAnswer::Choice(3) => "journal".to_string(),
+        _ => "vertical-split".to_string(),
+    };
+
+    let layout_tabs_modal = ConfirmModal::new(
+        "Show workspace tabs?",
+        "Tabs let you keep multiple parallel sessions visible at once. \
+         Default = yes; press n / Esc for a single-session layout.",
+    );
+    let layout_tabs_answer = runner.run_confirm("step7-layout-tabs", layout_tabs_modal)?;
+    tui_answers.layout_tabs = matches!(
+        layout_tabs_answer,
+        ModalAnswer::Confirm(ConfirmChoice::Yes)
+    );
+
+    // ── Step 8: TUI Preferences ──────────────────────────────────────────
+    runner.session.render_banner(
+        "Step 8 of 8 — TUI Preferences",
+        &[
+            "Mouse capture, theme, and default permission mode.",
+            "Change any of these later with /config or settings.json.",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    let mouse_modal = ConfirmModal::new(
+        "Enable mouse capture?",
+        "Default OFF. With capture OFF your terminal owns the mouse: \
+         drag-to-select + native copy work everywhere. With capture ON, \
+         Anvil intercepts mouse events for clickable tabs + wheel-scroll, \
+         but you must hold a modifier (Option on macOS, Shift elsewhere) \
+         to select text. Press y to opt in, n / Esc to keep the default.",
+    );
+    let mouse_answer = runner.run_confirm("step8-mouse", mouse_modal)?;
+    tui_answers.mouse_capture = matches!(
+        mouse_answer,
+        ModalAnswer::Confirm(ConfirmChoice::Yes)
+    );
+
+    let theme_modal = WizardChoiceModal::new(
+        "Theme",
+        vec![
+            "Dark   (default)".into(),
+            "Light".into(),
+            "Auto   (follow terminal background detection)".into(),
+        ],
+    );
+    let theme_answer = runner.run_choice("step8-theme", theme_modal)?;
+    tui_answers.theme = match theme_answer {
+        ModalAnswer::Choice(1) => "light".to_string(),
+        ModalAnswer::Choice(2) => "auto".to_string(),
+        _ => "dark".to_string(),
+    };
+
+    let perm_modal = WizardChoiceModal::new(
+        "Default permission mode",
+        vec![
+            "ask                  (confirm each tool call — safest, default)".into(),
+            "workspace-write      (auto-allow edits inside the workspace)".into(),
+            "danger-full-access   (no prompts — high trust required)".into(),
+        ],
+    );
+    let perm_answer = runner.run_choice("step8-perm", perm_modal)?;
+    tui_answers.permission_mode = match perm_answer {
+        ModalAnswer::Choice(1) => "workspace-write".to_string(),
+        ModalAnswer::Choice(2) => "danger-full-access".to_string(),
+        _ => "ask".to_string(),
+    };
+
+    // ── Final banner ─────────────────────────────────────────────────────
+    runner.session.render_banner(
+        "Done — saving config",
+        &[
+            "Writing config.json + finalizing setup...",
+        ],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    Ok((chosen_model, ollama_url, profile_name, tui_answers))
 }
 
 /// Stdin fallback for the TUI-config steps. Used when stdout is not a
@@ -940,36 +1141,9 @@ pub(crate) fn run_first_run_wizard() {
         }
     };
 
-    // Default model selection.
-    let chosen_model: String = if model_candidates.is_empty() {
-        DEFAULT_MODEL.to_string()
-    } else {
-        println!();
-        println!("  Select your default model:");
-        let mut unique_models: Vec<(String, String)> = Vec::new();
-        let mut seen_ids = std::collections::HashSet::new();
-        for (id, label) in &model_candidates {
-            if seen_ids.insert(id.clone()) {
-                unique_models.push((id.clone(), label.clone()));
-            }
-        }
-        for (i, (id, label)) in unique_models.iter().enumerate() {
-            println!("    [{}] {} ({})", i + 1, id, label);
-        }
-        println!();
-        let model_choice = wizard_read_line("  Choice: ");
-        if let Ok(n) = model_choice.parse::<usize>() {
-            if n >= 1 && n <= unique_models.len() {
-                unique_models[n - 1].0.clone()
-            } else {
-                unique_models[0].0.clone()
-            }
-        } else {
-            unique_models[0].0.clone()
-        }
-    };
-
-    // Thinking mode toggle
+    // Thinking mode toggle (kept on the inline path — small choice, no
+    // need to bring up alt-screen just for this; the alt-screen comes
+    // up below for steps 4..8).
     println!();
     println!("  \x1b[1;33mEnable Thinking Mode?\x1b[0m");
     println!("  Some models (Qwen3, Claude, o3) support extended thinking/reasoning.");
@@ -982,7 +1156,7 @@ pub(crate) fn run_first_run_wizard() {
     let thinking_enabled =
         think_choice.trim() == "1" || think_choice.trim().to_lowercase() == "yes";
     if thinking_enabled {
-        println!("  \x1b[32m✓\x1b[0m Thinking mode enabled. Toggle anytime with /think");
+        println!("  \x1b[32m\u{2713}\x1b[0m Thinking mode enabled. Toggle anytime with /think");
     } else {
         println!("  Thinking mode off. Toggle anytime with /think");
     }
@@ -992,32 +1166,91 @@ pub(crate) fn run_first_run_wizard() {
         .cloned()
         .unwrap_or_else(|| "anthropic".to_string());
 
-    // ── Steps 7 + 8: TUI Layout + Preferences (single alt-screen session) ───
+    // Deduplicate model candidates while preserving order.
+    let mut unique_models: Vec<(String, String)> = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+    for (id, label) in &model_candidates {
+        if seen_ids.insert(id.clone()) {
+            unique_models.push((id.clone(), label.clone()));
+        }
+    }
+
+    // ── Steps 4 → 8: model + ollama + profile + TUI prefs (single alt-screen) ─
     //
-    // Task #579 v2.2.17 finisher: the four TUI-config prompts (layout
-    // architecture, layout tabs, mouse capture, theme, permission mode)
+    // Task #642 (v2.2.17 finisher): the model picker, Ollama URL,
+    // profile name, layout, mouse capture, theme and permission mode all
     // render as in-TUI modals inside a SINGLE alt-screen session — the
-    // user sees no flicker, no inline transitions, and a single
-    // EnterAlternateScreen / LeaveAlternateScreen pair for the whole
-    // chunk. See `feedback-tui-flash-anti-pattern.md` (#622).
+    // user sees one banner transition between steps and the terminal
+    // never returns to inline mode.  See `feedback-tui-flash-anti-pattern.md`
+    // (#622) and `feedback-cross-platform-ux-defaults.md` (#623).
     //
-    // Provider OAuth + vault password steps above intentionally stay on
-    // the stdin path per #578 / #627 exception — those need stdin echo
-    // control ratatui's alt-screen cannot replicate.
+    // Steps 1 (vault password), 2 (provider catalogue) and 3 (OAuth)
+    // above run on the inline + per-step alt-screen path —
+    // OAuth still drops to stdin per #578 exception because the
+    // existing `run_anthropic_login` infrastructure prompts on stdin
+    // for the manual paste fallback. The remaining alt-screen-friendly
+    // steps are unified here.
     //
     // Fallback: when stdout is not a TTY (CI / piped input), drop back
     // to the stdin path so existing wizard-fed scripts keep working.
-    let tui_answers = if io::stdout().is_terminal() {
-        match run_tui_config_modals_in_alt_screen() {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("  Note: alt-screen unavailable ({e}); falling back to stdin prompts.");
-                run_tui_config_via_stdin()
+    let (chosen_model, ollama_url_modal, _profile_name, tui_answers) =
+        if io::stdout().is_terminal() {
+            match run_post_auth_modals_in_alt_screen(&unique_models) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("  Note: alt-screen unavailable ({e}); falling back to stdin prompts.");
+                    let m = if unique_models.is_empty() {
+                        DEFAULT_MODEL.to_string()
+                    } else {
+                        unique_models[0].0.clone()
+                    };
+                    let answers = run_tui_config_via_stdin();
+                    (
+                        m,
+                        ollama_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
+                        "default".to_string(),
+                        answers,
+                    )
+                }
             }
-        }
-    } else {
-        run_tui_config_via_stdin()
-    };
+        } else {
+            // Stdin fallback: ask the model + profile questions inline
+            // (steps 5 + 6 already had a URL captured during step 2 if
+            // the user picked option 2/3 in the Ollama branch; otherwise
+            // we use the default).
+            let m = if unique_models.is_empty() {
+                DEFAULT_MODEL.to_string()
+            } else {
+                println!();
+                println!("  Select your default model:");
+                for (i, (id, label)) in unique_models.iter().enumerate() {
+                    println!("    [{}] {} ({})", i + 1, id, label);
+                }
+                let raw = wizard_read_line("  Choice [1]: ");
+                if let Ok(n) = raw.parse::<usize>() {
+                    if n >= 1 && n <= unique_models.len() {
+                        unique_models[n - 1].0.clone()
+                    } else {
+                        unique_models[0].0.clone()
+                    }
+                } else {
+                    unique_models[0].0.clone()
+                }
+            };
+            let url = wizard_read_line("  Ollama URL [http://localhost:11434]: ");
+            let url = if url.is_empty() {
+                ollama_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string())
+            } else {
+                url
+            };
+            let prof = wizard_read_line("  Profile name [default]: ");
+            let prof = if prof.is_empty() { "default".to_string() } else { prof };
+            let answers = run_tui_config_via_stdin();
+            (m, url, prof, answers)
+        };
+    // The modal-driven Ollama URL takes precedence over any URL captured
+    // during step 2 (if the user reconfigured at step 5).
+    let ollama_url = Some(ollama_url_modal);
 
     let layout_kind_str = tui_answers.layout_kind.as_str();
     let layout_tabs = tui_answers.layout_tabs;
