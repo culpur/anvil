@@ -121,7 +121,7 @@ surfaces:
       Newest version mention must be current. Additional manual checks NOT
       automated here (reviewer responsibility):
         - Quality bar test count card matches `cargo test --workspace` count
-        - Provider section card count == provider_label() unique count in
+        - Provider section card count == provider_display_name() unique count in
           crates/api/src/providers/mod.rs ProviderKind enum (canonical 35)
         - meta description has no "[&hellip;]" truncation
 
@@ -180,10 +180,10 @@ surfaces:
     type: cross_surface_invariant
     url: "(no single URL — see surfaces_touched in notes)"
     deploy_path: "crates/api/src/providers/mod.rs ProviderKind enum (source) + surfaces in notes"
-    verify_curl: "grep -oE 'provider_label.*=>.*\"[A-Z][a-zA-Z0-9 ]+\"' crates/api/src/providers/mod.rs 2>/dev/null | grep -oE '\"[A-Z][a-zA-Z0-9 ]+\"' | sort -u | wc -l | tr -d ' '"
+    verify_curl: "grep -oE 'ProviderKind::[A-Za-z0-9]+\\s*=>\\s*\"[^\"]+\"' crates/api/src/providers/mod.rs 2>/dev/null | awk -F'=>' '{print $2}' | sort -u | wc -l | tr -d ' '"
     verify_expect: ">= 1"
     notes: |
-      Canonical count = unique provider_label() outputs in ProviderKind enum.
+      Canonical count = unique provider_display_name() outputs in ProviderKind enum.
       Surfaces that claim a count and MUST match:
         - culpur.net/anvil (header + footer + card-grid count)
         - culpur/anvil README (badge + hero + body)
