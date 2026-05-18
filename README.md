@@ -77,84 +77,68 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
-## What's new in v2.2.16 &mdash; The TUI Layout System and the largest release in Anvil's history
+## What's new in v2.2.17 &mdash; The Setup Wizard, Reflection, Sandboxing, and the Source Viewer
 
-**v2.2.15 and v2.2.16 land as a single unified arc &mdash; 130+ commits since v2.2.13.** The TUI now has four selectable layout architectures with a new vertical-split rail as the default. The provider catalog grew six-fold. The seven-layer memory system from v2.2.5 cohesion-tests end-to-end. OAuth tokens stay alive in the background. Ctrl+C interrupts every provider mid-stream. Pasting images, documents, and text follows CC parity exactly. Two foundational arcs that started in v2.2.5 finish here.
+**v2.2.17 lands the new first-run wizard.** Welcome card &rarr; nine modal steps &rarr; zero-seam vault unlock &rarr; main TUI handoff &mdash; all inside a single alt-screen with one entry and one exit. OAuth waits stream the elapsed counter in real time, the CC migration step lives inside the wizard, and the grey font got bumped to a brighter readable RGB. Plus a new autonomous reflection loop, the sandbox-runner companion binary, an AnvilHub source viewer for every package, and a structural fix that prevents ratatui from ever leaving the rail blank again after a wizard exit.
 
-### TUI Layout System
+### The new setup wizard
 
-Four selectable architectures &times; tabs on/off = **eight live-switchable layouts**. The new default &mdash; **Vertical Split** &mdash; gives you a persistent left rail and a swappable right deck. The rail owns all the chrome: sessions, agents, status, **the 7-layer MEMORY surface**, model, permissions, context bar, keybinds, build, optional update banner. The right deck is conversation and input only.
+A single alt-screen owns the entire first-run experience. The welcome card explains what the wizard will do before it asks for anything. Nine modal steps follow &mdash; vault password, provider login, defaults &mdash; each with a tight per-step description so you always know why a question is being asked. OAuth callbacks now poll a 100&nbsp;ms timeout (was: blocking on keypress) so the elapsed counter ticks live and the callback completes the moment your browser redirects, no extra keystroke required.
 
-Classic, Three-Pane, and Journal stay one keystroke away. `/layout <alias>` switches the active tab; `/layout <alias> --global` writes the new default to `~/.anvil/config.json` for every new tab. `/layout list` shows what's available, `/layout reset` returns to the wizard pick. State survives the switch &mdash; log, input, model, in-flight turns &mdash; and the terminal clears so cells from the previous renderer don't bleed through.
+Step 9 is the CC migration handoff, also in-modal: import memory, instructions, settings, skills, plugins, sessions from `~/.claude` if present. When the wizard finishes it hands directly to the password modal for vault unlock, then drops into the TUI &mdash; one alt-screen, one teardown, zero seam.
 
-The MEMORY surface shows live counts for all seven memory layers (working / episodic / semantic / procedural / reflective / long-term / permission decisions) plus QMD archive status, polled every 30 seconds. Classic layout also gets an inline 7-layer MEMORY block above the input on terminals &ge; 30 rows tall. The split anchor is mouse-draggable. Migration is safe: anyone with an explicit `tui_layout` setting keeps it, and upgraders without the key see the new default with a one-time intro toast.
+### Autonomous reflection loop
 
-### Provider catalog: 5 &rarr; 31
+Long-running turns now get a stuck-detector. If a turn loops without progress, the reflection layer switches strategy and writes a multi-attempt scratchpad so the next iteration sees what didn't work. No more silent dead-ends in deep agent runs.
 
-Six became thirty-one. Every implementation either uses a documented public API or identifies as Anvil honestly in headers &mdash; **no IDE spoofing, no scraped credentials, no silent fallbacks.**
+### `anvil-sandbox-runner` companion binary
 
-- **AWS Bedrock** &mdash; hand-rolled SigV4 signing (no AWS SDK = ~50&nbsp;MB smaller binary), audited against AWS test vectors. `InvokeModel` + `InvokeModelWithResponseStream`.
-- **Google Gemini OAuth + Antigravity** &mdash; Code Assist OAuth with PKCE flow, dynamic-port localhost callback, atomic token save, pre-emptive refresh. Headers identify Anvil honestly &mdash; not VS Code.
-- **GitHub Copilot** &mdash; device flow.
-- **Azure OpenAI** &mdash; deployment-name + `api-version` URL pattern.
-- **Cursor Cloud Agents** &mdash; public API, repo-bound (see `/cursor` below).
-- **24 OpenAI-compatible providers** added in one cycle: Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together&nbsp;AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, OpenCode, OpenCode-Go.
+Hub-install detonation now runs in a separate binary so a malicious plugin cannot escape into the main anvil process. Ships alongside `anvil` on all seven platforms.
 
-`/provider login <slug>` runs the right flow for each: API-key paste with live validation for direct-key providers, OAuth PKCE for Google, device flow for Copilot, SigV4 for Bedrock.
+### AnvilHub source viewer
 
-### `/cursor` first-class command tree
+Every one of the 558 HubPackages now has a viewable source archive on `anvilhub.culpur.net`. A backfill seeded archives for all packages that were missing them, and `Documentation` tabs are populated for all 547 packages that had a NULL readme. Verified badges + AnvilHub-Official grants live across the catalog.
 
-Cursor's public Cloud Agents API is repo-bound and uses a different UX than a typical chat provider, so it gets its own command tree. Six TAB-completable subcommands:
+### TUI rendering &mdash; the rail-stays-paint fix
 
-- `/cursor launch <prompt>` &mdash; spawn an agent on the current workspace's GitHub repo, opens an SSE-streamed agent tab
-- `/cursor list` &mdash; show active agents with status, model, repo, branch
-- `/cursor get <agent_id>` &mdash; full agent record + recent runs
-- `/cursor cancel <agent_id> [<run_id>]` &mdash; terminate an in-flight run
-- `/cursor artifacts <agent_id>` &mdash; list and download generated files
-- `/cursor stream <agent_id> <run_id>` &mdash; re-attach to an SSE stream with `Last-Event-ID` resume
+`#648` traced a ratatui contract violation in the region-gated repaint optimization from `#574`. Layouts must paint every band every frame because `swap_buffers` zeros the inactive buffer between draws. All three layouts now always paint every region, with no perceptual cost &mdash; the cell-level frame diff still handles the actual terminal write economy.
 
-`git remote get-url origin` is mandatory &mdash; Cursor errors loudly if the current workspace isn't a GitHub repo.
+### TUI bug fixes &mdash; the long tail
 
-### `/model` cross-provider unified picker
+- Vertical-split rail no longer goes blank/garbage on first prompt after wizard exit (#648)
+- TUI flash on Gnome Terminal eliminated &mdash; unconditional full-screen `Clear()` widget gated on `DirtyRegions::ALL` (#622, #629). This was a photosensitivity hazard during streaming output.
+- Wizard mouse-capture default flipped to **off** so native text selection works cross-platform on Mac, Linux, and Windows Terminal (#623)
+- `/agent compose` and `/agent traits` rewired to push through the TUI &mdash; no more `println!` corrupting the alt-screen (#624). Cross-binary clippy lint `#![deny(clippy::print_stdout, clippy::print_stderr)]` prevents the regression (#626).
+- Shift+drag on vertical-split now selects deck text only, not the rail (#625)
+- Vertical-split rail keybinds (g / d / s / a / Ctrl+R) wired through (#634), plus a drift gate to keep them wired
 
-`/model<TAB>` enumerates **every configured provider's models in one list**, provider-prefixed (`anthropic/claude-4.5-sonnet`, `groq/llama-3.3-70b`, `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0`, `cursor/claude-4-sonnet-thinking`, `ollama/qwen-coder`, ...). Picking a model performs an **atomic switch** &mdash; provider routing, system prompt identity, and TUI chrome all update together. Lists are live-fetched from each provider's `/models` endpoint (cached per session). Unconfigured providers are excluded from the picker.
+### In-TUI ConfirmModal and PasswordModal
 
-### Memory Cohesion Arc &mdash; completing v2.2.5
+The two TUI primitives that bridge the wizard to the main session now have real in-screen modals. Vault unlock for returning users is a PasswordModal inside the existing alt-screen, not a CLI prompt. ConfirmModal supports the two-button confirmation pattern used by destructive actions.
 
-The seven-layer memory system from v2.2.5 (Sensory / Working / Episodic / Semantic / Procedural / Reflective / Long-term) cohesion-tests end-to-end. Retrieval-order block in the system prompt, `WorkingMemorySnapshot` as `Vec<PromptSection>`, `PermissionMemory` wired into the permission gate, `/file-cache` real handler replacing the stub, egress allowlist wired into settings + `/policy view`, `/memory why` actually injecting daily summaries into the prompt.
+### Reactive compaction and Stop hook
 
-### Capability Cohesion Arc &mdash; 8 axes, enforced at build time
+Reactive compaction now seeds its summary-size budget from the actual overflow delta, not a fixed token guess. `ANVIL_STOP_HOOK_BLOCK_CAP` caps Stop-hook blocking to prevent an infinite loop if a hook mis-fires.
 
-Every Anvil capability meets an 8-axis contract: **definition / registration / completion / handler / dispatch / rendering / permission gate / OTel + tests**. The cheap-drift gate enforces this at workspace build time &mdash; `every_slash_command_variant_has_a_spec` blocks bidirectional drift. Slash dispatch is unified at one site. Stub messages are banned.
+### Session and compaction polish
 
-### CC&rarr;Anvil migration
+`derive_title_from_first_message()` is now wired to the actual session auto-titling trigger. Hook paths refresh after `EnterWorktree` so PWD-relative hooks don't go stale. The welcome banner names the active provider, not hardcoded Anthropic, for 3P users.
 
-`anvil import claude-code` brings your prior assistant's investment forward verbatim with provenance frontmatter: memory entries get `imported_from` stamps, project instruction files get merge semantics that never clobber existing files, settings get conflict detection, skills get collision handling. Past sessions (up to ~1,800 JSONL files, ~1&nbsp;GB) can be optionally summarized via your configured provider into daily records. The day-2 command `anvil memory clean` rewrites imported entries through a configurable LLM and detects duplicate-meaning entries via Jaccard similarity. The first-run setup wizard offers migration as an opt-in step.
+### Quality bar
 
-### OAuth keep-alive
+Every TUI-touching file (cmd_provider, cmd_ai, cmd_static, providers, remote_control, tui/, utils, vault, commands/handlers, commands/skill_chaining) gets `#![deny(clippy::print_stdout, clippy::print_stderr)]`. 23 BUG sites fixed, full audit at `audit/println-tui-reachability-2026-05-18.md`. A regression test in `anvil-cli/src/tests.rs` blocks future drift. `release-surfaces.yaml` at repo root is the single source of truth for release surfaces; `scripts/verify-release-surfaces.sh` is the gate.
 
-A strict RFC 6749 token-exchange parser captures `scope` and `expires_in` on every refresh; legacy credentials with missing metadata are auto-migrated on startup. Three layers of keep-alive run in tandem: a 5-minute safety window prevents mid-flight expiry, a transparent 1-bounded retry on HTTP 401 reissues the failed request, and a background ticker proactively refreshes between `(expires_at - now) / 2` (clamped 60s &ndash; 30min). Refresh failures surface a TUI banner instead of crashing the session.
+### Cross-fleet ops
 
-### Paste parity &mdash; text, images, documents
+Passage prod migration unblocked: HAProxy patroni_rw routing wired, ownership reconciled (passage_dev/prod role rename across 63 prod tables), F1 prisma migrate green, sequential deploy clean. P0 incident closed: Patroni replication that had been silently dead since 2026-05-08 restored on f1+f2.
 
-Text, image, and document content blocks all route through one consolidated paste handler. File-path detection runs at both bracketed-paste **and** submit-time, which covers the macOS Terminal case where Cmd+V from Finder arrives as keystrokes rather than a paste event. Long pastes (more than 6 lines or 400 chars) collapse to a `[Pasted text #N +X lines, Y chars]` placeholder in history while the full content is preserved in the request. PDFs and Office docs route to first-class Anthropic `Document` content blocks with a 32&nbsp;MB cap. Drag-and-drop from Finder is detected by a keystroke-burst heuristic (20+ chars in 100ms followed by 50ms idle). Mouse capture is **off by default** so terminal-native click-drag selection and Cmd+C copy just work.
+### Compatibility
 
-### Ctrl+C aborts mid-stream &mdash; every provider
+Anvil v2.2.17 is a drop-in upgrade from v2.2.16. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. `anvil upgrade` works on every platform now (the Windows `windows-msvc` regression was fixed in v2.2.16).
 
-A single `tokio::select!` in `DefaultRuntimeClient::stream` aborts the blocking HTTP read on cancel, dropping the reqwest future so the underlying TCP connection tears down immediately. One Ctrl+C, one cancel message, no further tokens. Anthropic, OpenAI, xAI, Gemini, Copilot, Cursor, Ollama &mdash; all seven providers covered by one fix, end-to-end verified via wiremock integration tests.
+### Install
 
-### In-TUI modal OAuth login
-
-`/provider <name> login` no longer drops to the CLI for the OAuth dance. A six-screen modal handles auth-method picker, OAuth callback, API-key paste, multi-field setup, instructions, and result. Eliminates the terminal-state corruption the drop-to-CLI flow used to leave behind.
-
-### AnvilHub update probe
-
-The update check now hits `anvilhub.culpur.net/api/version` first (with a 24-hour on-disk cache at `~/.anvil/update_check.json`) and falls back to GitHub Releases on any non-200. The source is recorded in the cache so you can tell which probe served the result. The rail's `&uarr; update available` banner appears when the response is greater than the running build.
-
-### Seven platforms
-
-macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified at [anvilhub.culpur.net/sha256/](https://anvilhub.culpur.net/sha256/).
-
+Seven platforms, SHA256-verified, single binary, no runtime required.
 ---
 
 ## Parallel work, transparent tools
@@ -295,7 +279,29 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 ### v2.2.17 &mdash; May 18, 2026
 
-See the [release notes](https://github.com/culpur/anvil/releases/tag/v2.2.17) for full details.
+**The Setup Wizard, Reflection, Sandboxing, and the Source Viewer.**
+
+- &#10003; **New first-run wizard** &mdash; welcome card &rarr; nine modal steps &rarr; vault unlock &rarr; main TUI, all in one alt-screen. Per-step descriptions explain why each question is asked. OAuth waits poll on 100&nbsp;ms and stream the elapsed counter live. Step 9 is CC migration in-modal. Brighter grey font for modal text.
+- &#10003; **Autonomous reflection loop** &mdash; stuck-detector switches strategy and writes a multi-attempt scratchpad when a turn loops without progress.
+- &#10003; **`anvil-sandbox-runner` companion binary** &mdash; hub-install detonation runs in an isolated binary, shipped alongside `anvil` on all seven platforms.
+- &#10003; **AnvilHub source viewer** &mdash; every one of the 558 HubPackages has a viewable source archive; 547 packages got synthesized `Documentation` tabs from DB columns.
+- &#10003; **Vertical-split rail-stays-painted fix (#648)** &mdash; ratatui `swap_buffers` contract violation in the `#574` region-gated repaint surfaced as blank/garbage rails after wizard exit. All three layouts now always paint every region every frame.
+- &#10003; **TUI flash eliminated on Gnome Terminal/alacritty (#622, #629)** &mdash; full-screen `Clear()` is now gated on `DirtyRegions::ALL` and `commit_pending_redraw` no longer routes `TextDelta` through `terminal.clear()`. Photosensitivity hazard during streaming output resolved.
+- &#10003; **Wizard mouse-capture default OFF (#623)** &mdash; native text selection now works cross-platform. Banner is no longer Mac-only.
+- &#10003; **`/agent compose` + `/agent traits` rewired (#624)** &mdash; no more `println!` corrupting the alt-screen. 23 BUG sites fixed in the broader println audit (#626), with `#![deny(clippy::print_stdout, clippy::print_stderr)]` on every TUI-touching file and a regression test to block future drift.
+- &#10003; **In-TUI ConfirmModal + PasswordModal** &mdash; vault unlock for returning users is now a modal in the existing alt-screen, not a CLI prompt; ConfirmModal supports two-button destructive-action confirmation.
+- &#10003; **Vertical-split Shift+drag deck-only selection (#625)** &mdash; rail no longer comes along when you select conversation text.
+- &#10003; **Vertical-split rail keybinds wired (#634)** &mdash; g / d / s / a / Ctrl+R now work in the rail, with a drift gate to keep them wired.
+- &#10003; **Reactive compaction sizes from actual overflow (#564)** &mdash; summary-size budget is now seeded from the real overflow delta, not a fixed guess.
+- &#10003; **`ANVIL_STOP_HOOK_BLOCK_CAP` (#566)** &mdash; caps Stop-hook blocking to prevent infinite-loop runaway if a hook mis-fires.
+- &#10003; **Session auto-titling wired (#580)** &mdash; `derive_title_from_first_message()` now actually drives the trigger.
+- &#10003; **Hook PWD refresh after worktree switch (#561)** &mdash; PWD-relative hooks no longer go stale when `EnterWorktree` runs.
+- &#10003; **Welcome banner names active provider for 3P users (#562)** &mdash; no more hardcoded Anthropic when you're on Groq/Bedrock/etc.
+- &#10003; **`release-surfaces.yaml` enforcement gate (#614)** &mdash; one manifest is the single source of truth for every public surface; `scripts/verify-release-surfaces.sh` is the gate.
+- &#10003; **AnvilHub `/sha256/2.2.17.txt` published** &mdash; out-of-band checksum manifest for primary-source SHA256 verification.
+- &#10003; **`install.sh` + `install.ps1` rebuilt** &mdash; live versions on `anvilhub.culpur.net` updated to the proper `/api/version`-aware variants. Fixes the `tag_name` regex breakage (#619) and the hardcoded `windows-msvc` Windows target (#612).
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
+
 ### v2.2.16 &mdash; May 17, 2026
 
 **The TUI Layout System. Eight live-switchable layout variants on a per-tab `TuiLayoutConfig`. New default: Vertical Split + Tabs.**
