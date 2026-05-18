@@ -324,8 +324,16 @@ pub enum RedrawReason {
     /// The streaming spinner advanced one frame.
     Spinner,
     /// The user switched tabs (or the active tab changed for any reason).
+    /// This is the only "soft" structural event that still warrants a hard
+    /// clear — ratatui's diff can coalesce across the boundary otherwise.
     TabSwitch,
-    /// Catch-all for paths that haven't been classified yet.
+    /// Returning from a drop-to-CLI inline operation (OAuth login, vault
+    /// setup, etc.). The terminal state has been mutated outside ratatui's
+    /// awareness — a hard clear is the only safe way to resync.
+    InlineOpReturn,
+    /// Catch-all for paths that haven't been classified yet. Routes through
+    /// the soft `draw()` path per task #629; if you need a hard clear, use
+    /// `TabSwitch` or `InlineOpReturn` explicitly.
     Other,
 }
 
@@ -1011,13 +1019,24 @@ impl AnvilTui {
         //   `ANVIL_TUI_NO_FLASH=1`    — alias of default; documented for
         //                               users who hit a regression and want
         //                               to be explicit.
+        // Task #629: invert the gate default. Streaming events that arrive
+        // tagged as `Other` or `None` (e.g. TurnDone end-of-stream commit,
+        // ChannelClosed, several apply_tagged_event paths) used to cascade
+        // through `draw_full()` and emit `\x1b[2J` per event — strace
+        // confirmed 27 full-screen clears per short streaming session on
+        // Linux. That's the flash. New rule: ONLY explicit structural
+        // events (TabSwitch and the new InlineOpReturn) take the hard path.
+        // Everything else — including unclassified `Other` and `None` —
+        // routes through the soft `draw()` path. Tagging-by-default is too
+        // brittle for accessibility-critical behavior; deny-by-default
+        // protects against future drift.
         let force_clear = std::env::var("ANVIL_TUI_FORCE_CLEAR")
             .map(|v| v == "1")
             .unwrap_or(false);
         let needs_full_clear = force_clear
             || matches!(
                 self.redraw_reason,
-                Some(RedrawReason::TabSwitch) | Some(RedrawReason::Other) | None
+                Some(RedrawReason::TabSwitch) | Some(RedrawReason::InlineOpReturn)
             );
         if needs_full_clear {
             self.draw_full()?;
@@ -1033,7 +1052,16 @@ impl AnvilTui {
                 Some(RedrawReason::KeyEvent) => redraw::DirtyRegions::INPUT,
                 Some(RedrawReason::TextDeltaBatch) => redraw::DirtyRegions::SCROLLBACK,
                 Some(RedrawReason::Spinner) => redraw::DirtyRegions::SCROLLBACK,
-                Some(RedrawReason::TabSwitch) | Some(RedrawReason::Other) | None => {
+                // Task #629: `Other` and `None` reach this arm now (they
+                // used to take the hard path). They get SCROLLBACK instead
+                // of ALL so the layout renderers don't paint the
+                // full-screen Clear widget on top of the diffed draw.
+                // TabSwitch and InlineOpReturn never reach this arm — they
+                // hit `needs_full_clear` above.
+                Some(RedrawReason::Other) | None => redraw::DirtyRegions::SCROLLBACK,
+                Some(RedrawReason::TabSwitch) | Some(RedrawReason::InlineOpReturn) => {
+                    // Unreachable in practice (handled by needs_full_clear
+                    // above), but exhaustive match.
                     redraw::DirtyRegions::ALL
                 }
             };
@@ -1076,7 +1104,7 @@ impl AnvilTui {
     /// stale content from before the inline op lingers on screen.
     pub fn force_full_repaint_after_inline_op(&mut self) {
         self.redraw.request_full();
-        self.request_redraw_reason(RedrawReason::Other);
+        self.request_redraw_reason(RedrawReason::InlineOpReturn);
         // Eagerly commit so the repaint fires on the very next draw cycle.
         // Ignore the error — if we can't paint we'll paint next iteration.
         let _ = self.commit_pending_redraw();
@@ -1817,7 +1845,9 @@ impl AnvilTui {
         self.layout_local = layouts::LayoutLocalState::for_kind(new.kind);
 
         self.redraw.request_full();
-        self.request_redraw_reason(RedrawReason::Other);
+        // Layout switch is a structural event — ratatui's back-buffer
+        // dimensions/regions change. Hard clear required (task #629).
+        self.request_redraw_reason(RedrawReason::InlineOpReturn);
     }
 
     /// Backward-compat alias: `set_layout(new)` → `set_active_tab_layout(new, global=true)`.
@@ -2391,7 +2421,9 @@ impl AnvilTui {
                     {
                         self.apply_tagged_event(tagged);
                         self.scroll_to_bottom();
-                        self.request_redraw_reason(RedrawReason::Other);
+                        // Task #629: end-of-stream commit. Stay on the soft
+                        // path so the final TextDelta doesn't flash.
+                        self.request_redraw_reason(RedrawReason::TextDeltaBatch);
                         self.commit_pending_redraw()?;
                         return Ok(InFlightInterruption::TurnDone);
                     }
@@ -2412,7 +2444,9 @@ impl AnvilTui {
                             }
                         }
                         self.scroll_to_bottom();
-                        self.request_redraw_reason(RedrawReason::Other);
+                        // Task #629: channel-closed handler still during
+                        // streaming context — soft path.
+                        self.request_redraw_reason(RedrawReason::TextDeltaBatch);
                         self.commit_pending_redraw()?;
                         return Ok(InFlightInterruption::ChannelClosed);
                     }
@@ -2534,7 +2568,10 @@ impl AnvilTui {
                 {
                     self.apply_tagged_event(tagged);
                     self.scroll_to_bottom();
-                    self.request_redraw_reason(RedrawReason::Other);
+                    // Task #629: end-of-stream commit in recv_timeout
+                    // branch. Soft path so the final TextDelta doesn't
+                    // flash.
+                    self.request_redraw_reason(RedrawReason::TextDeltaBatch);
                     self.commit_pending_redraw()?;
                     return Ok(InFlightInterruption::TurnDone);
                 }
@@ -2547,7 +2584,9 @@ impl AnvilTui {
                         tab.think_label.clear();
                     }
                     self.scroll_to_bottom();
-                    self.request_redraw_reason(RedrawReason::Other);
+                    // Task #629: channel-closed handler in recv_timeout
+                    // branch — same soft-path treatment.
+                    self.request_redraw_reason(RedrawReason::TextDeltaBatch);
                     self.commit_pending_redraw()?;
                     return Ok(InFlightInterruption::ChannelClosed);
                 }
