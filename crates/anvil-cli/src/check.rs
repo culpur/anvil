@@ -9,6 +9,10 @@
 //! - API keys present for each configured provider
 //! - Relay reachability (wss://passage.culpur.net/v1/relay)
 
+// Task #626: SAFE-HEADLESS — `run_check` only from `CliAction::Check`
+// (`anvil --check`); no TUI.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fmt;
 use std::path::Path;
 use std::process::Command;

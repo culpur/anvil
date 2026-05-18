@@ -9,6 +9,11 @@
 //! 2. **GitHub `/releases/latest`** — fallback only. The URL is reconstructed
 //!    from the tag using `release.sh`'s canonical asset naming.
 
+// Task #626: SAFE-HEADLESS — `run_self_update` only fires from the
+// `--update` flag; no TUI.  `check_for_update` returns a String that the
+// TUI surface caller renders without `println!`.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;

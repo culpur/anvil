@@ -1,14 +1,19 @@
-/// `anvil mcp-server` — expose Anvil as an MCP server on stdio.
-///
-/// Transport: newline-delimited JSON-RPC 2.0 on stdin/stdout.
-/// ALL diagnostic/log output goes to stderr — stdout is the protocol channel.
-///
-/// Supported methods:
-///   initialize     → return server capabilities
-///   tools/list     → return published tool definitions
-///   tools/call     → dispatch to Anvil tool implementations
-///
-/// Unknown methods return JSON-RPC error -32601 (METHOD_NOT_FOUND).
+// Task #626: SAFE-HEADLESS — `anvil mcp-server` is a stdio JSON-RPC
+// server; stderr IS the documented log channel here (see the docs
+// comment below).  No TUI runs in this mode.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
+//! `anvil mcp-server` — expose Anvil as an MCP server on stdio.
+//!
+//! Transport: newline-delimited JSON-RPC 2.0 on stdin/stdout.
+//! ALL diagnostic/log output goes to stderr — stdout is the protocol channel.
+//!
+//! Supported methods:
+//!   initialize     → return server capabilities
+//!   tools/list     → return published tool definitions
+//!   tools/call     → dispatch to Anvil tool implementations
+//!
+//! Unknown methods return JSON-RPC error -32601 (METHOD_NOT_FOUND).
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};

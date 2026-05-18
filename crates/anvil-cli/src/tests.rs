@@ -1168,3 +1168,51 @@ fn response_to_events_ignores_thinking_blocks() {
     ));
     assert!(!String::from_utf8(out).expect("utf8").contains("step 1"));
 }
+
+// ─── Task #626 — clippy gate regression test ──────────────────────────────────
+
+/// Every TUI-touching file in this crate must carry the
+/// `#![deny(clippy::print_stdout, clippy::print_stderr)]` attribute so a
+/// new `println!` / `eprintln!` regression fails clippy at PR time
+/// instead of corrupting the alt-screen at runtime.
+///
+/// This test reads the source files at test-run time and asserts the
+/// gate is in place.  If a file is intentionally moved off the deny
+/// list, drop its entry from `EXPECTED` here and document why in
+/// `audit/println-tui-reachability-2026-05-18.md`.
+#[test]
+fn clippy_print_gate_is_in_place_on_tui_touching_files() {
+    let expected = [
+        // anvil-cli crate
+        "crates/anvil-cli/src/cmd_provider.rs",
+        "crates/anvil-cli/src/cmd_ai.rs",
+        "crates/anvil-cli/src/cmd_static.rs",
+        "crates/anvil-cli/src/providers.rs",
+        "crates/anvil-cli/src/remote_control.rs",
+        "crates/anvil-cli/src/tui/mod.rs",
+        "crates/anvil-cli/src/utils.rs",
+        "crates/anvil-cli/src/vault.rs",
+        // commands crate
+        "crates/commands/src/handlers.rs",
+        "crates/commands/src/skill_chaining.rs",
+    ];
+    // Walk up from `crates/anvil-cli` to the repo root.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("repo root above crates/anvil-cli");
+
+    let needle = "#![deny(clippy::print_stdout, clippy::print_stderr)]";
+    for rel in expected {
+        let path = repo_root.join(rel);
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        assert!(
+            body.contains(needle),
+            "task #626: {rel} is missing the print-stdout/stderr deny gate.  \
+             Add `{needle}` at the top of the file or remove it from the \
+             EXPECTED list and document why in the audit file."
+        );
+    }
+}

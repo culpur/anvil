@@ -4,6 +4,10 @@
 //! `OpenAI`, Ollama, and xAI.  The module is intentionally free of any TUI or
 //! REPL state so it can be called at startup before `LiveCli` is constructed.
 
+// Task #626: SAFE-HEADLESS — `run_login` is only entered via
+// `CliAction::Login` (`anvil --login`); the TUI never starts on this path.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};

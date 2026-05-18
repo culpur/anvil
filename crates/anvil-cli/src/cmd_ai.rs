@@ -1,3 +1,11 @@
+// Task #626 — TUI stdout/stderr discipline.  All LLM-turn methods in this
+// file (`run_bughunter`, `run_ultraplan`, `run_commit`, `run_pr`,
+// `run_issue`, …) are reachable from `run_command_for_tui` (TUI path) and
+// `handle_repl_command` (headless path).  None of them may `println!` —
+// they MUST return a `String` and let the caller route it.  The crate-level
+// deny below catches regressions at clippy time.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -82,16 +90,21 @@ impl LiveCli {
         }
     }
 
-    pub(crate) fn run_bughunter(&self, scope: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the bughunter report so the caller can either
+    /// `println!` it (headless) or `tui.push_system` it (TUI), instead of
+    /// the method writing directly to stdout and corrupting ratatui's
+    /// alt-screen back-buffer.
+    pub(crate) fn run_bughunter(&self, scope: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         let scope = scope.unwrap_or("the current repository");
         let prompt = format!(
             "You are /bughunter. Inspect {scope} and identify the most likely bugs or correctness issues. Prioritize concrete findings with file paths, severity, and suggested fixes. Use tools if needed."
         );
-        println!("{}", self.run_internal_prompt_text(&prompt, true)?);
-        Ok(())
+        self.run_internal_prompt_text(&prompt, true)
     }
 
-    pub(crate) fn run_ultraplan(&self, task: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the ultraplan output for the caller to route to
+    /// the correct sink (stdout vs TUI scrollback).
+    pub(crate) fn run_ultraplan(&self, task: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         let task = task.unwrap_or("the current repo work");
         let prompt = format!(
             "You are /ultraplan. Produce a deep multi-step execution plan for {task}. Include goals, risks, implementation sequence, verification steps, and rollback considerations. Use tools if needed."
@@ -101,8 +114,7 @@ impl LiveCli {
         {
             Ok(plan) => {
                 progress.finish_success();
-                println!("{plan}");
-                Ok(())
+                Ok(plan)
             }
             Err(error) => {
                 progress.finish_failure(&error.to_string());
@@ -819,7 +831,11 @@ impl LiveCli {
                         );
                     }
                 }
-                eprintln!("[anvil] /perf profile: executing via sh -c: {rest}");
+                // Task #626: previously `eprintln!` here corrupted the TUI
+                // back-buffer because `/perf profile` is dispatched from
+                // `run_command_for_tui::Perf` (main.rs:5659) while the
+                // alt-screen is up.  Route through the TUI-aware sink.
+                crate::tui::log_warning(&format!("/perf profile: executing via sh -c: {rest}"));
                 let start = std::time::Instant::now();
                 let output = Command::new("sh")
                     .arg("-c")
@@ -1728,11 +1744,12 @@ impl LiveCli {
         }
     }
 
-    pub(crate) fn run_commit(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the commit report as a String for the caller to
+    /// route to either stdout (headless) or `tui.push_system` (TUI).
+    pub(crate) fn run_commit(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         let status = git_output(&["status", "--short"])?;
         if status.trim().is_empty() {
-            println!("Commit\n  Result           skipped\n  Reason           no workspace changes");
-            return Ok(());
+            return Ok("Commit\n  Result           skipped\n  Reason           no workspace changes".to_string());
         }
 
         git_status_ok(&["add", "-A"])?;
@@ -1758,15 +1775,15 @@ impl LiveCli {
             return Err(format!("git commit failed: {stderr}").into());
         }
 
-        println!(
+        Ok(format!(
             "Commit\n  Result           created\n  Message file     {}\n\n{}",
             path.display(),
             message.trim()
-        );
-        Ok(())
+        ))
     }
 
-    pub(crate) fn run_pr(&self, context: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the PR report.
+    pub(crate) fn run_pr(&self, context: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         let staged = git_output(&["diff", "--stat"])?;
         let prompt = format!(
             "Generate a pull request title and body from this conversation and diff summary. Output plain text in this format exactly:\nTITLE: <title>\nBODY:\n<body markdown>\n\nContext hint: {}\n\nDiff summary:\n{}",
@@ -1786,19 +1803,18 @@ impl LiveCli {
                 .output()?;
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                println!(
+                return Ok(format!(
                     "PR\n  Result           created\n  Title            {title}\n  URL              {}",
                     if stdout.is_empty() { "<unknown>" } else { &stdout }
-                );
-                return Ok(());
+                ));
             }
         }
 
-        println!("PR draft\n  Title            {title}\n\n{body}");
-        Ok(())
+        Ok(format!("PR draft\n  Title            {title}\n\n{body}"))
     }
 
-    pub(crate) fn run_issue(&self, context: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the issue report.
+    pub(crate) fn run_issue(&self, context: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         let prompt = format!(
             "Generate a GitHub issue title and body from this conversation. Output plain text in this format exactly:\nTITLE: <title>\nBODY:\n<body markdown>\n\nContext hint: {}\n\nConversation context:\n{}",
             context.unwrap_or("none"),
@@ -1817,15 +1833,13 @@ impl LiveCli {
                 .output()?;
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                println!(
+                return Ok(format!(
                     "Issue\n  Result           created\n  Title            {title}\n  URL              {}",
                     if stdout.is_empty() { "<unknown>" } else { &stdout }
-                );
-                return Ok(());
+                ));
             }
         }
 
-        println!("Issue draft\n  Title            {title}\n\n{body}");
-        Ok(())
+        Ok(format!("Issue draft\n  Title            {title}\n\n{body}"))
     }
 }

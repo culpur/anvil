@@ -4,6 +4,14 @@
 //! All sensitive input is read via no-echo terminal prompts so secrets never
 //! appear in REPL history or process argument lists.
 
+// Task #626 — `/vault` subcommands run from both TUI and headless paths.
+// `read_password_prompt` is a BUG-DEFER per the audit: in TUI mode the
+// `eprint!` prompt corrupts the alt-screen and `rpassword::read_password`
+// fights ratatui for stdin.  Fix needs a TUI password modal; until that
+// lands the eprint! carries a single per-call `#[allow]` and the bug is
+// tracked as a follow-up.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,6 +50,13 @@ pub(crate) fn write_curl_auth_header(token: &str) -> Result<PathBuf, String> {
 
 /// Read a password from the terminal with no echo.
 /// Prints `prompt` to stderr so it is visible even when stdout is piped.
+///
+/// Task #626 BUG-DEFER: when called from a TUI session, `eprint!` paints
+/// into the alt-screen back-buffer and `rpassword::read_password`
+/// competes with ratatui for stdin.  Fix needs an in-TUI password modal
+/// (tracked as a follow-up); the per-call `#[allow]` documents that the
+/// crate-level deny is suppressed here on purpose.
+#[allow(clippy::print_stderr, reason = "BUG-DEFER per audit 2026-05-18 — in-TUI password modal is the structural fix; tracked as follow-up")]
 pub(crate) fn read_password_prompt(prompt: &str) -> Result<String, String> {
     eprint!("{prompt}");
     rpassword::read_password().map_err(|e| format!("Failed to read password: {e}"))

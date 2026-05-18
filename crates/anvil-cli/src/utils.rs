@@ -1,3 +1,9 @@
+// Task #626 — `utils.rs` is a mix of pure render helpers (String-returning,
+// SAFE) and a single SAFE-HEADLESS subcommand (`run_init`).  The
+// crate-level deny catches any future `println!` regression; `run_init`
+// carries an explicit per-fn `#[allow]`.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -858,6 +864,9 @@ pub(crate) fn init_anvil_md() -> Result<String, Box<dyn std::error::Error>> {
     Ok(initialize_repo(&cwd)?.render())
 }
 
+/// `anvil --init` entry point.  Task #626 SAFE-HEADLESS:
+/// `CliAction::Init` runs before the TUI ever starts.
+#[allow(clippy::print_stdout, reason = "headless `anvil --init` subcommand; TUI never active")]
 pub(crate) fn run_init() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", init_anvil_md()?);
     Ok(())

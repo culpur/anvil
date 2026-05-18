@@ -10,6 +10,13 @@
 //!     `slash_command_completion_candidates`, `suggest_repl_commands`, `edit_distance`,
 //!     `describe_tool_progress`, `permission_policy`, `convert_messages`
 
+// Task #626 — `build_runtime` and `build_runtime_with_tui_slot` run on
+// every TUI command that rebuilds the runtime (`/fast`, `/model`, `/clear`,
+// `/permissions`, agent compose, etc.).  Warnings on MCP/LSP discovery
+// must route through `tui::log_warning`; direct `eprintln!` corrupts
+// ratatui's alt-screen back-buffer.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 #[allow(unused_imports)]
 use std::collections::BTreeSet;
 use std::env;
@@ -496,7 +503,10 @@ pub(crate) fn build_runtime_with_tui_slot(
         let mut manager = McpServerManager::from_runtime_config(&runtime_config);
         let tokio_rt = tokio::runtime::Runtime::new()?;
         let discovered = tokio_rt.block_on(manager.discover_tools()).unwrap_or_else(|err| {
-            eprintln!("[mcp] tool discovery failed: {err}");
+            // Task #626: `build_runtime` runs on every `/fast`, `/model`,
+            // `/clear` etc. from inside the TUI — route the discovery warning
+            // through the TUI-aware sink so we don't corrupt the alt-screen.
+            crate::tui::log_warning(&format!("[mcp] tool discovery failed: {err}"));
             Vec::new()
         });
         let mcp_defs = discovered
@@ -533,7 +543,7 @@ pub(crate) fn build_runtime_with_tui_slot(
             match LspManager::new(server_configs) {
                 Ok(m) => Some(m),
                 Err(err) => {
-                    eprintln!("[lsp] failed to initialize LSP manager: {err}");
+                    crate::tui::log_warning(&format!("[lsp] failed to initialize LSP manager: {err}"));
                     None
                 }
             }
@@ -614,7 +624,9 @@ pub(crate) fn build_runtime_for_provider(
         let mut manager = McpServerManager::from_runtime_config(&runtime_config);
         let tokio_rt = tokio::runtime::Runtime::new()?;
         let discovered = tokio_rt.block_on(manager.discover_tools()).unwrap_or_else(|err| {
-            eprintln!("[mcp] tool discovery failed: {err}");
+            // Task #626: TUI-reachable from every `build_runtime_with_tui_slot`
+            // call (`/fast`, `/model`, `/clear`, etc.) — use the TUI-aware sink.
+            crate::tui::log_warning(&format!("[mcp] tool discovery failed: {err}"));
             Vec::new()
         });
         let mcp_defs = discovered
@@ -650,7 +662,7 @@ pub(crate) fn build_runtime_for_provider(
             match LspManager::new(server_configs) {
                 Ok(m) => Some(m),
                 Err(err) => {
-                    eprintln!("[lsp] failed to initialize LSP manager: {err}");
+                    crate::tui::log_warning(&format!("[lsp] failed to initialize LSP manager: {err}"));
                     None
                 }
             }

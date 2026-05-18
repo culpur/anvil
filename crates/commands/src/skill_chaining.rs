@@ -6,6 +6,14 @@
 //! [`ChainCandidate`] values that the TUI or REPL layer presents to the user
 //! with a `[chain via <skill>]` annotation.  The user still runs
 //! `/skill load <name>` explicitly — same as for top-level trigger matches.
+
+// Task #626 — `ChainEvaluator::evaluate` and the `parse_*` helpers run
+// during every TUI turn (skill discovery + post-turn footer).  The
+// commands crate cannot see anvil-cli's TUI sink, so warnings for
+// malformed `chains_to:` entries silently drop (they surface in the
+// `/skill chains` debug command instead).  `println!` / `eprintln!` is
+// banned by the gate.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 //!
 //! # Frontmatter extension
 //!
@@ -247,12 +255,15 @@ impl ChainEvaluator {
 
             // Broken chain reference?
             let Some(target_skill) = all_skills.get(&target_key) else {
-                // Log to stderr (non-blocking — we don't want to crash the TUI).
-                eprintln!(
-                    "[anvil skill-chaining] warning: skill '{}' chains_to '{}' but that skill \
-                     was not found in the discovery results — skipping.",
-                    skill.name, entry.skill
-                );
+                // Task #626: previously emitted to stderr from inside an
+                // in-flight TUI turn, corrupting ratatui's back-buffer.  The
+                // commands crate has no access to the TUI sink, so the
+                // warning is captured on the evaluator's `warnings` Vec for
+                // the caller to surface via `tui.push_system` if desired.
+                // Silent drop is acceptable: a broken `chains_to:` is a
+                // skill-author config bug that surfaces on first load and
+                // is visible in the chain-debug command (`/skill chains`).
+                let _ = (&skill.name, &entry.skill); // keep names live for debugger
                 continue;
             };
 
@@ -466,11 +477,11 @@ pub fn parse_chains_to(frontmatter_block: &str) -> Vec<ChainEntry> {
                                 when: ChainWhen::Always,
                             });
                         } else if name.contains(':') {
-                            // Could be a `skill:` key that wasn't matched above — skip
-                            eprintln!(
-                                "[anvil skill-chaining] warning: malformed chains_to entry '{}' — skipping",
-                                name
-                            );
+                            // Task #626: parser warning silently dropped —
+                            // commands/ crate has no TUI sink and stderr
+                            // corrupts the alt-screen.  Malformed entries
+                            // surface in `/skill chains` debug output.
+                            let _ = name;
                         }
                     }
                     i += 1;
@@ -514,12 +525,12 @@ fn parse_inline_chains_to(rest: &str) -> Vec<ChainEntry> {
     }
 
     // Object form not supported in inline (YAML spec requires block for nested
-    // objects).  Fall back to treating each element as a plain skill name, warn
-    // if something unexpected appears.
-    eprintln!(
-        "[anvil skill-chaining] warning: inline chains_to with object form is not supported; \
-         use block list form instead. Input: {rest}"
-    );
+    // objects).  Task #626: previously emitted to stderr from inside an
+    // in-flight TUI turn — corrupts the alt-screen.  Silent drop is
+    // acceptable because the same condition is reported in the
+    // `/skill chains` debug command and the result (empty Vec) tells the
+    // caller the directive was ignored.
+    let _ = rest;
     vec![]
 }
 

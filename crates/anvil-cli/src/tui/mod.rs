@@ -7,6 +7,13 @@
 //!   widgets          — slash-command completion data, Ollama model cache, clipboard helpers
 //!   `configure_types`  — `ConfigureState`, `ConfigureAction`, `ConfigureData`, configure menu helpers
 //!   `input_handler`    — `AnvilTui` input loop (`read_input`, `handle_key`, editing, history, completion)
+
+// Task #626 — every file under `tui/` runs while ratatui owns the
+// alt-screen.  `println!` / `eprintln!` is banned.  Warnings route
+// through `tui::log_warning` (which writes to ~/.anvil/anvil.log while
+// the TUI is up, or stderr when it isn't); informational output goes
+// through `tui.push_system` so it appears in scrollback.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 pub mod configure_types;
 pub(super) mod completion;
 pub(super) mod helpers;
@@ -293,6 +300,83 @@ pub(super) struct TabHit {
     pub label_end: u16,
     /// Column of the `×` close glyph, or `None` when only one tab is open.
     pub close_col: Option<u16>,
+}
+
+/// Runtime probe for the TUI lifecycle (task #626).
+///
+/// Set to `true` while `run_tui_session` is active and the alt-screen has
+/// been entered; reset to `false` after `drop(tui)`.  Background helpers
+/// (relay threads, MCP/LSP discovery, daily-summary writers, skill-chain
+/// evaluators) gate their stderr fallback paths on `!tui_session_active()`
+/// so a stray warning never corrupts the ratatui back-buffer.
+///
+/// This is the canonical "is the TUI currently up?" probe — distinct from
+/// [`alternate_screen_enabled`], which is a process-start configuration
+/// flag.
+pub(crate) static TUI_SESSION_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns `true` if a TUI session is currently active (alt-screen up).
+///
+/// Background tasks that emit warnings on error paths should consult this
+/// before writing to stderr: when the TUI owns the terminal, a stray
+/// `eprintln!` will be painted onto the alt-screen behind ratatui's diff
+/// renderer and the back-buffer will desynchronise from what the user
+/// sees.  Use this probe + a fallback log file (or silent drop) instead.
+#[inline]
+pub fn tui_session_active() -> bool {
+    TUI_SESSION_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Internal hook to flip the TUI-active flag.  Called by `run_tui_session`
+/// at entry/exit; not part of the public API.
+#[inline]
+pub(crate) fn set_tui_session_active(active: bool) {
+    TUI_SESSION_ACTIVE.store(active, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Best-effort warning sink for code paths that are TUI-reachable but
+/// non-critical (MCP/LSP discovery errors, relay thread errors, skill-chain
+/// parse warnings, etc.).
+///
+/// Behaviour:
+/// * When no TUI session is active → `eprintln!("[anvil] {msg}")`.
+/// * When a TUI session is active → append to `$ANVIL_HOME/anvil.log` if
+///   we can resolve a home dir; otherwise drop silently (the back-buffer
+///   stays consistent and the user can re-run with TUI off to see the
+///   warning live).
+///
+/// Task #626 — see `feedback-tui-stdout-anti-pattern.md`.
+pub fn log_warning(msg: &str) {
+    if tui_session_active() {
+        // Append to ~/.anvil/anvil.log; silent failure is fine.
+        if let Some(home) = dirs_next::home_dir() {
+            let log_path = home.join(".anvil").join("anvil.log");
+            // Ignore directory-create / write errors — this is best-effort.
+            let _ = std::fs::create_dir_all(log_path.parent().unwrap_or(&log_path));
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                use std::io::Write as _;
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let _ = writeln!(f, "[anvil epoch={secs}] {msg}");
+            }
+        }
+    } else {
+        // SAFE: `tui_session_active()` returned false, so no TUI owns the
+        // terminal — stderr is the right sink.  This is the one
+        // legitimate eprintln in the `tui/` module, kept under the
+        // crate-level deny gate via the per-call allow.
+        #[allow(clippy::print_stderr, reason = "no TUI is active; stderr is safe (this fn is the sink other code is supposed to call)")]
+        {
+            eprintln!("[anvil] {msg}");
+        }
+    }
 }
 
 /// Whether the TUI should enter/leave the terminal's alternate screen.

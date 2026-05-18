@@ -109,8 +109,10 @@ fn spawn_background_model_fetch(ollama_cache: Vec<(String, String)>) {
         .name("anvil-model-fetch".to_string())
         .spawn(move || {
             let (models, warnings) = live_provider_models(&ollama_cache);
+            // Task #626: background thread can't write to stderr while
+            // ratatui owns the alt-screen — route through the TUI-aware sink.
             for w in &warnings {
-                eprintln!("{w}");
+                super::log_warning(w);
             }
             if let Ok(mut cache) = model_choices_cache().lock() {
                 *cache = ModelChoicesCache {

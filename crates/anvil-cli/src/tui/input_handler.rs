@@ -1372,8 +1372,10 @@ fn save_api_key_credential(vault_key: &'static str, key: &str) -> String {
         match runtime::vault_session_upsert(vault_key, key) {
             Ok(()) => return format!("Key saved to encrypted vault (key: {vault_key})."),
             Err(e) => {
-                // Fall through to plaintext fallback.
-                eprintln!("[provider-login] vault upsert failed: {e}");
+                // Fall through to plaintext fallback.  Task #626: this fires
+                // inside the in-TUI provider-login modal, so route the warning
+                // through the TUI-aware sink instead of `eprintln!` directly.
+                super::log_warning(&format!("[provider-login] vault upsert failed: {e}"));
             }
         }
     }

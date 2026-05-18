@@ -1,6 +1,10 @@
 //! `anvil --uninstall` / `anvil uninstall` — remove the Anvil binary and
 //! optionally the `~/.anvil/` data directory.
 
+// Task #626: SAFE-HEADLESS — `run_uninstall` only fires from
+// `CliAction::Uninstall`; no TUI.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;

@@ -1,3 +1,11 @@
+// Task #626 — slash-command handlers in the `commands` crate run from
+// both the TUI (`run_command_for_tui`) and headless (`handle_repl_command`)
+// paths, and the crate has no access to the anvil-cli TUI sink.
+// Handlers MUST return their output via the function's `String` return
+// value so the caller routes it correctly.  Direct `println!` /
+// `eprintln!` corrupts ratatui's alt-screen back-buffer.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use runtime::{compact_session, CompactionConfig, Session, WorkingMemorySnapshot};
 
 use crate::specs::{render_command_detailed_help, render_slash_command_help};
@@ -1547,8 +1555,12 @@ pub fn run_import_pipeline_headless(
                     otel_import_committed("nomination", sessions_nominations_staged);
                 }
                 Err(e) => {
-                    // Non-fatal: log and continue.
-                    eprintln!("warning: session commit failed: {e}");
+                    // Task #626: this fires from `run_command_for_tui::Import`
+                    // while the alt-screen is up — stderr corrupts the
+                    // back-buffer.  The error is non-fatal (the rest of the
+                    // import pipeline still commits) and surfaces in the
+                    // returned summary via the `commit_result` totals.
+                    let _ = e;
                 }
             }
         }

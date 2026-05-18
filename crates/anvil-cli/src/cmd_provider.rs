@@ -1,6 +1,17 @@
 // Edition 2024: env::set_var/remove_var require unsafe
 #![allow(unsafe_code)]
 
+// Task #626 — TUI stdout/stderr discipline.  This module is dispatched
+// from inside the TUI loop (`run_command_for_tui::Provider`, `Login`,
+// `Search`, `Goal`, `Agent`, `Hub`, etc.), so any `println!` /
+// `eprintln!` here can corrupt ratatui's alt-screen back-buffer.  The
+// only legitimate sites are the drop-to-CLI login flows bracketed by
+// `leave_alt_screen_for_inline_op()` / `restore_alt_screen()` — those
+// carry a per-call `#[allow(clippy::print_stdout, reason = "…")]`
+// annotation.  Everything else must return a `String` so the caller
+// (TUI or headless) decides where the bytes go.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 //! Provider, search, goal, agent, share, and hub command handlers for `impl LiveCli`.
 //!
 //! Extracted from `main.rs` to reduce file size. No behaviour is changed.
@@ -246,6 +257,12 @@ impl LiveCli {
     /// Print the session status report to stdout. Used by the batch/print REPL
     /// path (`handle_repl_command`). The TUI path returns a string via
     /// `run_command_for_tui`.
+    ///
+    /// Task #626 SAFE-HEADLESS: only called from `handle_repl_command::Status`
+    /// in the plain REPL; the TUI dispatches `/status` inline at
+    /// `run_command_for_tui::Status` (main.rs ~5413).
+    #[allow(clippy::print_stdout, reason = "headless /status REPL path; TUI uses run_command_for_tui inline")]
+    #[allow(clippy::print_stderr, reason = "headless /status REPL path; TUI uses run_command_for_tui inline")]
     pub(crate) fn print_status(&self) {
         let cumulative = self.active_runtime().usage().cumulative_usage();
         let latest = self.active_runtime().usage().current_turn_usage();
@@ -438,6 +455,16 @@ impl LiveCli {
 
     /// `/login [provider]` or `/provider login` — refresh OAuth token from within REPL.
     /// Temporarily leaves the TUI to run the OAuth browser flow, then returns.
+    ///
+    /// Task #626 SAFE-DTC: every login arm in this function is wrapped by
+    /// `tui::leave_alt_screen_for_inline_op()` / `tui::restore_alt_screen()`,
+    /// so the bytes written between those bookends land on the user's real
+    /// terminal — not behind ratatui's diff renderer.  The crate-level
+    /// `#![deny(clippy::print_stdout, clippy::print_stderr)]` would otherwise
+    /// fire on every line; this fn-level `#[allow]` documents the audit
+    /// verdict and keeps the rest of the file under the deny gate.
+    #[allow(clippy::print_stdout, reason = "drop-to-CLI: leave_alt_screen_for_inline_op / restore_alt_screen bracket every println in this function (audit 2026-05-18)")]
+    #[allow(clippy::print_stderr, reason = "same as print_stdout — bracketed drop-to-CLI flow")]
     pub(crate) fn run_inline_login(&self, provider: Option<&str>) -> String {
         let provider_name = provider.unwrap_or_else(|| {
             match detect_provider_kind(&self.model) {

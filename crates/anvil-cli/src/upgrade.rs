@@ -15,6 +15,10 @@
 //! Uses the respawn infrastructure from `respawn.rs` to relaunch the new
 //! binary so the user's terminal session survives the update.
 
+// Task #626: SAFE-HEADLESS — `run_upgrade` only fires from
+// `CliAction::Upgrade` (`anvil --upgrade`); no TUI on this path.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;

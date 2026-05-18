@@ -1,6 +1,11 @@
 // Edition 2024: env::set_var/remove_var require unsafe
 #![allow(unsafe_code)]
 
+// Task #626 — `/remote-control` / `/share` is dispatched from inside the
+// TUI; the spawned relay thread previously `eprintln!`-ed errors into
+// ratatui's back-buffer.  Warnings now route through `tui::log_warning`.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 //! Remote control command handler for `impl LiveCli`.
 //!
 //! Extracted from `main.rs` to reduce file size.  The `LiveCli` struct and its
@@ -79,7 +84,9 @@ impl LiveCli {
                         .enable_all()
                         .build()
                     else {
-                        eprintln!("Failed to create relay tokio runtime");
+                        // Task #626: relay thread fires while TUI alt-screen
+                        // is up — route through the TUI-aware warning sink.
+                        crate::tui::log_warning("Failed to create relay tokio runtime");
                         return;
                     };
                     // Set the fixed pairing code BEFORE running the relay
@@ -88,7 +95,9 @@ impl LiveCli {
                         None::<Box<dyn Fn() -> Vec<runtime::relay::TabSnapshot> + Send>>,
                     ));
                     if let Err(e) = rt.block_on(relay_host.run(&passage_ws_url, event_rx, snapshot_fn, Some(relay_input_tx))) {
-                        eprintln!("Relay disconnected: {e}");
+                        // Task #626: same TUI-aware sink for the disconnect
+                        // path — without this the back-buffer corrupts.
+                        crate::tui::log_warning(&format!("Relay disconnected: {e}"));
                     }
                 });
 

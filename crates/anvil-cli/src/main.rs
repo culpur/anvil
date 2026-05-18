@@ -1,6 +1,37 @@
 // Edition 2024: env::set_var/remove_var require unsafe
 #![allow(unsafe_code)]
 
+// Task #626 — TUI stdout/stderr discipline (anti-pattern feedback file:
+// `feedback-tui-stdout-anti-pattern.md`).
+//
+// `main.rs` is the entry point for every code path Anvil exposes:
+// headless subcommands (`--setup`, `--upgrade`, `--check`, `--version`,
+// `mcp-server`, etc.), the plain REPL (`run_repl_plain`), and the TUI
+// REPL (`run_repl_tui`).  Each `println!` / `eprintln!` site in this
+// file falls into one of the following SAFE buckets per the audit at
+// `audit/println-tui-reachability-2026-05-18.md`:
+//
+//   • SAFE-HEADLESS  — runs in a code path that exits before any TUI.
+//   • SAFE-PREWIZARD — runs inside `run_first_run_wizard` /
+//     `LiveCli::new`, before `run_tui_session` enters the alt-screen.
+//   • SAFE-POSTDROP  — runs after `drop(tui)` on the exit path or in
+//     the panic / error hooks (alt-screen is already torn down).
+//
+// All TUI-reachable prints that the audit caught have been refactored
+// to return `String` (the caller chooses `tui.push_system` or
+// `println!`) or to route through `tui::log_warning` (the TUI-aware
+// sink defined in `tui/mod.rs`).  The crate-level allow below acknowledges
+// that the file-wide audit has cleared the remaining sites.  New prints
+// added to this file MUST either fit one of the SAFE buckets above (with
+// a justifying comment) or be replaced with a `String` return — clippy
+// won't catch the regression for you here, but the per-PR audit /
+// per-task review will.  Other anvil-cli modules use scoped `#![deny]`
+// (cmd_provider.rs, cmd_ai.rs, cmd_static.rs, providers.rs,
+// remote_control.rs, the `tui/` submodules, `commands/src/handlers.rs`,
+// `commands/src/skill_chaining.rs`) so a stray print in *those* files
+// fails clippy and the CI build.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 mod agents;
 mod auth;
 mod cmd_ai;
@@ -236,6 +267,10 @@ fn main() {
                 crossterm::event::DisableMouseCapture,
             );
         }
+        // Task #626: the alt-screen has been torn down — clear the
+        // TUI-active flag so any subsequent diagnostics print to the
+        // real terminal again.
+        crate::tui::set_tui_session_active(false);
         // Reap the cross-session agent snapshot so a panic doesn't leave a
         // stale file behind (CC-139-F1, #462).
         runtime::agent_snapshot::clear_snapshot(std::process::id());
@@ -257,7 +292,12 @@ fn main() {
                 crossterm::event::DisableMouseCapture,
             );
         }
-        eprintln!("{}", render_cli_error(&error.to_string()));
+        // Task #626: clear the TUI-active flag — the alt-screen is down.
+        crate::tui::set_tui_session_active(false);
+        #[allow(clippy::print_stderr, reason = "post-drop CLI error path; TUI alt-screen torn down above")]
+        {
+            eprintln!("{}", render_cli_error(&error.to_string()));
+        }
         std::process::exit(1);
     }
 }
@@ -2308,6 +2348,13 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     let (mut tui, sender) =
         AnvilTui::new(cli.model.clone(), cli.session_id(), cli.permission_mode.as_str())?;
 
+    // Task #626: flip the runtime TUI-active flag.  Background threads and
+    // commands-crate helpers gate their stderr fallback paths on this so a
+    // stray `eprintln!` never corrupts ratatui's alt-screen back-buffer.
+    // The matching `set_tui_session_active(false)` lives after `drop(tui)`
+    // at the bottom of this function.
+    tui::set_tui_session_active(true);
+
     // Keep a prototype sender so push_tab_runtime can stamp new per-tab senders.
     let sender_prototype = sender.clone();
 
@@ -2438,6 +2485,10 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // ── Screensaver state ──────────────────────────────────────────────────────
     let mut screensaver_state: Option<screensaver::FurnaceScreensaver> = None;
     let mut last_input_time = Instant::now();
+    // Task #626: lines captured from `record_daily()` at exit, flushed to
+    // stderr *after* `drop(tui)` so they don't corrupt the alt-screen.
+    #[allow(unused_assignments, reason = "set at every `break 'outer` exit arm, consumed after drop(tui)")]
+    let mut daily_exit_lines: Vec<String> = Vec::new();
 
     // v2.2.11: fire SessionStart hooks after config + MCP loaded, before first prompt.
     {
@@ -2547,7 +2598,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             match result {
                 tui::ReadResult::Exit => {
                     cli.persist_session()?;
-                    cli.record_daily();
+                    daily_exit_lines = cli.record_daily();
                     break 'outer;
                 }
                 _ => continue,
@@ -3262,7 +3313,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     ));
                 }
                 cli.persist_session()?;
-                cli.record_daily();
+                daily_exit_lines = cli.record_daily();
                 break 'outer;
             }
             ReadResult::ConfigureAction(action) => {
@@ -3331,7 +3382,7 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         ));
                     }
                     cli.persist_session()?;
-                    cli.record_daily();
+                    daily_exit_lines = cli.record_daily();
                     break 'outer;
                 }
 
@@ -3946,6 +3997,23 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // Drop `tui` here — the Drop impl restores the terminal.
     drop(tui);
 
+    // Task #626: clear the runtime TUI-active flag so any post-drop helpers
+    // (the exit banner, panic-hook diagnostics, daily-summary "open items")
+    // are free to write directly to stderr again.
+    tui::set_tui_session_active(false);
+
+    // Task #626: flush the daily-summary "open items" lines that were
+    // captured at the exit arm.  This used to `eprintln!` while ratatui's
+    // alt-screen was still up; doing it here keeps the back-buffer clean.
+    if !daily_exit_lines.is_empty() {
+        #[allow(clippy::print_stderr, reason = "post-drop banner; TUI alt-screen has been torn down")]
+        {
+            for line in &daily_exit_lines {
+                eprintln!("{line}");
+            }
+        }
+    }
+
     // T3-Exit-UX: print resume-friendly exit message AFTER the alternate
     // screen has been torn down, so the lines persist in the user's
     // normal scrollback rather than disappearing with the TUI.
@@ -4007,7 +4075,11 @@ fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 if matches!(trimmed, "/exit" | "/quit") {
                     cli.persist_session()?;
-                    cli.record_daily();
+                    let lines = cli.record_daily();
+                    #[allow(clippy::print_stderr, reason = "run_repl_plain is headless; no TUI active")]
+                    for line in &lines {
+                        eprintln!("{line}");
+                    }
                     break;
                 }
                 if let Some(command) = SlashCommand::parse(trimmed) {
@@ -4045,7 +4117,11 @@ fn run_repl_plain(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
             input::ReadOutcome::Cancel => {}
             input::ReadOutcome::Exit => {
                 cli.persist_session()?;
-                cli.record_daily();
+                let lines = cli.record_daily();
+                #[allow(clippy::print_stderr, reason = "run_repl_plain is headless; no TUI active")]
+                for line in &lines {
+                    eprintln!("{line}");
+                }
                 break;
             }
         }
@@ -5457,8 +5533,12 @@ impl LiveCli {
                 (if diff.trim().is_empty() { "No uncommitted changes.".to_string() } else { diff }, false)
             }
             SlashCommand::Compact => {
-                self.compact()?;
-                ("Session compacted.".to_string(), false)
+                // Task #626: compact now returns the report string so we
+                // push it through the TUI scrollback instead of having it
+                // `println!`-ed directly to the terminal underneath
+                // ratatui's alt-screen.
+                let report = self.compact()?;
+                (report, false)
             }
             SlashCommand::Agents { args } => {
                 // Route subcommands that target the live agent manager
@@ -5491,8 +5571,11 @@ impl LiveCli {
             }
             SlashCommand::Model { model } => {
                 if model.is_some() {
-                    let changed = self.set_model(model)?;
-                    (format!("Model: {}", self.model), changed)
+                    // Task #626: set_model now returns (changed, report) so
+                    // the report goes through the TUI scrollback instead
+                    // of the previous corrupting `println!`.
+                    let (changed, report) = self.set_model(model)?;
+                    (report, changed)
                 } else {
                     (format_model_report(
                         &self.model,
@@ -5502,8 +5585,9 @@ impl LiveCli {
                 }
             }
             SlashCommand::Permissions { mode } => {
-                let changed = self.set_permissions(mode)?;
-                (format!("Permissions: {}", self.permission_mode.as_str()), changed)
+                // Task #626: set_permissions now returns (changed, report).
+                let (changed, report) = self.set_permissions(mode)?;
+                (report, changed)
             }
             SlashCommand::OutputStyle { style } => {
                 let msg = self.set_output_style(style).unwrap_or_else(|e| e.to_string());
@@ -5514,21 +5598,24 @@ impl LiveCli {
                 (msg, false)
             }
             SlashCommand::Clear { confirm, all_tabs } => {
-                let changed = self.clear_session(confirm)?;
+                // Task #626: clear_session now returns (changed, report).
+                let (changed, report) = self.clear_session(confirm)?;
                 if changed {
                     // T4-N: tell the TUI to wipe its visible display state so
                     // the user no longer sees the just-cleared session.
                     if let Some(tx) = self.active_tui_slot().lock().ok().and_then(|g| g.clone()) {
                         tx.send(TuiEvent::WorkspaceClear { all_tabs });
                     }
-                    let msg = if all_tabs {
-                        "Workspace cleared (all tabs).".to_string()
+                    // Build a richer summary that pairs the canonical
+                    // report with the workspace-clear flag.
+                    let banner = if all_tabs {
+                        "Workspace cleared (all tabs)."
                     } else {
-                        "Session cleared.".to_string()
+                        "Session cleared."
                     };
-                    (msg, true)
+                    (format!("{banner}\n{report}"), true)
                 } else {
-                    ("Use /clear --confirm to clear.".to_string(), false)
+                    (report, false)
                 }
             }
             SlashCommand::Init => {
@@ -5539,16 +5626,39 @@ impl LiveCli {
                 self.export_session(format.as_deref(), path.as_deref())?;
                 ("Session exported.".to_string(), false)
             }
-            // Commands that trigger model turns — run them as normal turns
-            SlashCommand::Bughunter { .. }
-            | SlashCommand::Commit
-            | SlashCommand::Pr { .. }
-            | SlashCommand::Issue { .. }
-            | SlashCommand::Ultraplan { .. }
-            | SlashCommand::Teleport { .. }
-            | SlashCommand::DebugToolCall => {
-                self.handle_repl_command(command)?;
-                (String::new(), true)
+            // Commands that trigger model turns — run them as normal turns.
+            // Task #626: each `run_*` now returns `Result<String, _>` and
+            // the TUI path pushes the report through the system-message
+            // channel.  Previously this arm dropped into
+            // `self.handle_repl_command(command)` which `println!`-ed the
+            // report and corrupted ratatui's alt-screen back-buffer.
+            SlashCommand::Bughunter { scope } => {
+                let msg = self.run_bughunter(scope.as_deref())?;
+                (msg, true)
+            }
+            SlashCommand::Commit => {
+                let msg = self.run_commit()?;
+                (msg, true)
+            }
+            SlashCommand::Pr { context } => {
+                let msg = self.run_pr(context.as_deref())?;
+                (msg, true)
+            }
+            SlashCommand::Issue { context } => {
+                let msg = self.run_issue(context.as_deref())?;
+                (msg, true)
+            }
+            SlashCommand::Ultraplan { task } => {
+                let msg = self.run_ultraplan(task.as_deref())?;
+                (msg, true)
+            }
+            SlashCommand::Teleport { target } => {
+                let msg = self.run_teleport(target.as_deref())?;
+                (msg, true)
+            }
+            SlashCommand::DebugToolCall => {
+                let msg = self.run_debug_tool_call()?;
+                (msg, true)
             }
             SlashCommand::History { show_all } => {
                 (self.format_history(show_all), false)
@@ -5828,12 +5938,23 @@ impl LiveCli {
             }
             SlashCommand::Restart { soft } => {
                 if soft {
-                    // Soft restart: reload config in-place.
-                    Self::print_config(None)?;
-                    ("Config reloaded.".to_string(), false)
+                    // Soft restart: reload config in-place.  Task #626:
+                    // `Self::print_config(None)?` corrupted the TUI alt-screen.
+                    // Use the string-returning renderer and surface the
+                    // report through ratatui scrollback instead.
+                    let report = render_config_report(None)?;
+                    (format!("Config reloaded.\n{report}"), false)
                 } else {
                     // Full restart: prompt then respawn (TUI path — prompt via stdout).
-                    print!("Save and restart Anvil? [y/N] ");
+                    // BUG-DEFER (task #626): this `print!` + `read_line` is
+                    // an interactive prompt that the TUI doesn't intercept,
+                    // so the y/N prompt is written into the alt-screen and
+                    // stdin is owned by ratatui's event loop.  A TUI confirm
+                    // modal belongs here; tracked as a follow-up because
+                    // refusing the command would regress the only working
+                    // escape hatch for `/restart` from inside the TUI.
+                    #[allow(clippy::print_stdout, reason = "TUI-reachable interactive prompt; BUG-DEFER per audit 2026-05-18")]
+                    { print!("Save and restart Anvil? [y/N] "); }
                     let _ = io::stdout().flush();
                     let mut choice = String::new();
                     let _ = io::stdin().read_line(&mut choice);
@@ -6550,7 +6671,14 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
             Ok(new_prompt) => {
                 self.system_prompt = new_prompt;
                 self.instructions_mtime = current;
-                eprintln!("⟳ ANVIL.md / MEMORY.md changed — system prompt reloaded");
+                // Task #626: previously `eprintln!` here corrupted the TUI
+                // back-buffer because this method runs inside the active
+                // turn loop at main.rs:3101 / 3683.  Route through the
+                // TUI-aware sink so the message either reaches stderr
+                // (headless) or anvil.log (TUI).  Callers in the TUI path
+                // can additionally surface a system message after a
+                // successful reload if they want a user-visible notice.
+                crate::tui::log_warning("ANVIL.md / MEMORY.md changed — system prompt reloaded");
                 true
             }
             Err(_) => {
@@ -6646,33 +6774,52 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         command: SlashCommand,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         // ── LLM-turn commands (cannot go through run_command_for_tui) ────────
+        // Task #626: each `run_*` now returns `Result<String, _>`; the
+        // headless `handle_repl_command` path `println!`s the result, while
+        // the TUI path (run_command_for_tui:5511–5519, see below) routes
+        // the same String into `tui.push_system` so it lands in ratatui
+        // scrollback instead of corrupting the back-buffer.
         match &command {
             SlashCommand::Bughunter { scope } => {
-                self.run_bughunter(scope.as_deref())?;
+                let msg = self.run_bughunter(scope.as_deref())?;
+                #[allow(clippy::print_stdout, reason = "headless /bughunter REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             SlashCommand::Commit => {
-                self.run_commit()?;
+                let msg = self.run_commit()?;
+                #[allow(clippy::print_stdout, reason = "headless /commit REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(true);
             }
             SlashCommand::Pr { context } => {
-                self.run_pr(context.as_deref())?;
+                let msg = self.run_pr(context.as_deref())?;
+                #[allow(clippy::print_stdout, reason = "headless /pr REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             SlashCommand::Issue { context } => {
-                self.run_issue(context.as_deref())?;
+                let msg = self.run_issue(context.as_deref())?;
+                #[allow(clippy::print_stdout, reason = "headless /issue REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             SlashCommand::Ultraplan { task } => {
-                self.run_ultraplan(task.as_deref())?;
+                let msg = self.run_ultraplan(task.as_deref())?;
+                #[allow(clippy::print_stdout, reason = "headless /ultraplan REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             SlashCommand::Teleport { target } => {
-                self.run_teleport(target.as_deref())?;
+                let msg = self.run_teleport(target.as_deref())?;
+                #[allow(clippy::print_stdout, reason = "headless /teleport REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             SlashCommand::DebugToolCall => {
-                self.run_debug_tool_call()?;
+                let msg = self.run_debug_tool_call()?;
+                #[allow(clippy::print_stdout, reason = "headless /debug-tool-call REPL path; TUI uses run_command_for_tui")]
+                { println!("{msg}"); }
                 return Ok(false);
             }
             // Status has a REPL-specific print_status path (writes structured output
@@ -6723,12 +6870,21 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         Ok(())
     }
 
-    /// Record this session in the daily summary store and print any open items.
+    /// Record this session in the daily summary store and return any lines
+    /// the caller should print after the TUI has been torn down.
     ///
     /// Called once at normal session exit (from both TUI and non-TUI paths).
     /// Failures are swallowed so a write error never prevents Anvil from exiting.
-    fn record_daily(&self) {
+    ///
+    /// Task #626: this function used to `eprintln!` directly, but at TUI
+    /// exit (main.rs:3265) it ran *before* `drop(tui)`, so the "Open items"
+    /// banner painted into ratatui's alt-screen and corrupted the
+    /// back-buffer for the final frame.  Returning `Vec<String>` lets the
+    /// caller print them after `drop(tui)`.
+    fn record_daily(&self) -> Vec<String> {
         use runtime::{DailyStore, SessionSummary, extract_tasks};
+
+        let mut out: Vec<String> = Vec::new();
 
         // Acquire the runtime mutex ONCE, derive everything we need, then drop
         // the guard before doing the I/O work. Re-acquiring on the same thread
@@ -6788,20 +6944,21 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         let store = DailyStore::new();
         if let Err(e) = store.record_session(summary) {
             // Non-fatal: daily summaries are best-effort.
-            eprintln!("[daily] failed to record session: {e}");
-            return;
+            out.push(format!("[daily] failed to record session: {e}"));
+            return out;
         }
 
-        // Print open items as a reminder.
+        // Collect open items as a reminder.
         let updated = store.today();
         let open = store.reconcile(&updated);
         if !open.is_empty() {
-            eprintln!();
-            eprintln!("Open items from today ({}):", updated.date);
+            out.push(String::new());
+            out.push(format!("Open items from today ({}):", updated.date));
             for (i, item) in open.iter().enumerate() {
-                eprintln!("  {}. {item}", i + 1);
+                out.push(format!("  {}. {item}", i + 1));
             }
         }
+        out
     }
 
     // print_status → cmd_provider.rs
@@ -6922,51 +7079,49 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         Ok((previous, message_count))
     }
 
-    fn set_model(&mut self, model: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
+    /// Task #626: returns `(changed, report)` so the caller decides whether
+    /// to `println!` (headless) or `tui.push_system` (TUI).  Previously the
+    /// `println!`s inside this fn corrupted ratatui's alt-screen when
+    /// `run_command_for_tui::Model` invoked the write path.
+    fn set_model(
+        &mut self,
+        model: Option<String>,
+    ) -> Result<(bool, String), Box<dyn std::error::Error>> {
         let Some(model) = model else {
-            println!(
-                "{}",
-                format_model_report(
-                    &self.model,
-                    self.active_runtime().session().messages.len(),
-                    self.active_runtime().usage().turns(),
-                )
+            let report = format_model_report(
+                &self.model,
+                self.active_runtime().session().messages.len(),
+                self.active_runtime().usage().turns(),
             );
-            return Ok(false);
+            return Ok((false, report));
         };
 
         let resolved = resolve_model_alias(&model).to_string();
 
         if resolved == self.model {
-            println!(
-                "{}",
-                format_model_report(
-                    &self.model,
-                    self.active_runtime().session().messages.len(),
-                    self.active_runtime().usage().turns(),
-                )
+            let report = format_model_report(
+                &self.model,
+                self.active_runtime().session().messages.len(),
+                self.active_runtime().usage().turns(),
             );
-            return Ok(false);
+            return Ok((false, report));
         }
 
         let (previous, message_count) = self.apply_model_switch(&resolved, None)?;
-        println!(
-            "{}",
-            format_model_switch_report(&previous, &self.model, message_count)
-        );
-        Ok(true)
+        let report = format_model_switch_report(&previous, &self.model, message_count);
+        Ok((true, report))
     }
 
+    /// Task #626: returns `(changed, report)` so the caller decides where
+    /// the report goes.  Previously the inline `println!`s corrupted the
+    /// TUI when `run_command_for_tui::Permissions` reached the write path.
     fn set_permissions(
         &mut self,
         mode: Option<String>,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<(bool, String), Box<dyn std::error::Error>> {
         let Some(mode) = mode else {
-            println!(
-                "{}",
-                format_permissions_report(self.permission_mode.as_str())
-            );
-            return Ok(false);
+            let report = format_permissions_report(self.permission_mode.as_str());
+            return Ok((false, report));
         };
 
         let normalized = normalize_permission_mode(&mode).ok_or_else(|| {
@@ -6976,8 +7131,8 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         })?;
 
         if normalized == self.permission_mode.as_str() {
-            println!("{}", format_permissions_report(normalized));
-            return Ok(false);
+            let report = format_permissions_report(normalized);
+            return Ok((false, report));
         }
 
         let previous = self.permission_mode.as_str().to_string();
@@ -6995,19 +7150,21 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
             self.active_tui_slot(),
             self.agent_manager.clone(),
         )?);
-        println!(
-            "{}",
-            format_permissions_switch_report(&previous, normalized)
-        );
-        Ok(true)
+        let report = format_permissions_switch_report(&previous, normalized);
+        Ok((true, report))
     }
 
-    fn clear_session(&mut self, confirm: bool) -> Result<bool, Box<dyn std::error::Error>> {
+    /// Task #626: returns `(changed, report)`.  TUI corruption regression
+    /// from `println!("clear: confirmation required…")` is gone.
+    fn clear_session(
+        &mut self,
+        confirm: bool,
+    ) -> Result<(bool, String), Box<dyn std::error::Error>> {
         if !confirm {
-            println!(
-                "clear: confirmation required; run /clear --confirm to start a fresh session."
-            );
-            return Ok(false);
+            return Ok((
+                false,
+                "clear: confirmation required; run /clear --confirm to start a fresh session.".to_string(),
+            ));
         }
 
         self.session = create_managed_session_handle()?;
@@ -7023,13 +7180,13 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
             self.active_tui_slot(),
             self.agent_manager.clone(),
         )?);
-        println!(
+        let report = format!(
             "Session cleared\n  Mode             fresh session\n  Preserved model  {}\n  Permission mode  {}\n  Session          {}",
             self.model,
             self.permission_mode.as_str(),
             self.session.id,
         );
-        Ok(true)
+        Ok((true, report))
     }
 
     fn print_cost(&self) {
@@ -7447,7 +7604,10 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         self.persist_session()
     }
 
-    fn compact(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Task #626: returns the compact report instead of `println!`-ing it,
+    /// so the TUI caller (`run_command_for_tui::Compact`) can push it
+    /// through `tui.push_system` and the headless caller can `println!`.
+    fn compact(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         // Archive the full conversation before discarding messages.
         let _ = self.history_archiver.archive_session(
             &self.session.id,
@@ -7477,8 +7637,7 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         // Re-index history so the new archive file is immediately searchable.
         self.qmd.ensure_history_indexed(self.history_archiver.history_dir());
 
-        println!("{}", format_compact_report(removed, kept, skipped));
-        Ok(())
+        Ok(format_compact_report(removed, kept, skipped))
     }
 
     /// Check if the current session is approaching the context limit.  When it
@@ -8159,13 +8318,14 @@ Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --global"
 
 
     #[allow(clippy::unused_self)]
-    fn run_teleport(&self, target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_teleport(&self, target: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
         cmd_static::run_teleport(target)
     }
 
-    fn run_debug_tool_call(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("{}", render_last_tool_debug_report(self.active_runtime().session())?);
-        Ok(())
+    /// Task #626: returns the last-tool-call debug report instead of
+    /// writing it directly to stdout — callers route it to the right sink.
+    fn run_debug_tool_call(&self) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(render_last_tool_debug_report(self.active_runtime().session())?)
     }
 }
 

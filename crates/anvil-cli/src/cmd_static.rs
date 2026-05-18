@@ -2,6 +2,19 @@
 //! These have no `self` receiver and are dispatched from both the TUI and
 //! headless REPL paths.
 
+// Task #626 — TUI stdout/stderr discipline.  Most fns in this file run
+// from both TUI and headless paths, so `println!` / `eprintln!` is
+// banned by default.  Two exceptions:
+//
+//   • `run_undo` — gated to headless mode at the TUI dispatcher
+//     (run_command_for_tui::Undo refuses TUI invocation), so its
+//     `println!` / `print!` prompts are safe.  Annotated with a fn-level
+//     `#[allow]` below.
+//   • `run_iac_command` — `eprint!` on the apply-confirm path is gated
+//     behind `tui::tui_session_active()` and only runs when no TUI is
+//     up; carries a per-call `#[allow]`.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -167,8 +180,25 @@ pub(crate) fn run_iac_command(args: Option<&str>) -> String {
                 Install OpenTofu: https://opentofu.org/docs/intro/install/".to_string();
     };
     if args == "apply" {
-        // Require explicit confirmation before modifying infrastructure.
-        eprint!("This will apply changes to your infrastructure. Continue? (y/N) ");
+        // Task #626 (BUG-DEFER): when invoked from inside the TUI, ratatui
+        // owns stdin and the alt-screen, so the previous interactive
+        // confirmation was broken (the prompt printed into the back-buffer
+        // and the `read_line` blocked the event loop).  Refuse the apply
+        // path while a TUI session is active and tell the user how to run
+        // it safely.  A proper TUI confirm modal is tracked as a follow-up.
+        if crate::tui::tui_session_active() {
+            return "/iac apply: interactive confirmation is not available \
+                    from inside the TUI yet (task #626).  Run \
+                    `anvil --print /iac apply` from a regular shell, or \
+                    apply the change with `tofu apply` / `terraform apply` \
+                    directly.".to_string();
+        }
+        // Headless path: require explicit confirmation before modifying
+        // infrastructure.
+        #[allow(clippy::print_stderr, reason = "headless confirm prompt; TUI path is gated above")]
+        {
+            eprint!("This will apply changes to your infrastructure. Continue? (y/N) ");
+        }
         let mut answer = String::new();
         if std::io::stdin().read_line(&mut answer).is_err()
             || answer.trim().to_lowercase() != "y"
@@ -1546,6 +1576,14 @@ pub(crate) fn parse_semantic_search_args(args: &str) -> (String, Option<String>,
 
 // ─── Additional self-free command handlers ───────────────────────────────────
 
+/// `/undo` interactive workspace revert.  Task #626 SAFE-HEADLESS: the
+/// TUI dispatcher (`run_command_for_tui::Undo`) refuses to invoke this
+/// function and tells the user to run `/undo` from `--print` mode
+/// instead, because the `read_line` prompts here block the TUI event
+/// loop and the `println!` lines would corrupt the alt-screen.  Both
+/// allows below trigger only on the headless path.
+#[allow(clippy::print_stdout, reason = "headless /undo only — TUI dispatcher refuses this command, see main.rs run_command_for_tui::Undo")]
+#[allow(clippy::print_stderr, reason = "headless /undo only — TUI dispatcher refuses this command, see main.rs run_command_for_tui::Undo")]
 pub(crate) fn run_undo() -> Result<String, Box<dyn std::error::Error>> {
     // Check for unstaged / tracked changes first.
     let changed = git_output(&["diff", "--name-only", "HEAD"])?;
@@ -1828,13 +1866,15 @@ fn load_anvil_ui_config_map() -> serde_json::Map<String, serde_json::Value> {
     }
 }
 
-pub(crate) fn run_teleport(target: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+/// Task #626: returns the teleport report as a `String` so the caller can
+/// route it to either stdout (headless) or `tui.push_system` (TUI). The
+/// previous `println!` corrupted the alt-screen back-buffer when reached via
+/// the LLM-turn fallthrough in `run_command_for_tui`.
+pub(crate) fn run_teleport(target: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
     let Some(target) = target.map(str::trim).filter(|value| !value.is_empty()) else {
-        println!("Usage: /teleport <symbol-or-path>");
-        return Ok(());
+        return Ok("Usage: /teleport <symbol-or-path>".to_string());
     };
 
-    println!("{}", render_teleport_report(target)?);
-    Ok(())
+    Ok(render_teleport_report(target)?)
 }
 

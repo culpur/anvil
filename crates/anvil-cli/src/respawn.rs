@@ -15,6 +15,13 @@
 
 #![allow(unsafe_code)]
 
+// Task #626: SAFE-HEADLESS — `prompt_restart_and_respawn` is currently
+// `#[allow(dead_code)]` (not yet wired by Phase 4 of the AnvilHub
+// installer).  When wired, callers must check `tui::tui_session_active()`
+// and route the prompt through `tui.push_system` instead of `print!` /
+// `println!`.  Until then this file is treated as headless.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::env;
 use std::fs;
 use std::io;

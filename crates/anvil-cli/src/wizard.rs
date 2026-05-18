@@ -10,6 +10,11 @@
 //! vault setup step is explicitly skipped, preserving backward compatibility
 //! with existing installations that may not have run the wizard.
 
+// Task #626: this file runs entirely before the TUI starts (SAFE-PREWIZARD
+// per audit 2026-05-18).  Allow `print_stdout` / `print_stderr` so the
+// wizard can render its interactive forms.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;

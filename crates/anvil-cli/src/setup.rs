@@ -11,6 +11,10 @@
 //! 5. Install shell completions to the appropriate location
 //! 6. Print a success summary
 
+// Task #626: SAFE-HEADLESS — entered only via `CliAction::Setup`
+// (`anvil --setup`); the TUI never starts on this code path.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;

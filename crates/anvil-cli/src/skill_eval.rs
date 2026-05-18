@@ -4,6 +4,9 @@
 // CLI.  Does not touch the engine itself — only parses arguments, loads prompts,
 // resolves skill paths, formats output, and calls `run_evals_with_caller`.
 
+// Task #626: SAFE-HEADLESS — `anvil skill-eval` is a subcommand; no TUI.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::path::{Path, PathBuf};
 
 use compat_harness::skill_evals::{
