@@ -578,4 +578,65 @@ mod tests {
         assert!(rendered.contains("claude-sonnet-4-6"));
         assert!(rendered.contains("hello world"));
     }
+
+    // ── Task #573: golden baseline snapshots ──────────────────────────────
+    //
+    // Step 1 of the TUI Layout work spec: each layout (classic,
+    // vertical-split, three-pane, journal) gets a deterministic golden
+    // snapshot at known sizes. The vertical-split + three-pane snapshots
+    // already exist alongside this directory; these add journal C (no tabs)
+    // and journal F (tabs) so a stylistic regression to either is caught
+    // at `cargo test -p anvil-cli` time.
+    //
+    // Snapshots use `insta::assert_snapshot!` to keep the workflow uniform
+    // with three_pane.rs / vertical_split.rs. Refresh with
+    // `cargo insta review` from the workspace root.
+
+    /// Deterministic fixture for golden snapshots: no live timestamps, no
+    /// dynamic git branch, no input echo, no streaming pending text. We pin
+    /// every field that varies between runs.
+    fn journal_golden_snap() -> LayoutSnapshot {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.git_branch = "main".to_string();
+        snap.tab_infos = vec![
+            (1, "anvil-dev".to_string(), true, false, false),
+            (2, "aegis-fix".to_string(), false, false, false),
+        ];
+        snap.input_text = String::new();
+        snap.cursor_pos = 0;
+        snap.pending = String::new();
+        snap.session_id = "session-pinned".to_string();
+        // ALL so the snapshot reflects a "clean" structural paint.
+        snap.dirty_regions = DirtyRegions::ALL;
+        snap
+    }
+
+    #[test]
+    fn journal_no_tabs__80x24() {
+        let snap = journal_golden_snap();
+        let rendered = render_real_journal(&snap, 80, 24, false);
+        insta::assert_snapshot!("journal_no_tabs__80x24", rendered);
+    }
+
+    #[test]
+    fn journal_no_tabs__120x40() {
+        let snap = journal_golden_snap();
+        let rendered = render_real_journal(&snap, 120, 40, false);
+        insta::assert_snapshot!("journal_no_tabs__120x40", rendered);
+    }
+
+    #[test]
+    fn journal_tabs__80x24() {
+        let snap = journal_golden_snap();
+        let rendered = render_real_journal(&snap, 80, 24, true);
+        insta::assert_snapshot!("journal_tabs__80x24", rendered);
+    }
+
+    #[test]
+    fn journal_tabs__120x40() {
+        let snap = journal_golden_snap();
+        let rendered = render_real_journal(&snap, 120, 40, true);
+        insta::assert_snapshot!("journal_tabs__120x40", rendered);
+    }
 }

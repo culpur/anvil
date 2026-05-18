@@ -44,10 +44,16 @@
 
 pub mod confirm;
 pub mod password;
+pub mod queue;
 
 pub(crate) use confirm::{ConfirmAction, ConfirmModal};
 pub(crate) use password::{PasswordAction, PasswordModal};
 pub use confirm::ConfirmChoice;
+// Task #579: modal queue foundation. Re-export the queue types so
+// the wizard adapter (and any future multi-step caller) can target
+// `tui::modals::queue::ModalQueue` without an internal-path import.
+#[allow(unused_imports)]
+pub(crate) use queue::{ModalQueue, ModalAnswer, QueuedModal, WizardChoiceModal};
 
 // ─── Pending action enums (held alongside the modal on AnvilTui) ─────────────
 

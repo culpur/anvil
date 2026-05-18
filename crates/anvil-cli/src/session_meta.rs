@@ -272,13 +272,18 @@ pub(crate) fn resolve_reference_extended(
 
 /// Derive a short session title from the user's first message.
 ///
-/// Rules (#563, CC-142-B):
+/// Rules (#563, CC-142-B; #580 auto-title wiring):
 /// 1. If the first message is a bare URL (all tokens start with `http://`
 ///    or `https://`, no surrounding text) → return `None` (caller should use
 ///    a generic fallback like `"Session <date>"`).
 /// 2. If the message contains a URL but also surrounding text → strip the URL
 ///    tokens and use the remaining text.
-/// 3. Otherwise use the first 60 characters of the message, trimmed.
+/// 3. Strip a leading slash-command token (e.g. `/compact`, `/model gpt-5`)
+///    so titles reflect the user's actual ask rather than the bare command.
+/// 4. Truncate to ~40 chars (whole characters, not bytes).
+/// 5. Sanitize for sidecar-name compatibility: only `[A-Za-z0-9_-]` chars
+///    survive, others become `-`; collapse runs of `-`, trim leading/trailing
+///    `-`/`_`. Empty result → `None`.
 ///
 /// Returns `None` when no usable title can be extracted (bare URL or empty).
 #[must_use]
@@ -304,15 +309,76 @@ pub(crate) fn derive_title_from_first_message(message: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let candidate = without_urls.trim();
-    if candidate.is_empty() {
+    // Strip a leading slash-command token (`/foo` or `/foo arg`). The slash
+    // command itself is rarely a useful title — what follows it is. If the
+    // message is ONLY a slash command (`/help`), fall back to the command
+    // name without the slash.
+    let candidate_pre_slash = without_urls.trim();
+    let candidate = if let Some(rest) = candidate_pre_slash.strip_prefix('/') {
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let cmd = parts.next().unwrap_or("");
+        let args = parts.next().unwrap_or("").trim();
+        if args.is_empty() { cmd.to_string() } else { args.to_string() }
+    } else {
+        candidate_pre_slash.to_string()
+    };
+
+    if candidate.trim().is_empty() {
         return None;
     }
 
-    // Truncate to 60 chars (whole characters, not bytes).
-    const MAX_CHARS: usize = 60;
-    let title: String = candidate.chars().take(MAX_CHARS).collect();
-    Some(title.trim().to_string())
+    // Truncate to 40 chars before sanitization so we sanitize the relevant
+    // prefix rather than throwing away leading whitespace surprises.
+    const MAX_CHARS: usize = 40;
+    let truncated: String = candidate.chars().take(MAX_CHARS).collect();
+
+    // Sanitize to sidecar-name alphabet: [A-Za-z0-9_-]. Other chars → `-`.
+    // Collapse repeated `-`. Trim leading/trailing `-`/`_`.
+    let mut out = String::with_capacity(truncated.len());
+    let mut last_dash = false;
+    for ch in truncated.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch);
+            last_dash = ch == '-';
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let title = out.trim_matches(|c| c == '-' || c == '_').to_string();
+    if title.is_empty() { None } else { Some(title) }
+}
+
+/// Auto-set a session name from its first user message — but only if the
+/// session has no existing name (manual /name or prior auto-name).
+///
+/// Called from `LiveCli::persist_session` after the first turn completes.
+/// Failures are swallowed: a missing title or duplicate name must not
+/// interrupt the persist path.
+///
+/// Triggers ONLY when:
+///   * the session has at least one user AND one assistant message
+///     (i.e. a complete turn — not just a queued send), AND
+///   * no `<id>.meta.json` name field is set.
+///
+/// `first_user_message_text` is the plain-text first user message; if `None`
+/// or the heuristic returns `None`, no name is written.
+pub(crate) fn auto_set_title_if_missing(
+    id: &str,
+    first_user_message_text: Option<&str>,
+    has_assistant_message: bool,
+) {
+    if !has_assistant_message {
+        return;
+    }
+    if get_session_name(id).is_some() {
+        return;
+    }
+    let Some(text) = first_user_message_text else { return };
+    let Some(title) = derive_title_from_first_message(text) else { return };
+    // set_session_name validates and enforces uniqueness; if a collision
+    // exists (rare), silently skip rather than fail the persist path.
+    let _ = set_session_name(id, &title);
 }
 
 #[cfg(test)]
@@ -479,8 +545,82 @@ mod tests {
 
     #[test]
     fn title_works_normally_for_regular_text() {
+        // After #580: spaces become `-`, ~40 char cap, sanitized.
         let msg = "Refactor the database connection pool to use async/await";
-        let title = derive_title_from_first_message(msg);
-        assert_eq!(title.as_deref(), Some(msg));
+        let title = derive_title_from_first_message(msg).expect("title");
+        assert!(title.starts_with("Refactor-the-database-connection"), "got {title}");
+        // Length cap (40 chars max, post-truncation; sanitization may shorten further).
+        assert!(title.chars().count() <= 40, "title too long: {title}");
+        // Sidecar-name alphabet only.
+        assert!(
+            title.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "non-sidecar-safe chars in title: {title}"
+        );
+    }
+
+    // ── #580: slash-command stripping ─────────────────────────────────────
+
+    #[test]
+    fn title_strips_leading_slash_command_with_args() {
+        // `/compact summarize the auth refactor` → title from the args.
+        let title = derive_title_from_first_message(
+            "/compact summarize the auth refactor",
+        )
+        .expect("title");
+        assert!(!title.starts_with('/'), "title should not start with /: {title}");
+        assert!(
+            title.contains("summarize") || title.contains("auth"),
+            "expected slash args in title: {title}"
+        );
+    }
+
+    #[test]
+    fn title_strips_bare_slash_command_keeps_name() {
+        // `/help` alone → keep `help` (not None).
+        let title = derive_title_from_first_message("/help").expect("title");
+        assert_eq!(title, "help");
+    }
+
+    #[test]
+    fn title_truncates_to_40_chars() {
+        let msg = "a".repeat(200);
+        let title = derive_title_from_first_message(&msg).expect("title");
+        assert!(title.chars().count() <= 40, "title too long: {title}");
+    }
+
+    #[test]
+    fn title_sanitizes_non_alphabet_chars() {
+        // Question marks, colons, parens all become `-`.
+        let title = derive_title_from_first_message(
+            "How do I fix the SSO redirect? (auth0 + Okta)",
+        )
+        .expect("title");
+        assert!(
+            title.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "non-sidecar-safe chars: {title}"
+        );
+        // No leading/trailing dashes.
+        assert!(!title.starts_with('-'));
+        assert!(!title.ends_with('-'));
+    }
+
+    // ── #580: auto_set_title_if_missing gating ────────────────────────────
+
+    #[test]
+    fn auto_title_skips_when_no_assistant_message() {
+        // Pure unit logic: with has_assistant_message=false we should
+        // never touch the sidecar. Use a non-existent session id —
+        // even if we tried to write, set_session_name would create
+        // a sidecar in the workspace, but the gate fires FIRST.
+        // Verify by post-condition: get_session_name still None.
+        let id = "test-session-no-assistant-message";
+        // Make sure we start clean.
+        if let Ok(p) = meta_path_for_id(id)
+            && p.exists()
+        {
+            let _ = fs::remove_file(p);
+        }
+        auto_set_title_if_missing(id, Some("hello world"), false);
+        assert_eq!(get_session_name(id), None);
     }
 }

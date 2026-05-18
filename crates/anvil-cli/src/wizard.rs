@@ -194,6 +194,39 @@ pub(crate) fn wizard_save_config(
 /// - `"2"` / `"y"` / `"yes"`    → `true`  (ON, opt-in)
 /// - anything else              → `false` (conservative — never silently flip ON)
 #[must_use]
+/// Parse the wizard's "TUI Layout — architecture choice" answer (#571).
+///
+/// Step 7 of `run_first_run_wizard` asks the user to pick one of four
+/// architectures (1 = vertical-split [default], 2 = classic, 3 = three-pane,
+/// 4 = journal). Empty / unrecognized input falls back to vertical-split.
+///
+/// Extracted as a pure function so the wizard's layout selection is
+/// regression-tested without a stdin fixture.
+pub(crate) fn wizard_parse_layout_kind_choice(raw: &str) -> &'static str {
+    match raw.trim() {
+        "2" => "classic",
+        "3" => "three-pane",
+        "4" => "journal",
+        _ => "vertical-split",
+    }
+}
+
+/// Parse the wizard's "Show workspace tabs?" answer (#571).
+///
+/// `true` = tabs visible (default; matches pre-v2.2.16 behaviour). Only
+/// explicit "no" inputs disable tabs.
+pub(crate) fn wizard_parse_layout_tabs_choice(raw: &str) -> bool {
+    !matches!(raw.trim(), "2" | "n" | "N" | "no" | "No")
+}
+
+/// Compose the `tui_layout` config alias from the two wizard answers (#571).
+///
+/// Mirrors the inline logic in `run_first_run_wizard` Step 7 so call sites
+/// stay synchronized.
+pub(crate) fn wizard_compose_layout_alias(kind: &str, tabs: bool) -> String {
+    if tabs { format!("{kind}-tabs") } else { kind.to_string() }
+}
+
 pub(crate) fn wizard_parse_mouse_capture_choice(raw: &str) -> bool {
     matches!(
         raw.trim(),
@@ -749,24 +782,15 @@ pub(crate) fn run_first_run_wizard() {
     println!("    [4] Journal         — single-column, timestamped, Ctrl-K palette");
     println!();
     let layout_arch_choice = wizard_read_line("  Choice [1]: ");
-    let layout_kind_str = match layout_arch_choice.trim() {
-        "2" => "classic",
-        "3" => "three-pane",
-        "4" => "journal",
-        _   => "vertical-split",
-    };
+    let layout_kind_str = wizard_parse_layout_kind_choice(&layout_arch_choice);
     println!();
     println!("  Show workspace tabs?");
     println!("    [1] Yes — multiple parallel sessions visible at once          (default)");
     println!("    [2] No  — single session, tab strip hidden");
     println!();
     let layout_tabs_choice = wizard_read_line("  Choice [1]: ");
-    let layout_tabs = !matches!(layout_tabs_choice.trim(), "2" | "n" | "N" | "no" | "No");
-    let layout_alias = if layout_tabs {
-        format!("{layout_kind_str}-tabs")
-    } else {
-        layout_kind_str.to_string()
-    };
+    let layout_tabs = wizard_parse_layout_tabs_choice(&layout_tabs_choice);
+    let layout_alias = wizard_compose_layout_alias(layout_kind_str, layout_tabs);
     let tabs_label = if layout_tabs { "tabs" } else { "no tabs" };
     println!("  \x1b[32m✓\x1b[0m Layout = {layout_alias} ({tabs_label}). Change later with /layout or /configure layout.");
     println!();
@@ -1103,5 +1127,66 @@ mod tests {
         assert!(!wizard_parse_mouse_capture_choice("maybe"));
         assert!(!wizard_parse_mouse_capture_choice("3"));
         assert!(!wizard_parse_mouse_capture_choice("foo"));
+    }
+
+    // ── #571: layout wizard step ──────────────────────────────────────────
+
+    #[test]
+    fn wizard_layout_kind_choice_defaults_to_vertical_split() {
+        // Empty / whitespace / "1" / unknown → vertical-split (the default).
+        assert_eq!(wizard_parse_layout_kind_choice(""), "vertical-split");
+        assert_eq!(wizard_parse_layout_kind_choice("   "), "vertical-split");
+        assert_eq!(wizard_parse_layout_kind_choice("1"), "vertical-split");
+        assert_eq!(wizard_parse_layout_kind_choice("garbage"), "vertical-split");
+    }
+
+    #[test]
+    fn wizard_layout_kind_choice_routes_each_option() {
+        assert_eq!(wizard_parse_layout_kind_choice("2"), "classic");
+        assert_eq!(wizard_parse_layout_kind_choice("3"), "three-pane");
+        assert_eq!(wizard_parse_layout_kind_choice("4"), "journal");
+    }
+
+    #[test]
+    fn wizard_layout_tabs_choice_defaults_to_true() {
+        // Empty / "1" / unknown → tabs ON (default).
+        assert!(wizard_parse_layout_tabs_choice(""));
+        assert!(wizard_parse_layout_tabs_choice("   "));
+        assert!(wizard_parse_layout_tabs_choice("1"));
+        assert!(wizard_parse_layout_tabs_choice("yes"));
+    }
+
+    #[test]
+    fn wizard_layout_tabs_choice_off_inputs() {
+        for raw in ["2", "n", "N", "no", "No"] {
+            assert!(
+                !wizard_parse_layout_tabs_choice(raw),
+                "expected tabs OFF for {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wizard_compose_layout_alias_matches_config_schema() {
+        // All six aliases the config schema (runtime/config/schema.rs:556-563)
+        // accepts must be reachable from the wizard's two answers.
+        assert_eq!(
+            wizard_compose_layout_alias("vertical-split", true),
+            "vertical-split-tabs"
+        );
+        assert_eq!(
+            wizard_compose_layout_alias("vertical-split", false),
+            "vertical-split"
+        );
+        assert_eq!(
+            wizard_compose_layout_alias("three-pane", true),
+            "three-pane-tabs"
+        );
+        assert_eq!(
+            wizard_compose_layout_alias("three-pane", false),
+            "three-pane"
+        );
+        assert_eq!(wizard_compose_layout_alias("journal", true), "journal-tabs");
+        assert_eq!(wizard_compose_layout_alias("journal", false), "journal");
     }
 }

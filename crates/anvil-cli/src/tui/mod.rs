@@ -233,6 +233,14 @@ pub struct AnvilTui {
     /// (up to 3 attempts); on success or final failure both fields are
     /// cleared.
     pub(super) pending_password_action: Option<modals::PendingPasswordAction>,
+    /// Task #579: FIFO queue of pending modal overlays used by the
+    /// in-TUI first-run wizard (foundation). Empty in normal sessions.
+    /// The input handler does not drain this yet — wired in v2.2.18
+    /// alongside the wizard adapter; defined now so the queue's tests
+    /// compile against the same `tui::modals::queue` module the wizard
+    /// will eventually target.
+    #[allow(dead_code)]
+    pub(super) modal_queue: modals::queue::ModalQueue,
     /// Clickable-tab geometry recorded by the draw loop. The input handler
     /// looks this up on a mouse Down(Left) event to decide whether the click
     /// landed on a tab label (switch) or its close glyph (close).
@@ -651,6 +659,8 @@ impl AnvilTui {
                 pending_confirm_action: None,
                 password_modal: None,
                 pending_password_action: None,
+                // Task #579: wizard modal queue starts empty.
+                modal_queue: modals::queue::ModalQueue::new(),
                 pending_auto_submit: None,
                 tab_hits: Vec::new(),
                 tab_bar_row: 0,
@@ -924,6 +934,10 @@ impl AnvilTui {
         let model_str = model.into();
         self.context_max_tokens = context_max_for_model(&model_str);
         self.active_tab_mut().model = model_str;
+        // Task #574: model-switch dirties the HEADER band (model label,
+        // context window). STATUS picks up the cost/effort/permission strip.
+        // No need to dirty SCROLLBACK or INPUT — content is unaffected.
+        self.redraw.request(redraw::DirtyRegions::HEADER | redraw::DirtyRegions::STATUS);
     }
 
     /// Apply a new theme to the TUI immediately (live hot-swap).
@@ -2277,6 +2291,12 @@ impl AnvilTui {
         self.drain_events();
         let frame = self.active_tab().think_frame.wrapping_add(1);
         self.active_tab_mut().think_frame = frame;
+        // Task #574: spinner-frame advance dirties the HEADER band
+        // (spinner glyph is rendered in the model/version header strip on
+        // journal layout; vertical-split/three-pane carry it in their own
+        // bands but the HEADER bit is the closest scoped target).
+        // Don't promote to ALL — that defeats the flash-fix gating.
+        self.redraw.request(redraw::DirtyRegions::HEADER);
     }
 
     /// Block until `TurnDone` arrives on the channel, processing events as they

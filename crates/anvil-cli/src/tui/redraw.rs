@@ -64,11 +64,16 @@ impl DirtyRegions {
     pub const FOCUS: Self = Self(1 << 8);
     /// Layout B/E CONTEXT strip (model/tokens/cost/git). Scoped repaint target.
     pub const CONTEXT: Self = Self(1 << 9);
+    /// Task #574: top header row in journal / classic / vertical-split
+    /// layouts — the strip that shows model + git branch + version. Distinct
+    /// from STATUS (status line / footer) so a model-switch or spinner-frame
+    /// tick can scope its repaint to JUST the header band.
+    pub const HEADER: Self = Self(1 << 10);
     // Note: JOURNAL_BODY reuses SCROLLBACK (single-column → same region).
     // BUFFER_LINE / THREAD_SWITCHER reuse TAB_STRIP (same role).
 
-    /// All regions (updated for v2.2.16 with the three new bits).
-    pub const ALL: Self = Self(0b0000_0011_1111_1111);
+    /// All regions (updated for v2.2.17 with the HEADER bit at position 10).
+    pub const ALL: Self = Self(0b0000_0111_1111_1111);
 
     /// No regions dirty.
     pub const NONE: Self = Self(0);
@@ -301,9 +306,58 @@ mod tests {
             DirtyRegions::RAIL,
             DirtyRegions::FOCUS,
             DirtyRegions::CONTEXT,
+            // v2.2.17 task #574 — header band region.
+            DirtyRegions::HEADER,
         ] {
             assert!(all.contains(region));
         }
+    }
+
+    // ── Task #574: region granularity — independent bits ──────────────────
+    //
+    // The bedrock guarantee of the bitset: every region is independent so
+    // a caller can scope a repaint to JUST that bit. Regression-testing
+    // this catches a future merge that collapses bits or aliases two
+    // regions.
+
+    #[test]
+    fn header_bit_is_independent_of_input_and_rail() {
+        // Requesting HEADER must NOT mark INPUT or RAIL dirty.
+        let mut s = RedrawScheduler::new();
+        s.request(DirtyRegions::HEADER);
+        assert!(s.peek_dirty().contains(DirtyRegions::HEADER));
+        assert!(!s.peek_dirty().contains(DirtyRegions::INPUT));
+        assert!(!s.peek_dirty().contains(DirtyRegions::RAIL));
+        assert!(!s.peek_dirty().contains(DirtyRegions::SCROLLBACK));
+    }
+
+    #[test]
+    fn input_bit_is_independent_of_header_and_rail() {
+        let mut s = RedrawScheduler::new();
+        s.request(DirtyRegions::INPUT);
+        assert!(s.peek_dirty().contains(DirtyRegions::INPUT));
+        assert!(!s.peek_dirty().contains(DirtyRegions::HEADER));
+        assert!(!s.peek_dirty().contains(DirtyRegions::RAIL));
+    }
+
+    #[test]
+    fn rail_bit_is_independent_of_header_and_input() {
+        let mut s = RedrawScheduler::new();
+        s.request(DirtyRegions::RAIL);
+        assert!(s.peek_dirty().contains(DirtyRegions::RAIL));
+        assert!(!s.peek_dirty().contains(DirtyRegions::HEADER));
+        assert!(!s.peek_dirty().contains(DirtyRegions::INPUT));
+    }
+
+    #[test]
+    fn last_committed_dirty_records_header_only() {
+        // A header-only repaint (e.g. spinner tick) must not leak into
+        // last_committed_dirty as ALL.
+        let mut s = RedrawScheduler::new();
+        s.request(DirtyRegions::HEADER);
+        assert!(s.commit_pending());
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::HEADER);
+        assert!(!s.last_committed_dirty().contains(DirtyRegions::ALL));
     }
 
     #[test]
