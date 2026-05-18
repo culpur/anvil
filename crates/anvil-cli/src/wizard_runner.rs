@@ -445,6 +445,72 @@ where
             .unwrap_or(ModalAnswer::TextInput(default)))
     }
 
+    /// Drive an `OAuthFlow` to completion inside the active alt-screen
+    /// session (task #642 Sub-task C).
+    ///
+    /// The flow is polled non-blocking each tick and rendered into the
+    /// session's terminal; user keys route to `OAuthFlow::handle_key`.
+    /// Returns the terminal `OAuthOutcome` from `OAuthFlow::finalize`.
+    ///
+    /// This is the bridge that lets the first-run wizard's Step 3 run
+    /// the OAuth callback inline — no drop to stdin, no second
+    /// alt-screen transition, the whole flow stays inside the same
+    /// `WizardSession` the rest of the wizard owns.
+    #[allow(dead_code)]
+    pub(crate) fn run_oauth_flow(
+        &mut self,
+        mut flow: crate::tui::oauth_flow::OAuthFlow,
+    ) -> Result<crate::tui::oauth_flow::OAuthOutcome, RunnerError> {
+        use crate::tui::oauth_flow::{OAuthAction, OAuthEvent, OAuthFlowState};
+        let accent = self.accent;
+        loop {
+            // Per-tick: poll the listener channel before drawing so the
+            // success/failed card is visible immediately after the
+            // callback arrives.
+            match flow.poll() {
+                Some(OAuthEvent::Success) | Some(OAuthEvent::Failed(_)) => {
+                    // Render the result card.
+                    self.session
+                        .terminal
+                        .draw(|frame| {
+                            let area = frame.area();
+                            flow.render(frame, area, accent);
+                        })
+                        .map_err(|e| RunnerError::Draw(e.to_string()))?;
+                }
+                _ => {
+                    self.session
+                        .terminal
+                        .draw(|frame| {
+                            let area = frame.area();
+                            flow.render(frame, area, accent);
+                        })
+                        .map_err(|e| RunnerError::Draw(e.to_string()))?;
+                }
+            }
+
+            // If awaiting and channel empty, keep polling without
+            // blocking forever on keys — but block briefly so the loop
+            // doesn't spin.
+            let key = self.keys.next_key();
+            if let Some(k) = key {
+                match flow.handle_key(k) {
+                    OAuthAction::Continue => continue,
+                    OAuthAction::Cancel | OAuthAction::Advance => {
+                        return Ok(flow.finalize());
+                    }
+                }
+            }
+
+            // If the flow has already transitioned out of AwaitingCallback
+            // and we got no key (e.g. scripted-source empty), break with
+            // the current outcome rather than spinning.
+            if !matches!(flow.state, OAuthFlowState::AwaitingCallback { .. }) {
+                return Ok(flow.finalize());
+            }
+        }
+    }
+
     /// Drive a single password modal to resolution, returning the raw
     /// secret on success. Used by the v2.2.17 wizard for vault-setup
     /// password capture inside the alt-screen session.
