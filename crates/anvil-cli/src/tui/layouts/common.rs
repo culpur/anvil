@@ -135,6 +135,55 @@ pub(super) fn render_tab_bar(
     frame.render_widget(widget, area);
 }
 
+/// Task #574: rebuild `tab_hits_out` without repainting the tab bar.
+///
+/// Used by the region-gated render path when the TAB_STRIP dirty bit is
+/// not set on this frame. Click hit-testing requires up-to-date geometry
+/// even when the strip's pixels are not being repainted, so we walk the
+/// same span sequence as `render_tab_bar` and emit the `TabHit` entries
+/// without writing into the frame buffer. Keeping the two walkers in
+/// lockstep is enforced by the `tab_hits_match_render_tab_bar` regression
+/// test in `tui/layouts/common.rs`.
+pub(super) fn rebuild_tab_hits(
+    area: Rect,
+    snap: &LayoutSnapshot,
+    tab_hits_out: &mut Vec<crate::tui::TabHit>,
+) {
+    use crate::tui::TabHit;
+    let mut cursor_col: u16 = area.x + 1;
+    for (idx, (_tab_id, tab_name, _is_active, has_unread, has_perm)) in
+        snap.tab_infos.iter().enumerate()
+    {
+        let label_start = cursor_col;
+        // Prefix space.
+        cursor_col += 1;
+        // Dot prefix ("● " or "○ ", 2 chars).
+        cursor_col += 2;
+        // Tab name.
+        cursor_col += tab_name.chars().count() as u16;
+        // Unread superscript.
+        if *has_unread {
+            cursor_col += 1;
+        }
+        // Perm glyph (" ⚠" — space + glyph).
+        if *has_perm {
+            cursor_col += 2;
+        }
+        let label_end = cursor_col;
+        let close_col = if snap.can_close_tab {
+            let col = cursor_col + 1;
+            // " × " takes 3 columns when closable.
+            cursor_col += 3;
+            Some(col)
+        } else {
+            // Single trailing space.
+            cursor_col += 1;
+            None
+        };
+        tab_hits_out.push(TabHit { idx, label_start, label_end, close_col });
+    }
+}
+
 /// Render the model/session info bar into `area` (a single-row rect).
 pub(super) fn render_model_bar(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let theme = &snap.theme;

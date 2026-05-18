@@ -29,8 +29,8 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use super::common::{
-    rgb, render_completion_popup, render_tab_bar, right_aligned_row, section_header_line,
-    truncate,
+    rebuild_tab_hits, rgb, render_completion_popup, render_tab_bar, right_aligned_row,
+    section_header_line, truncate,
 };
 use super::{LayoutLocalState, RightDeckMode, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
@@ -122,6 +122,15 @@ impl TuiLayoutRenderer for Renderer {
 
         let rail_w = rail_width(width);
 
+        // Task #574 region gating: rail and deck repaint independently.
+        //   - RAIL bit → repaint left rail
+        //   - FOCUS / SCROLLBACK / CONTEXT bits → repaint deck content
+        //   - HEADER / TAB_STRIP bits → repaint deck header
+        //   - INPUT / STATUS bits → repaint deck footer
+        // `DirtyRegions::ALL` always paints everything (first-frame contract).
+        let render_rail_now = snap.dirty_regions.contains(DirtyRegions::RAIL)
+            || snap.dirty_regions.contains(DirtyRegions::ALL);
+
         // ── Global vertical split: left rail | right deck ───────────────────────
         // When rail_w == 0 (narrow terminal) we skip the rail entirely.
         if rail_w == 0 {
@@ -156,8 +165,10 @@ impl TuiLayoutRenderer for Renderer {
         let sep_area = horiz[1];
         let deck_area = horiz[2];
 
-        render_rail(frame, rail_area, snap);
-        render_separator(frame, sep_area, snap);
+        if render_rail_now {
+            render_rail(frame, rail_area, snap);
+            render_separator(frame, sep_area, snap);
+        }
         render_deck(frame, deck_area, snap, local, tab_hits_out, self.tabs, deck_mode);
     }
 }
@@ -637,8 +648,23 @@ fn render_deck(
     let content_area = chunks[1];
     let footer_area = chunks[2];
 
+    // Task #574 region gating for the deck.
+    let render_header = snap.dirty_regions.contains(DirtyRegions::HEADER)
+        || snap.dirty_regions.contains(DirtyRegions::ALL);
+    let render_tab_strip = snap.dirty_regions.contains(DirtyRegions::TAB_STRIP)
+        || snap.dirty_regions.contains(DirtyRegions::ALL);
+    let render_content = snap.dirty_regions.contains(DirtyRegions::SCROLLBACK)
+        || snap.dirty_regions.contains(DirtyRegions::FOCUS)
+        || snap.dirty_regions.contains(DirtyRegions::ALL);
+    let render_input = snap.dirty_regions.contains(DirtyRegions::INPUT)
+        || snap.dirty_regions.contains(DirtyRegions::ALL);
+    let render_status = snap.dirty_regions.contains(DirtyRegions::STATUS)
+        || snap.dirty_regions.contains(DirtyRegions::ALL);
+
     // ── Header: [optional tab strip] + deck mode label ────────────────────────
-    frame.render_widget(ratatui::widgets::Clear, header_area);
+    if render_header || render_tab_strip {
+        frame.render_widget(ratatui::widgets::Clear, header_area);
+    }
     if tabs && tab_strip_height > 0 {
         // Tab strip occupies the first row of the header area.
         let tab_area = Rect {
@@ -647,9 +673,13 @@ fn render_deck(
             width: header_area.width,
             height: 1,
         };
-        render_tab_bar(frame, tab_area, snap, tab_hits_out);
+        if render_tab_strip {
+            render_tab_bar(frame, tab_area, snap, tab_hits_out);
+        } else {
+            rebuild_tab_hits(tab_area, snap, tab_hits_out);
+        }
         // Deck mode header on next row.
-        if header_area.height > 1 {
+        if render_header && header_area.height > 1 {
             let mode_area = Rect {
                 x: header_area.x,
                 y: header_area.y + 1,
@@ -658,16 +688,18 @@ fn render_deck(
             };
             render_deck_header(frame, mode_area, snap, deck_mode);
         }
-    } else {
+    } else if render_header {
         render_deck_header(frame, header_area, snap, deck_mode);
     }
 
     // ── Content ───────────────────────────────────────────────────────────────
     let configure_state = &snap.configure_state;
     let content_width = content_area.width;
-    frame.render_widget(ratatui::widgets::Clear, content_area);
+    if render_content {
+        frame.render_widget(ratatui::widgets::Clear, content_area);
+    }
 
-    if snap.is_ssh_tab {
+    if render_content && snap.is_ssh_tab {
         if let Some((ref grid_lines, ref footer_lines)) = snap.ssh_screen {
             let ssh_footer_h = footer_lines.len() as u16;
             let grid_h = content_area.height.saturating_sub(ssh_footer_h);
@@ -682,7 +714,7 @@ fn render_deck(
             frame.render_widget(Paragraph::new(Text::from(grid_lines.clone())), grid_area);
             frame.render_widget(Paragraph::new(Text::from(footer_lines.clone())), status_area);
         }
-    } else {
+    } else if render_content {
         let all_lines: Vec<Line<'static>> = if *configure_state == ConfigureState::Inactive {
             build_content_lines(snap, content_width, deck_mode, theme)
         } else {
@@ -730,12 +762,19 @@ fn render_deck(
     // ── Footer (input ONLY — task #594 / BUG-13) ──────────────────────────────
     // The rail owns ALL chrome; the deck footer is separator + queued + input.
     // No status_lines call, no keybind row.
-    render_footer(frame, footer_area, snap, width, queued_indicator_height);
+    //
+    // Task #574: gate on INPUT or STATUS dirty.
+    if render_input || render_status {
+        render_footer(frame, footer_area, snap, width, queued_indicator_height);
+    }
 
     // ── Completion popup ──────────────────────────────────────────────────────
     render_completion_popup(frame, footer_area, snap);
 
     // ── Cursor position ───────────────────────────────────────────────────────
+    // Always set the cursor — it's positional, not a paintable region, and
+    // the user needs the on-screen caret in lockstep with the input buffer
+    // even on HEADER-only / RAIL-only repaints.
     let (cursor_row_offset, cursor_col) =
         cursor_visual_position(&snap.input_text, snap.cursor_pos, width);
     let cursor_x = footer_area.x + cursor_col as u16;
@@ -1489,19 +1528,67 @@ mod tests {
 
     #[test]
     fn vertical_split_skips_full_screen_clear_when_no_flash_set() {
-        // SCROLLBACK-only dirty: the top-level Clear must be skipped. We
-        // verify the renderer doesn't panic and completes the draw with
-        // visible chrome intact.
+        // #622 + #574 contract: SCROLLBACK-only dirty must skip the
+        // full-screen Clear AND the rail / chrome paints. In the
+        // TestBackend buffer the rail cells should NOT be written.
         let mut snap = LayoutSnapshot::test_default();
         snap.model = "claude-sonnet-4-6".to_string();
         snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         let rendered = render_real_vsplit(&snap, 120, 30, true);
-        // Sanity: the rail's SESSIONS header still renders.
+        assert!(
+            !rendered.contains("SESSIONS"),
+            "rail must NOT repaint on SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// Task #574: RAIL-only repaint paints the left rail but not the
+    /// deck content or deck header.
+    #[test]
+    fn vertical_split_renders_only_rail_on_rail_dirty() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::RAIL;
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
         assert!(
             rendered.contains("SESSIONS"),
-            "rail must render with SCROLLBACK-only dirty; got:\n{rendered}"
+            "rail SESSIONS header must render with RAIL-only dirty; got:\n{rendered}"
         );
+        assert!(
+            !rendered.contains("DECK: "),
+            "deck header must NOT render with RAIL-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// Task #574: HEADER-only repaint paints just the deck header strip.
+    #[test]
+    fn vertical_split_renders_only_deck_header_on_header_dirty() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::HEADER;
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
+        assert!(
+            rendered.contains("DECK: "),
+            "deck header must render with HEADER-only dirty; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("SESSIONS"),
+            "rail must NOT render with HEADER-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// Task #574: first-frame `DirtyRegions::ALL` paints rail AND deck.
+    #[test]
+    fn vertical_split_first_frame_renders_everything() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::ALL;
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
+        assert!(rendered.contains("SESSIONS"), "rail must render on dirty=ALL");
+        assert!(rendered.contains("DECK: "), "deck header must render on dirty=ALL");
     }
 
     #[test]

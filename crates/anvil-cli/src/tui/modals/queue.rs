@@ -191,7 +191,6 @@ impl WizardChoiceModal {
     }
 
     /// Outcome of `handle_key`.
-    #[allow(dead_code)] // Wired in v2.2.18 alongside wizard migration.
     pub(crate) fn handle_key(
         &mut self,
         key: crossterm::event::KeyEvent,
@@ -225,6 +224,74 @@ impl WizardChoiceModal {
             }
             _ => ChoiceAction::Continue,
         }
+    }
+
+    /// Task #579: render the choice modal as a centered overlay. Used by
+    /// the wizard's standalone runner (`tui::wizard_runner`) and any
+    /// future in-TUI caller that drains the queue from inside an alt
+    /// screen. Mirrors the visual contract of `ConfirmModal::render`:
+    /// rounded border, accent-colored title, dim-numbered options, the
+    /// `selected` index drawn with reverse video.
+    pub(crate) fn render(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        accent: ratatui::style::Color,
+    ) {
+        use ratatui::layout::Rect;
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+
+        // Width: at most 70, at least 30, padded against the screen edges.
+        let modal_w = area.width.saturating_sub(8).min(70).max(30);
+        // Height: 2 padding + 1 line per option + 1 footer + 2 border = N + 5.
+        let opts_rows = self.options.len() as u16;
+        let modal_h: u16 = opts_rows + 5;
+        if area.width < 12 || area.height < modal_h {
+            return;
+        }
+        let modal_x = (area.width.saturating_sub(modal_w)) / 2;
+        let modal_y = (area.height.saturating_sub(modal_h)) / 2;
+        let modal_area = Rect {
+            x: modal_x,
+            y: modal_y,
+            width: modal_w,
+            height: modal_h,
+        };
+
+        frame.render_widget(Clear, modal_area);
+
+        let block = Block::default()
+            .title(format!(" {} ", self.title))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+            .style(Style::default().bg(Color::Black));
+        let inner = block.inner(modal_area);
+        frame.render_widget(block, modal_area);
+
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.options.len() + 2);
+        lines.push(Line::from(""));
+        for (idx, opt) in self.options.iter().enumerate() {
+            let label = format!("  [{}] {}", idx + 1, opt);
+            let style = if idx == self.selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(Span::styled(label, style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  ↑↓ navigate · Enter select · 1-9 jump · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        frame.render_widget(Paragraph::new(lines), inner);
     }
 }
 

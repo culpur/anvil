@@ -69,6 +69,21 @@ impl TuiLayoutRenderer for Renderer {
             _ => (false, String::new(), 0),
         };
 
+        // Task #574 region gating: each band repaints independently.
+        //   - TAB_STRIP → thread switcher row
+        //   - HEADER → version/model header band
+        //   - SCROLLBACK → timestamped journal body
+        //   - INPUT → input row
+        // `DirtyRegions::ALL` paints everything (first-frame / structural).
+        let render_tab_strip = snap.dirty_regions.contains(DirtyRegions::TAB_STRIP)
+            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        let render_header = snap.dirty_regions.contains(DirtyRegions::HEADER)
+            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        let render_body = snap.dirty_regions.contains(DirtyRegions::SCROLLBACK)
+            || snap.dirty_regions.contains(DirtyRegions::ALL);
+        let render_input = snap.dirty_regions.contains(DirtyRegions::INPUT)
+            || snap.dirty_regions.contains(DirtyRegions::ALL);
+
         // ── Row allocation ────────────────────────────────────────────────────
         // Layout F: row 0 = thread switcher; rest = header + body + input row.
         // Layout C: no thread switcher row.
@@ -80,7 +95,15 @@ impl TuiLayoutRenderer for Renderer {
                 width: size.width,
                 height: 1,
             };
-            render_thread_switcher(frame, anchor_area, snap, tab_hits_out);
+            // The thread switcher populates tab_hits_out — same trick as
+            // classic/vertical_split: render only when dirty, but always
+            // rebuild click hit-test geometry so clicks route correctly on
+            // narrow-dirty frames.
+            if render_tab_strip {
+                render_thread_switcher(frame, anchor_area, snap, tab_hits_out);
+            } else {
+                rebuild_thread_switcher_hits(anchor_area, snap, tab_hits_out);
+            }
             y_offset = 1;
         }
 
@@ -106,47 +129,53 @@ impl TuiLayoutRenderer for Renderer {
         let input_area = bands[2];
 
         // ── Header ────────────────────────────────────────────────────────────
-        let version = env!("CARGO_PKG_VERSION");
-        let header_text = format!(
-            " {} · v{} · {}",
-            if snap.git_branch.is_empty() { "anvil".to_string() } else { snap.git_branch.clone() },
-            version,
-            snap.model,
-        );
-        frame.render_widget(ratatui::widgets::Clear, header_area);
-        frame.render_widget(
-            Paragraph::new(header_text).style(
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .bg(rgb(theme.bg_primary))
-                    .add_modifier(Modifier::ITALIC),
-            ),
-            header_area,
-        );
+        if render_header {
+            let version = env!("CARGO_PKG_VERSION");
+            let header_text = format!(
+                " {} · v{} · {}",
+                if snap.git_branch.is_empty() { "anvil".to_string() } else { snap.git_branch.clone() },
+                version,
+                snap.model,
+            );
+            frame.render_widget(ratatui::widgets::Clear, header_area);
+            frame.render_widget(
+                Paragraph::new(header_text).style(
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .bg(rgb(theme.bg_primary))
+                        .add_modifier(Modifier::ITALIC),
+                ),
+                header_area,
+            );
+        }
 
         // ── Body (timestamped journal entries) ────────────────────────────────
-        render_journal_body(frame, body_area, snap);
+        if render_body {
+            render_journal_body(frame, body_area, snap);
+        }
 
         // ── Input row ─────────────────────────────────────────────────────────
-        let input_line = if snap.input_text.is_empty() {
-            Line::from(Span::styled(
-                " ▌ ctrl-k for command palette · ↑ history · enter to send",
-                Style::default().fg(Color::DarkGray),
-            ))
-        } else {
-            Line::from(vec![
-                Span::styled(" ▌ ", Style::default().fg(rgb(theme.accent))),
-                Span::raw(snap.input_text.clone()),
-                Span::styled("█", Style::default().fg(Color::White)),
-            ])
-        };
-        frame.render_widget(ratatui::widgets::Clear, input_area);
-        frame.render_widget(
-            Paragraph::new(input_line).style(Style::default().bg(rgb(theme.bg_primary))),
-            input_area,
-        );
+        if render_input {
+            let input_line = if snap.input_text.is_empty() {
+                Line::from(Span::styled(
+                    " ▌ ctrl-k for command palette · ↑ history · enter to send",
+                    Style::default().fg(Color::DarkGray),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(" ▌ ", Style::default().fg(rgb(theme.accent))),
+                    Span::raw(snap.input_text.clone()),
+                    Span::styled("█", Style::default().fg(Color::White)),
+                ])
+            };
+            frame.render_widget(ratatui::widgets::Clear, input_area);
+            frame.render_widget(
+                Paragraph::new(input_line).style(Style::default().bg(rgb(theme.bg_primary))),
+                input_area,
+            );
+        }
 
-        // Cursor in the input row.
+        // Cursor in the input row — always set, since it's positional.
         let col = snap.cursor_pos.min(input_area.width.saturating_sub(4) as usize);
         frame.set_cursor_position(Position {
             x: input_area.x + 3 + col as u16,
@@ -169,6 +198,32 @@ impl TuiLayoutRenderer for Renderer {
 }
 
 // ─── Thread switcher (Layout F) ───────────────────────────────────────────────
+
+/// Task #574: rebuild journal thread-switcher click hit-test geometry
+/// without repainting the band. Walks the same `tab_infos` sequence with
+/// identical column arithmetic as `render_thread_switcher`. Used when
+/// `DirtyRegions::TAB_STRIP` is not set on this frame.
+fn rebuild_thread_switcher_hits(
+    area: Rect,
+    snap: &LayoutSnapshot,
+    tab_hits_out: &mut Vec<TabHit>,
+) {
+    let mut cursor_col: u16 = area.x + 1;
+    for (idx, (_tab_id, tab_name, _is_active, _has_unread, _has_perm)) in
+        snap.tab_infos.iter().enumerate()
+    {
+        let label_len = tab_name.chars().count() as u16;
+        let label_start = cursor_col;
+        let label_end = cursor_col + label_len;
+        tab_hits_out.push(TabHit { idx, label_start, label_end, close_col: None });
+        // Separator between tabs (" · " = 3 cols) or final " · +" (4 cols).
+        if idx + 1 < snap.tab_infos.len() {
+            cursor_col = label_end + 3;
+        } else {
+            cursor_col = label_end + 4;
+        }
+    }
+}
 
 fn render_thread_switcher(
     frame: &mut Frame,
@@ -513,45 +568,51 @@ mod tests {
         rows.join("\n")
     }
 
-    /// #583 regression: with `DirtyRegions::SCROLLBACK` only (the streaming
-    /// soft-path post-flash-fix), the journal layout MUST still redraw the
-    /// header and input rows on every frame. Before commit 264c922 the
-    /// header carried stale cells from prior layouts; the fix adds a
-    /// sub-region `Clear` per band so each band is rewritten regardless of
-    /// the top-level flash gate.
-    ///
-    /// Sub-region clears are the safe option per
-    /// `feedback-tui-flash-anti-pattern.md`: "For sub-region clears
-    /// (header_area, content_area), those are OK — they're small and don't
-    /// cause perceptible flash."
+    /// Task #574 region gating: a SCROLLBACK-only frame must NOT repaint
+    /// the header or input bands. In `TestBackend` land each new frame's
+    /// buffer starts empty, so "unrepainted" is observable as "blank
+    /// cells". (At the terminal-emulator level the previous frame's
+    /// pixels are preserved because ratatui only emits cell diffs.)
     #[test]
-    fn journal_redraws_header_and_input_on_scrollback_only_dirty() {
+    fn journal_redraws_only_body_on_scrollback_dirty() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        snap.pending = "Streaming token".to_string();
         let rendered = render_real_journal(&snap, 100, 20, false);
-
-        // Header: model + git branch must appear on the header row.
         assert!(
-            rendered.contains("claude-sonnet-4-6"),
-            "header model must render with SCROLLBACK-only dirty; got:\n{rendered}"
+            !rendered.contains("claude-sonnet-4-6"),
+            "header model must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
         );
         assert!(
-            rendered.contains("v2.2.14-phase1"),
-            "header git branch must render with SCROLLBACK-only dirty; got:\n{rendered}"
+            !rendered.contains("v2.2.14-phase1"),
+            "header git branch must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
         );
-
-        // Input row: user-typed text must appear in the bottom row.
         assert!(
-            rendered.contains("hello world"),
-            "input row text must render with SCROLLBACK-only dirty; got:\n{rendered}"
+            !rendered.contains("ctrl-k for command palette"),
+            "input prompt placeholder must NOT render with SCROLLBACK-only dirty; got:\n{rendered}"
         );
     }
 
-    /// #583 regression, paired test: with `DirtyRegions::ALL` the full-screen
-    /// `Clear` (gated behind ALL per task #622) fires, and header + input
-    /// rows still render coherently.
+    /// Task #574: HEADER-only repaint paints just the header band — body
+    /// content and input row stay blank.
     #[test]
-    fn journal_renders_header_and_input_with_dirty_all() {
+    fn journal_renders_only_header_on_header_dirty() {
+        let mut snap = journal_snap();
+        snap.dirty_regions = DirtyRegions::HEADER;
+        let rendered = render_real_journal(&snap, 100, 20, false);
+        assert!(
+            rendered.contains("claude-sonnet-4-6"),
+            "header model must render with HEADER-only dirty; got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("ctrl-k for command palette"),
+            "input prompt placeholder must NOT render with HEADER-only dirty; got:\n{rendered}"
+        );
+    }
+
+    /// Task #574: first-frame `DirtyRegions::ALL` paints every band.
+    #[test]
+    fn journal_first_frame_renders_everything_on_dirty_all() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::ALL;
         let rendered = render_real_journal(&snap, 100, 20, false);
@@ -560,11 +621,11 @@ mod tests {
         assert!(rendered.contains("hello world"));
     }
 
-    /// #583/#622 regression: a streaming `pending` text frame (SCROLLBACK-only)
-    /// must render the new tokens AND keep the header/input rows intact.
-    /// Before 264c922 the header would ghost; after the fix it does not.
+    /// Task #574 streaming contract: a streaming `pending` text frame
+    /// (SCROLLBACK-only dirty) paints the new tokens into the journal
+    /// body but leaves the header / input rows untouched.
     #[test]
-    fn journal_streaming_pending_keeps_header_and_input_fresh() {
+    fn journal_streaming_pending_renders_only_body() {
         let mut snap = journal_snap();
         snap.dirty_regions = DirtyRegions::SCROLLBACK;
         snap.pending = "Streaming response token".to_string();
@@ -573,10 +634,64 @@ mod tests {
             rendered.contains("Streaming response token"),
             "streaming pending must render; got:\n{rendered}"
         );
-        // Header + input must still be visible — the photosensitivity-safe
-        // sub-region Clears are doing their job.
-        assert!(rendered.contains("claude-sonnet-4-6"));
-        assert!(rendered.contains("hello world"));
+        assert!(
+            !rendered.contains("claude-sonnet-4-6"),
+            "header must NOT repaint on streaming SCROLLBACK frame; got:\n{rendered}"
+        );
+    }
+
+    /// Task #574 cross-task contract: a Confirm modal overlay renders
+    /// cleanly above the layout regardless of layout dirty bits.
+    #[test]
+    fn confirm_modal_renders_cleanly_under_header_only_dirty() {
+        use crate::tui::modals::ConfirmModal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+        use ratatui::Terminal;
+
+        let mut snap = journal_snap();
+        snap.dirty_regions = DirtyRegions::HEADER;
+        let modal = ConfirmModal::new("Restart Anvil?", "This will respawn the current binary in-place.");
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+        let mut local = LayoutLocalState::Journal {
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                super::Renderer { tabs: false }.render(frame, &snap, &mut local, &mut hits);
+                let size = frame.area();
+                modal.render(frame, size, Color::Cyan);
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer();
+        let (bw, bh) = (buf.area.width as usize, buf.area.height as usize);
+        let mut rows = Vec::with_capacity(bh);
+        for row in 0..bh {
+            let mut line = String::with_capacity(bw);
+            for col in 0..bw {
+                let ch = buf[(col as u16, row as u16)].symbol();
+                if ch.is_empty() || ch == "\x00" {
+                    line.push(' ');
+                } else {
+                    line.push_str(ch);
+                }
+            }
+            rows.push(line.trim_end().to_string());
+        }
+        let rendered = rows.join("\n");
+        assert!(
+            rendered.contains("Restart Anvil?"),
+            "confirm modal title must render over HEADER-only dirty layout; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("respawn the current binary"),
+            "confirm modal body must render over HEADER-only dirty layout; got:\n{rendered}"
+        );
     }
 
     // ── Task #573: golden baseline snapshots ──────────────────────────────
