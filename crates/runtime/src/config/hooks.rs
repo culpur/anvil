@@ -30,6 +30,10 @@ pub struct RuntimeHookConfig {
     pub(super) permission_denied: Vec<RuntimeHookSpec>,
     pub(super) post_tool_batch: Vec<RuntimeHookSpec>,
     pub(super) notification: Vec<RuntimeHookSpec>,
+    // Task #566: Stop hook event — fires at end-of-turn when no tool_use
+    // blocks were emitted.  A hook returning `{"decision":"block"}` keeps
+    // the turn loop running; any other / missing decision allows stop.
+    pub(super) stop: Vec<RuntimeHookSpec>,
 }
 
 impl RuntimeHookConfig {
@@ -48,6 +52,7 @@ impl RuntimeHookConfig {
             permission_denied: Vec::new(),
             post_tool_batch: Vec::new(),
             notification: Vec::new(),
+            stop: Vec::new(),
         }
     }
 
@@ -68,6 +73,7 @@ impl RuntimeHookConfig {
             permission_denied: Vec::new(),
             post_tool_batch: Vec::new(),
             notification: Vec::new(),
+            stop: Vec::new(),
         }
     }
 
@@ -129,6 +135,15 @@ impl RuntimeHookConfig {
         &self.notification
     }
 
+    /// Task #566: fires at end of an assistant message with no tool_use
+    /// blocks (i.e. the turn loop is about to return control).  A hook
+    /// returning `{"decision":"block","reason":"..."}` keeps the turn
+    /// running.
+    #[must_use]
+    pub fn stop(&self) -> &[RuntimeHookSpec] {
+        &self.stop
+    }
+
     #[must_use]
     pub fn merged(&self, other: &Self) -> Self {
         let mut merged = self.clone();
@@ -147,6 +162,7 @@ impl RuntimeHookConfig {
         extend_unique(&mut self.permission_denied, other.permission_denied());
         extend_unique(&mut self.post_tool_batch, other.post_tool_batch());
         extend_unique(&mut self.notification, other.notification());
+        extend_unique(&mut self.stop, other.stop());
     }
 }
 
@@ -178,6 +194,7 @@ pub fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig
         )?,
         post_tool_batch: parse_runtime_hook_spec_array(hooks, "PostToolBatch", "merged settings.hooks")?,
         notification: parse_runtime_hook_spec_array(hooks, "Notification", "merged settings.hooks")?,
+        stop: parse_runtime_hook_spec_array(hooks, "Stop", "merged settings.hooks")?,
     })
 }
 

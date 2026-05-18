@@ -13,7 +13,10 @@ use super::{
 use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
 use crate::auto_mode::AutoModeConfig;
-use crate::hooks::{HookRunner, PostToolBatchPayload};
+use crate::hooks::{
+    HookRunner, PostToolBatchPayload, StopHookBlockCounter, StopHookCapDecision,
+    StopHookDecision, StopHookPayload,
+};
 use crate::permission_memory::PermissionMemory;
 use crate::permissions::{PermissionPolicy, PermissionPrompter};
 use crate::permissions::reviewer::Reviewer;
@@ -38,6 +41,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     auto_mode: &AutoModeConfig,
     permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
     cancel_token: &Arc<AtomicBool>,
+    stop_hook_counter: &mut StopHookBlockCounter,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
     let mut tool_results = Vec::new();
@@ -84,7 +88,42 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
         assistant_messages.push(assistant_message);
 
         if pending_tool_uses.is_empty() {
-            break;
+            // Task #566: fire Stop hooks. If any returns
+            // {"decision":"block","reason":"..."} we keep the loop alive
+            // by injecting `reason` as a user-role message (until the
+            // per-session cap is hit).  Otherwise the turn ends.
+            let session_id = crate::session_ctx::get()
+                .map(|c| c.session_id.clone())
+                .unwrap_or_default();
+            let result = hook_runner.run_stop(&StopHookPayload {
+                session_id,
+                turn_count: iterations as u64,
+                block_count: stop_hook_counter.blocks_seen(),
+            });
+            match result.decision {
+                StopHookDecision::Allow => {
+                    break;
+                }
+                StopHookDecision::Block { reason } => {
+                    match stop_hook_counter.record_block() {
+                        StopHookCapDecision::Continue => {
+                            // Inject the reason as a new user message so
+                            // the model re-engages on the next turn.
+                            session.messages.push(
+                                crate::session::ConversationMessage::user_text(reason),
+                            );
+                            continue;
+                        }
+                        StopHookCapDecision::AllowStop { warning: _ } => {
+                            // Cap exceeded: surface a synthetic user
+                            // message noting the cap before stopping so
+                            // the transcript records what happened, then
+                            // exit the loop.
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         // v2.2.11: track per-tool timing for PostToolBatch payload.

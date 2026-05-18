@@ -159,6 +159,11 @@ pub struct ConversationRuntime<C, T> {
     /// between tool-use iterations. Flipped from outside (the TUI's Ctrl+C
     /// handler) through `cancel_handle`.
     cancel_token: Arc<AtomicBool>,
+    /// Task #566: per-session Stop-hook block counter.  When a Stop hook
+    /// returns `{"decision":"block"}` the runtime keeps the turn alive; the
+    /// counter caps the number of consecutive blocks before the runtime
+    /// emits a one-shot warning and lets the stop proceed.
+    stop_hook_counter: crate::hooks::StopHookBlockCounter,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -253,6 +258,7 @@ where
             auto_mode,
             permission_memory,
             cancel_token: Arc::new(AtomicBool::new(false)),
+            stop_hook_counter: crate::hooks::StopHookBlockCounter::default(),
         }
     }
 
@@ -334,7 +340,29 @@ where
             &self.auto_mode,
             self.permission_memory.as_ref(),
             &self.cancel_token,
+            &mut self.stop_hook_counter,
         )
+    }
+
+    /// Test/inspector access to the Stop-hook block counter (#566).
+    #[must_use]
+    pub fn stop_hook_counter(&self) -> &crate::hooks::StopHookBlockCounter {
+        &self.stop_hook_counter
+    }
+
+    /// Test-only: install an externally-constructed HookRunner.  Used by
+    /// the Stop-hook regression tests to inject `stop_extra` specs
+    /// without round-tripping through settings.json.
+    #[cfg(test)]
+    pub fn set_hook_runner_for_testing(&mut self, runner: crate::hooks::HookRunner) {
+        self.hook_runner = runner;
+    }
+
+    /// Test-only: lower the Stop-hook block cap so the force-stop path
+    /// can be exercised in a small number of iterations.
+    #[cfg(test)]
+    pub fn set_stop_hook_cap_for_testing(&mut self, cap: u32) {
+        self.stop_hook_counter = crate::hooks::StopHookBlockCounter::new(cap);
     }
 
     #[must_use]
@@ -511,7 +539,7 @@ impl ToolExecutor for StaticToolExecutor {
 mod tests {
     use super::{
         ApiClient, ApiRequest, AssistantEvent, ConversationRuntime, RuntimeError,
-        StaticToolExecutor,
+        StaticToolExecutor, ToolExecutor,
     };
     use crate::compact::CompactionConfig;
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
@@ -1023,5 +1051,197 @@ mod tests {
     #[cfg(not(windows))]
     fn shell_snippet(script: &str) -> String {
         script.to_string()
+    }
+
+    // ─── Task #566: Stop hook end-to-end through ConversationRuntime ─────────
+
+    struct OneShotApi {
+        served: bool,
+    }
+
+    impl ApiClient for OneShotApi {
+        fn stream(&mut self, _request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.served = true;
+            Ok(vec![
+                AssistantEvent::TextDelta("done".to_string()),
+                AssistantEvent::Usage(TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                }),
+                AssistantEvent::MessageStop,
+            ])
+        }
+    }
+
+    /// Counts the number of times stream() was called so a Stop-hook
+    /// block can be verified by re-invocation.  Each turn the body just
+    /// emits an empty assistant message + MessageStop so the loop falls
+    /// through to the Stop hook every iteration.
+    struct CountingApi {
+        calls: usize,
+        max_calls: usize,
+    }
+
+    impl ApiClient for CountingApi {
+        fn stream(&mut self, _request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.calls += 1;
+            if self.calls > self.max_calls {
+                return Err(RuntimeError::new("CountingApi reached max_calls"));
+            }
+            Ok(vec![
+                AssistantEvent::TextDelta(format!("turn {}", self.calls)),
+                AssistantEvent::Usage(TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                }),
+                AssistantEvent::MessageStop,
+            ])
+        }
+    }
+
+    fn runtime_with_stop_hooks<C: ApiClient, T: ToolExecutor>(
+        api: C,
+        tool_executor: T,
+        stop_hooks: Vec<HookSpec>,
+    ) -> ConversationRuntime<C, T> {
+        let mut hook_config = RuntimeHookConfig::default();
+        // Programmatic injection: push specs onto the runtime extras so we
+        // don't need to round-trip through settings.json parsing.
+        let mut features = RuntimeFeatureConfig::default();
+        features = features.with_hooks(hook_config.clone());
+        let mut runtime = ConversationRuntime::new_with_features(
+            Session::new(),
+            api,
+            tool_executor,
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+            features,
+        );
+        // Append stop_extra via a freshly built runner.
+        let mut runner = crate::hooks::HookRunner::default();
+        for spec in stop_hooks {
+            runner.stop_extra_mut().push(crate::hooks::RuntimeHookSpec::Plugin(spec));
+        }
+        runtime.set_hook_runner_for_testing(runner);
+        let _ = hook_config;
+        runtime
+    }
+
+    /// run_turn() invokes the Stop hook exactly once at end-of-turn when
+    /// there are no pending tool_uses.
+    #[test]
+    fn stop_hook_invoked_at_turn_end() {
+        let api = OneShotApi { served: false };
+        let tool_executor = StaticToolExecutor::new();
+        // Touch-witness file: hook writes to a tempfile so the test can
+        // observe that the runtime really invoked it.
+        let tmp = std::env::temp_dir().join(format!(
+            "anvil-stop-hook-witness-{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let snippet = shell_snippet(&format!(
+            "printf 'invoked' > {}; printf '%s' '{{\"decision\":\"allow\"}}'",
+            tmp.display()
+        ));
+        let mut runtime = runtime_with_stop_hooks(
+            api,
+            tool_executor,
+            vec![HookSpec::Command(snippet)],
+        );
+        let summary = runtime
+            .run_turn("hi", None)
+            .expect("turn should complete normally");
+        // Hook ran exactly once.
+        assert!(
+            tmp.exists(),
+            "Stop hook witness file should exist after run_turn"
+        );
+        let body = std::fs::read_to_string(&tmp).expect("read witness");
+        assert_eq!(body, "invoked");
+        let _ = std::fs::remove_file(&tmp);
+        // The OneShotApi only served one call → one iteration.
+        assert_eq!(summary.iterations, 1);
+    }
+
+    /// A Stop hook returning `{"decision":"block","reason":"..."}` keeps
+    /// the turn alive — the runtime calls the API a second time.
+    #[test]
+    fn stop_hook_block_decision_holds_turn() {
+        let api = CountingApi {
+            calls: 0,
+            max_calls: 10,
+        };
+        let tool_executor = StaticToolExecutor::new();
+        // Block exactly once then allow on the next invocation.
+        let tmp = std::env::temp_dir().join(format!(
+            "anvil-stop-hook-flip-{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        // Shell that prints `block` on first invocation, then `allow`
+        // afterwards.  Uses the witness file as a flag.
+        let snippet = shell_snippet(&format!(
+            "if [ -f {p} ]; then printf '%s' '{{\"decision\":\"allow\"}}'; else touch {p}; printf '%s' '{{\"decision\":\"block\",\"reason\":\"do another pass\"}}'; fi",
+            p = tmp.display()
+        ));
+        let mut runtime = runtime_with_stop_hooks(
+            api,
+            tool_executor,
+            vec![HookSpec::Command(snippet)],
+        );
+        let summary = runtime
+            .run_turn("hi", None)
+            .expect("turn should eventually allow stop");
+        // First turn blocks → re-runs → second turn allows.
+        assert!(
+            summary.iterations >= 2,
+            "Stop hook block must drive at least 2 iterations, got {}",
+            summary.iterations
+        );
+        let _ = std::fs::remove_file(&tmp);
+        // The injected reason should appear as a user message in the session.
+        let has_reason = runtime.session().messages.iter().any(|m| {
+            m.blocks.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("do another pass")))
+        });
+        assert!(has_reason, "block reason should be injected as user message");
+    }
+
+    /// When a Stop hook blocks more times than the configured cap, the
+    /// runtime force-stops the loop so a buggy hook can't spin forever.
+    #[test]
+    fn stop_hook_block_count_cap_force_stops() {
+        let api = CountingApi {
+            calls: 0,
+            max_calls: 20,
+        };
+        let tool_executor = StaticToolExecutor::new();
+        // A hook that ALWAYS blocks.
+        let snippet = shell_snippet(
+            r#"printf '%s' '{"decision":"block","reason":"always block"}'"#,
+        );
+        let mut runtime = runtime_with_stop_hooks(
+            api,
+            tool_executor,
+            vec![HookSpec::Command(snippet)],
+        );
+        // Lower the cap so the test is fast.
+        runtime.set_stop_hook_cap_for_testing(2);
+        let summary = runtime
+            .run_turn("hi", None)
+            .expect("turn should force-stop once cap is hit");
+        assert!(
+            summary.iterations <= 3,
+            "force-stop should land in <= 3 iterations (cap=2), got {}",
+            summary.iterations
+        );
+        assert!(
+            runtime.stop_hook_counter().blocks_seen() >= 2,
+            "block counter should have recorded the blocks"
+        );
     }
 }

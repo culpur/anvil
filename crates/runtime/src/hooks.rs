@@ -286,6 +286,13 @@ pub enum HookEvent {
     /// Fires when Anvil displays a notification to the user.
     /// Payload: `{ kind: "permission_prompt"|"error"|"completion"|"info", message }`.
     Notification,
+    /// Fires at the end of an assistant message that produced no `tool_use`
+    /// blocks — i.e. the runtime is about to return control to the user.
+    /// A hook may return `{ "decision": "block", "reason": "..." }` to
+    /// keep the turn loop running; any other / missing decision allows
+    /// the stop to proceed.  Task #566.
+    /// Payload: `{ session_id, turn_count, block_count }`.
+    Stop,
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +435,39 @@ impl NotificationKind {
             Self::Info => "info",
         }
     }
+}
+
+/// Payload for `HookEvent::Stop` (task #566).
+///
+/// Emitted at end-of-turn when the assistant returned no `tool_use`
+/// blocks.  A hook may inspect `block_count` (how many times a Stop
+/// hook has already kept the loop alive this session) and return
+/// `{"decision":"block","reason":"..."}` to keep the turn running, or
+/// any other / missing decision to allow the stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopHookPayload {
+    pub session_id: String,
+    pub turn_count: u64,
+    pub block_count: u32,
+}
+
+/// Decision returned by `HookRunner::run_stop`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopHookDecision {
+    /// No hook returned a block decision — the turn loop should exit.
+    Allow,
+    /// At least one hook returned `{"decision":"block"}`.  The runtime
+    /// should keep the turn alive and inject `reason` as a user-role
+    /// message.  Multiple block decisions concatenate their reasons.
+    Block { reason: String },
+}
+
+/// Aggregate result from running every Stop hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StopHookResult {
+    pub decision: StopHookDecision,
+    /// Non-decision stdout that should be surfaced to the user.
+    pub messages: Vec<String>,
 }
 
 /// Payload for `HookEvent::Notification`.
@@ -600,6 +640,7 @@ impl HookEvent {
             Self::PermissionDenied => "PermissionDenied",
             Self::PostToolBatch => "PostToolBatch",
             Self::Notification => "Notification",
+            Self::Stop => "Stop",
         }
     }
 }
@@ -647,6 +688,8 @@ pub struct HookRunner {
     permission_denied_extra: Vec<RuntimeHookSpec>,
     post_tool_batch_extra: Vec<RuntimeHookSpec>,
     notification_extra: Vec<RuntimeHookSpec>,
+    // Task #566: programmatic Stop hook extras (tests inject here).
+    stop_extra: Vec<RuntimeHookSpec>,
     mcp_invoker: Option<Arc<dyn McpHookInvoker>>,
 }
 
@@ -664,6 +707,7 @@ impl std::fmt::Debug for HookRunner {
             .field("permission_denied_extra", &self.permission_denied_extra)
             .field("post_tool_batch_extra", &self.post_tool_batch_extra)
             .field("notification_extra", &self.notification_extra)
+            .field("stop_extra", &self.stop_extra)
             .field("mcp_invoker", &self.mcp_invoker.as_ref().map(|_| "<dyn McpHookInvoker>"))
             .finish()
     }
@@ -682,6 +726,7 @@ impl PartialEq for HookRunner {
             && self.permission_denied_extra == other.permission_denied_extra
             && self.post_tool_batch_extra == other.post_tool_batch_extra
             && self.notification_extra == other.notification_extra
+            && self.stop_extra == other.stop_extra
     }
 }
 impl Eq for HookRunner {}
@@ -711,6 +756,7 @@ impl HookRunner {
             permission_denied_extra: Vec::new(),
             post_tool_batch_extra: Vec::new(),
             notification_extra: Vec::new(),
+            stop_extra: Vec::new(),
             mcp_invoker: None,
         }
     }
@@ -740,6 +786,7 @@ impl HookRunner {
             permission_denied_extra: Vec::new(),
             post_tool_batch_extra: Vec::new(),
             notification_extra: Vec::new(),
+            stop_extra: Vec::new(),
             mcp_invoker: None,
         }
     }
@@ -760,6 +807,13 @@ impl HookRunner {
     #[must_use]
     pub fn mcp_invoker_clone(&self) -> Option<Arc<dyn McpHookInvoker>> {
         self.mcp_invoker.clone()
+    }
+
+    /// Task #566: mutable access to programmatically registered Stop
+    /// hooks. Used by tests + by hosts that need to register Stop hooks
+    /// after construction.
+    pub fn stop_extra_mut(&mut self) -> &mut Vec<RuntimeHookSpec> {
+        &mut self.stop_extra
     }
 
     #[must_use]
@@ -972,6 +1026,106 @@ impl HookRunner {
         self.run_observe_only(HookEvent::PostToolBatch, &specs, &payload)
     }
 
+    /// Task #566: fire all Stop hooks and collect their decisions.
+    ///
+    /// A hook that returns `{"decision":"block","reason":"..."}` keeps
+    /// the turn loop alive; any other / missing decision allows stop.
+    /// Multiple block decisions concatenate their reasons (separated by
+    /// `\n\n`) so the user can see every reason at once.  Non-decision
+    /// stdout (other JSON keys, plain text) is surfaced as a message.
+    pub fn run_stop(&self, p: &StopHookPayload) -> StopHookResult {
+        let specs = self.collect_specs(HookEvent::Stop);
+        if specs.is_empty() {
+            return StopHookResult {
+                decision: StopHookDecision::Allow,
+                messages: Vec::new(),
+            };
+        }
+        let payload = json!({
+            "hook_event_name": HookEvent::Stop.as_str(),
+            "session_id": p.session_id,
+            "turn_count": p.turn_count,
+            "block_count": p.block_count,
+        })
+        .to_string();
+
+        let ctx = HookInterpolationContext {
+            tool_name: None,
+            tool_input: None,
+            cwd: std::env::current_dir().ok().map(|path| path.display().to_string()),
+            date: Some(current_date_iso()),
+            model: None,
+        };
+
+        let mut messages = Vec::new();
+        let mut block_reasons: Vec<String> = Vec::new();
+
+        for spec in &specs {
+            let outcome = match spec {
+                RuntimeHookSpec::Plugin(plugin) if plugin.is_prompt() => {
+                    run_prompt_spec(plugin, HookEvent::Stop, HookEvent::Stop.as_str(), &ctx)
+                }
+                RuntimeHookSpec::Plugin(plugin) => Self::run_command(
+                    plugin.body(),
+                    HookCommandRequest {
+                        event: HookEvent::Stop,
+                        tool_name: HookEvent::Stop.as_str(),
+                        tool_input: "{}",
+                        tool_output: None,
+                        is_error: false,
+                        payload: &payload,
+                    },
+                ),
+                RuntimeHookSpec::McpTool { server, tool, input } => self.run_mcp_tool_spec(
+                    HookEvent::Stop,
+                    HookEvent::Stop.as_str(),
+                    server,
+                    tool,
+                    input,
+                ),
+            };
+            match outcome {
+                HookCommandOutcome::Allow { message } => {
+                    if let Some(ref stdout) = message {
+                        if let Some(reason) = parse_stop_block_reason(stdout) {
+                            block_reasons.push(reason);
+                        }
+                    }
+                    if let Some(msg) = message {
+                        messages.push(msg);
+                    }
+                }
+                // Exit code 2 from a Stop hook is treated as a block decision
+                // with an empty / hook-supplied reason.  Mirrors how
+                // PermissionRequest treats exit-2 as a deny injection.
+                HookCommandOutcome::Deny { message } => {
+                    let reason = message
+                        .clone()
+                        .and_then(|m| parse_stop_block_reason(&m))
+                        .unwrap_or_else(|| {
+                            message.clone().unwrap_or_else(|| {
+                                "Stop hook returned exit 2 (block)".to_string()
+                            })
+                        });
+                    block_reasons.push(reason);
+                    if let Some(msg) = message {
+                        messages.push(msg);
+                    }
+                }
+                HookCommandOutcome::Warn { message } => messages.push(message),
+            }
+        }
+
+        let decision = if block_reasons.is_empty() {
+            StopHookDecision::Allow
+        } else {
+            StopHookDecision::Block {
+                reason: block_reasons.join("\n\n"),
+            }
+        };
+        StopHookResult { decision, messages }
+    }
+
     /// Fire all Notification hooks (observe-only).
     pub fn run_notification(&self, p: &NotificationPayload) -> HookRunResult {
         let specs = self.collect_specs(HookEvent::Notification);
@@ -1072,6 +1226,7 @@ impl HookRunner {
                 (self.config.post_tool_batch(), &self.post_tool_batch_extra)
             }
             HookEvent::Notification => (self.config.notification(), &self.notification_extra),
+            HookEvent::Stop => (self.config.stop(), &self.stop_extra),
         };
         let mut out = Vec::with_capacity(config_specs.len() + extras.len());
         // Config specs are already RuntimeHookSpec; no conversion needed.
@@ -1386,6 +1541,28 @@ impl HookRunner {
         };
         append_terminal_sequence_warning(outcome, terminal_sequence_warning)
     }
+}
+
+/// Parse a Stop hook's stdout for a `{"decision":"block","reason":"..."}`
+/// block decision.  Returns `Some(reason)` when both fields are present
+/// and `decision == "block"`; `None` otherwise (no decision, allow, or
+/// not JSON).  Empty `reason` is treated as a generic block.
+fn parse_stop_block_reason(stdout: &str) -> Option<String> {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('{') {
+        return None;
+    }
+    let value = serde_json::from_str::<serde_json::Value>(trimmed).ok()?;
+    let decision = value.get("decision")?.as_str()?;
+    if decision != "block" {
+        return None;
+    }
+    let reason = value
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Stop hook blocked the turn")
+        .to_string();
+    Some(reason)
 }
 
 /// Extract a `terminalSequence` value from hook stdout JSON, emit it
@@ -2163,6 +2340,111 @@ mod tests {
             assert_eq!(c.record_block(), StopHookCapDecision::Continue);
         }
         assert_eq!(c.blocks_seen(), 50);
+    }
+
+    // ─── Task #566: Stop hook event + decision plumbing ──────────────────────
+
+    /// Empty Stop hook config: run_stop returns Allow.
+    #[test]
+    fn stop_hook_with_no_specs_allows() {
+        use super::{StopHookDecision, StopHookPayload};
+        let runner = HookRunner::default();
+        let result = runner.run_stop(&StopHookPayload {
+            session_id: "test".to_string(),
+            turn_count: 1,
+            block_count: 0,
+        });
+        assert_eq!(result.decision, StopHookDecision::Allow);
+        assert!(result.messages.is_empty());
+    }
+
+    /// Hook returning `{"decision":"block","reason":"..."}` produces a
+    /// Block decision with the reason carried through.
+    #[test]
+    fn stop_hook_block_decision_returns_block_with_reason() {
+        use super::{StopHookDecision, StopHookPayload};
+        let mut runner = HookRunner::default();
+        runner.stop_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet(
+                r#"printf '%s' '{"decision":"block","reason":"keep going"}'"#,
+            )),
+        ));
+        let result = runner.run_stop(&StopHookPayload {
+            session_id: "s".to_string(),
+            turn_count: 1,
+            block_count: 0,
+        });
+        match result.decision {
+            StopHookDecision::Block { reason } => {
+                assert_eq!(reason, "keep going");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    /// Hook returning anything other than `decision:block` (e.g. allow,
+    /// missing field, plain text) results in Allow.
+    #[test]
+    fn stop_hook_default_decision_allows_stop() {
+        use super::{StopHookDecision, StopHookPayload};
+        let mut runner = HookRunner::default();
+        runner.stop_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet(
+                r#"printf '%s' '{"decision":"allow"}'"#,
+            )),
+        ));
+        let result = runner.run_stop(&StopHookPayload {
+            session_id: "s".to_string(),
+            turn_count: 1,
+            block_count: 0,
+        });
+        assert_eq!(
+            result.decision,
+            StopHookDecision::Allow,
+            "decision other than 'block' must allow stop"
+        );
+
+        // Plain-text (non-JSON) stdout also allows.
+        let mut runner2 = HookRunner::default();
+        runner2.stop_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet("printf 'just a log line'")),
+        ));
+        let r2 = runner2.run_stop(&StopHookPayload {
+            session_id: "s".to_string(),
+            turn_count: 1,
+            block_count: 0,
+        });
+        assert_eq!(r2.decision, StopHookDecision::Allow);
+        assert!(r2.messages.iter().any(|m| m.contains("just a log line")));
+    }
+
+    /// Block decisions from multiple hooks concatenate their reasons.
+    #[test]
+    fn stop_hook_multiple_blocks_concat_reasons() {
+        use super::{StopHookDecision, StopHookPayload};
+        let mut runner = HookRunner::default();
+        runner.stop_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet(
+                r#"printf '%s' '{"decision":"block","reason":"first"}'"#,
+            )),
+        ));
+        runner.stop_extra.push(RuntimeHookSpec::Plugin(
+            HookSpec::Command(shell_snippet(
+                r#"printf '%s' '{"decision":"block","reason":"second"}'"#,
+            )),
+        ));
+        let result = runner.run_stop(&StopHookPayload {
+            session_id: "s".to_string(),
+            turn_count: 1,
+            block_count: 0,
+        });
+        match result.decision {
+            StopHookDecision::Block { reason } => {
+                assert!(reason.contains("first"), "missing first: {reason}");
+                assert!(reason.contains("second"), "missing second: {reason}");
+            }
+            other => panic!("expected Block, got {other:?}"),
+        }
     }
 
     // ─── Task #556: terminalSequence allow-list ──────────────────────────────

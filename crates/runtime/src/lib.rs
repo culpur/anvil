@@ -108,7 +108,8 @@ pub use hooks::{
     McpHookInvoker, NotificationKind, NotificationPayload, PermissionDeniedPayload,
     PermissionDeniedSource, PermissionRequestHookResult, PermissionRequestPayload,
     PostToolBatchPayload, RuntimeHookSpec, StopHookBlockCounter, StopHookCapDecision,
-    TerminalSequenceSink, DEFAULT_STOP_HOOK_BLOCK_CAP, STOP_HOOK_BLOCK_CAP_ENV,
+    StopHookDecision, StopHookPayload, StopHookResult, TerminalSequenceSink,
+    DEFAULT_STOP_HOOK_BLOCK_CAP, STOP_HOOK_BLOCK_CAP_ENV,
 };
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
