@@ -10,6 +10,15 @@ const COMPACT_DIRECT_RESUME_INSTRUCTION: &str = "Continue the conversation from 
 pub struct CompactionConfig {
     pub preserve_recent_messages: usize,
     pub max_estimated_tokens: usize,
+    /// Task #564: when true, the turn loop catches
+    /// `RuntimeError::context_too_long` and runs reactive compaction
+    /// before retrying the same turn.  Default: true.
+    pub reactive_enabled: bool,
+    /// Task #564: cap on consecutive reactive compactions for a single
+    /// turn.  Once exceeded the error surfaces to the user (so a model
+    /// that always overflows even after compaction can't loop
+    /// indefinitely).  Default: 1.
+    pub reactive_max_retries: u32,
 }
 
 impl Default for CompactionConfig {
@@ -17,6 +26,8 @@ impl Default for CompactionConfig {
         Self {
             preserve_recent_messages: 6,
             max_estimated_tokens: 10_000,
+            reactive_enabled: true,
+            reactive_max_retries: 1,
         }
     }
 }
@@ -86,6 +97,55 @@ pub fn get_compact_continuation_message(
     base
 }
 
+/// Task #564: reactive compaction triggered by a provider's
+/// `ContextTooLong` error.  Bypasses the `should_compact` threshold
+/// check and aggressively halves the current token estimate (minus the
+/// reported overflow) so the next request fits.  Returns the same
+/// `CompactionResult` shape as `compact_session`; callers can then
+/// install the compacted session and retry the turn.
+///
+/// Semantics:
+/// - `overflow_tokens` is the model's reported overflow (or 0 when
+///   unknown — the helper clamps).
+/// - The function picks `max_estimated_tokens = (current - overflow) / 2`
+///   so the new session uses at most half the model's remaining budget.
+///   This matches CC's reactive behaviour: be aggressive on first
+///   overflow, then leave headroom for the upcoming turn's output.
+/// - `preserve_recent_messages` is preserved from `base_config` so the
+///   trailing turn (the one that overflowed) stays verbatim if it fits.
+#[must_use]
+pub fn compact_session_reactive(
+    session: &Session,
+    overflow_tokens: u32,
+    base_config: CompactionConfig,
+) -> CompactionResult {
+    let current = estimate_session_tokens(session) as u64;
+    let overflow = overflow_tokens as u64;
+    // Aggressive halving: target half of the remaining budget after the
+    // overflow.  If overflow is unknown or >= current, fall back to
+    // halving `current` outright.
+    let remaining = current.saturating_sub(overflow);
+    let target = (remaining / 2).max(1) as usize;
+    let reactive_config = CompactionConfig {
+        // Keep the most-recent turn so the user's last request survives
+        // (matches the proactive flow's default).
+        preserve_recent_messages: base_config.preserve_recent_messages.max(2),
+        max_estimated_tokens: target,
+        ..base_config
+    };
+    // Force compaction even when `should_compact` would skip — this is
+    // a reactive trigger from the provider, not the proactive threshold.
+    compact_session_force(session, reactive_config)
+}
+
+/// Identical to [`compact_session`] but skips the `should_compact`
+/// threshold gate.  Used by the reactive path so that even short
+/// sessions that exceeded the provider's context window can be
+/// compacted.
+fn compact_session_force(session: &Session, config: CompactionConfig) -> CompactionResult {
+    do_compact_session(session, config)
+}
+
 #[must_use]
 pub fn compact_session(session: &Session, config: CompactionConfig) -> CompactionResult {
     if !should_compact(session, config) {
@@ -96,6 +156,12 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
             removed_message_count: 0,
         };
     }
+    do_compact_session(session, config)
+}
+
+fn do_compact_session(session: &Session, config: CompactionConfig) -> CompactionResult {
+    // Skip the should_compact gate; callers (proactive vs reactive)
+    // decide whether to enter this path.
 
     let existing_summary = session
         .messages
@@ -558,8 +624,9 @@ fn extract_summary_timeline(summary: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_key_files, compact_session, estimate_session_tokens, format_compact_summary,
-        get_compact_continuation_message, infer_pending_work, should_compact, CompactionConfig,
+        collect_key_files, compact_session, compact_session_reactive, estimate_session_tokens,
+        format_compact_summary, get_compact_continuation_message, infer_pending_work,
+        should_compact, CompactionConfig,
     };
     use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
 
@@ -607,7 +674,7 @@ mod tests {
             &session,
             CompactionConfig {
                 preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
+                max_estimated_tokens: 1, ..CompactionConfig::default()
             },
         );
 
@@ -626,7 +693,7 @@ mod tests {
             &session,
             CompactionConfig {
                 preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
+                max_estimated_tokens: 1, ..CompactionConfig::default()
             }
         ));
         assert!(
@@ -653,7 +720,7 @@ mod tests {
         };
         let config = CompactionConfig {
             preserve_recent_messages: 2,
-            max_estimated_tokens: 1,
+            max_estimated_tokens: 1, ..CompactionConfig::default()
         };
 
         let first = compact_session(&initial_session, config);
@@ -721,7 +788,7 @@ mod tests {
             &session,
             CompactionConfig {
                 preserve_recent_messages: 2,
-                max_estimated_tokens: 1,
+                max_estimated_tokens: 1, ..CompactionConfig::default()
             }
         ));
     }
@@ -807,7 +874,7 @@ mod tests {
 
         let result = compact_session(
             &session,
-            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1 },
+            CompactionConfig { preserve_recent_messages: 2, max_estimated_tokens: 1, ..CompactionConfig::default() },
         );
 
         assert_eq!(result.removed_message_count, 2);
@@ -817,5 +884,72 @@ mod tests {
             post_total, pre_total,
             "cumulative usage must survive /compact"
         );
+    }
+
+    // ─── Task #564: reactive compaction ──────────────────────────────────────
+
+    /// `compact_session_reactive` halves the remaining budget after
+    /// subtracting the overflow.  Given a session with N estimated
+    /// tokens and overflow O, target = (N - O) / 2.  We verify both
+    /// (i) the helper actually compacted (removed_message_count > 0)
+    /// and (ii) the resulting session estimate sits below the target.
+    #[test]
+    fn reactive_compact_targets_half_of_remaining_after_overflow() {
+        // Build a session with several long messages.
+        let mut session = Session::new();
+        for i in 0..10 {
+            let user_text = format!("Long user message number {i}. ").repeat(30);
+            session.messages.push(ConversationMessage::user_text(user_text));
+            session.messages.push(ConversationMessage {
+                role: MessageRole::Assistant,
+                blocks: vec![ContentBlock::Text {
+                    text: format!("Long assistant response number {i}. ").repeat(30),
+                }],
+                usage: None,
+            });
+        }
+        let current = estimate_session_tokens(&session);
+        // Pretend the provider reported an overflow of 10% of the
+        // current estimate; reactive compaction should drop the
+        // session to ~ (current - overflow) / 2.
+        let overflow = (current / 10) as u32;
+        let result = compact_session_reactive(
+            &session,
+            overflow,
+            CompactionConfig::default(),
+        );
+        assert!(
+            result.removed_message_count > 0,
+            "reactive compact must remove messages even when proactive should_compact would skip"
+        );
+        let post = estimate_session_tokens(&result.compacted_session);
+        let remaining = current.saturating_sub(overflow as usize);
+        let target = remaining / 2;
+        // Generous bound: post should be at most 2x the target (the
+        // summary block adds overhead).  The point is that we ARE
+        // compacting aggressively, not landing exactly on the target.
+        assert!(
+            post <= target.max(2000) * 2,
+            "post-compaction estimate {post} must be near reactive target {target} (current={current}, overflow={overflow})"
+        );
+    }
+
+    /// The turn loop tests in conversation/mod.rs already cover the
+    /// retry-cap behaviour.  This helper-level test just verifies the
+    /// shape of `CompactionConfig` (max_retries default + ability to
+    /// override).
+    #[test]
+    fn reactive_compact_respects_max_retries() {
+        let default = CompactionConfig::default();
+        assert!(default.reactive_enabled);
+        assert_eq!(default.reactive_max_retries, 1);
+        // Custom override works.
+        let custom = CompactionConfig {
+            reactive_enabled: false,
+            reactive_max_retries: 5,
+            ..CompactionConfig::default()
+        };
+        assert!(!custom.reactive_enabled);
+        assert_eq!(custom.reactive_max_retries, 5);
     }
 }

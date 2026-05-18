@@ -88,6 +88,11 @@ impl std::error::Error for ToolError {}
 pub struct RuntimeError {
     message: String,
     cancelled: bool,
+    /// Task #564: provider returned a context-overflow error.  When set,
+    /// the turn loop catches the error, runs reactive compaction, and
+    /// retries the same turn (up to `reactive_max_retries`).  Carries
+    /// the model-reported overflow in tokens; `0` when unknown.
+    context_too_long_overflow: Option<u32>,
 }
 
 impl RuntimeError {
@@ -96,6 +101,7 @@ impl RuntimeError {
         Self {
             message: message.into(),
             cancelled: false,
+            context_too_long_overflow: None,
         }
     }
 
@@ -105,6 +111,22 @@ impl RuntimeError {
         Self {
             message: "turn cancelled".to_string(),
             cancelled: true,
+            context_too_long_overflow: None,
+        }
+    }
+
+    /// Task #564: provider reported a context-overflow error.  The
+    /// caller (turn loop) catches this variant, runs reactive
+    /// compaction, and retries the turn.  `overflow_tokens` is the
+    /// model-reported overflow; pass `0` when unknown.
+    #[must_use]
+    pub fn context_too_long(overflow_tokens: u32) -> Self {
+        Self {
+            message: format!(
+                "context too long: provider reported overflow of {overflow_tokens} tokens"
+            ),
+            cancelled: false,
+            context_too_long_overflow: Some(overflow_tokens),
         }
     }
 
@@ -114,6 +136,14 @@ impl RuntimeError {
     #[must_use]
     pub const fn is_cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// Task #564: returns `Some(overflow_tokens)` when the error came
+    /// from a provider's context-overflow response.  Used by the turn
+    /// loop to gate reactive compaction.
+    #[must_use]
+    pub const fn context_too_long_overflow(&self) -> Option<u32> {
+        self.context_too_long_overflow
     }
 }
 
@@ -164,6 +194,12 @@ pub struct ConversationRuntime<C, T> {
     /// counter caps the number of consecutive blocks before the runtime
     /// emits a one-shot warning and lets the stop proceed.
     stop_hook_counter: crate::hooks::StopHookBlockCounter,
+    /// Task #564: compaction configuration used by the proactive
+    /// `compact()` helper AND by the turn loop's reactive
+    /// context-overflow handler.  Initialised from
+    /// `CompactionConfig::default()`; hosts can replace it via
+    /// [`Self::set_compaction_config`].
+    compaction_config: CompactionConfig,
 }
 
 impl<C, T> ConversationRuntime<C, T>
@@ -259,6 +295,7 @@ where
             permission_memory,
             cancel_token: Arc::new(AtomicBool::new(false)),
             stop_hook_counter: crate::hooks::StopHookBlockCounter::default(),
+            compaction_config: CompactionConfig::default(),
         }
     }
 
@@ -341,7 +378,21 @@ where
             self.permission_memory.as_ref(),
             &self.cancel_token,
             &mut self.stop_hook_counter,
+            &self.compaction_config,
         )
+    }
+
+    /// Task #564: install a custom compaction config (proactive +
+    /// reactive).  Hosts call this after construction when they need
+    /// non-default settings (e.g. CLI bootstrap reading the user's
+    /// `compaction.reactive_enabled` setting).
+    pub fn set_compaction_config(&mut self, config: CompactionConfig) {
+        self.compaction_config = config;
+    }
+
+    #[must_use]
+    pub const fn compaction_config(&self) -> &CompactionConfig {
+        &self.compaction_config
     }
 
     /// Test/inspector access to the Stop-hook block counter (#566).
@@ -926,7 +977,7 @@ mod tests {
 
         let result = runtime.compact(CompactionConfig {
             preserve_recent_messages: 2,
-            max_estimated_tokens: 1,
+            max_estimated_tokens: 1, ..CompactionConfig::default()
         });
         assert!(result.summary.contains("Conversation summary"));
         assert_eq!(
@@ -1037,7 +1088,7 @@ mod tests {
         let pre_b = tab_b.estimated_tokens();
         let _result = tab_a.compact(CompactionConfig {
             preserve_recent_messages: 2,
-            max_estimated_tokens: 1,
+            max_estimated_tokens: 1, ..CompactionConfig::default()
         });
         let post_b = tab_b.estimated_tokens();
         assert_eq!(pre_b, post_b, "Tab B token estimate must be unaffected by Tab A's compaction");
@@ -1209,6 +1260,104 @@ mod tests {
             m.blocks.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("do another pass")))
         });
         assert!(has_reason, "block reason should be injected as user message");
+    }
+
+    // ─── Task #564: turn loop reactive compaction + retry ─────────────────
+
+    /// Provider that returns ContextTooLong on the first call and a
+    /// normal MessageStop on subsequent calls.  Used to verify the turn
+    /// loop's reactive-compact-then-retry path lands a successful turn.
+    struct OverflowOnceApi {
+        calls: usize,
+    }
+
+    impl ApiClient for OverflowOnceApi {
+        fn stream(&mut self, _request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.calls += 1;
+            if self.calls == 1 {
+                Err(RuntimeError::context_too_long(50_000))
+            } else {
+                Ok(vec![
+                    AssistantEvent::TextDelta("compacted-and-retried".to_string()),
+                    AssistantEvent::Usage(TokenUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                    }),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+    }
+
+    #[test]
+    fn turn_loop_retries_after_reactive_compact() {
+        use crate::compact::CompactionConfig;
+        let api = OverflowOnceApi { calls: 0 };
+        let tool_executor = StaticToolExecutor::new();
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tool_executor,
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        // Enable reactive compaction with one retry (default).
+        runtime.set_compaction_config(CompactionConfig {
+            reactive_enabled: true,
+            reactive_max_retries: 1,
+            ..CompactionConfig::default()
+        });
+        let summary = runtime
+            .run_turn("hi", None)
+            .expect("turn should succeed after reactive compact + retry");
+        assert!(
+            summary.iterations >= 1,
+            "expected at least one successful iteration after retry"
+        );
+        // The compacted assistant message should be the final one.
+        let last_text = runtime
+            .session()
+            .messages
+            .last()
+            .and_then(|m| {
+                m.blocks.iter().find_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .unwrap_or_default();
+        assert!(
+            last_text.contains("compacted-and-retried"),
+            "expected post-retry text, got: {last_text:?}"
+        );
+    }
+
+    /// When reactive_enabled is false, ContextTooLong surfaces verbatim.
+    #[test]
+    fn turn_loop_does_not_retry_when_reactive_disabled() {
+        use crate::compact::CompactionConfig;
+        let api = OverflowOnceApi { calls: 0 };
+        let tool_executor = StaticToolExecutor::new();
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api,
+            tool_executor,
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec![PromptSection::new(PromptSectionKind::System, "system")],
+        );
+        runtime.set_compaction_config(CompactionConfig {
+            reactive_enabled: false,
+            ..CompactionConfig::default()
+        });
+        let err = runtime
+            .run_turn("hi", None)
+            .expect_err("should propagate ContextTooLong when reactive disabled");
+        assert!(
+            err.context_too_long_overflow().is_some(),
+            "error should carry context-too-long overflow"
+        );
     }
 
     /// When a Stop hook blocks more times than the configured cap, the

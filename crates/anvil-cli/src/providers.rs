@@ -1047,7 +1047,16 @@ impl ApiClient for DefaultRuntimeClient {
                 .client
                 .stream_message(&message_request)
                 .await
-                .map_err(|error| RuntimeError::new(error.to_string()))?;
+                .map_err(|error| {
+                    // Task #564: detect provider context-overflow errors
+                    // and surface them as `RuntimeError::context_too_long`
+                    // so the turn loop can react with compaction + retry.
+                    if let Some(overflow) = error.context_too_long_overflow() {
+                        RuntimeError::context_too_long(overflow)
+                    } else {
+                        RuntimeError::new(error.to_string())
+                    }
+                })?;
             let mut stdout = io::stdout();
             let mut sink = io::sink();
             // When a TUI sender is active we always use sink for stdout (output

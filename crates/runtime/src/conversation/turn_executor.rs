@@ -13,6 +13,7 @@ use super::{
 use super::permission_gate::evaluate_and_execute;
 use super::usage_tracking::collect_and_record;
 use crate::auto_mode::AutoModeConfig;
+use crate::compact::{compact_session_reactive, CompactionConfig};
 use crate::hooks::{
     HookRunner, PostToolBatchPayload, StopHookBlockCounter, StopHookCapDecision,
     StopHookDecision, StopHookPayload,
@@ -42,10 +43,15 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
     cancel_token: &Arc<AtomicBool>,
     stop_hook_counter: &mut StopHookBlockCounter,
+    compaction_config: &CompactionConfig,
 ) -> Result<TurnSummary, RuntimeError> {
     let mut assistant_messages = Vec::new();
     let mut tool_results = Vec::new();
     let mut iterations = 0;
+    // Task #564: per-turn counter of reactive compactions, capped by
+    // `compaction_config.reactive_max_retries`.  Reset for every new
+    // call to run_turn_inner.
+    let mut reactive_retries: u32 = 0;
 
     loop {
         if cancel_token.load(Ordering::SeqCst) {
@@ -64,7 +70,33 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
             messages: session.messages.clone(),
         };
         api_client.set_cancel_token(Arc::clone(cancel_token));
-        let events = api_client.stream(request)?;
+        // Task #564: catch provider context-overflow errors and react
+        // with compaction before retrying the same turn.
+        let events = match api_client.stream(request) {
+            Ok(ev) => ev,
+            Err(err) => {
+                if let Some(overflow) = err.context_too_long_overflow() {
+                    if compaction_config.reactive_enabled
+                        && reactive_retries < compaction_config.reactive_max_retries
+                    {
+                        reactive_retries += 1;
+                        let result = compact_session_reactive(
+                            session,
+                            overflow,
+                            *compaction_config,
+                        );
+                        // Install the compacted session in place and re-loop.
+                        *session = result.compacted_session;
+                        // Reset the iteration count for the retry so we
+                        // don't burn the max_iterations budget on the
+                        // reactive path.
+                        iterations -= 1;
+                        continue;
+                    }
+                }
+                return Err(err);
+            }
+        };
         if cancel_token.load(Ordering::SeqCst) {
             return Err(RuntimeError::cancelled());
         }

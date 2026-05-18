@@ -115,6 +115,71 @@ impl ApiError {
         }
     }
 
+    /// Task #564: detect context-overflow errors across providers and
+    /// return the model-reported overflow in tokens (best-effort; `0`
+    /// when the body doesn't carry a parseable count).
+    ///
+    /// Recognized patterns:
+    /// - **Anthropic**: HTTP 400 with `error.type == "invalid_request_error"`
+    ///   AND a message containing "prompt is too long".
+    /// - **OpenAI** (and OpenAI-compat / Azure / Copilot / Cursor):
+    ///   HTTP 400 with body containing "context_length_exceeded" or
+    ///   "maximum context length" or "context window".
+    /// - **Ollama**: HTTP 500 (or 400) with body containing "context length"
+    ///   or "ggml" + "context".
+    ///
+    /// Returns `None` when the error does not match any known overflow
+    /// pattern.  Callers should NOT retry on `Some(_)` without compacting.
+    #[must_use]
+    pub fn context_too_long_overflow(&self) -> Option<u32> {
+        let Self::Api {
+            status,
+            error_type,
+            message,
+            body,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let code = status.as_u16();
+        // Pull the lowercased searchable text from message + body so we
+        // only run the substring scan once.
+        let mut haystack = String::new();
+        if let Some(m) = message {
+            haystack.push_str(&m.to_lowercase());
+            haystack.push('\n');
+        }
+        haystack.push_str(&body.to_lowercase());
+        let et = error_type.as_deref().unwrap_or("").to_lowercase();
+
+        let matched = if code == 400 {
+            // Anthropic: invalid_request_error + "prompt is too long".
+            (et == "invalid_request_error" && haystack.contains("prompt is too long"))
+                // OpenAI / Azure / Copilot / Cursor common phrasings.
+                || haystack.contains("context_length_exceeded")
+                || haystack.contains("maximum context length")
+                || haystack.contains("context window")
+                || haystack.contains("prompt is too long")
+                || haystack.contains("context length")
+                || haystack.contains("string too long")
+        } else if code == 500 {
+            // Ollama: surfaces context overflow as a 500 with "context length"
+            // / "context window" in the body.  Some local llama.cpp builds
+            // mention "ggml" + "context".
+            haystack.contains("context length")
+                || haystack.contains("context window")
+                || (haystack.contains("ggml") && haystack.contains("context"))
+        } else {
+            false
+        };
+
+        if !matched {
+            return None;
+        }
+        Some(parse_overflow_tokens(&haystack).unwrap_or(0))
+    }
+
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
@@ -214,6 +279,36 @@ impl Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+/// Task #564: best-effort extraction of a model-reported overflow
+/// token count from a (lowercased) overflow error body.  Looks for
+/// phrases like "exceeds the context window of 200000 tokens" or
+/// "tokens (...) > 128000" and returns the first plausible integer
+/// after the marker.  Returns `None` when no integer can be located.
+fn parse_overflow_tokens(haystack_lower: &str) -> Option<u32> {
+    // Strategy: scan for the first integer >= 1024 in the haystack.
+    // Provider messages mention 1024+ token windows; smaller values
+    // (HTTP statuses, error codes, etc.) are unlikely to be meaningful
+    // overflow figures and are skipped.
+    let bytes = haystack_lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if let Ok(n) = haystack_lower[start..i].parse::<u32>() {
+                if n >= 1024 {
+                    return Some(n);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
 impl From<reqwest::Error> for ApiError {
     fn from(value: reqwest::Error) -> Self {
         Self::Http(value)
@@ -296,6 +391,89 @@ mod tests {
             msg.contains("Groq") || msg.contains("api.groq.com"),
             "expected Groq or its URL in 5xx msg: {msg}"
         );
+    }
+
+    // ─── Task #564: context-too-long detection across providers ─────────────
+
+    fn make_api_error_full(
+        status_u16: u16,
+        error_type: Option<&str>,
+        message: Option<&str>,
+        body: &str,
+    ) -> ApiError {
+        ApiError::Api {
+            status: reqwest::StatusCode::from_u16(status_u16).unwrap(),
+            error_type: error_type.map(String::from),
+            message: message.map(String::from),
+            body: body.to_string(),
+            retryable: false,
+            retry_after_secs: None,
+            provider_hint: None,
+        }
+    }
+
+    #[test]
+    fn anthropic_provider_detects_prompt_too_long_returns_context_too_long() {
+        let err = make_api_error_full(
+            400,
+            Some("invalid_request_error"),
+            Some("prompt is too long: 250000 tokens > 200000 maximum"),
+            r#"{"error":{"type":"invalid_request_error","message":"prompt is too long: 250000 tokens > 200000 maximum"}}"#,
+        );
+        let overflow = err
+            .context_too_long_overflow()
+            .expect("Anthropic 400 prompt-too-long must map to ContextTooLong");
+        // The first parseable >= 1024 integer is 250000.
+        assert!(
+            overflow >= 1024,
+            "expected non-trivial overflow token count, got {overflow}"
+        );
+    }
+
+    #[test]
+    fn openai_provider_detects_context_length_exceeded() {
+        let err = make_api_error_full(
+            400,
+            Some("invalid_request_error"),
+            Some(
+                "This model's maximum context length is 128000 tokens. \
+                 However, your messages resulted in 130000 tokens.",
+            ),
+            r#"{"error":{"code":"context_length_exceeded","message":"maximum context length"}}"#,
+        );
+        assert!(err.context_too_long_overflow().is_some());
+    }
+
+    #[test]
+    fn ollama_provider_detects_context_overflow() {
+        // Ollama surfaces overflow as a 500 with a body mentioning
+        // "context length" (the daemon's wording for window overflow).
+        let err = make_api_error_full(
+            500,
+            None,
+            Some("context length exceeded"),
+            "context length exceeded by 4096 tokens",
+        );
+        let overflow = err
+            .context_too_long_overflow()
+            .expect("Ollama 500 context-length must map to ContextTooLong");
+        assert!(overflow >= 1024);
+    }
+
+    #[test]
+    fn context_too_long_returns_none_for_unrelated_errors() {
+        // A 400 for a different reason must not be confused for overflow.
+        let err = make_api_error_full(
+            400,
+            Some("invalid_request_error"),
+            Some("model parameter is required"),
+            r#"{"error":"model parameter is required"}"#,
+        );
+        assert!(err.context_too_long_overflow().is_none());
+
+        // A 503 (server-error) must not match either.
+        let err2 = make_api_error_full(503, None, Some("upstream busy"), "{}");
+        assert!(err2.context_too_long_overflow().is_none());
     }
 
     #[test]
