@@ -18,6 +18,7 @@ use runtime::theme::StatusLineConfig;
 use super::configure_types::{ConfigureState, ConfigureData};
 use super::list_viewport::ListViewport;
 use super::provider_login::ProviderLoginRenderSnapshot;
+use super::redraw::DirtyRegions;
 use super::scrollback::ScrollbackState;
 use super::ssh_form::SshFormState;
 use super::state::LogEntry;
@@ -229,6 +230,15 @@ pub(crate) struct LayoutSnapshot {
     pub session_pct: f32,
     /// Whole minutes elapsed in the current session block.
     pub block_minutes: u32,
+
+    // ── Task #622: redraw gating for photosensitivity / Gnome Terminal flash ──
+    /// The dirty set captured at the moment the frame was committed to the
+    /// scheduler (see `RedrawScheduler::last_committed_dirty`). Layout
+    /// renderers consult this to decide whether the top-level full-screen
+    /// `Clear` widget is justified for THIS frame. Defaults to
+    /// `DirtyRegions::ALL` so legacy/direct draw paths keep the conservative
+    /// wipe behavior.
+    pub dirty_regions: DirtyRegions,
 }
 
 #[cfg(test)]
@@ -315,6 +325,9 @@ impl LayoutSnapshot {
             context_limit_tokens: 0,
             session_pct: 0.0,
             block_minutes: 0,
+            // Task #622: default test snapshots to ALL so existing snapshot
+            // tests keep their conservative full-clear behavior.
+            dirty_regions: DirtyRegions::ALL,
         }
     }
 }

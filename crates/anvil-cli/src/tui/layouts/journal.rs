@@ -23,6 +23,7 @@ use ratatui::widgets::Paragraph;
 use super::common::{render_completion_popup, rgb};
 use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::helpers::strip_ansi;
+use crate::tui::redraw::DirtyRegions;
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::LogEntry;
 use crate::tui::TabHit;
@@ -43,8 +44,20 @@ impl TuiLayoutRenderer for Renderer {
         let theme = &snap.theme;
 
         // BUG-3 fix (Option B): clear the entire frame so cells from a prior
-        // layout do not survive ratatui's frame-diff into this layout's first frame.
-        frame.render_widget(ratatui::widgets::Clear, size);
+        // layout do not survive ratatui's frame-diff into this layout's first
+        // frame.
+        //
+        // Task #622 (CRITICAL accessibility fix): gate the full-screen Clear
+        // on structural dirty (DirtyRegions::ALL) only — unconditional Clear
+        // flashes on Gnome Terminal during streaming. See classic.rs for the
+        // full rationale.
+        let force_full_clear = snap.dirty_regions.contains(DirtyRegions::ALL)
+            || std::env::var("ANVIL_TUI_FORCE_CLEAR")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        if force_full_clear {
+            frame.render_widget(ratatui::widgets::Clear, size);
+        }
 
         // Extract local state.
         let (palette_open, palette_query, palette_selected) = match local {

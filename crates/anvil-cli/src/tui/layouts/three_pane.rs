@@ -21,6 +21,7 @@ use super::common::{rgb, render_completion_popup, render_tab_bar};
 use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::helpers::strip_ansi;
 use crate::tui::layout::cursor_visual_position;
+use crate::tui::redraw::DirtyRegions;
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::LogEntry;
 use crate::tui::TabHit;
@@ -40,7 +41,18 @@ impl TuiLayoutRenderer for Renderer {
         let size = frame.area();
 
         // BUG-3 fix: wipe all cells before drawing.
-        frame.render_widget(ratatui::widgets::Clear, size);
+        //
+        // Task #622 (CRITICAL accessibility fix): gate the full-screen Clear
+        // on structural dirty (DirtyRegions::ALL) only — unconditional Clear
+        // flashes on Gnome Terminal during streaming. See classic.rs for the
+        // full rationale.
+        let force_full_clear = snap.dirty_regions.contains(DirtyRegions::ALL)
+            || std::env::var("ANVIL_TUI_FORCE_CLEAR")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        if force_full_clear {
+            frame.render_widget(ratatui::widgets::Clear, size);
+        }
 
         // Row 0 (Layout E only): tab bar.
         let mut y_offset: u16 = 0;

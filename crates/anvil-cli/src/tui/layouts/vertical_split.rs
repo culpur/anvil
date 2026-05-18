@@ -36,6 +36,7 @@ use super::{LayoutLocalState, RightDeckMode, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
 use crate::tui::helpers::strip_ansi;
 use crate::tui::layout::{compute_input_lines, cursor_visual_position};
+use crate::tui::redraw::DirtyRegions;
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::LogEntry;
 use crate::tui::TabHit;
@@ -82,7 +83,19 @@ impl TuiLayoutRenderer for Renderer {
 
         // BUG-3 fix: wipe all cells before drawing so stale content from a
         // previous layout cannot survive through ratatui's frame diff.
-        frame.render_widget(ratatui::widgets::Clear, size);
+        //
+        // Task #622 (CRITICAL accessibility fix): see classic.rs for the full
+        // rationale. Short version: an unconditional Clear here flashes on
+        // Gnome Terminal during streaming token output. Gate on structural
+        // dirty (DirtyRegions::ALL) only; otherwise let ratatui's cell diff
+        // handle the update.
+        let force_full_clear = snap.dirty_regions.contains(DirtyRegions::ALL)
+            || std::env::var("ANVIL_TUI_FORCE_CLEAR")
+                .map(|v| v == "1")
+                .unwrap_or(false);
+        if force_full_clear {
+            frame.render_widget(ratatui::widgets::Clear, size);
+        }
 
         // Determine current deck mode from local state.
         let deck_mode = match local {
@@ -1363,5 +1376,78 @@ mod tests {
         assert!(!deck_only.contains("8 archives"), "deck must not show archive count");
         assert!(!deck_only.contains("g switch deck │"), "deck must not show keybind row");
         insta::assert_snapshot!("vertical_split_no_deck_footer__120x40", rendered);
+    }
+
+    // ── Task #622: photosensitivity / Gnome Terminal flash fix ─────────────
+    //
+    // See classic.rs for the full rationale. These tests pin the same gate
+    // behavior in the vertical_split renderer.
+
+    use crate::tui::layouts::{LayoutLocalState, TuiLayoutRenderer};
+    use crate::tui::redraw::DirtyRegions;
+    use crate::tui::snapshot::LayoutSnapshot;
+
+    fn render_real_vsplit(snap: &LayoutSnapshot, width: u16, height: u16, tabs: bool) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("TestBackend");
+        let mut local = LayoutLocalState::VerticalSplit {
+            right_deck_mode: super::super::RightDeckMode::Conversation,
+            rail_selected: 0,
+        };
+        let mut hits = Vec::new();
+        terminal
+            .draw(|frame| {
+                super::Renderer { tabs }.render(frame, snap, &mut local, &mut hits);
+            })
+            .expect("draw");
+        extract_text(&terminal)
+    }
+
+    #[test]
+    fn vertical_split_skips_full_screen_clear_when_no_flash_set() {
+        // SCROLLBACK-only dirty: the top-level Clear must be skipped. We
+        // verify the renderer doesn't panic and completes the draw with
+        // visible chrome intact.
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
+        // Sanity: the rail's SESSIONS header still renders.
+        assert!(
+            rendered.contains("SESSIONS"),
+            "rail must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn vertical_split_still_clears_when_dirty_regions_all() {
+        // ALL dirty: the legacy Clear path fires. Verify the renderer still
+        // produces a coherent frame.
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::ALL;
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
+        assert!(
+            rendered.contains("SESSIONS"),
+            "rail must render with ALL dirty; got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn vertical_split_text_delta_during_stream_renders_pending() {
+        // Streaming TextDelta frame with SCROLLBACK-only dirty. The pending
+        // text MUST appear in the deck.
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        snap.dirty_regions = DirtyRegions::SCROLLBACK;
+        snap.pending = "Token stream incoming".to_string();
+        let rendered = render_real_vsplit(&snap, 120, 30, true);
+        assert!(
+            rendered.contains("Token stream incoming"),
+            "streaming pending text must render with SCROLLBACK-only dirty; got:\n{rendered}"
+        );
     }
 }

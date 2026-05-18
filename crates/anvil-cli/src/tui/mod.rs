@@ -839,7 +839,65 @@ impl AnvilTui {
         if !self.redraw_pending {
             return Ok(false);
         }
-        self.draw_full()?;
+        // Task #622: pick the draw path based on the redraw reason.
+        //
+        // Background: the v2.2.14 BUG-fix-real path always called
+        // `draw_full()` here, which runs `terminal.clear()` (ANSI \x1b[2J)
+        // before every draw. On Gnome Terminal / kitty / some xterm builds
+        // that screen-wide erase causes a perceptible flicker on every
+        // committed frame. During token streaming the wait loop commits
+        // many frames per second — the user on Ubuntu/Gnome reported it as
+        // a "health issue" (photosensitivity / visual fatigue).
+        //
+        // The original BUG-fix-real concern was that ratatui's frame diff
+        // could coalesce a streaming tab's paint with the active tab's
+        // typed-char paint and drop the latter. The fix shape: invalidate
+        // ratatui's diff via `terminal.clear()`. But that fix is too
+        // aggressive — it only matters across structural boundaries (tab
+        // switch, modal close, layout change), NOT for every TextDelta or
+        // spinner tick.
+        //
+        // For streaming and key-event reasons we now use plain `draw()`
+        // (ratatui's natural cell diff) plus an explicit flush. The diff
+        // works fine for in-tab streaming because the deltas only touch
+        // the SCROLLBACK region — the only cross-tab race that needed
+        // `terminal.clear()` is the structural one (TabSwitch), and that
+        // still routes through `draw_full()` below.
+        //
+        // Escape hatches:
+        //   `ANVIL_TUI_FORCE_CLEAR=1` — legacy behavior; always full clear.
+        //   `ANVIL_TUI_NO_FLASH=1`    — alias of default; documented for
+        //                               users who hit a regression and want
+        //                               to be explicit.
+        let force_clear = std::env::var("ANVIL_TUI_FORCE_CLEAR")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let needs_full_clear = force_clear
+            || matches!(
+                self.redraw_reason,
+                Some(RedrawReason::TabSwitch) | Some(RedrawReason::Other) | None
+            );
+        if needs_full_clear {
+            self.draw_full()?;
+        } else {
+            // Soft path: ratatui's cell diff + explicit flush. No screen-wide
+            // ANSI erase — no flash.
+            //
+            // Tell the scheduler what region the upcoming `draw()` should be
+            // labeled as. The layout renderers consult `snap.dirty_regions`
+            // to decide whether the top-level full-screen `Clear` widget is
+            // justified. For streaming/keystroke reasons we want it skipped.
+            let region = match self.redraw_reason {
+                Some(RedrawReason::KeyEvent) => redraw::DirtyRegions::INPUT,
+                Some(RedrawReason::TextDeltaBatch) => redraw::DirtyRegions::SCROLLBACK,
+                Some(RedrawReason::Spinner) => redraw::DirtyRegions::SCROLLBACK,
+                Some(RedrawReason::TabSwitch) | Some(RedrawReason::Other) | None => {
+                    redraw::DirtyRegions::ALL
+                }
+            };
+            self.redraw.set_last_committed_dirty(region);
+            self.draw()?;
+        }
         use std::io::Write;
         self.terminal.backend_mut().flush()?;
         self.redraw_pending = false;
@@ -860,6 +918,11 @@ impl AnvilTui {
     /// every cell unconditionally.
     pub(super) fn draw_full(&mut self) -> io::Result<()> {
         self.terminal.clear()?;
+        // Task #622: this is an explicit structural repaint (modal close,
+        // tmux re-attach, etc.) — promote the next draw to a full wipe so the
+        // layout's top-level `Clear` widget fires regardless of any prior
+        // narrow dirty set captured by the scheduler.
+        self.redraw.mark_next_full();
         self.draw()
     }
 
@@ -1292,6 +1355,12 @@ impl AnvilTui {
             context_limit_tokens,
             session_pct,
             block_minutes,
+            // Task #622: capture the dirty set that fired the most recent
+            // `commit_pending` so layout renderers can gate the top-level
+            // full-screen `Clear` widget on whether this frame actually
+            // changed layout structure (resize, /layout switch, modal close)
+            // versus a streaming TextDelta that should NOT cause a wipe.
+            dirty_regions: self.redraw.last_committed_dirty(),
         }
     }
 

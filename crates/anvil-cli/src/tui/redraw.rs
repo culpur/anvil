@@ -116,6 +116,14 @@ pub struct RedrawScheduler {
     last_commit: Option<Instant>,
     frame_budget: Duration,
     force_next: bool,
+    /// Task #622: the dirty set that fired the most recent commit. Captured
+    /// inside `commit_pending()` BEFORE the dirty set is reset so the draw
+    /// closure (which runs after `commit_pending` returns) can ask "was this
+    /// frame a full layout change or just a streaming token delta?" and gate
+    /// expensive full-screen `Clear` widgets accordingly. Defaults to
+    /// `DirtyRegions::ALL` so paths that call `draw()` directly (welcome
+    /// banner, force-redraws via `redraw_pending`) still do a full wipe.
+    last_committed_dirty: DirtyRegions,
 }
 
 impl Default for RedrawScheduler {
@@ -127,6 +135,7 @@ impl Default for RedrawScheduler {
             // imperceptible UX impact; faster than this floods tmux -CC.
             frame_budget: Duration::from_millis(16),
             force_next: false,
+            last_committed_dirty: DirtyRegions::ALL,
         }
     }
 }
@@ -163,6 +172,10 @@ impl RedrawScheduler {
                 }
             }
         }
+        // Task #622: capture the dirty set BEFORE we clear it so the draw
+        // closure can read `last_committed_dirty()` and decide whether the
+        // top-level full-screen `Clear` widget is justified for this frame.
+        self.last_committed_dirty = self.dirty;
         self.dirty = DirtyRegions::NONE;
         self.force_next = false;
         self.last_commit = Some(Instant::now());
@@ -173,6 +186,36 @@ impl RedrawScheduler {
     #[allow(dead_code)]
     pub fn peek_dirty(&self) -> DirtyRegions {
         self.dirty
+    }
+
+    /// Task #622: the dirty set captured by the most recent `commit_pending`.
+    /// The draw closure reads this to gate the top-level full-screen `Clear`
+    /// widget — if the only thing that changed was SCROLLBACK or MISC during a
+    /// streaming token delta, a full wipe causes a perceptible flash on
+    /// Gnome Terminal / kitty / some xterm builds.
+    ///
+    /// Defaults to `DirtyRegions::ALL` so direct `draw()` callers (the welcome
+    /// banner, force-redraws via `redraw_pending`, etc.) still get the
+    /// belt-and-suspenders full wipe.
+    pub fn last_committed_dirty(&self) -> DirtyRegions {
+        self.last_committed_dirty
+    }
+
+    /// Task #622: mark the next direct `draw()` (one that doesn't route
+    /// through `commit_pending`) as a full repaint so the layout's top-level
+    /// `Clear` will fire. Used by force-redraw paths that bypass the
+    /// scheduler entirely.
+    pub fn mark_next_full(&mut self) {
+        self.last_committed_dirty = DirtyRegions::ALL;
+    }
+
+    /// Task #622: explicit setter for direct-draw paths that want to declare
+    /// the dirty set for the in-flight frame. The soft path inside
+    /// `commit_pending_redraw` (TextDelta / Spinner / KeyEvent) uses this to
+    /// say "treat this as a SCROLLBACK-only paint" so the layout renderer
+    /// skips its top-level full-screen `Clear`.
+    pub fn set_last_committed_dirty(&mut self, region: DirtyRegions) {
+        self.last_committed_dirty = region;
     }
 }
 
@@ -270,5 +313,47 @@ mod tests {
         assert!(s.commit_pending());
         // Force flag should NOT persist — next idle commit is silent
         assert!(!s.commit_pending());
+    }
+
+    // ── Task #622: last_committed_dirty plumbing ────────────────────────────
+
+    #[test]
+    fn last_committed_dirty_defaults_to_all() {
+        // A fresh scheduler hasn't seen a commit yet; any direct `draw()` call
+        // (welcome banner, etc.) needs the conservative full-clear path.
+        let s = RedrawScheduler::new();
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::ALL);
+    }
+
+    #[test]
+    fn last_committed_dirty_captures_request_full() {
+        let mut s = RedrawScheduler::new();
+        s.request_full();
+        assert!(s.commit_pending());
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::ALL);
+    }
+
+    #[test]
+    fn last_committed_dirty_captures_narrow_request() {
+        // A streaming text-delta dirties only SCROLLBACK. The full-screen
+        // Clear in the layout's render() must NOT fire on this frame.
+        let mut s = RedrawScheduler::new();
+        s.request(DirtyRegions::SCROLLBACK);
+        assert!(s.commit_pending());
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::SCROLLBACK);
+        assert!(!s.last_committed_dirty().contains(DirtyRegions::ALL));
+    }
+
+    #[test]
+    fn mark_next_full_promotes_direct_draw_paths() {
+        let mut s = RedrawScheduler::new();
+        // Simulate: a narrow commit happened (only INPUT dirty).
+        s.request(DirtyRegions::INPUT);
+        assert!(s.commit_pending());
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::INPUT);
+        // Now a force-redraw path (one that bypasses commit_pending) tags
+        // the next draw as full.
+        s.mark_next_full();
+        assert_eq!(s.last_committed_dirty(), DirtyRegions::ALL);
     }
 }
