@@ -201,7 +201,7 @@ impl PasswordRenderSnapshot {
             Line::from(""),
             Line::from(Span::styled(
                 format!("  {}", self.prompt),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(super::modal_secondary_color()),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -214,9 +214,7 @@ impl PasswordRenderSnapshot {
                     }
                 ),
                 if self.mask_len == 0 {
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM)
+                    Style::default().fg(super::modal_secondary_color())
                 } else {
                     Style::default().fg(Color::Cyan)
                 },
@@ -246,7 +244,7 @@ impl PasswordRenderSnapshot {
         };
         lines.push(Line::from(Span::styled(
             hint,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            Style::default().fg(super::modal_secondary_color()),
         )));
 
         let para = Paragraph::new(Text::from(lines));

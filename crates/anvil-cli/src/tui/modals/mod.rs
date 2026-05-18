@@ -47,6 +47,52 @@ pub mod password;
 pub mod queue;
 pub mod text_input;
 
+use ratatui::style::Color;
+
+/// Secondary-text color used for modal hint rows, prompt labels, and
+/// option descriptions across every modal (v2.2.17 #644 Item 5).
+///
+/// `Color::DarkGray` historically rendered around ~25% luminance on the
+/// dark-background terminals Anvil ships against, which user testing
+/// flagged as unreadable.  The replacement is an explicit RGB value
+/// targeting ~65% luminance — bright enough to read comfortably while
+/// still visibly subordinate to the primary white text.
+///
+/// We also drop `Modifier::DIM` from the call-sites that use this color:
+/// stacking DIM on top of an already-secondary RGB collapses the value
+/// back to the unreadable range on terminals that interpret DIM as a
+/// 50% luminance reduction (Gnome Terminal, kitty).
+///
+/// The regression test
+/// `modal_secondary_text_color_meets_luminance_threshold` asserts the
+/// returned value has a relative luminance >= 0.55 against the
+/// rec.709 coefficient sum (0.2126·R + 0.7152·G + 0.0722·B).
+pub(crate) fn modal_secondary_color() -> Color {
+    // RGB(170,170,170) → relative luminance 170/255 ≈ 0.667 against the
+    // rec.709 sum (each channel equal, so luminance == component / 255).
+    Color::Rgb(170, 170, 170)
+}
+
+/// Relative luminance of a `Color::Rgb(r,g,b)` against the rec.709
+/// coefficient sum. Returns `None` for any non-RGB variant (palette /
+/// named colors depend on the terminal theme, so we don't try to
+/// luminance-check them — call sites that need a luminance guarantee
+/// MUST use `Color::Rgb`).
+///
+/// Public to the crate so the regression test can exercise it directly.
+#[allow(dead_code)]
+pub(crate) fn rgb_relative_luminance(color: Color) -> Option<f32> {
+    match color {
+        Color::Rgb(r, g, b) => {
+            let r = r as f32 / 255.0;
+            let g = g as f32 / 255.0;
+            let b = b as f32 / 255.0;
+            Some(0.2126 * r + 0.7152 * g + 0.0722 * b)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) use confirm::{ConfirmAction, ConfirmModal};
 pub(crate) use password::{PasswordAction, PasswordModal};
 pub use confirm::ConfirmChoice;

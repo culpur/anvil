@@ -312,7 +312,7 @@ impl WizardChoiceModal {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  ↑↓ navigate · Enter select · 1-9 jump · Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(super::modal_secondary_color()),
         )));
 
         frame.render_widget(Paragraph::new(lines), inner);

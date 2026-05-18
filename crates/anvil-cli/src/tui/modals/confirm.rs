@@ -162,7 +162,7 @@ impl ConfirmRenderSnapshot {
         lines.push(button_row(self.selected, accent));
         lines.push(Line::from(Span::styled(
             "  y / n   Enter: confirm   Tab: switch   Esc: cancel",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            Style::default().fg(super::modal_secondary_color()),
         )));
 
         let para = Paragraph::new(Text::from(lines));

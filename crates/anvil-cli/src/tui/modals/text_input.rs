@@ -218,16 +218,12 @@ impl TextInputModal {
             if ghost.is_empty() {
                 Line::from(Span::styled(
                     "  <type a value, Enter to submit>".to_string(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(super::modal_secondary_color()),
                 ))
             } else {
                 Line::from(Span::styled(
                     format!("  {ghost}"),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(super::modal_secondary_color()),
                 ))
             }
         } else {
@@ -241,7 +237,7 @@ impl TextInputModal {
             Line::from(""),
             Line::from(Span::styled(
                 format!("  {}", self.prompt),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(super::modal_secondary_color()),
             )),
             Line::from(""),
             display_line,
@@ -255,9 +251,7 @@ impl TextInputModal {
                         self.default
                     )
                 },
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(super::modal_secondary_color()),
             )),
         ];
 

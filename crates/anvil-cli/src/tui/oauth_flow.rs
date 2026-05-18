@@ -466,7 +466,11 @@ impl OAuthFlow {
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);
 
-        let hint = Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+        // Secondary hint text — bumped from `Color::DarkGray + DIM` to a
+        // higher-luminance RGB per v2.2.17 #644 Item 5.  Centralised in
+        // `tui::modals::modal_secondary_color()` so every wizard surface
+        // resolves to the same value.
+        let hint = Style::default().fg(crate::tui::modals::modal_secondary_color());
         let normal = Style::default().fg(Color::White);
         let link = Style::default().fg(accent).add_modifier(Modifier::UNDERLINED);
         let ok = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);

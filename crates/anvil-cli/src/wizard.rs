@@ -188,6 +188,55 @@ pub(crate) fn wizard_save_config(
     Ok(path)
 }
 
+/// Write a minimal-defaults config.json when the user skips setup at
+/// the welcome card (v2.2.17 #644 Item 1).
+///
+/// The minimal config sets `setup_completed = true` so subsequent
+/// launches don't re-show the wizard, plus the system-level defaults
+/// for layout / mouse / theme / permission so the TUI boots without
+/// asking for any of them.  Provider config stays empty — the user
+/// runs `anvil login <provider>` later.
+pub(crate) fn write_minimal_default_config() -> io::Result<PathBuf> {
+    let mut config = serde_json::Map::new();
+    config.insert(
+        "default_model".to_string(),
+        serde_json::Value::String(DEFAULT_MODEL.to_string()),
+    );
+    config.insert(
+        "default_provider".to_string(),
+        serde_json::Value::String("anthropic".to_string()),
+    );
+    config.insert("setup_completed".to_string(), serde_json::Value::Bool(true));
+    config.insert(
+        "setup_skipped".to_string(),
+        serde_json::Value::Bool(true),
+    );
+    config.insert(
+        "tui_layout".to_string(),
+        serde_json::json!({
+            "kind": "vertical-split",
+            "tabs": true,
+        }),
+    );
+    config.insert(
+        "tui_layout_intro_seen".to_string(),
+        serde_json::Value::Bool(true),
+    );
+    config.insert(
+        "tui_mouse_capture".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    config.insert(
+        "theme".to_string(),
+        serde_json::Value::String("dark".to_string()),
+    );
+    config.insert(
+        "permission_mode".to_string(),
+        serde_json::Value::String("ask".to_string()),
+    );
+    wizard_save_config(&config)
+}
+
 /// Parse a wizard step-7 mouse-capture choice into a boolean.
 ///
 /// **Default OFF.** Task #623 (v2.2.14 Phase 1) fixed the v2.2.13/15/16
@@ -428,11 +477,10 @@ where
     use crate::tui::modals::text_input::TextInputModal;
 
     // ── Step 4: Default Model ────────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 4 of 8 — Default Model",
-        &[
-            "Pick the model Anvil uses by default. Change later with /model.",
-        ],
+        "Pick your default model. Switch any time via /model.",
+        &[],
         ratatui::style::Color::Cyan,
     )?;
 
@@ -457,11 +505,10 @@ where
     };
 
     // ── Step 5: Ollama Endpoint ──────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 5 of 8 — Ollama Endpoint",
-        &[
-            "Local Ollama URL. Press Enter to accept the default.",
-        ],
+        "If you run a local Ollama instance, point Anvil at it now. Skip if you don't.",
+        &[],
         ratatui::style::Color::Cyan,
     )?;
 
@@ -473,11 +520,10 @@ where
     };
 
     // ── Step 6: Profile Name ─────────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 6 of 8 — Profile",
-        &[
-            "Name this Anvil profile. Switch later with `anvil --profile <name>`.",
-        ],
+        "Profiles let you keep separate configs (e.g. work / personal). Default is fine if you're not sure.",
+        &[],
         ratatui::style::Color::Cyan,
     )?;
 
@@ -489,12 +535,10 @@ where
     };
 
     // ── Step 7: TUI Layout ───────────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 7 of 8 — TUI Layout",
-        &[
-            "Pick your default workspace architecture and tab visibility.",
-            "Live previews: https://anvilhub.culpur.net/tui-preview",
-        ],
+        "Pick your TUI layout. Preview screenshots: https://anvilhub.culpur.net/tui-preview",
+        &[],
         ratatui::style::Color::Cyan,
     )?;
 
@@ -530,12 +574,10 @@ where
     );
 
     // ── Step 8: TUI Preferences ──────────────────────────────────────────
-    runner.session.render_banner(
-        "Step 8 of 8 — TUI Preferences",
-        &[
-            "Mouse capture, theme, and default permission mode.",
-            "Change any of these later with /config or settings.json.",
-        ],
+    runner.session.render_banner_with_description(
+        "Step 8 of 8 — Preferences",
+        "Mouse, theme, and permission mode. All changeable later via /config.",
+        &[],
         ratatui::style::Color::Cyan,
     )?;
 
@@ -652,11 +694,11 @@ where
         return Ok(None);
     };
 
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 9 of 9 — Import from Claude Code (optional)",
+        "We detected Claude Code. Want to import your sessions, skills, plugins, and memory? Takes ~30 seconds.",
         &[
-            "We detected Claude Code on this system.",
-            "Import your sessions, settings, skills, plugins, and memory?",
+            "Read-only — nothing in ~/.claude/ is modified.",
         ],
         ratatui::style::Color::Cyan,
     )?;
@@ -771,6 +813,61 @@ pub(crate) struct FullWizardResult {
     pub(crate) migration_summary: Option<String>,
 }
 
+/// Welcome-card outcome — what the user pressed at the first screen
+/// (v2.2.17 #644 Item 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WelcomeOutcome {
+    /// User pressed Enter — proceed into Step 1.
+    Continue,
+    /// User pressed Esc — skip the wizard, write minimal defaults.
+    Skip,
+}
+
+/// Draw the welcome card and wait for Enter (continue) or Esc (skip).
+///
+/// Renders the card on every iteration so any future async work (e.g.
+/// a "press any key" pulsating hint) can update without losing the
+/// frame.  The poll cadence matches `run_oauth_flow` — 100ms — so the
+/// loop is responsive but does not pin a CPU.
+pub(crate) fn await_welcome_keypress<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+) -> Result<WelcomeOutcome, RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: crate::wizard_runner::TerminalHooks,
+    K: crate::wizard_runner::KeySource,
+{
+    use crossterm::event::KeyCode;
+    let title = format!("Welcome to Anvil v{}", env!("CARGO_PKG_VERSION"));
+    let tagline =
+        "Your AI coding partner that runs anywhere — Anthropic, OpenAI, Ollama, and 32 more providers.";
+    let kicker = "Let's get you setup.";
+    let hint = "Press Enter to continue · Esc to skip setup";
+    let accent = ratatui::style::Color::Cyan;
+
+    let key_poll = std::time::Duration::from_millis(100);
+    loop {
+        runner
+            .session
+            .render_welcome_card(&title, tagline, kicker, hint, accent)?;
+        if let Some(k) = runner.keys.try_next_key(key_poll) {
+            match k.code {
+                KeyCode::Enter | KeyCode::Char(' ') => return Ok(WelcomeOutcome::Continue),
+                KeyCode::Esc => return Ok(WelcomeOutcome::Skip),
+                _ => continue,
+            }
+        }
+        // Scripted-source exit: if the test source is exhausted with
+        // no resolution, default to Continue (matches the "Enter
+        // continues" semantic).  Production CrosstermKeySource never
+        // reports exhausted, so this only fires in tests.
+        if runner.keys.is_exhausted_hint() {
+            return Ok(WelcomeOutcome::Continue);
+        }
+    }
+}
+
 /// Open ONE alt-screen session and drive ALL 8 wizard steps inside it
 /// (task #642, v2.2.17 finisher).
 ///
@@ -802,15 +899,23 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
     let mut runner =
         WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
 
-    // Welcome banner.
-    runner.session.render_banner(
-        &format!("Anvil v{}", env!("CARGO_PKG_VERSION")),
-        &[
-            "First-run setup wizard — 8 steps, ~2 minutes.",
-            "All choices can be changed later via /config or settings.json.",
-        ],
-        ratatui::style::Color::Cyan,
-    )?;
+    // ── Step 0: Welcome card ────────────────────────────────────────────
+    //
+    // Renders BEFORE any "Step N of 8" banner so the user's first
+    // impression of Anvil is a deliberate welcome rather than a
+    // jarring vault-password prompt (v2.2.17 #644 Item 1).
+    //
+    // Enter advances into Step 1.  Esc skips the wizard entirely and
+    // returns a sentinel `RunnerError::Enter("user-skipped")` which
+    // the orchestrator catches and turns into a minimal-default
+    // config.
+    let welcome_outcome = await_welcome_keypress(&mut runner)?;
+    if matches!(welcome_outcome, WelcomeOutcome::Skip) {
+        // User pressed Esc — bail out of the wizard with a minimal
+        // default config. Drop the runner / session first so the
+        // alt-screen exits cleanly before any inline output runs.
+        return Err(RunnerError::Enter("user-skipped".to_string()));
+    }
 
     // Steps 1-3.
     let steps123 = run_steps_1_to_3_in_alt_screen(&mut runner)?;
@@ -1106,11 +1211,11 @@ where
     let mut out = WizardSteps123::default();
 
     // ── Step 1: Vault Setup ───────────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 1 of 8 — Vault Setup",
+        "Vault encrypts your API keys at rest. Pick a master password you'll remember — there's no recovery if lost.",
         &[
             "Anvil stores API keys in an AES-256-GCM encrypted vault.",
-            "Set a master password now — it is never stored anywhere.",
         ],
         ratatui::style::Color::Cyan,
     )?;
@@ -1216,11 +1321,11 @@ where
     }
 
     // ── Step 2: AI Provider ───────────────────────────────────────────────
-    runner.session.render_banner(
+    runner.session.render_banner_with_description(
         "Step 2 of 8 — AI Provider",
+        "Pick the AI provider you'll use most. You can add more later via /provider.",
         &[
-            "Pick your primary AI provider.  More can be added later",
-            "via /provider <name> login or `anvil login <provider>`.",
+            "More can be added with `anvil login <provider>` after setup.",
         ],
         ratatui::style::Color::Cyan,
     )?;
@@ -1292,11 +1397,11 @@ where
 
     if matches!(provider, ProviderKind::AnvilApi) {
         // Anthropic — OAuth or manual API key.
-        runner.session.render_banner(
+        runner.session.render_banner_with_description(
             "Step 3 of 8 — Sign In to Anthropic",
+            "Sign in once so Anvil can make calls on your behalf. OAuth opens a browser; manual key paste also works.",
             &[
-                "OAuth opens your browser and signs you in via claude.ai.",
-                "Manual API key skips the browser (paste sk-ant-...).",
+                "OAuth signs you in via claude.ai; manual key skips the browser.",
             ],
             ratatui::style::Color::Cyan,
         )?;
@@ -1705,6 +1810,28 @@ pub(crate) fn run_first_run_wizard() -> WizardResult {
 fn run_first_run_wizard_modal() -> WizardResult {
     let result = match run_full_wizard_in_alt_screen() {
         Ok(r) => r,
+        Err(RunnerError::Enter(ref msg)) if msg == "user-skipped" => {
+            // User pressed Esc on the welcome card — write a minimal
+            // defaults config so the next launch doesn't re-show the
+            // wizard, and return a sensible `WizardResult` (v2.2.17
+            // #644 Item 1).
+            let _ = write_minimal_default_config();
+            println!();
+            wizard_box_top();
+            wizard_box_line("");
+            wizard_box_line("  Setup skipped.");
+            wizard_box_line("");
+            wizard_box_line("  Run `anvil` again or `/config` to configure providers.");
+            wizard_box_line("");
+            wizard_box_bot();
+            println!();
+            return WizardResult {
+                wizard_completed: true,
+                chosen_model: None,
+                vault_was_unlocked: false,
+                migration_summary: None,
+            };
+        }
         Err(e) => {
             // The alt-screen session failed to enter — fall back to the
             // stdin path so the user still gets through setup.
