@@ -278,6 +278,72 @@ impl AnvilTui {
             }
         }
 
+        // Task #627: confirm modal (/restart, /iac apply).  Route all
+        // keys to it while open; on resolution emit a ReadResult variant
+        // so the host (LiveCli) can fire the pending action with full
+        // access to its own state (respawn ctx, session id, etc.).
+        if self.confirm_modal.is_some() {
+            use super::modals::ConfirmAction;
+            let action = self.confirm_modal.as_mut().unwrap().handle_key(key);
+            match action {
+                ConfirmAction::Continue => {
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                ConfirmAction::Committed(choice) => {
+                    // Consume both the modal and the pending action
+                    // atomically so the host receives them together.
+                    let pending = self.pending_confirm_action.take();
+                    self.confirm_modal = None;
+                    self.redraw.request_full();
+                    if let Some(action) = pending {
+                        return Ok(super::ReadResult::ConfirmResolved {
+                            action,
+                            choice,
+                        });
+                    }
+                    // No pending action (defensive — shouldn't happen).
+                    return Ok(super::ReadResult::Continue);
+                }
+            }
+        }
+
+        // Task #627: password modal (/vault unlock).  Route keys to it
+        // while open; on submission emit a ReadResult so the host can
+        // attempt the unlock with full access to vault state.
+        if self.password_modal.is_some() {
+            use super::modals::PasswordAction;
+            let action = self.password_modal.as_mut().unwrap().handle_key(key);
+            match action {
+                PasswordAction::Continue => {
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
+                PasswordAction::Cancel => {
+                    self.password_modal = None;
+                    self.pending_password_action = None;
+                    self.push_system("Vault unlock cancelled.".to_string());
+                    self.redraw.request_full();
+                    return Ok(super::ReadResult::Continue);
+                }
+                PasswordAction::Submit(password) => {
+                    // Don't clear the modal yet — the host may need to
+                    // call `password_modal_set_error` and keep it open
+                    // for retries.  The host clears it on success or
+                    // after the attempt-cap is reached.
+                    if let Some(pending) = self.pending_password_action.clone() {
+                        return Ok(super::ReadResult::PasswordSubmitted {
+                            action: pending,
+                            password,
+                        });
+                    }
+                    // Defensive: no pending action -> just close.
+                    self.password_modal = None;
+                    return Ok(super::ReadResult::Continue);
+                }
+            }
+        }
+
         // #578: when the provider-login modal is open, route all keys to it.
         if self.provider_login_modal.is_some() {
             use super::provider_login::ProviderLoginAction;

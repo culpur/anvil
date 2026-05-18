@@ -17,6 +17,8 @@ use runtime::theme::StatusLineConfig;
 
 use super::configure_types::{ConfigureState, ConfigureData};
 use super::list_viewport::ListViewport;
+use super::modals::confirm::ConfirmRenderSnapshot;
+use super::modals::password::PasswordRenderSnapshot;
 use super::provider_login::ProviderLoginRenderSnapshot;
 use super::redraw::DirtyRegions;
 use super::scrollback::ScrollbackState;
@@ -150,6 +152,13 @@ pub(crate) struct LayoutSnapshot {
     /// in `AnvilTui.provider_login_modal` — the snapshot carries a shallow
     /// copy of every renderable field via `ProviderLoginModal::render_snapshot`.
     pub provider_login_modal_snapshot: Option<ProviderLoginRenderSnapshot>,
+
+    // ── Confirm / password modals (task #627) ─────────────────────────────
+    /// Cloned ConfirmModal state when the overlay is open; `None` otherwise.
+    pub confirm_modal_snapshot: Option<ConfirmRenderSnapshot>,
+    /// Cloned PasswordModal render snapshot (mask length + error, never the
+    /// raw buffer) when the overlay is open; `None` otherwise.
+    pub password_modal_snapshot: Option<PasswordRenderSnapshot>,
 
     // ── Pre-fetched scrollback view (for historical view mode) ────────────
     /// Lines to display when the user has scrolled back in history.
@@ -300,6 +309,8 @@ impl LayoutSnapshot {
             is_ssh_tab: false,
             ssh_form_snapshot: None,
             provider_login_modal_snapshot: None,
+            confirm_modal_snapshot: None,
+            password_modal_snapshot: None,
             scrollback_view_lines: None,
             can_close_tab: false,
             running_tab_count: 0,

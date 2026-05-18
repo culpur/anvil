@@ -161,6 +161,22 @@ pub(crate) fn run_k8s_command(args: Option<&str>) -> String {
 }
 
 pub(crate) fn run_iac_command(args: Option<&str>) -> String {
+    // Default entry: headless mode keeps the legacy interactive flow.
+    // TUI mode is intercepted at handle_repl_command_tui (task #627)
+    // and re-enters via `run_iac_command_confirmed(..., true)` after
+    // the user accepts the in-TUI ConfirmModal.
+    run_iac_command_confirmed(args, false)
+}
+
+/// Task #627: TUI-aware variant of `/iac`.
+///
+/// `confirmed = true` skips the interactive y/N prompt on the apply
+/// path — the caller (TUI ConfirmModal resolver) has already asked
+/// the user.  When `confirmed = false` and called from a TUI session,
+/// returns instructions to use the TUI modal flow (defensive — the
+/// TUI dispatcher should intercept).  Headless callers keep the
+/// existing eprint! + read_line prompt.
+pub(crate) fn run_iac_command_confirmed(args: Option<&str>, confirmed: bool) -> String {
     let args = args.unwrap_or("").trim();
     if args.is_empty() || args == "help" {
         return [
@@ -171,6 +187,17 @@ pub(crate) fn run_iac_command(args: Option<&str>) -> String {
             "  /iac drift      Detect infrastructure drift (plan -refresh-only)",
         ].join("\n");
     }
+    // Task #627 — TUI safety gate must fire *before* we shell out for
+    // `tf_bin`, because reaching the apply path without a resolved
+    // ConfirmModal would corrupt the alt-screen with the eprint! prompt
+    // below.  Refuse early; binary-detection runs only when we know
+    // we're allowed to proceed.
+    if args == "apply" && !confirmed && crate::tui::tui_session_active() {
+        return "/iac apply: in-TUI confirmation modal did not resolve. \
+                Please retry — or run `anvil --print /iac apply` \
+                from a regular shell to use the CLI confirmation \
+                prompt instead.".to_string();
+    }
     let tf_bin = if command_exists("tofu") {
         "tofu"
     } else if command_exists("terraform") {
@@ -179,22 +206,9 @@ pub(crate) fn run_iac_command(args: Option<&str>) -> String {
         return "Neither 'tofu' nor 'terraform' found in PATH.\n\
                 Install OpenTofu: https://opentofu.org/docs/intro/install/".to_string();
     };
-    if args == "apply" {
-        // Task #626 (BUG-DEFER): when invoked from inside the TUI, ratatui
-        // owns stdin and the alt-screen, so the previous interactive
-        // confirmation was broken (the prompt printed into the back-buffer
-        // and the `read_line` blocked the event loop).  Refuse the apply
-        // path while a TUI session is active and tell the user how to run
-        // it safely.  A proper TUI confirm modal is tracked as a follow-up.
-        if crate::tui::tui_session_active() {
-            return "/iac apply: interactive confirmation is not available \
-                    from inside the TUI yet (task #626).  Run \
-                    `anvil --print /iac apply` from a regular shell, or \
-                    apply the change with `tofu apply` / `terraform apply` \
-                    directly.".to_string();
-        }
+    if args == "apply" && !confirmed {
         // Headless path: require explicit confirmation before modifying
-        // infrastructure.
+        // infrastructure.  The TUI path is gated above.
         #[allow(clippy::print_stderr, reason = "headless confirm prompt; TUI path is gated above")]
         {
             eprint!("This will apply changes to your infrastructure. Continue? (y/N) ");
@@ -208,13 +222,49 @@ pub(crate) fn run_iac_command(args: Option<&str>) -> String {
     }
     let tf_args: &[&str] = match args {
         "plan"     => &["plan", "-no-color"],
-        "apply"    => &["apply", "-no-color"],
+        "apply"    => &["apply", "-no-color", "-auto-approve"],
         "validate" => &["validate", "-no-color"],
         "drift"    => &["plan", "-refresh-only", "-no-color"],
         other => return format!("Unknown /iac sub-command: {other}\nRun `/iac help` for usage."),
     };
     let out = Command::new(tf_bin).args(tf_args).output();
     shell_output_or_err(out, &format!("{tf_bin} {args}"))
+}
+
+/// Task #627: build a short diff summary string suitable for the body
+/// of the in-TUI ConfirmModal that precedes `/iac apply`.
+///
+/// Runs `terraform plan -no-color -input=false` and extracts the
+/// "Plan: N to add, N to change, N to destroy." line if present.
+/// Falls back to a generic "Review changes carefully." message when
+/// no plan can be produced (no terraform/tofu binary, no config, etc.).
+pub(crate) fn iac_apply_confirm_body() -> String {
+    let tf_bin = if command_exists("tofu") {
+        "tofu"
+    } else if command_exists("terraform") {
+        "terraform"
+    } else {
+        return "No terraform/tofu binary found in PATH. \
+                Install OpenTofu before applying.".to_string();
+    };
+    let out = Command::new(tf_bin)
+        .args(["plan", "-no-color", "-input=false"])
+        .output();
+    let plan_line = out.ok().and_then(|o| {
+        let combined = String::from_utf8_lossy(&o.stdout).into_owned()
+            + &String::from_utf8_lossy(&o.stderr);
+        combined
+            .lines()
+            .find(|l| l.trim_start().starts_with("Plan:"))
+            .map(str::trim)
+            .map(ToString::to_string)
+    });
+    match plan_line {
+        Some(line) => format!(
+            "This will apply changes to your infrastructure.\n\n{line}\n\nReview the plan carefully before confirming.",
+        ),
+        None => "This will apply changes to your infrastructure.\n\nReview the plan carefully before confirming.".to_string(),
+    }
 }
 
 pub(crate) fn run_deps_command(args: Option<&str>) -> String {

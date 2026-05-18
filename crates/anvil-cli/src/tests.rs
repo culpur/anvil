@@ -1216,3 +1216,72 @@ fn clippy_print_gate_is_in_place_on_tui_touching_files() {
         );
     }
 }
+
+// ─── Task #627 — modal wiring regression tests ────────────────────────────────
+
+#[test]
+fn vault_unlock_needs_modal_bare_unlock_is_true() {
+    assert!(super::vault_unlock_needs_modal("unlock"));
+}
+
+#[test]
+fn vault_unlock_needs_modal_with_inline_pw_is_false() {
+    // `/vault unlock <pw>` carries the password inline — no modal.
+    assert!(!super::vault_unlock_needs_modal("unlock hunter2"));
+}
+
+#[test]
+fn vault_unlock_needs_modal_other_subcommands_false() {
+    for s in &[
+        "", "status", "setup", "lock", "store myvault",
+        "get foo", "list", "delete foo", "totp list",
+    ] {
+        assert!(
+            !super::vault_unlock_needs_modal(s),
+            "{s:?} should not open the password modal"
+        );
+    }
+}
+
+#[test]
+fn vault_unlock_needs_modal_handles_whitespace() {
+    // Leading / trailing whitespace must not cause us to drop the modal.
+    assert!(super::vault_unlock_needs_modal("  unlock  "));
+}
+
+#[test]
+fn iac_apply_confirm_body_is_nonempty() {
+    // The body string must never be empty, even when no terraform
+    // binary is installed (the wrap_body / render path assumes some
+    // text to lay out).
+    let body = super::cmd_static::iac_apply_confirm_body();
+    assert!(!body.is_empty(), "iac confirm body must not be empty");
+    assert!(
+        body.contains("infrastructure") || body.contains("terraform"),
+        "iac confirm body should mention the impact: {body:?}"
+    );
+}
+
+#[test]
+fn run_iac_command_help_with_confirmed_flag() {
+    // confirmed=true on a non-apply subcommand must not consult the
+    // TUI gate or the tf binary.  Smoke test that `help` still works.
+    let out = super::cmd_static::run_iac_command_confirmed(Some("help"), true);
+    assert!(out.starts_with("Usage:"), "help should print usage, got {out:?}");
+}
+
+#[test]
+fn run_iac_command_unconfirmed_in_tui_returns_safe_message() {
+    // Simulate a TUI session being active so the apply path takes the
+    // defensive "modal did not resolve" branch (instead of writing to
+    // stderr or blocking on stdin).
+    super::tui::set_tui_session_active(true);
+    let out = super::cmd_static::run_iac_command_confirmed(Some("apply"), false);
+    super::tui::set_tui_session_active(false);
+    // The message should mention the TUI / modal so the user knows
+    // to try again.
+    assert!(
+        out.contains("modal") || out.contains("TUI") || out.contains("--print"),
+        "expected TUI-safe message, got: {out:?}"
+    );
+}

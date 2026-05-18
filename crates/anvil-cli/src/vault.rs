@@ -5,11 +5,14 @@
 //! appear in REPL history or process argument lists.
 
 // Task #626 — `/vault` subcommands run from both TUI and headless paths.
-// `read_password_prompt` is a BUG-DEFER per the audit: in TUI mode the
-// `eprint!` prompt corrupts the alt-screen and `rpassword::read_password`
-// fights ratatui for stdin.  Fix needs a TUI password modal; until that
-// lands the eprint! carries a single per-call `#[allow]` and the bug is
-// tracked as a follow-up.
+// `read_password_prompt` was a BUG-DEFER per the audit; task #627
+// resolved the `/vault unlock` path by intercepting it in
+// `handle_repl_command_tui` and opening an in-TUI PasswordModal.
+// The remaining sub-commands (setup, store, get, totp ...) still use
+// `read_password_prompt` and are headless-only — invoking them from
+// the TUI prints the password prompt to stderr, which the alt-screen
+// hides until exit.  Pending follow-up: extend PasswordModal coverage
+// to those flows (track separately so this task stays scoped).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::io::Write as _;

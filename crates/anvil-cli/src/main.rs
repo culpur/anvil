@@ -3363,6 +3363,82 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     new_session.id,
                 ));
             }
+            // Task #627: confirm modal (/restart, /iac apply) resolved.
+            ReadResult::ConfirmResolved { action, choice } => {
+                use tui::{ConfirmChoice, PendingConfirmAction};
+                match (action, choice) {
+                    (PendingConfirmAction::Restart, ConfirmChoice::Yes) => {
+                        let ctx = get_respawn_ctx();
+                        let session_id = cli.session.id.clone();
+                        match respawn::respawn(&ctx, "user /restart", &session_id) {
+                            Ok(respawn::RespawnOutcome::Respawned) => {
+                                // Unreachable — exec replaced us.
+                            }
+                            Ok(respawn::RespawnOutcome::PromptUser(msg)) => {
+                                tui.push_system(msg);
+                            }
+                            Err(e) => {
+                                tui.push_system(format!("Restart failed: {e}"));
+                            }
+                        }
+                    }
+                    (PendingConfirmAction::Restart, ConfirmChoice::No) => {
+                        tui.push_system("Restart cancelled.".to_string());
+                    }
+                    (PendingConfirmAction::IacApply, ConfirmChoice::Yes) => {
+                        let out = cmd_static::run_iac_command_confirmed(Some("apply"), true);
+                        if !out.is_empty() {
+                            tui.push_system(out);
+                        }
+                    }
+                    (PendingConfirmAction::IacApply, ConfirmChoice::No) => {
+                        tui.push_system("Apply cancelled.".to_string());
+                    }
+                }
+            }
+            // Task #627: password modal submitted.  Host attempts the
+            // action; on failure call password_modal_set_error and
+            // keep the modal open (up to 3 attempts); on success or
+            // attempt-cap close the modal and push status.
+            ReadResult::PasswordSubmitted { action, password } => {
+                use tui::PendingPasswordAction;
+                const MAX_VAULT_ATTEMPTS: u32 = 3;
+                match action {
+                    PendingPasswordAction::VaultUnlock => {
+                        let mut vm = runtime::VaultManager::with_default_dir();
+                        if !vm.is_initialized() {
+                            tui.close_password_modal();
+                            tui.push_system(
+                                "Vault not initialized. Run /vault setup first.".to_string()
+                            );
+                        } else {
+                            match vm.unlock(&password) {
+                                Ok(()) => {
+                                    tui.close_password_modal();
+                                    tui.push_system(
+                                        "Vault unlocked.".to_string()
+                                    );
+                                }
+                                Err(e) => {
+                                    // Already-elapsed attempts is the
+                                    // count BEFORE set_error increments.
+                                    let prior = tui.password_modal_attempts();
+                                    if prior + 1 >= MAX_VAULT_ATTEMPTS {
+                                        tui.close_password_modal();
+                                        tui.push_system(format!(
+                                            "Vault unlock failed after {MAX_VAULT_ATTEMPTS} attempts: {e}"
+                                        ));
+                                    } else {
+                                        tui.password_modal_set_error(format!(
+                                            "Wrong password ({e}) — try again"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             ReadResult::Submit(input) => {
                 last_input_time = Instant::now();
                 // Task #599: drain any expanded paste-placeholder blocks
@@ -5410,6 +5486,44 @@ impl LiveCli {
                 tui.open_provider_login_modal(kind);
                 return Ok(false);
             }
+            // Task #627: hard `/restart` — open in-TUI confirm modal
+            // instead of `print!`/`read_line` which corrupted the
+            // alt-screen.  Soft restart (`/restart --soft`) needs no
+            // confirm; it falls through to the inline arm below.
+            SlashCommand::Restart { soft: false } => {
+                tui.open_confirm_modal(
+                    "Restart Anvil?",
+                    "This will exit and respawn the current session.",
+                    tui::PendingConfirmAction::Restart,
+                );
+                return Ok(false);
+            }
+            // Task #627: `/iac apply` — open ConfirmModal with a diff
+            // summary in the body.  On Yes the host re-enters
+            // run_iac_command_confirmed(..., true) which skips the
+            // legacy eprint! prompt.
+            SlashCommand::Iac { action: Some(a) } if a.trim() == "apply" => {
+                let body = cmd_static::iac_apply_confirm_body();
+                tui.open_confirm_modal(
+                    "Apply IaC changes?",
+                    body,
+                    tui::PendingConfirmAction::IacApply,
+                );
+                return Ok(false);
+            }
+            // Task #627: `/vault unlock` (no inline password) — open
+            // in-TUI password modal instead of eprint!+rpassword which
+            // fought ratatui for stdin.  When a password is provided
+            // inline (e.g. `/vault unlock <pw>` for the web viewer)
+            // fall through to the inline arm below.
+            SlashCommand::Vault { action: Some(a) } if vault_unlock_needs_modal(a) => {
+                tui.open_password_modal(
+                    "Vault Unlock",
+                    "Enter master password",
+                    tui::PendingPasswordAction::VaultUnlock,
+                );
+                return Ok(false);
+            }
             _ => {}
         }
 
@@ -5945,15 +6059,14 @@ impl LiveCli {
                     let report = render_config_report(None)?;
                     (format!("Config reloaded.\n{report}"), false)
                 } else {
-                    // Full restart: prompt then respawn (TUI path — prompt via stdout).
-                    // BUG-DEFER (task #626): this `print!` + `read_line` is
-                    // an interactive prompt that the TUI doesn't intercept,
-                    // so the y/N prompt is written into the alt-screen and
-                    // stdin is owned by ratatui's event loop.  A TUI confirm
-                    // modal belongs here; tracked as a follow-up because
-                    // refusing the command would regress the only working
-                    // escape hatch for `/restart` from inside the TUI.
-                    #[allow(clippy::print_stdout, reason = "TUI-reachable interactive prompt; BUG-DEFER per audit 2026-05-18")]
+                    // Full restart: prompt then respawn.
+                    // Task #627: the TUI dispatcher (handle_repl_command_tui)
+                    // intercepts `/restart` (soft: false) and opens an
+                    // in-TUI ConfirmModal *before* reaching this arm.  So
+                    // the `print!` below is now safe — it only runs from
+                    // the headless `anvil --print /restart` path where
+                    // ratatui is not on screen.
+                    #[allow(clippy::print_stdout, reason = "headless /restart prompt; TUI path intercepts in handle_repl_command_tui")]
                     { print!("Save and restart Anvil? [y/N] "); }
                     let _ = io::stdout().flush();
                     let mut choice = String::new();
@@ -8407,6 +8520,21 @@ fn format_elapsed(secs: u64) -> String {
     } else {
         format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
     }
+}
+
+// ── Vault TUI helpers (#627) ─────────────────────────────────────────────────
+
+/// True when `/vault <action>` is `unlock` with no inline password,
+/// i.e. the password modal must be opened to capture the secret.
+/// Returns false for `/vault unlock <pw>` (caller supplied inline)
+/// and for every other subcommand (status, store, list, etc.).
+///
+/// We intentionally only open the modal for the bare `unlock` form to
+/// avoid surprising users who scripted `/vault unlock <pw>` via the
+/// web viewer relay (which passes the master password inline).
+fn vault_unlock_needs_modal(action: &str) -> bool {
+    let trimmed = action.trim();
+    trimmed == "unlock"
 }
 
 // ── Provider-login TUI helpers (#578) ────────────────────────────────────────

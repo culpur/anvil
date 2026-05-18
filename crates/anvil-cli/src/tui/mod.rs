@@ -24,6 +24,7 @@ pub(super) mod redraw;
 pub(super) mod scrollback;
 pub(super) mod snapshot;
 pub(super) mod ssh_bridge;
+pub(super) mod modals;
 pub(super) mod provider_login;
 pub(super) mod ssh_form;
 pub(super) mod ssh_tab;
@@ -38,6 +39,10 @@ pub use state::{InFlightInterruption, TaggedTuiEvent, TuiEvent, TuiSender};
 pub(super) use state::{PermissionReply, PendingPermission};
 pub use configure_types::{ConfigureAction, ConfigureData};
 pub use widgets::{init_ollama_model_cache, invalidate_ollama_model_cache};
+// Task #627: re-export modal pending-action enums + choice enum so the
+// LiveCli host can match on them after read_input returns
+// ReadResult::ConfirmResolved / ::PasswordSubmitted.
+pub use modals::{ConfirmChoice, PendingConfirmAction, PendingPasswordAction};
 
 
 // Internal imports used by AnvilTui methods in this file.
@@ -83,6 +88,21 @@ pub enum ReadResult {
     NewTab,
     /// User triggered a configure action from the interactive configure menu.
     ConfigureAction(ConfigureAction),
+    /// Task #627: a confirm modal opened by `/restart` or `/iac apply`
+    /// resolved.  The host runs `action` when `choice == Yes`, or
+    /// pushes a "Cancelled" system message when `choice == No`.
+    ConfirmResolved {
+        action: modals::PendingConfirmAction,
+        choice: modals::ConfirmChoice,
+    },
+    /// Task #627: the password modal opened by `/vault unlock` submitted
+    /// a password.  Host attempts the action; on failure host calls
+    /// [`AnvilTui::password_modal_set_error`] and the modal stays open;
+    /// on success host calls [`AnvilTui::close_password_modal`].
+    PasswordSubmitted {
+        action: modals::PendingPasswordAction,
+        password: String,
+    },
 }
 
 // ─── AnvilTui ─────────────────────────────────────────────────────────────────
@@ -194,6 +214,25 @@ pub struct AnvilTui {
     /// #578: in-TUI provider login modal. `Some` while the overlay is open;
     /// `None` otherwise.  Replaces the drop-to-CLI pattern in `run_inline_login`.
     pub(super) provider_login_modal: Option<provider_login::ProviderLoginModal>,
+    /// Task #627: in-TUI yes/no confirmation modal.  `Some` while the
+    /// overlay is open; `None` otherwise.  Used by `/restart` and
+    /// `/iac apply`, which previously corrupted the alt-screen with
+    /// `print!`/`read_line` confirm prompts.
+    pub(super) confirm_modal: Option<modals::ConfirmModal>,
+    /// Task #627: pending action to fire when `confirm_modal` resolves
+    /// to `Yes`.  Always paired with `confirm_modal` — both set when
+    /// the modal opens, both cleared on resolution.
+    pub(super) pending_confirm_action: Option<modals::PendingConfirmAction>,
+    /// Task #627: in-TUI masked-input password modal.  Used by
+    /// `/vault unlock` (and any future vault subcommand that needs the
+    /// master password) so the secret never touches stdout / the
+    /// ratatui back-buffer.
+    pub(super) password_modal: Option<modals::PasswordModal>,
+    /// Task #627: pending action to fire when `password_modal` submits.
+    /// On failure the host calls `set_error` and keeps the modal open
+    /// (up to 3 attempts); on success or final failure both fields are
+    /// cleared.
+    pub(super) pending_password_action: Option<modals::PendingPasswordAction>,
     /// Clickable-tab geometry recorded by the draw loop. The input handler
     /// looks this up on a mouse Down(Left) event to decide whether the click
     /// landed on a tab label (switch) or its close glyph (close).
@@ -564,6 +603,10 @@ impl AnvilTui {
                 ssh_escape_pending: false,
                 ssh_form: None,
                 provider_login_modal: None,
+                confirm_modal: None,
+                pending_confirm_action: None,
+                password_modal: None,
+                pending_password_action: None,
                 pending_auto_submit: None,
                 tab_hits: Vec::new(),
                 tab_bar_row: 0,
@@ -1363,6 +1406,14 @@ impl AnvilTui {
             .provider_login_modal
             .as_ref()
             .map(|m| m.render_snapshot());
+        let confirm_modal_snapshot = self
+            .confirm_modal
+            .as_ref()
+            .map(|m| m.render_snapshot());
+        let password_modal_snapshot = self
+            .password_modal
+            .as_ref()
+            .map(|m| m.render_snapshot());
         let ssh_form_snapshot: Option<ssh_form::SshFormState> = self.ssh_form.as_ref().map(|f| {
             let mut copy = ssh_form::SshFormState::new();
             copy.host = f.host.clone();
@@ -1429,6 +1480,8 @@ impl AnvilTui {
             is_ssh_tab,
             ssh_form_snapshot,
             provider_login_modal_snapshot,
+            confirm_modal_snapshot,
+            password_modal_snapshot,
             scrollback_view_lines,
             can_close_tab,
             running_tab_count,
@@ -1597,6 +1650,31 @@ impl AnvilTui {
                     snap.theme.error.2,
                 );
                 login_snap.render(frame, size, accent, error_c);
+            }
+
+            // Task #627: confirm modal (/restart, /iac apply).
+            if let Some(ref c) = snap.confirm_modal_snapshot {
+                let accent = Color::Rgb(
+                    snap.theme.accent.0,
+                    snap.theme.accent.1,
+                    snap.theme.accent.2,
+                );
+                c.render(frame, size, accent);
+            }
+
+            // Task #627: password modal (/vault unlock).
+            if let Some(ref p) = snap.password_modal_snapshot {
+                let accent = Color::Rgb(
+                    snap.theme.accent.0,
+                    snap.theme.accent.1,
+                    snap.theme.accent.2,
+                );
+                let error_c = Color::Rgb(
+                    snap.theme.error.0,
+                    snap.theme.error.1,
+                    snap.theme.error.2,
+                );
+                p.render(frame, size, accent, error_c);
             }
 
             // Bug-3 Commit 4: permission approval modal.
@@ -3072,6 +3150,67 @@ impl AnvilTui {
         self.ssh_form.is_some()
             || self.configure_state != ConfigureState::Inactive
             || self.provider_login_modal.is_some()
+            || self.confirm_modal.is_some()
+            || self.password_modal.is_some()
+    }
+
+    // ─── Task #627 modal helpers ─────────────────────────────────────────────
+
+    /// Open a confirm modal with the given pending action.  Replaces
+    /// any previously-open confirm modal (rare; only happens if a
+    /// command intercepts itself).
+    pub(crate) fn open_confirm_modal(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        action: modals::PendingConfirmAction,
+    ) {
+        self.confirm_modal = Some(modals::ConfirmModal::new(title, body));
+        self.pending_confirm_action = Some(action);
+        self.redraw.request_full();
+    }
+
+    /// Open a password modal with the given pending action.
+    pub(crate) fn open_password_modal(
+        &mut self,
+        title: impl Into<String>,
+        prompt: impl Into<String>,
+        action: modals::PendingPasswordAction,
+    ) {
+        self.password_modal = Some(modals::PasswordModal::new(title, prompt));
+        self.pending_password_action = Some(action);
+        self.redraw.request_full();
+    }
+
+    /// Close the confirm modal and consume its pending action.  Idempotent.
+    pub(crate) fn close_confirm_modal(&mut self) {
+        self.confirm_modal = None;
+        self.pending_confirm_action = None;
+        self.redraw.request_full();
+    }
+
+    /// Close the password modal and consume its pending action.  Idempotent.
+    pub(crate) fn close_password_modal(&mut self) {
+        self.password_modal = None;
+        self.pending_password_action = None;
+        self.redraw.request_full();
+    }
+
+    /// Set an error message on the open password modal (e.g. after a
+    /// failed unlock attempt).  No-op if no password modal is open.
+    /// Increments the modal's `attempts` counter — the host should
+    /// check `password_modal_attempts()` against its retry cap and
+    /// close the modal when the cap is exceeded.
+    pub(crate) fn password_modal_set_error(&mut self, msg: impl Into<String>) {
+        if let Some(modal) = self.password_modal.as_mut() {
+            modal.set_error(msg);
+            self.redraw.request_full();
+        }
+    }
+
+    /// Current attempt count on the open password modal, or 0 if none.
+    pub(crate) fn password_modal_attempts(&self) -> u32 {
+        self.password_modal.as_ref().map_or(0, |m| m.attempts)
     }
 
     /// Open the provider-login modal for the given provider (#578).
