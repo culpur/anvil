@@ -72,6 +72,11 @@ mod bg_handlers;
 mod utils;
 mod vault;
 mod wizard;
+/// Task #579: standalone modal-queue runner used by the first-run
+/// wizard to drive `WizardChoiceModal` / `ConfirmModal` steps before
+/// the full `AnvilTui` exists.
+#[allow(dead_code)] // Wired to wizard.rs callsites in a follow-up commit.
+mod wizard_runner;
 
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
