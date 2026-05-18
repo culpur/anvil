@@ -248,6 +248,14 @@ pub(crate) struct LayoutSnapshot {
     /// `DirtyRegions::ALL` so legacy/direct draw paths keep the conservative
     /// wipe behavior.
     pub dirty_regions: DirtyRegions,
+
+    // ── Task #634: rail focus (v2.2.14 Phase 1) ──────────────────────────
+    /// Which left-rail section currently owns navigation focus. The
+    /// vertical_split renderer reads this to paint the focused section's
+    /// header with a bold accent emphasis. Driven by the `g` / `d` / `s` /
+    /// `a` rail-nav keys in `input_handler.rs` (gated on empty input + no
+    /// active modal).
+    pub rail_focus: super::RailFocus,
 }
 
 #[cfg(test)]
@@ -339,6 +347,9 @@ impl LayoutSnapshot {
             // Task #622: default test snapshots to ALL so existing snapshot
             // tests keep their conservative full-clear behavior.
             dirty_regions: DirtyRegions::ALL,
+            // Task #634: default rail focus to Deck so existing rail-render
+            // golden snapshots stay byte-stable.
+            rail_focus: super::RailFocus::Deck,
         }
     }
 }

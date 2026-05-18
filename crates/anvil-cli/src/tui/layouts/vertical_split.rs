@@ -39,7 +39,7 @@ use crate::tui::layout::{compute_input_lines, cursor_visual_position};
 use crate::tui::redraw::DirtyRegions;
 use crate::tui::snapshot::LayoutSnapshot;
 use crate::tui::state::LogEntry;
-use crate::tui::TabHit;
+use crate::tui::{RailFocus, TabHit};
 
 /// Rail width in columns. Clamped between MIN_RAIL and MAX_RAIL.
 ///
@@ -51,6 +51,23 @@ use crate::tui::TabHit;
 const MIN_RAIL: u16 = 16;
 const MAX_RAIL: u16 = 40;
 const DEFAULT_RAIL: u16 = 32;
+
+/// Task #634: The five lines of the KEYBINDS rail block. Defined as a const
+/// so both the renderer and the drift-gate test read the SAME source of
+/// truth.  Any addition / removal here must come with:
+///   * A matching match arm in `tui::input_handler::handle_key` (or
+///     `handle_ctrl_key` for Ctrl-prefixed keys).
+///   * An entry in `every_advertised_rail_key_has_a_handler`'s expected-
+///     pattern table.
+///
+/// See `feedback-advertised-keys-must-have-handlers.md`.
+pub(super) const RAIL_KEYBIND_LINES: [&str; 5] = [
+    " g switch deck · d tools",
+    " s sessions · a agents",
+    " F2/F3 tab · Ctrl+T new",
+    " Ctrl+W close · Ctrl+R deck",
+    " ? help · /quit exit",
+];
 
 /// Compute the left rail width from terminal width.
 fn rail_width(terminal_width: u16) -> u16 {
@@ -244,15 +261,35 @@ fn render_rail(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     );
 }
 
+/// Pick the section-header style for a given section based on rail focus.
+///
+/// Task #634: when the user has navigated focus onto a rail block via the
+/// `g`/`d`/`s`/`a` keys, the corresponding header gains a strong-accent
+/// emphasis (BOLD + full accent fg, no DIM modifier) so the user can see
+/// which block receives further nav keys. Unfocused blocks render with the
+/// default `BOLD | DIM` accent — same as before this task.
+fn section_header_style(focused: bool, accent: ratatui::style::Color) -> Style {
+    if focused {
+        Style::default().fg(accent).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(accent)
+            .add_modifier(Modifier::BOLD | Modifier::DIM)
+    }
+}
+
 /// Build the top-of-rail line set: SESSIONS, AGENTS (GLOBAL), STATUS (ALL TABS).
 fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     let theme = &snap.theme;
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Style tokens — shared with the bottom builder.
-    let section_style = Style::default()
-        .fg(rgb(theme.accent))
-        .add_modifier(Modifier::BOLD | Modifier::DIM);
+    let accent = rgb(theme.accent);
+    let sessions_focused = matches!(snap.rail_focus, RailFocus::Sessions);
+    let agents_focused = matches!(snap.rail_focus, RailFocus::Agents);
+    let sessions_style = section_header_style(sessions_focused, accent);
+    let agents_style = section_header_style(agents_focused, accent);
+    let unfocused_style = section_header_style(false, accent);
     let dim = Style::default().fg(Color::DarkGray);
     let qualifier_style = Style::default()
         .fg(Color::DarkGray)
@@ -261,7 +298,7 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     let inactive_dot_style = Style::default().fg(Color::DarkGray);
 
     // ── SESSIONS section ──────────────────────────────────────────────────────
-    lines.push(section_header_line("SESSIONS", None, w, section_style));
+    lines.push(section_header_line("SESSIONS", None, w, sessions_style));
 
     for (_, tab_name, is_active, has_unread, _has_perm) in &snap.tab_infos {
         let dot = if *is_active { "●" } else { "○" };
@@ -283,7 +320,7 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     // ── AGENTS (GLOBAL) section ───────────────────────────────────────────────
-    lines.push(section_header_line("AGENTS", Some("GLOBAL"), w, section_style));
+    lines.push(section_header_line("AGENTS", Some("GLOBAL"), w, agents_style));
 
     let tab_id_to_name: std::collections::HashMap<usize, &str> = snap
         .tab_infos
@@ -337,7 +374,9 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     // ── STATUS (ALL TABS) section ─────────────────────────────────────────────
-    lines.push(section_header_line("STATUS", Some("ALL TABS"), w, section_style));
+    // STATUS is informational only — no key binding focuses it directly, so it
+    // always renders unfocused.
+    lines.push(section_header_line("STATUS", Some("ALL TABS"), w, unfocused_style));
 
     let running_val = if snap.running_tab_count == 1 {
         "1 tab".to_string()
@@ -458,14 +497,7 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
 
     // ── KEYBINDS section ──────────────────────────────────────────────────────
     lines.push(section_header_line("KEYBINDS", None, w, section_style));
-    let kb_lines = [
-        " g switch deck · d tools",
-        " s sessions · a agents",
-        " F2/F3 tab · Ctrl+T new",
-        " Ctrl+W close · Ctrl+R deck",
-        " ? help · /quit exit",
-    ];
-    for kb in kb_lines {
+    for kb in RAIL_KEYBIND_LINES {
         let kb_truncated = truncate(kb.to_string(), w);
         lines.push(Line::from(Span::styled(kb_truncated, dim)));
     }
@@ -720,11 +752,14 @@ fn render_deck_header(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot, deck
     let w = area.width as usize;
     let mode_label = deck_mode.label();
     let header_text = format!("DECK: {mode_label}{}", " ".repeat(w.saturating_sub(6 + mode_label.len())));
+    // Task #634: when rail focus is on Deck (the default) or Tools, paint the
+    // deck header with strong-accent emphasis. When focus is on Sessions or
+    // Agents (a rail block), drop the deck header to the dim accent so the
+    // eye is drawn to the focused rail header.
+    let focused = matches!(snap.rail_focus, RailFocus::Deck | RailFocus::Tools);
+    let style = section_header_style(focused, rgb(theme.accent));
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            header_text,
-            Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD | Modifier::DIM),
-        )),
+        Paragraph::new(Span::styled(header_text, style)),
         area,
     );
 }
@@ -1597,4 +1632,210 @@ mod tests {
              got {sep_hits} hits over {total_rows} rows. Full render:\n{rendered}"
         );
     }
+
+    // ── Task #634: drift gate + focus-render tests ─────────────────────────
+    //
+    // The KEYBINDS rail block advertises 8 distinct key tokens (g, d, s, a,
+    // F2/F3, Ctrl+T, Ctrl+W, Ctrl+R) plus `?` and `/quit` on the last line
+    // (which the parent task notes are already wired). The drift gate
+    // mechanically parses `RAIL_KEYBIND_LINES`, extracts the leading key
+    // token from every clause, and asserts the production `input_handler.rs`
+    // contains a matching match-arm pattern. If a label is added to the rail
+    // without a handler, the test fails; if a handler is removed without
+    // updating the label, the test also fails.
+    //
+    // This is the same pattern as task #626's println audit and the slash
+    // command drift gate at lib.rs::every_slash_command_variant_has_a_spec.
+    // See `feedback-advertised-keys-must-have-handlers.md`.
+
+    /// Drift gate: every key advertised in the rail's KEYBINDS block must
+    /// have a corresponding match-arm pattern in `input_handler.rs`.
+    #[test]
+    fn every_advertised_rail_key_has_a_handler() {
+        let handler_src = include_str!("../input_handler.rs");
+
+        let mut advertised: Vec<String> = Vec::new();
+        for line in super::RAIL_KEYBIND_LINES {
+            for clause in line.trim().split('·') {
+                let clause = clause.trim();
+                if let Some(token) = clause.split_whitespace().next() {
+                    if !token.is_empty() {
+                        advertised.push(token.to_string());
+                    }
+                }
+            }
+        }
+
+        // Expected pattern fragment for each rail key. The drift gate looks
+        // for these literal substrings inside `input_handler.rs`. Patterns
+        // are deliberately narrow (the actual match arm, not just any
+        // mention of the key) so a stray comment can't satisfy the gate.
+        //
+        // `?` and `/quit` are intentionally skipped: `?` is handled by the
+        // transcript-help dispatcher (only fires in historical view, which
+        // is correct behavior for that key) and `/quit` is a slash command
+        // routed via the dispatch table, not a key handler.
+        for key in &advertised {
+            let expected: &str = match key.as_str() {
+                "g" => "KeyCode::Char('g')",
+                "d" => "KeyCode::Char('d')",
+                "s" => "KeyCode::Char('s')",
+                "a" => "KeyCode::Char('a')",
+                "F2/F3" => "KeyCode::F(2)",
+                "Ctrl+T" => "KeyCode::Char('t' | 'T')",
+                "Ctrl+W" => "KeyCode::Char('w' | 'W')",
+                "Ctrl+R" => "KeyCode::Char('r' | 'R')",
+                "?" => continue, // handled by transcript_help dispatcher
+                "/quit" => continue, // slash command, not a key handler
+                other => panic!(
+                    "Rail key '{other}' has no expected handler pattern. Either \
+                     wire a handler in input_handler.rs and add a mapping here, \
+                     or remove the label from RAIL_KEYBIND_LINES."
+                ),
+            };
+            assert!(
+                handler_src.contains(expected),
+                "Rail advertises '{key}' but input_handler.rs is missing the \
+                 expected handler pattern '{expected}'. Either wire the \
+                 handler or remove the label from RAIL_KEYBIND_LINES."
+            );
+        }
+
+        // Also: F3 should be handled as a separate match arm even though it
+        // shares a rail label ('F2/F3') with F2.
+        assert!(
+            handler_src.contains("KeyCode::F(3)"),
+            "F2/F3 rail label requires both KeyCode::F(2) and KeyCode::F(3) \
+             handlers in input_handler.rs"
+        );
+    }
+
+    /// The `g` / `d` / `s` / `a` rail-focus arms in `input_handler.rs` must
+    /// gate on empty input + no active modal. Without these gates a user
+    /// mid-typing would have their characters swallowed instead of appended.
+    #[test]
+    fn rail_focus_handlers_gate_on_empty_input_and_no_modal() {
+        let handler_src = include_str!("../input_handler.rs");
+
+        for key in ["g", "d", "s", "a"] {
+            let pattern = format!("KeyCode::Char('{key}')");
+            // Find the arm and check that the same block contains both
+            // `input_buffer_is_empty()` and `has_active_modal()` calls.
+            // We tolerate exact whitespace by checking that BOTH substrings
+            // appear within ~400 chars of the pattern (the arm body is
+            // multi-line but short).
+            let pos = handler_src.find(&pattern).unwrap_or_else(|| {
+                panic!("Expected rail-focus handler for '{key}' (pattern '{pattern}')")
+            });
+            let window_end = (pos + 400).min(handler_src.len());
+            let window = &handler_src[pos..window_end];
+            assert!(
+                window.contains("input_buffer_is_empty()"),
+                "Rail-focus handler for '{key}' must gate on input_buffer_is_empty()"
+            );
+            assert!(
+                window.contains("has_active_modal()"),
+                "Rail-focus handler for '{key}' must gate on !has_active_modal()"
+            );
+        }
+    }
+
+    /// Visual indicator: when `snap.rail_focus = Sessions`, the SESSIONS
+    /// section header must render with BOLD (no DIM) — i.e. a stronger
+    /// accent than the default `BOLD | DIM`. We assert by rendering the
+    /// real rail with two different focus states and checking that the
+    /// SESSIONS header row's ANSI/visual class differs at the position
+    /// of the label. Snapshot tests pin the rendered glyph stream.
+    #[test]
+    fn rail_focus_sessions_emphasizes_sessions_header() {
+        let mut snap = LayoutSnapshot::test_default();
+        snap.model = "claude-sonnet-4-6".to_string();
+        snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+
+        // Baseline: focus is Deck (default).
+        snap.rail_focus = crate::tui::RailFocus::Deck;
+        let baseline = render_real_rail(&snap, 32, 50);
+
+        // Focused: rail_focus = Sessions.
+        snap.rail_focus = crate::tui::RailFocus::Sessions;
+        let focused = render_real_rail(&snap, 32, 50);
+
+        // Both must still contain SESSIONS header text.
+        assert!(baseline.contains("SESSIONS"));
+        assert!(focused.contains("SESSIONS"));
+        // The plain-text extraction in `render_real_rail` strips ANSI, so
+        // the surface text is identical between the two — the difference
+        // lives in the styled-span layer (Modifier::DIM is dropped when
+        // focused). Pin THAT via direct style inspection: re-render into
+        // a buffer and check the modifier on the row where SESSIONS sits.
+        let style = focused_section_modifier_for(&snap, "SESSIONS");
+        assert!(
+            style.contains(ratatui::style::Modifier::BOLD),
+            "focused SESSIONS header must keep BOLD"
+        );
+        assert!(
+            !style.contains(ratatui::style::Modifier::DIM),
+            "focused SESSIONS header must DROP the DIM modifier (got {style:?})"
+        );
+
+        // And the same row with focus elsewhere must KEEP DIM. Rebuild a
+        // fresh snap with the same one-tab fixture so we don't try to clone
+        // the live snapshot (LayoutSnapshot is not Clone; several internal
+        // fields hold non-clonable receivers).
+        let mut other = LayoutSnapshot::test_default();
+        other.model = "claude-sonnet-4-6".to_string();
+        other.tab_infos = vec![(1, "main".to_string(), true, false, false)];
+        other.rail_focus = crate::tui::RailFocus::Agents;
+        let style_other = focused_section_modifier_for(&other, "SESSIONS");
+        assert!(
+            style_other.contains(ratatui::style::Modifier::DIM),
+            "unfocused SESSIONS header must KEEP DIM"
+        );
+    }
+
+    /// Inspect the modifier set on the first styled span of the row that
+    /// contains `label`. Renders the production `render_rail` into a
+    /// TestBackend buffer and walks cells, picking the first cell whose
+    /// substring equals `label`'s first char.
+    fn focused_section_modifier_for(
+        snap: &LayoutSnapshot,
+        label: &str,
+    ) -> ratatui::style::Modifier {
+        use ratatui::Frame;
+        use ratatui::layout::Rect;
+        let width: u16 = 32;
+        let height: u16 = 50;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend");
+        terminal
+            .draw(|frame: &mut Frame| {
+                let area = Rect { x: 0, y: 0, width, height };
+                super::render_rail(frame, area, snap);
+            })
+            .expect("draw");
+
+        let buf = terminal.backend().buffer();
+        let first_ch = label.chars().next().expect("non-empty label");
+        for row in 0..height {
+            // Read the row as a string.
+            let mut row_text = String::new();
+            for col in 0..width {
+                let sym = buf[(col, row)].symbol();
+                if !sym.is_empty() {
+                    row_text.push_str(sym);
+                }
+            }
+            if row_text.contains(label) {
+                // Find the column of the label's first char.
+                for col in 0..width {
+                    let sym = buf[(col, row)].symbol();
+                    if sym.chars().next() == Some(first_ch) {
+                        return buf[(col, row)].modifier;
+                    }
+                }
+            }
+        }
+        panic!("did not find row containing label '{label}'");
+    }
 }
+

@@ -563,6 +563,66 @@ impl AnvilTui {
                 self.next_tab();
                 return Ok(ReadResult::Continue);
             }
+            // Task #634: rail-focus navigation in vertical-split layouts.
+            //
+            // The KEYBINDS rail block advertises:
+            //     g switch deck · d tools · s sessions · a agents
+            //
+            // These chars come through here as plain `KeyCode::Char`. We
+            // intercept ONLY when the input buffer is empty AND no modal is
+            // open — otherwise the char must fall through to the standard
+            // `insert_char` path so a user mid-typing can still write words
+            // that start with g/d/s/a (and so that completion popups, modals,
+            // historical-view nav keys, etc. all keep their existing semantics).
+            //
+            // The drift gate test in `vertical_split.rs::tests::every_advertised_rail_key_has_a_handler`
+            // parses the rail block and asserts each label has a matching
+            // handler here — DO NOT remove these arms without updating the
+            // rail labels first, or the test will fail.
+            KeyCode::Char('g')
+                if self.input_buffer_is_empty()
+                    && !self.has_active_modal()
+                    && !self.active_tab().completion.visible
+                    && self.active_tab().scrollback_state.is_live() =>
+            {
+                self.rail_focus = super::RailFocus::Deck;
+                self.redraw.request(DirtyRegions::RAIL | DirtyRegions::SCROLLBACK);
+                self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                return Ok(ReadResult::Continue);
+            }
+            KeyCode::Char('d')
+                if self.input_buffer_is_empty()
+                    && !self.has_active_modal()
+                    && !self.active_tab().completion.visible
+                    && self.active_tab().scrollback_state.is_live() =>
+            {
+                self.rail_focus = super::RailFocus::Tools;
+                self.redraw.request(DirtyRegions::RAIL | DirtyRegions::SCROLLBACK);
+                self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                return Ok(ReadResult::Continue);
+            }
+            KeyCode::Char('s')
+                if self.input_buffer_is_empty()
+                    && !self.has_active_modal()
+                    && !self.active_tab().completion.visible
+                    && self.active_tab().scrollback_state.is_live() =>
+            {
+                self.rail_focus = super::RailFocus::Sessions;
+                self.redraw.request(DirtyRegions::RAIL | DirtyRegions::SCROLLBACK);
+                self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                return Ok(ReadResult::Continue);
+            }
+            KeyCode::Char('a')
+                if self.input_buffer_is_empty()
+                    && !self.has_active_modal()
+                    && !self.active_tab().completion.visible
+                    && self.active_tab().scrollback_state.is_live() =>
+            {
+                self.rail_focus = super::RailFocus::Agents;
+                self.redraw.request(DirtyRegions::RAIL | DirtyRegions::SCROLLBACK);
+                self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                return Ok(ReadResult::Continue);
+            }
             KeyCode::Enter => {
                 if self.active_tab().completion.visible {
                     self.tab_complete();
@@ -663,6 +723,35 @@ impl AnvilTui {
         match key.code {
             KeyCode::Char('t' | 'T') => {
                 return Ok(ReadResult::NewTab);
+            }
+            // Task #634: Ctrl+R — cycle the vertical-split deck pane through
+            // Conversation → Transcript → ToolResults. Advertised in the
+            // rail KEYBINDS block as "Ctrl+R deck". No-op (with a system
+            // message) for non-vertical-split layouts so the binding is
+            // never silently swallowed.
+            //
+            // The drift gate test in `vertical_split.rs` asserts that this
+            // arm exists; do not remove without updating the rail label.
+            KeyCode::Char('r' | 'R') => {
+                if self.cycle_deck_pane() {
+                    let label = match &self.active_tab().layout_local {
+                        super::layouts::LayoutLocalState::VerticalSplit {
+                            right_deck_mode, ..
+                        } => right_deck_mode.label(),
+                        _ => "?",
+                    };
+                    self.push_system(format!("Deck pane: {label}"));
+                    self.redraw.request(DirtyRegions::SCROLLBACK);
+                    self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                } else {
+                    self.push_system(
+                        "Deck cycling: only available in vertical-split layouts."
+                            .to_string(),
+                    );
+                    self.redraw.request(DirtyRegions::SCROLLBACK);
+                    self.request_redraw_reason(super::RedrawReason::TextDeltaBatch);
+                }
+                return Ok(ReadResult::Continue);
             }
             KeyCode::Char('w' | 'W') => {
                 if self.tabs.len() > 1 {

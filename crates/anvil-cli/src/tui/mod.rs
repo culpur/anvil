@@ -304,6 +304,42 @@ pub struct AnvilTui {
     /// Singleton across tabs by design: a drop never starts on one tab
     /// and finishes on another. Reset on tab-switch.
     pub(super) burst_tracker: paste::BurstTracker,
+
+    // ── Task #634: rail-focus navigation (v2.2.14 Phase 1) ──────────────────
+
+    /// Which rail section currently has the navigation focus.
+    ///
+    /// Driven by `g` (Deck) / `d` (Tools) / `s` (Sessions) / `a` (Agents) when
+    /// the input buffer is empty and no modal is open. The vertical_split
+    /// renderer paints the focused section's header with a bold accent style
+    /// so the user can see which section receives the next nav key.
+    ///
+    /// Stored at the AnvilTui level (not per-tab) because rail focus tracks
+    /// the user's eye, not session-specific state — switching tabs should
+    /// preserve which rail section the user was looking at.
+    pub(super) rail_focus: RailFocus,
+}
+
+/// Which left-rail section currently owns the navigation focus.
+///
+/// Task #634 (v2.2.14 Phase 1). The bottom KEYBINDS block in
+/// `vertical_split.rs` advertises `g switch deck · d tools · s sessions ·
+/// a agents`; this enum + the key-handler match arms in `input_handler.rs`
+/// are the wiring those labels point at. The rail renderer reads
+/// `LayoutSnapshot.rail_focus` and applies bold accent emphasis to the
+/// active section header. Default `Deck` matches the old behavior (the
+/// deck owns the cursor on startup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RailFocus {
+    /// The conversation deck owns focus. Default. `g` returns here.
+    #[default]
+    Deck,
+    /// The tools / agent-tree subpanel owns focus. `d` selects this.
+    Tools,
+    /// The SESSIONS rail block owns focus. `s` selects this.
+    Sessions,
+    /// The AGENTS (GLOBAL) rail block owns focus. `a` selects this.
+    Agents,
 }
 
 /// v2.2.14 BUG-fix-real: tagged reason for a `request_redraw` call.
@@ -633,6 +669,9 @@ impl AnvilTui {
                     .unwrap_or(30),
                 paste_counter: 0,
                 burst_tracker: paste::BurstTracker::default(),
+                // Task #634: rail focus starts on the conversation deck so
+                // the cursor lives in the input box on startup.
+                rail_focus: RailFocus::default(),
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -647,6 +686,34 @@ impl AnvilTui {
 
     pub(super) fn active_tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active_tab]
+    }
+
+    // ─── Task #634: vertical-split rail-focus + deck-pane navigation ────────
+
+    /// Cycle the active tab's vertical-split deck pane through Conversation →
+    /// Transcript → ToolResults → Conversation.
+    ///
+    /// Wired to `Ctrl+R deck` in the rail's KEYBINDS block. Only meaningful
+    /// in `LayoutLocalState::VerticalSplit`; for other layouts (Classic,
+    /// ThreePane, Journal) this is a no-op (we still emit a system message
+    /// so the user knows the keybind isn't lost — see `input_handler.rs`).
+    pub(crate) fn cycle_deck_pane(&mut self) -> bool {
+        let tab_idx = self.active_tab;
+        match &mut self.tabs[tab_idx].layout_local {
+            layouts::LayoutLocalState::VerticalSplit { right_deck_mode, .. } => {
+                *right_deck_mode = right_deck_mode.next();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Return `true` when the active tab's input buffer is empty. Used as the
+    /// gate for rail-focus nav keys (`g`/`d`/`s`/`a`) so a user mid-typing
+    /// doesn't have their `g` swallowed — it appends to the buffer instead.
+    /// Task #634.
+    pub(crate) fn input_buffer_is_empty(&self) -> bool {
+        self.active_tab().input.is_empty()
     }
 
     /// Clear the active tab's visible display state — log, pending streaming
@@ -1541,6 +1608,11 @@ impl AnvilTui {
             // changed layout structure (resize, /layout switch, modal close)
             // versus a streaming TextDelta that should NOT cause a wipe.
             dirty_regions: self.redraw.last_committed_dirty(),
+            // Task #634: ship the rail-focus enum through to the layout
+            // renderer so the focused section's header gets bold accent
+            // emphasis. Driven by `g` / `d` / `s` / `a` keys when input is
+            // empty and no modal is open (see `input_handler.rs`).
+            rail_focus: self.rail_focus,
         }
     }
 

@@ -310,4 +310,81 @@ mod tests {
             "new tab must inherit config.json default, not active tab's layout"
         );
     }
+
+    // ── Task #634: Ctrl+R deck cycling on the active tab's layout state ────
+
+    /// Cycling the deck pane on a `VerticalSplit` layout state advances the
+    /// `right_deck_mode` field through Conversation → Transcript →
+    /// ToolResults → Conversation. The other fields (rail_selected) are
+    /// untouched.
+    #[test]
+    fn cycle_deck_pane_advances_vertical_split_mode() {
+        let mut state = LayoutLocalState::VerticalSplit {
+            right_deck_mode: RightDeckMode::Conversation,
+            rail_selected: 0,
+        };
+        // Helper: cycle by calling .next() inline (mimicking what
+        // AnvilTui::cycle_deck_pane does without needing a real terminal).
+        fn cycle(s: &mut LayoutLocalState) -> bool {
+            match s {
+                LayoutLocalState::VerticalSplit { right_deck_mode, .. } => {
+                    *right_deck_mode = right_deck_mode.next();
+                    true
+                }
+                _ => false,
+            }
+        }
+
+        assert!(cycle(&mut state));
+        match state {
+            LayoutLocalState::VerticalSplit { right_deck_mode, rail_selected } => {
+                assert_eq!(right_deck_mode, RightDeckMode::Transcript);
+                assert_eq!(rail_selected, 0, "rail_selected must NOT change");
+            }
+            _ => panic!("state must remain VerticalSplit"),
+        }
+        assert!(cycle(&mut state));
+        match state {
+            LayoutLocalState::VerticalSplit { right_deck_mode, .. } => {
+                assert_eq!(right_deck_mode, RightDeckMode::ToolResults);
+            }
+            _ => unreachable!(),
+        }
+        assert!(cycle(&mut state));
+        match state {
+            LayoutLocalState::VerticalSplit { right_deck_mode, .. } => {
+                assert_eq!(right_deck_mode, RightDeckMode::Conversation);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Cycling on a non-VerticalSplit layout is a no-op (returns false).
+    /// `AnvilTui::cycle_deck_pane` uses this signal to emit a system
+    /// message instead of silently consuming Ctrl+R.
+    #[test]
+    fn cycle_deck_pane_is_noop_for_non_vertical_split_layouts() {
+        for mut state in [
+            LayoutLocalState::Classic,
+            LayoutLocalState::ThreePane,
+            LayoutLocalState::Journal {
+                palette_open: false,
+                palette_query: String::new(),
+                palette_selected: 0,
+            },
+        ] {
+            let before = format!("{state:?}");
+            // Same helper as above.
+            let cycled = match &mut state {
+                LayoutLocalState::VerticalSplit { right_deck_mode, .. } => {
+                    *right_deck_mode = right_deck_mode.next();
+                    true
+                }
+                _ => false,
+            };
+            assert!(!cycled, "non-VerticalSplit layouts must report no-cycle");
+            let after = format!("{state:?}");
+            assert_eq!(before, after, "state must be unchanged");
+        }
+    }
 }
