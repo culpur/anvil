@@ -68,14 +68,27 @@ pub struct McpToolInput {
     pub name: String,
     /// Free-text description shown in the tool's input schema.
     pub description: String,
-    /// Scalar input type. Object / array / nested schemas are deferred.
+    /// Input type. Supports scalars, enum, recursive `array`, and recursive
+    /// `object` schemas (task #673).
     pub kind: InputKind,
     /// When true the input is optional (no default emitted; the tool
     /// function checks for presence).
     pub optional: bool,
 }
 
-/// Scalar input kinds the v2.2.18 builder supports. See audit doc §6c.
+/// One named field on a nested object schema. Recursive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectField {
+    /// Field name. Must be a valid identifier (see [`validate_identifier`]).
+    pub name: String,
+    /// Field type. Recursive — may itself be Array or Object.
+    pub kind: InputKind,
+    /// When true the field is optional.
+    pub optional: bool,
+}
+
+/// Input kinds the builder supports. v2.2.18 launched with scalars + enum;
+/// v2.2.18 task #673 adds recursive `Array` and `Object`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputKind {
     String,
@@ -83,6 +96,13 @@ pub enum InputKind {
     Boolean,
     /// `enum` of strings, e.g. `["a", "b", "c"]`. Must be non-empty.
     Enum(Vec<String>),
+    /// Homogeneous array of `items`. The `items` schema is recursive — can
+    /// itself be Array or Object for nested cases like `array<object>`.
+    Array(Box<InputKind>),
+    /// Object with named fields. The field-type vocabulary is recursive,
+    /// so `object { foo: array<string>, bar: object { … } }` is expressible.
+    /// Empty field list is allowed (emits an open `{}` / `dict` schema).
+    Object(Vec<ObjectField>),
 }
 
 /// One tool definition.
@@ -323,19 +343,7 @@ fn node_zod_object(inputs: &[McpToolInput]) -> String {
     }
     let mut s = String::from("{\n");
     for input in inputs {
-        let base = match &input.kind {
-            InputKind::String => "z.string()".to_string(),
-            InputKind::Number => "z.number()".to_string(),
-            InputKind::Boolean => "z.boolean()".to_string(),
-            InputKind::Enum(values) => {
-                let joined = values
-                    .iter()
-                    .map(|v| js_string_literal(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("z.enum([{joined}])")
-            }
-        };
+        let base = node_zod_type(&input.kind);
         let with_desc = format!("{base}.describe({})", js_string_literal(&input.description));
         let final_schema = if input.optional {
             format!("{with_desc}.optional()")
@@ -346,6 +354,48 @@ fn node_zod_object(inputs: &[McpToolInput]) -> String {
     }
     s.push_str("  }");
     s
+}
+
+/// Recursive zod-expression emitter for a single [`InputKind`]. Used for
+/// top-level inputs and nested array-items / object-fields. The output is
+/// a single zod expression (no trailing semicolon, no `.describe(...)`).
+fn node_zod_type(kind: &InputKind) -> String {
+    match kind {
+        InputKind::String => "z.string()".to_string(),
+        InputKind::Number => "z.number()".to_string(),
+        InputKind::Boolean => "z.boolean()".to_string(),
+        InputKind::Enum(values) => {
+            let joined = values
+                .iter()
+                .map(|v| js_string_literal(v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("z.enum([{joined}])")
+        }
+        InputKind::Array(items) => {
+            let inner = node_zod_type(items);
+            format!("z.array({inner})")
+        }
+        InputKind::Object(fields) => {
+            if fields.is_empty() {
+                return "z.object({})".to_string();
+            }
+            let mut s = String::from("z.object({ ");
+            let mut parts: Vec<String> = Vec::with_capacity(fields.len());
+            for f in fields {
+                let inner = node_zod_type(&f.kind);
+                let with_opt = if f.optional {
+                    format!("{inner}.optional()")
+                } else {
+                    inner
+                };
+                parts.push(format!("{}: {}", f.name, with_opt));
+            }
+            s.push_str(&parts.join(", "));
+            s.push_str(" })");
+            s
+        }
+    }
 }
 
 fn node_args_destructure(inputs: &[McpToolInput]) -> String {
@@ -395,20 +445,35 @@ fn node_stub_call_args(inputs: &[McpToolInput]) -> String {
     if inputs.is_empty() {
         return "{}".to_string();
     }
-    let mut parts: Vec<String> = Vec::new();
-    for input in inputs {
-        let lit = match &input.kind {
-            InputKind::String => "'sample'".to_string(),
-            InputKind::Number => "0".to_string(),
-            InputKind::Boolean => "false".to_string(),
-            InputKind::Enum(values) => values
-                .first()
-                .map(|v| js_string_literal(v))
-                .unwrap_or_else(|| "'option'".to_string()),
-        };
-        parts.push(format!("{}: {}", input.name, lit));
-    }
+    let parts: Vec<String> = inputs
+        .iter()
+        .map(|i| format!("{}: {}", i.name, node_stub_value(&i.kind)))
+        .collect();
     format!("{{ {} }}", parts.join(", "))
+}
+
+/// Recursive stub-value emitter for tests. Mirrors [`node_zod_type`].
+fn node_stub_value(kind: &InputKind) -> String {
+    match kind {
+        InputKind::String => "'sample'".to_string(),
+        InputKind::Number => "0".to_string(),
+        InputKind::Boolean => "false".to_string(),
+        InputKind::Enum(values) => values
+            .first()
+            .map(|v| js_string_literal(v))
+            .unwrap_or_else(|| "'option'".to_string()),
+        InputKind::Array(items) => format!("[{}]", node_stub_value(items)),
+        InputKind::Object(fields) => {
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{}: {}", f.name, node_stub_value(&f.kind)))
+                .collect();
+            format!("{{ {} }}", parts.join(", "))
+        }
+    }
 }
 
 fn js_string_literal(s: &str) -> String {
@@ -447,23 +512,56 @@ fn python_main_py(name: &str, tools: &[McpToolSpec]) -> String {
     s.push_str("# becomes a tool the MCP client can call. Type hints drive the\n");
     s.push_str("# input schema; the docstring becomes the tool description.\n\n");
     s.push_str("from __future__ import annotations\n\n");
-    // Imports for Literal (used by enum inputs).
-    let needs_literal = tools
-        .iter()
-        .any(|t| t.inputs.iter().any(|i| matches!(i.kind, InputKind::Enum(_))));
-    let needs_optional = tools.iter().any(|t| t.inputs.iter().any(|i| i.optional));
+    // Scan all tool inputs (recursively) to decide which typing imports
+    // we actually need. Avoids dead-import warnings.
+    let needs_literal = any_kind_matches(tools, &|k| matches!(k, InputKind::Enum(_)));
+    let needs_optional = tools.iter().any(|t| {
+        t.inputs.iter().any(|i| i.optional)
+            || t.inputs.iter().any(|i| input_kind_has_optional_field(&i.kind))
+    });
+    let needs_list = any_kind_matches(tools, &|k| matches!(k, InputKind::Array(_)));
+    let needs_any = any_kind_matches(tools, &|k| {
+        matches!(k, InputKind::Object(fields) if fields.is_empty())
+    });
     if needs_literal {
         s.push_str("from typing import Literal\n");
     }
     if needs_optional {
         s.push_str("from typing import Optional\n");
     }
+    if needs_list {
+        s.push_str("from typing import List\n");
+    }
+    if needs_any {
+        s.push_str("from typing import Any, Dict\n");
+    }
+    let needs_basemodel = any_kind_matches(tools, &|k| {
+        matches!(k, InputKind::Object(fields) if !fields.is_empty())
+    });
+    if needs_basemodel {
+        s.push_str("from pydantic import BaseModel\n");
+    }
     s.push_str("from mcp.server.fastmcp import FastMCP\n\n");
+
+    // Emit pydantic BaseModel classes for every non-empty Object input
+    // (top-level or nested). Names are derived from the schema location;
+    // duplicates are de-duplicated by structural hash.
+    let mut model_pool = PythonModelPool::default();
+    let mut model_decls = String::new();
+    for tool in tools {
+        for input in &tool.inputs {
+            python_register_models(&input.kind, tool, &input.name, &mut model_pool, &mut model_decls);
+        }
+    }
+    if !model_decls.is_empty() {
+        s.push_str(&model_decls);
+    }
+
     s.push_str(&format!("mcp = FastMCP(\"{name}\")\n\n"));
 
     // Tool functions (exported for tests).
     for tool in tools {
-        let signature = python_tool_signature(tool);
+        let signature = python_tool_signature(tool, &model_pool);
         s.push_str("@mcp.tool()\n");
         s.push_str(&format!("def {}({}) -> dict:\n", tool.name, signature));
         // Docstring becomes the tool description in MCP.
@@ -492,22 +590,10 @@ fn python_main_py(name: &str, tools: &[McpToolSpec]) -> String {
     s
 }
 
-fn python_tool_signature(tool: &McpToolSpec) -> String {
+fn python_tool_signature(tool: &McpToolSpec, models: &PythonModelPool) -> String {
     let mut parts: Vec<String> = Vec::new();
     for input in &tool.inputs {
-        let base_type = match &input.kind {
-            InputKind::String => "str".to_string(),
-            InputKind::Number => "float".to_string(),
-            InputKind::Boolean => "bool".to_string(),
-            InputKind::Enum(values) => {
-                let joined = values
-                    .iter()
-                    .map(|v| python_string_literal(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("Literal[{joined}]")
-            }
-        };
+        let base_type = python_type_expr(&input.kind, models);
         if input.optional {
             parts.push(format!(
                 "{}: Optional[{}] = None",
@@ -518,6 +604,199 @@ fn python_tool_signature(tool: &McpToolSpec) -> String {
         }
     }
     parts.join(", ")
+}
+
+/// Walk every [`InputKind`] in every tool and return true if `pred` matches
+/// any of them. Used to decide which `typing` imports to emit.
+fn any_kind_matches(tools: &[McpToolSpec], pred: &dyn Fn(&InputKind) -> bool) -> bool {
+    fn walk(k: &InputKind, pred: &dyn Fn(&InputKind) -> bool) -> bool {
+        if pred(k) {
+            return true;
+        }
+        match k {
+            InputKind::Array(items) => walk(items, pred),
+            InputKind::Object(fields) => fields.iter().any(|f| walk(&f.kind, pred)),
+            _ => false,
+        }
+    }
+    tools
+        .iter()
+        .any(|t| t.inputs.iter().any(|i| walk(&i.kind, pred)))
+}
+
+/// Detect whether any nested object field is `optional`, requiring
+/// `Optional` to be imported even when the top-level input isn't optional.
+fn input_kind_has_optional_field(k: &InputKind) -> bool {
+    match k {
+        InputKind::Array(items) => input_kind_has_optional_field(items),
+        InputKind::Object(fields) => fields
+            .iter()
+            .any(|f| f.optional || input_kind_has_optional_field(&f.kind)),
+        _ => false,
+    }
+}
+
+/// Pool of generated pydantic model class names, keyed by structural shape
+/// so identical nested-object schemas reuse the same class.
+#[derive(Default)]
+struct PythonModelPool {
+    /// Map from structural-shape key to class name.
+    shapes: Vec<(String, String)>,
+}
+
+impl PythonModelPool {
+    fn lookup(&self, shape_key: &str) -> Option<&str> {
+        self.shapes
+            .iter()
+            .find(|(k, _)| k == shape_key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    fn insert(&mut self, shape_key: String, class_name: String) {
+        self.shapes.push((shape_key, class_name));
+    }
+
+    fn next_class_name(&self, hint: &str) -> String {
+        // Class names: capitalised, suffix with index if collision.
+        let base = capitalize_first(hint);
+        let mut candidate = base.clone();
+        let existing: Vec<&str> = self.shapes.iter().map(|(_, v)| v.as_str()).collect();
+        let mut n = 2;
+        while existing.contains(&candidate.as_str()) {
+            candidate = format!("{base}{n}");
+            n += 1;
+        }
+        candidate
+    }
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let cleaned = s.replace('_', " ").replace('-', " ");
+    for word in cleaned.split_whitespace() {
+        let mut chars = word.chars();
+        if let Some(c) = chars.next() {
+            out.push(c.to_ascii_uppercase());
+            for c in chars {
+                out.push(c.to_ascii_lowercase());
+            }
+        }
+    }
+    if out.is_empty() {
+        "Model".to_string()
+    } else {
+        out
+    }
+}
+
+/// Recursive walker: register every non-empty `Object` shape under the
+/// given context as a generated pydantic class. `decls` accumulates the
+/// rendered class declarations in dependency order (inner-most first).
+fn python_register_models(
+    kind: &InputKind,
+    tool: &McpToolSpec,
+    field_path: &str,
+    pool: &mut PythonModelPool,
+    decls: &mut String,
+) {
+    match kind {
+        InputKind::Array(items) => {
+            python_register_models(items, tool, &format!("{field_path}_item"), pool, decls);
+        }
+        InputKind::Object(fields) if !fields.is_empty() => {
+            // Walk children first so dependencies are declared above.
+            for f in fields {
+                python_register_models(
+                    &f.kind,
+                    tool,
+                    &format!("{field_path}_{}", f.name),
+                    pool,
+                    decls,
+                );
+            }
+            let shape_key = python_shape_key(kind);
+            if pool.lookup(&shape_key).is_some() {
+                return;
+            }
+            // Class name hint: "<Tool><FieldPath>".
+            let hint = format!("{}_{}", tool.name, field_path);
+            let class_name = pool.next_class_name(&hint);
+            pool.insert(shape_key, class_name.clone());
+            decls.push_str(&format!("class {class_name}(BaseModel):\n"));
+            for f in fields {
+                let inner = python_type_expr(&f.kind, pool);
+                if f.optional {
+                    decls.push_str(&format!(
+                        "    {}: Optional[{}] = None\n",
+                        f.name, inner
+                    ));
+                } else {
+                    decls.push_str(&format!("    {}: {}\n", f.name, inner));
+                }
+            }
+            decls.push_str("\n\n");
+        }
+        _ => {}
+    }
+}
+
+/// Stable structural key for a kind so identical Object shapes share one
+/// generated class.
+fn python_shape_key(kind: &InputKind) -> String {
+    match kind {
+        InputKind::String => "S".into(),
+        InputKind::Number => "N".into(),
+        InputKind::Boolean => "B".into(),
+        InputKind::Enum(values) => format!("E[{}]", values.join(",")),
+        InputKind::Array(items) => format!("A[{}]", python_shape_key(items)),
+        InputKind::Object(fields) => {
+            let mut parts: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{}{}:{}",
+                        if f.optional { "?" } else { "" },
+                        f.name,
+                        python_shape_key(&f.kind)
+                    )
+                })
+                .collect();
+            parts.sort();
+            format!("O{{{}}}", parts.join(","))
+        }
+    }
+}
+
+/// Type-expression for a kind. References pool-registered class names for
+/// non-empty Object schemas; falls back to `Dict[str, Any]` for open objects.
+fn python_type_expr(kind: &InputKind, pool: &PythonModelPool) -> String {
+    match kind {
+        InputKind::String => "str".into(),
+        InputKind::Number => "float".into(),
+        InputKind::Boolean => "bool".into(),
+        InputKind::Enum(values) => {
+            let joined = values
+                .iter()
+                .map(|v| python_string_literal(v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Literal[{joined}]")
+        }
+        InputKind::Array(items) => {
+            let inner = python_type_expr(items, pool);
+            format!("List[{inner}]")
+        }
+        InputKind::Object(fields) => {
+            if fields.is_empty() {
+                "Dict[str, Any]".into()
+            } else {
+                let key = python_shape_key(kind);
+                pool.lookup(&key)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Dict[str, Any]".into())
+            }
+        }
+    }
 }
 
 fn python_string_literal(s: &str) -> String {
@@ -543,6 +822,16 @@ fn python_docstring_escape(s: &str) -> String {
 }
 
 fn python_test_py(name: &str, tools: &[McpToolSpec]) -> String {
+    // Rebuild the model pool so test stubs use the same class names as
+    // the generated `__main__.py`.
+    let mut pool = PythonModelPool::default();
+    let mut sink = String::new();
+    for tool in tools {
+        for input in &tool.inputs {
+            python_register_models(&input.kind, tool, &input.name, &mut pool, &mut sink);
+        }
+    }
+
     let mut s = String::new();
     s.push_str("# Generated by Anvil MCP Builder.\n");
     s.push_str("#\n");
@@ -554,7 +843,7 @@ fn python_test_py(name: &str, tools: &[McpToolSpec]) -> String {
         name.replace('-', "_")
     ));
     for tool in tools {
-        let call_args = python_stub_call_args(&tool.inputs);
+        let call_args = python_stub_call_args_with_server(&tool.inputs, &pool);
         s.push_str(&format!(
             "def test_{tname}_stub_returns_honesty_contract() -> None:\n",
             tname = tool.name
@@ -572,26 +861,77 @@ fn python_test_py(name: &str, tools: &[McpToolSpec]) -> String {
     s
 }
 
-fn python_stub_call_args(inputs: &[McpToolInput]) -> String {
+/// Like [`python_stub_call_args`] but qualifies pydantic model references
+/// with the imported `server.` prefix so the test file can reach them
+/// without needing duplicate model declarations.
+fn python_stub_call_args_with_server(
+    inputs: &[McpToolInput],
+    pool: &PythonModelPool,
+) -> String {
     if inputs.is_empty() {
         return String::new();
     }
     let parts: Vec<String> = inputs
         .iter()
         .map(|i| {
-            let lit = match &i.kind {
-                InputKind::String => "\"sample\"".to_string(),
-                InputKind::Number => "0.0".to_string(),
-                InputKind::Boolean => "False".to_string(),
-                InputKind::Enum(values) => values
-                    .first()
-                    .map(|v| python_string_literal(v))
-                    .unwrap_or_else(|| "\"option\"".to_string()),
-            };
-            format!("{}={}", i.name, lit)
+            format!(
+                "{}={}",
+                i.name,
+                python_stub_value_with_server(&i.kind, pool)
+            )
         })
         .collect();
     parts.join(", ")
+}
+
+/// Wrapper around [`python_stub_value`] that prefixes every pool-registered
+/// class reference with `server.`.
+fn python_stub_value_with_server(kind: &InputKind, pool: &PythonModelPool) -> String {
+    match kind {
+        InputKind::String => "\"sample\"".into(),
+        InputKind::Number => "0.0".into(),
+        InputKind::Boolean => "False".into(),
+        InputKind::Enum(values) => values
+            .first()
+            .map(|v| python_string_literal(v))
+            .unwrap_or_else(|| "\"option\"".into()),
+        InputKind::Array(items) => format!("[{}]", python_stub_value_with_server(items, pool)),
+        InputKind::Object(fields) => {
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
+            let key = python_shape_key(kind);
+            let class_name = match pool.lookup(&key) {
+                Some(s) => s.to_string(),
+                None => {
+                    let parts: Vec<String> = fields
+                        .iter()
+                        .filter(|f| !f.optional)
+                        .map(|f| {
+                            format!(
+                                "\"{}\": {}",
+                                f.name,
+                                python_stub_value_with_server(&f.kind, pool)
+                            )
+                        })
+                        .collect();
+                    return format!("{{{}}}", parts.join(", "));
+                }
+            };
+            let parts: Vec<String> = fields
+                .iter()
+                .filter(|f| !f.optional)
+                .map(|f| {
+                    format!(
+                        "{}={}",
+                        f.name,
+                        python_stub_value_with_server(&f.kind, pool)
+                    )
+                })
+                .collect();
+            format!("server.{class_name}({})", parts.join(", "))
+        }
+    }
 }
 
 // ─── README (both languages) ─────────────────────────────────────────────────
@@ -1028,35 +1368,10 @@ fn prompt_inputs() -> Result<Vec<McpToolInput>, String> {
             let _ = writeln!(io::stdout(), "        ✗ duplicate input name");
             continue;
         }
-        let _ = writeln!(io::stdout(), "        type:");
-        let _ = writeln!(io::stdout(), "          1) string");
-        let _ = writeln!(io::stdout(), "          2) number");
-        let _ = writeln!(io::stdout(), "          3) boolean");
-        let _ = writeln!(io::stdout(), "          4) enum of strings");
-        let _ = write!(io::stdout(), "        choose [1-4]: ");
-        let _ = io::stdout().flush();
-        let kind = match read_line()?.as_str() {
-            "1" | "s" | "str" | "string" => InputKind::String,
-            "2" | "n" | "num" | "number" => InputKind::Number,
-            "3" | "b" | "bool" | "boolean" => InputKind::Boolean,
-            "4" | "e" | "enum" => {
-                let _ = write!(io::stdout(), "        enum values (comma-separated): ");
-                let _ = io::stdout().flush();
-                let raw = read_line()?;
-                let values: Vec<String> = raw
-                    .split(',')
-                    .map(|v| v.trim().to_string())
-                    .filter(|v| !v.is_empty())
-                    .collect();
-                if values.is_empty() {
-                    let _ = writeln!(io::stdout(), "        ✗ enum needs at least one value");
-                    seen.remove(&name);
-                    continue;
-                }
-                InputKind::Enum(values)
-            }
-            other => {
-                let _ = writeln!(io::stdout(), "        ✗ {other:?} not a type — try again.");
+        let kind = match prompt_input_kind("        ") {
+            Ok(k) => k,
+            Err(e) => {
+                let _ = writeln!(io::stdout(), "        ✗ {e}");
                 seen.remove(&name);
                 continue;
             }
@@ -1073,6 +1388,102 @@ fn prompt_inputs() -> Result<Vec<McpToolInput>, String> {
         inputs.push(McpToolInput {
             name,
             description,
+            kind,
+            optional,
+        });
+    }
+}
+
+/// Recursive prompt for an [`InputKind`]. `indent` is the leading
+/// whitespace shown before each prompt line — used so nested array-items
+/// and object-fields visually nest under their parent.
+///
+/// Loops until the user picks a valid type or aborts. Returns Err only
+/// when stdin closes mid-prompt; the caller re-asks the surrounding
+/// question on error.
+fn prompt_input_kind(indent: &str) -> Result<InputKind, String> {
+    loop {
+        let _ = writeln!(io::stdout(), "{indent}type:");
+        let _ = writeln!(io::stdout(), "{indent}  1) string");
+        let _ = writeln!(io::stdout(), "{indent}  2) number");
+        let _ = writeln!(io::stdout(), "{indent}  3) boolean");
+        let _ = writeln!(io::stdout(), "{indent}  4) enum of strings");
+        let _ = writeln!(io::stdout(), "{indent}  5) array (of …)");
+        let _ = writeln!(io::stdout(), "{indent}  6) object (named fields)");
+        let _ = write!(io::stdout(), "{indent}choose [1-6]: ");
+        let _ = io::stdout().flush();
+        match read_line()?.as_str() {
+            "1" | "s" | "str" | "string" => return Ok(InputKind::String),
+            "2" | "n" | "num" | "number" => return Ok(InputKind::Number),
+            "3" | "b" | "bool" | "boolean" => return Ok(InputKind::Boolean),
+            "4" | "e" | "enum" => {
+                let _ = write!(io::stdout(), "{indent}enum values (comma-separated): ");
+                let _ = io::stdout().flush();
+                let raw = read_line()?;
+                let values: Vec<String> = raw
+                    .split(',')
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .collect();
+                if values.is_empty() {
+                    let _ = writeln!(io::stdout(), "{indent}✗ enum needs at least one value");
+                    continue;
+                }
+                return Ok(InputKind::Enum(values));
+            }
+            "5" | "a" | "arr" | "array" => {
+                let _ = writeln!(io::stdout(), "{indent}array items:");
+                let inner_indent = format!("{indent}  ");
+                let items = prompt_input_kind(&inner_indent)?;
+                return Ok(InputKind::Array(Box::new(items)));
+            }
+            "6" | "o" | "obj" | "object" => {
+                let inner_indent = format!("{indent}  ");
+                let fields = prompt_object_fields(&inner_indent)?;
+                return Ok(InputKind::Object(fields));
+            }
+            other => {
+                let _ = writeln!(io::stdout(), "{indent}✗ {other:?} not a type — try again.");
+            }
+        }
+    }
+}
+
+/// Prompt loop for a list of [`ObjectField`]s. Blank name finishes the
+/// object. Identifier validation + de-duplication are enforced.
+fn prompt_object_fields(indent: &str) -> Result<Vec<ObjectField>, String> {
+    let _ = writeln!(
+        io::stdout(),
+        "{indent}object fields — press Enter on a blank name to finish."
+    );
+    let mut fields: Vec<ObjectField> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    loop {
+        let _ = write!(io::stdout(), "{indent}field #{} name: ", fields.len() + 1);
+        let _ = io::stdout().flush();
+        let name = read_line()?;
+        if name.is_empty() {
+            return Ok(fields);
+        }
+        if let Err(e) = validate_identifier(&name) {
+            let _ = writeln!(io::stdout(), "{indent}✗ {e}");
+            continue;
+        }
+        if !seen.insert(name.clone()) {
+            let _ = writeln!(io::stdout(), "{indent}✗ duplicate field name");
+            continue;
+        }
+        let kind = match prompt_input_kind(indent) {
+            Ok(k) => k,
+            Err(e) => {
+                let _ = writeln!(io::stdout(), "{indent}✗ {e}");
+                seen.remove(&name);
+                continue;
+            }
+        };
+        let optional = prompt_yes_no(&format!("{indent}optional? [y/N]: "), false);
+        fields.push(ObjectField {
+            name,
             kind,
             optional,
         });
