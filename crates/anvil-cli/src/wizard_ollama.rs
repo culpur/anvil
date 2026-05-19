@@ -98,26 +98,151 @@ impl OllamaState {
 pub struct ModelCandidate {
     pub tag: &'static str,
     pub label: &'static str,
+    /// Parameter count in billions.  Used by [`rank_for_hw`] to compute
+    /// a rough VRAM/RAM footprint for the model at q4_K_M (~0.56 B/param).
+    pub params_b: f64,
 }
 
-/// Hardcoded curated list. Hardware-aware ranking is task #665 — not
-/// in scope for this rebuild; we render the same list to everyone for
-/// now.
+/// Curated, quantized-by-default list.  Each tag is a Q4_K_M variant
+/// where Ollama exposes the explicit quantization suffix; otherwise
+/// the default tag (which Ollama itself ships as Q4_K_M for these).
+///
+/// q4_K_M is the sweet spot for local inference quality-vs-footprint:
+/// ~4.5 bits/parameter, on-disk weights weigh ≈ params × 0.56 bytes.
+/// Wizard task #665 uses [`rank_for_hw`] to label each entry with
+/// Recommended / Fits / Tight / Too big against the detected hardware
+/// so users never blindly pull a model that won't run.
 pub fn curated_models() -> &'static [ModelCandidate] {
     &[
         ModelCandidate {
-            tag: "qwen2.5-coder:7b",
-            label: "Qwen2.5 Coder 7B — best general coding (~4.7 GB)",
+            tag: "qwen2.5-coder:7b-instruct-q4_K_M",
+            label: "Qwen2.5 Coder 7B (q4_K_M) — best general coding (~4.7 GB)",
+            params_b: 7.0,
         },
         ModelCandidate {
-            tag: "llama3.2:3b",
-            label: "Llama 3.2 3B — small + fast (~2.0 GB)",
+            tag: "llama3.2:3b-instruct-q4_K_M",
+            label: "Llama 3.2 3B (q4_K_M) — small + fast (~2.0 GB)",
+            params_b: 3.0,
         },
         ModelCandidate {
-            tag: "qwen2.5-coder:1.5b",
-            label: "Qwen2.5 Coder 1.5B — works on 8 GB RAM (~1.0 GB)",
+            tag: "qwen2.5-coder:1.5b-instruct-q4_K_M",
+            label: "Qwen2.5 Coder 1.5B (q4_K_M) — works on 8 GB RAM (~1.0 GB)",
+            params_b: 1.5,
         },
     ]
+}
+
+// ─── Hardware-aware ranking (task #665) ──────────────────────────────────────
+
+/// Verdict on whether a model is likely to run on the current host.
+/// Pure function of (params, quant footprint, VRAM/RAM budget).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// Plenty of headroom — model + KV cache + OS reserve all fit
+    /// with margin.  Marked "Recommended ★" in the picker.
+    Recommended,
+    /// Fits within the GPU/unified-memory budget.
+    Fits,
+    /// Will fit but only with reduced context (KV cache squeezed) or
+    /// a CPU spillover for some layers.  User should expect slower
+    /// inference and lower context windows.
+    Tight,
+    /// Weights alone exceed the practical budget.  Will OOM at load.
+    TooBig,
+}
+
+impl Fit {
+    fn glyph(self) -> &'static str {
+        match self {
+            Fit::Recommended => "★",
+            Fit::Fits => "✓",
+            Fit::Tight => "▲",
+            Fit::TooBig => "✗",
+        }
+    }
+    fn note(self) -> &'static str {
+        match self {
+            Fit::Recommended => "Recommended",
+            Fit::Fits => "Fits",
+            Fit::Tight => "Tight",
+            Fit::TooBig => "Too big — will OOM",
+        }
+    }
+}
+
+/// Rank a curated candidate against the detected hardware.
+///
+/// Pure: no I/O, no clock.  Approximates weight footprint as
+/// `params_b * 1e9 * 0.5625` bytes (q4_K_M effective bpp from the
+/// tuner's `quant_bytes_per_param` table) and reserves ~4 GiB for
+/// OS + KV cache.  On Apple Silicon (unified memory, GpuKind::Metal
+/// with VRAM == RAM) we use 70 % of total RAM as the budget,
+/// matching the tuner's `compute_vram_budget`.
+#[must_use]
+pub fn rank_for_hw(
+    candidate: &ModelCandidate,
+    hw: &runtime::ollama_tune::hw::HardwareProfile,
+) -> Fit {
+    use runtime::ollama_tune::hw::GpuKind;
+
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const BPP_Q4KM: f64 = 0.5625;
+    const RESERVE_BYTES: f64 = 4.0 * GIB; // OS + KV cache + headroom
+
+    let weights = candidate.params_b * 1.0e9 * BPP_Q4KM;
+
+    // Budget mirrors `tuner::compute_vram_budget` (Apple-unified-aware).
+    let is_apple_unified = matches!(hw.gpu_kind, GpuKind::Metal)
+        && hw.vram_total_bytes == hw.ram_total_bytes
+        && hw.ram_total_bytes > 0;
+    let budget_bytes: f64 = if is_apple_unified {
+        (hw.ram_total_bytes as f64) * 0.70
+    } else if hw.vram_total_bytes > 0 {
+        hw.vram_total_bytes as f64
+    } else {
+        // CPU-only fallback: bound by RAM, leave 50 % for OS + everything else.
+        (hw.ram_total_bytes as f64) * 0.50
+    };
+
+    let usable = budget_bytes - RESERVE_BYTES;
+    if usable <= 0.0 {
+        // Pathologically small machine — only the smallest model has a chance.
+        return if candidate.params_b <= 2.0 { Fit::Tight } else { Fit::TooBig };
+    }
+    if weights > usable {
+        Fit::TooBig
+    } else if weights > usable * 0.75 {
+        Fit::Tight
+    } else if weights <= usable * 0.45 {
+        Fit::Recommended
+    } else {
+        Fit::Fits
+    }
+}
+
+/// Rank every curated entry and return the index of the
+/// most-recommended candidate (or 0 if every entry is "Too big").
+#[must_use]
+pub fn recommended_index(hw: &runtime::ollama_tune::hw::HardwareProfile) -> usize {
+    let cands = curated_models();
+    // Prefer the largest "Recommended", else largest "Fits", else any
+    // "Tight" — only fall back to 0 if every candidate is TooBig.
+    let mut best: Option<(usize, u8)> = None; // (index, weight)
+    for (i, c) in cands.iter().enumerate() {
+        let f = rank_for_hw(c, hw);
+        let weight: u8 = match f {
+            Fit::Recommended => 4,
+            Fit::Fits => 3,
+            Fit::Tight => 2,
+            Fit::TooBig => 0,
+        };
+        // Larger params_b is a tie-breaker within the same Fit class.
+        let scaled = weight.saturating_mul(10).saturating_add((c.params_b as u8).min(9));
+        if best.map_or(true, |(_, b)| scaled > b) {
+            best = Some((i, scaled));
+        }
+    }
+    best.map(|(i, _)| i).unwrap_or(0)
 }
 
 // ─── Wizard entry point ──────────────────────────────────────────────────────
@@ -309,13 +434,37 @@ where
         wait_for_daemon(&url, Duration::from_secs(15));
     }
 
-    // ── Step C: pick a model ────────────────────────────────────────────
+    // ── Step C: pick a model (HW-aware ranking, task #665) ──────────────
     let candidates = curated_models();
+    let hw = runtime::ollama_tune::hw::detect_cached();
+    let recommended = recommended_index(&hw);
     let mut labels: Vec<String> = candidates
         .iter()
-        .map(|c| format!("{} — {}", c.tag, c.label))
+        .enumerate()
+        .map(|(i, c)| {
+            let fit = rank_for_hw(c, &hw);
+            let marker = if i == recommended {
+                format!("{} Recommended for this machine", fit.glyph())
+            } else {
+                format!("{} {}", fit.glyph(), fit.note())
+            };
+            format!("{} — {}  [{}]", c.tag, c.label, marker)
+        })
         .collect();
     labels.push("Skip — I'll pull one later".to_string());
+
+    // Render a short HW summary banner so the user can see why the
+    // recommendation was made before opening the picker.
+    let hw_line = format_hw_summary(&hw);
+    runner.session.render_banner(
+        "Hardware detected",
+        &[
+            &hw_line,
+            "Quantized models (q4_K_M) are picked by default.",
+            "★ Recommended · ✓ Fits · ▲ Tight · ✗ Too big",
+        ],
+        accent,
+    )?;
 
     let modal = WizardChoiceModal::new("Pick a model", labels);
     let answer = runner.run_choice("step5-model", modal)?;
@@ -365,6 +514,31 @@ where
         });
     }
 
+    // ── Step E: tune for this hardware + persist (task #665) ────────────
+    //
+    // After a successful pull we know the model is on disk, the daemon is
+    // up, and we have a HardwareProfile.  Call the tuner to derive
+    // OllamaOptions (including flash_attn) and persist them under
+    // ~/.anvil/settings.json::ollama.models[tag].  First chat request will
+    // pick them up via the existing auto_tune wiring (#371).
+    let tune_summary = tune_and_persist(home, &url, &model_tag, &hw);
+    render_tune_summary_banner(runner, &model_tag, &tune_summary, accent)?;
+
+    // ── Step F: optional bench gate ─────────────────────────────────────
+    let bench_choice = runner.run_choice(
+        "step5-bench",
+        WizardChoiceModal::new(
+            "Baseline performance benchmark?",
+            vec![
+                "Run a quick bench now (~30s, 3 prompts) — recommended".to_string(),
+                "Skip — I'll run /ollama bench later".to_string(),
+            ],
+        ),
+    )?;
+    if let ModalAnswer::Choice(0) = bench_choice {
+        let _ = run_bench_with_banner(runner, home, &url, &model_tag, &hw, &tune_summary, accent);
+    }
+
     Ok(OllamaOutcome {
         choice: Some("Install".to_string()),
         binary_path: Some(target_path),
@@ -373,6 +547,461 @@ where
         pulled_model: Some(model_tag),
         defer_remaining: None,
     })
+}
+
+// ─── Tune + persist (#665) ──────────────────────────────────────────────────
+
+/// Result of [`tune_and_persist`] — a snapshot of what the tuner chose
+/// and whether persistence succeeded, suitable for rendering as a
+/// summary banner.  Pure data, no live handles.
+#[derive(Debug, Clone, Default)]
+struct TuneSummary {
+    /// Tuned context-window size (tokens).
+    num_ctx: Option<u32>,
+    /// Tuned GPU offload count.  `-1` means "all layers".
+    num_gpu: Option<i32>,
+    /// Flash-attention decision the tuner made.
+    flash_attention: Option<bool>,
+    /// Why flash-attention was on/off (from the L3a matrix).
+    flash_attention_reason: Option<String>,
+    /// Policy summary sentence from the tuner.
+    policy_summary: Option<String>,
+    /// True when the override was successfully persisted to settings.json.
+    persisted: bool,
+    /// Non-fatal error encountered along the way (rendered as a yellow
+    /// "skipped" line in the summary rather than aborting the wizard).
+    error: Option<String>,
+}
+
+fn tune_and_persist(
+    home: &Path,
+    url: &str,
+    model_tag: &str,
+    hw: &runtime::ollama_tune::hw::HardwareProfile,
+) -> TuneSummary {
+    use api::ollama_tune::policy_config::OllamaConfig;
+    use api::ollama_tune::tuner::{tune, KvCacheType, UserPolicy};
+    use api::fetch_model_meta_cached;
+
+    // Fetch model metadata on a transient current-thread runtime — we
+    // hold the alt-screen on the foreground; this call is single-shot
+    // and bounded by the 3 s timeout inside fetch_model_meta.
+    let url_owned = url.to_string();
+    let tag_owned = model_tag.to_string();
+    let meta_result = thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => return Err(format!("tokio runtime: {e}")),
+        };
+        rt.block_on(fetch_model_meta_cached(&url_owned, &tag_owned))
+            .map_err(|e| e.to_string())
+    })
+    .join()
+    .unwrap_or_else(|_| Err("meta-fetch thread panicked".to_string()));
+
+    let meta = match meta_result {
+        Ok(m) => m,
+        Err(e) => {
+            return TuneSummary {
+                error: Some(format!("Skipped tuning — /api/show failed: {e}")),
+                ..Default::default()
+            };
+        }
+    };
+
+    let policy = OllamaConfig::load().policy;
+    let policy = if policy.context_min == 0 {
+        UserPolicy::default()
+    } else {
+        policy
+    };
+
+    let tuned = match tune(hw, &*meta, &policy) {
+        Ok(t) => t,
+        Err(e) => {
+            return TuneSummary {
+                error: Some(format!("Tuner refused — {e:?}")),
+                ..Default::default()
+            };
+        }
+    };
+
+    // Persist as a per-model override.  We deliberately store every
+    // tuner-chosen value so the first /api/chat request matches the
+    // wizard preview exactly, even if the tuner's heuristics change later.
+    let mut cfg = OllamaConfig::load();
+    let opts_clone = tuned.options.clone();
+    let kv = match opts_clone.kv_cache_type {
+        KvCacheType::F16 => KvCacheType::F16,
+        KvCacheType::Q8_0 => KvCacheType::Q8_0,
+        KvCacheType::Q4_0 => KvCacheType::Q4_0,
+    };
+    cfg.set_override(model_tag, |ov| {
+        ov.num_ctx = Some(opts_clone.num_ctx);
+        ov.num_gpu = Some(opts_clone.num_gpu);
+        ov.num_thread = Some(opts_clone.num_thread);
+        ov.flash_attention = Some(opts_clone.flash_attention);
+        ov.kv_cache_type = Some(kv);
+        ov.keep_alive_secs = Some(opts_clone.keep_alive_secs);
+        ov.num_batch = Some(opts_clone.num_batch);
+    });
+    let persisted = match cfg.save() {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "[wizard_ollama] warn: failed to persist tuned override for {model_tag}: {e}"
+            );
+            false
+        }
+    };
+
+    // Drop a copy of the tune snapshot under ~/.anvil/bench/ so /ollama
+    // bench has something to diff against later.  Best-effort.
+    let _ = persist_tune_snapshot(home, model_tag, &tuned);
+
+    TuneSummary {
+        num_ctx: Some(tuned.options.num_ctx),
+        num_gpu: Some(tuned.options.num_gpu),
+        flash_attention: Some(tuned.options.flash_attention),
+        flash_attention_reason: Some(tuned.reasoning.flash_attention),
+        policy_summary: Some(tuned.reasoning.policy_summary),
+        persisted,
+        error: None,
+    }
+}
+
+fn persist_tune_snapshot(
+    home: &Path,
+    model_tag: &str,
+    tuned: &api::ollama_tune::tuner::TuneResult,
+) -> std::io::Result<()> {
+    let dir = home.join("bench");
+    fs::create_dir_all(&dir)?;
+    let slug = model_tag
+        .chars()
+        .map(|c| match c {
+            ':' | '/' | '\\' | ' ' => '-',
+            c => c,
+        })
+        .collect::<String>();
+    let path = dir.join(format!("{slug}.tune.json"));
+    let body = serde_json::to_string_pretty(tuned)
+        .unwrap_or_else(|_| "{}".to_string());
+    fs::write(path, body)
+}
+
+fn render_tune_summary_banner<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+    model_tag: &str,
+    summary: &TuneSummary,
+    accent: Color,
+) -> Result<(), RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: TerminalHooks,
+    K: KeySource,
+{
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(err) = &summary.error {
+        lines.push(err.clone());
+        lines.push(String::new());
+        lines.push("You can re-run /ollama tune later.".to_string());
+    } else {
+        if let Some(ctx) = summary.num_ctx {
+            lines.push(format!("Context window: {ctx} tokens"));
+        }
+        if let Some(g) = summary.num_gpu {
+            let layers = if g < 0 {
+                "all (GPU)".to_string()
+            } else if g == 0 {
+                "0 (CPU-only)".to_string()
+            } else {
+                format!("{g} (partial GPU offload)")
+            };
+            lines.push(format!("GPU layers: {layers}"));
+        }
+        if let Some(fa) = summary.flash_attention {
+            lines.push(format!(
+                "Flash-attention: {}",
+                if fa { "ON" } else { "off" }
+            ));
+        }
+        if let Some(reason) = &summary.flash_attention_reason {
+            lines.push(format!("  ↳ {reason}"));
+        }
+        if let Some(p) = &summary.policy_summary {
+            lines.push(String::new());
+            lines.push(p.clone());
+        }
+        lines.push(String::new());
+        lines.push(if summary.persisted {
+            "✓ Saved to ~/.anvil/settings.json".to_string()
+        } else {
+            "⚠ Could not persist — values will not stick across restarts".to_string()
+        });
+    }
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    runner.session.render_banner(
+        &format!("Tuned for this machine — {model_tag}"),
+        &refs,
+        accent,
+    )
+}
+
+// ─── Bench (#665) ───────────────────────────────────────────────────────────
+
+fn format_hw_summary(hw: &runtime::ollama_tune::hw::HardwareProfile) -> String {
+    use runtime::ollama_tune::hw::GpuKind;
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let ram = (hw.ram_total_bytes as f64 / gib).round() as u64;
+    let gpu = match hw.gpu_kind {
+        GpuKind::Metal => format!(
+            "Metal{}",
+            hw.gpu_name
+                .as_deref()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default()
+        ),
+        GpuKind::Cuda => format!(
+            "CUDA{} {}",
+            hw.gpu_name
+                .as_deref()
+                .map(|n| format!(" — {n}"))
+                .unwrap_or_default(),
+            if hw.vram_total_bytes > 0 {
+                format!("({} GB)", (hw.vram_total_bytes as f64 / gib).round() as u64)
+            } else {
+                String::new()
+            }
+        ),
+        GpuKind::Rocm => "ROCm".to_string(),
+        GpuKind::None => "CPU-only".to_string(),
+    };
+    format!("{} GB RAM · {} · {} threads", ram, gpu, hw.cpu_threads)
+}
+
+fn run_bench_with_banner<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+    home: &Path,
+    url: &str,
+    model_tag: &str,
+    hw: &runtime::ollama_tune::hw::HardwareProfile,
+    tune_summary: &TuneSummary,
+    accent: Color,
+) -> Result<(), RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: TerminalHooks,
+    K: KeySource,
+{
+    use api::ollama_tune::bench::{run_bench_with_progress, HostSummary};
+    use api::ollama_tune::policy_config::OllamaConfig;
+    use api::ollama_tune::tuner::{tune, KvCacheType, OllamaOptions, UserPolicy};
+    use api::fetch_model_meta_cached;
+    use runtime::ollama_tune::hw::GpuKind;
+
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let host_summary = HostSummary {
+        os: hw.os.clone(),
+        gpu_kind: match hw.gpu_kind {
+            GpuKind::Metal => "metal".into(),
+            GpuKind::Cuda => "cuda".into(),
+            GpuKind::Rocm => "rocm".into(),
+            GpuKind::None => "none".into(),
+        },
+        gpu_name: hw.gpu_name.clone(),
+        vram_total_gb: ((hw.vram_total_bytes as f64) / gib).round() as u64,
+        ram_total_gb: ((hw.ram_total_bytes as f64) / gib).round() as u64,
+    };
+
+    // Build options the same way auto_tune does at chat time: tuner → apply
+    // override. That way the bench reflects what actual chats will use.
+    let url_owned = url.to_string();
+    let tag_owned = model_tag.to_string();
+    let hw_clone = hw.clone();
+    let opts_result: Result<OllamaOptions, String> = thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("tokio: {e}"))?;
+        let meta = rt
+            .block_on(fetch_model_meta_cached(&url_owned, &tag_owned))
+            .map_err(|e| e.to_string())?;
+        let policy = OllamaConfig::load().policy;
+        let policy = if policy.context_min == 0 {
+            UserPolicy::default()
+        } else {
+            policy
+        };
+        let tuned = tune(&hw_clone, &*meta, &policy).map_err(|e| format!("{e:?}"))?;
+        let cfg = OllamaConfig::load();
+        Ok::<OllamaOptions, String>(cfg.apply_override(&tag_owned, tuned.options))
+    })
+    .join()
+    .unwrap_or_else(|_| Err("opts thread panicked".to_string()));
+
+    let options = match opts_result {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = render_banner_lines(
+                runner,
+                &format!("Bench skipped — {model_tag}"),
+                &[format!("Could not compute options: {e}")],
+                accent,
+            );
+            return Ok(());
+        }
+    };
+    // Touch tune_summary to keep the signature stable in case future
+    // banner work wants to render reasoning beside the bench numbers.
+    let _ = tune_summary;
+    // Verify kv_cache_type is one of the supported variants (compile-time
+    // exhaustive — if KvCacheType grows we want a build break here).
+    let _ = match options.kv_cache_type {
+        KvCacheType::F16 | KvCacheType::Q8_0 | KvCacheType::Q4_0 => (),
+    };
+
+    let progress = Arc::new(std::sync::Mutex::new(("starting…".to_string(), 0usize, 0usize)));
+    let progress_writer = Arc::clone(&progress);
+    let done = Arc::new(AtomicBool::new(false));
+    let done_writer = Arc::clone(&done);
+    let bench_result = Arc::new(std::sync::Mutex::new(None));
+    let result_writer = Arc::clone(&bench_result);
+
+    let url_owned = url.to_string();
+    let tag_owned = model_tag.to_string();
+    let host_clone = host_summary.clone();
+    let anvil_ver = env!("CARGO_PKG_VERSION").to_string();
+    let opts_for_bench = options.clone();
+
+    let handle = thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                done_writer.store(true, Ordering::Relaxed);
+                if let Ok(mut g) = result_writer.lock() {
+                    *g = Some(Err(format!("tokio: {e}")));
+                }
+                return;
+            }
+        };
+        let progress_cb = move |idx: usize, total: usize, msg: &str| {
+            if let Ok(mut g) = progress_writer.lock() {
+                *g = (msg.to_string(), idx, total);
+            }
+        };
+        let res = rt.block_on(run_bench_with_progress(
+            &url_owned,
+            &tag_owned,
+            &opts_for_bench,
+            host_clone,
+            anvil_ver,
+            &progress_cb,
+        ));
+        if let Ok(mut g) = result_writer.lock() {
+            *g = Some(res.map_err(|e| e.to_string()));
+        }
+        done_writer.store(true, Ordering::Relaxed);
+    });
+
+    // Poll the banner while the bench runs.  Tight loop here is fine —
+    // we're holding the alt-screen and nothing else is drawing.
+    let started = Instant::now();
+    while !done.load(Ordering::Relaxed) {
+        let (msg, idx, total) = progress
+            .lock()
+            .map(|g| (g.0.clone(), g.1, g.2))
+            .unwrap_or_else(|_| (String::new(), 0, 0));
+        let elapsed = started.elapsed().as_secs();
+        let header = if total == 0 {
+            format!("Benchmarking {model_tag}… ({elapsed}s)")
+        } else {
+            format!("Benchmarking {model_tag} — prompt {idx}/{total} ({elapsed}s)")
+        };
+        render_banner_lines(
+            runner,
+            &header,
+            &[
+                "Running 3 prompts (short Q&A, code gen, summarization).".to_string(),
+                String::new(),
+                msg,
+            ],
+            accent,
+        )?;
+        thread::sleep(Duration::from_millis(250));
+    }
+    let _ = handle.join();
+
+    let final_msg = match bench_result.lock().ok().and_then(|g| g.clone()) {
+        Some(Ok(result)) => {
+            // Persist BenchResult next to the tune snapshot.
+            let _ = persist_bench_result(home, model_tag, &result);
+            format!(
+                "{:.1} tok/s mean · {} ms ttft · {} tokens max",
+                result.aggregate.mean_tokens_per_sec,
+                result.aggregate.median_ttft_ms,
+                result.aggregate.max_completion_tokens,
+            )
+        }
+        Some(Err(e)) => format!("Bench failed: {e}"),
+        None => "Bench produced no result".to_string(),
+    };
+    render_banner_lines(
+        runner,
+        &format!("Bench complete — {model_tag}"),
+        &[final_msg, "Press Enter to continue.".to_string()],
+        accent,
+    )?;
+    let modal = ConfirmModal::new(
+        "Baseline saved",
+        "Bench numbers stored under ~/.anvil/bench/. Press Enter to continue.",
+    );
+    let _ = runner.run_confirm("step5-bench-done", modal)?;
+    Ok(())
+}
+
+fn persist_bench_result(
+    home: &Path,
+    model_tag: &str,
+    result: &api::ollama_tune::bench::BenchResult,
+) -> std::io::Result<()> {
+    let dir = home.join("bench");
+    fs::create_dir_all(&dir)?;
+    let slug = model_tag
+        .chars()
+        .map(|c| match c {
+            ':' | '/' | '\\' | ' ' => '-',
+            c => c,
+        })
+        .collect::<String>();
+    let path = dir.join(format!("{slug}.bench.json"));
+    let body =
+        serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string());
+    fs::write(path, body)
+}
+
+fn render_banner_lines<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+    title: &str,
+    lines: &[String],
+    accent: Color,
+) -> Result<(), RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: TerminalHooks,
+    K: KeySource,
+{
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    runner.session.render_banner(title, &refs, accent)
 }
 
 // ─── Binary download — in-process reqwest, banner-as-progress ───────────────
@@ -801,5 +1430,71 @@ mod tests {
     #[test]
     fn short_url_takes_basename() {
         assert_eq!(short_url("https://example.com/path/file.tgz"), "file.tgz");
+    }
+
+    // ─── #665: HW-aware ranking ──────────────────────────────────────────
+
+    fn hw(ram_gb: u64, vram_gb: u64, gpu: runtime::ollama_tune::hw::GpuKind) -> runtime::ollama_tune::hw::HardwareProfile {
+        runtime::ollama_tune::hw::HardwareProfile {
+            ram_total_bytes: ram_gb * 1024 * 1024 * 1024,
+            ram_available_bytes: ram_gb * 1024 * 1024 * 1024,
+            gpu_kind: gpu,
+            gpu_name: None,
+            vram_total_bytes: vram_gb * 1024 * 1024 * 1024,
+            vram_free_bytes: vram_gb * 1024 * 1024 * 1024,
+            cpu_threads: 8,
+            perf_cores: None,
+            has_avx2: false,
+            has_avx512: false,
+            os: "linux".into(),
+            arch: "x86_64".into(),
+        }
+    }
+
+    #[test]
+    fn rank_recommends_smallest_on_8gb_cpu_machine() {
+        let h = hw(8, 0, runtime::ollama_tune::hw::GpuKind::None);
+        let idx = recommended_index(&h);
+        let chosen = &curated_models()[idx];
+        // On 8 GB CPU-only the 7B model is too big; the smaller model wins.
+        assert!(chosen.params_b <= 3.0, "expected small model, got {}", chosen.tag);
+    }
+
+    #[test]
+    fn rank_picks_7b_on_apple_silicon_64gb() {
+        // Apple unified memory: vram == ram.
+        let h = hw(64, 64, runtime::ollama_tune::hw::GpuKind::Metal);
+        let idx = recommended_index(&h);
+        let chosen = &curated_models()[idx];
+        assert!(chosen.params_b >= 7.0, "expected 7B+, got {}", chosen.tag);
+    }
+
+    #[test]
+    fn rank_marks_7b_too_big_on_4gb_machine() {
+        let h = hw(4, 0, runtime::ollama_tune::hw::GpuKind::None);
+        let m = &curated_models()[0]; // 7B
+        assert_eq!(rank_for_hw(m, &h), Fit::TooBig);
+    }
+
+    #[test]
+    fn rank_marks_small_fits_on_modest_gpu() {
+        let h = hw(16, 8, runtime::ollama_tune::hw::GpuKind::Cuda);
+        // The smallest model (1.5B q4_K_M ≈ 0.85 GB weights) should at
+        // least be "Fits" on any 8 GB GPU.
+        let small = curated_models().last().unwrap();
+        let fit = rank_for_hw(small, &h);
+        assert!(matches!(fit, Fit::Recommended | Fit::Fits | Fit::Tight));
+        assert_ne!(fit, Fit::TooBig);
+    }
+
+    #[test]
+    fn curated_list_is_all_q4_km() {
+        for c in curated_models() {
+            assert!(
+                c.tag.contains("q4_K_M"),
+                "{} is not a q4_K_M variant",
+                c.tag
+            );
+        }
     }
 }
