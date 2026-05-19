@@ -168,6 +168,16 @@ pub enum SlashCommand {
         /// Sub-command, e.g. `Some("start")`.
         args: Option<String>,
     },
+    /// `/release [status|preflight|dry-run|help]` — operator-only release
+    /// helpers (v2.2.18 #656 F7). Local skill, not a public feature: the
+    /// help text + every public surface (README, AnvilHub, culpur.net,
+    /// release notes) must NOT mention `/release`. This command does NOT
+    /// invoke `scripts/release.sh` — releases need explicit per-release
+    /// authorization (CLAUDE.md), so /release stays read-only.
+    Release {
+        /// Sub-command, e.g. `Some("preflight")`.
+        args: Option<String>,
+    },
     Init,
     Diff,
     Version,
@@ -761,6 +771,9 @@ impl SlashCommand {
                 args: remainder_after_command(trimmed, command),
             },
             "daemon" => Self::Daemon {
+                args: remainder_after_command(trimmed, command),
+            },
+            "release" => Self::Release {
                 args: remainder_after_command(trimmed, command),
             },
             "init" => Self::Init,
@@ -1868,7 +1881,7 @@ mod tests {
         // task #636 v2.2.17: +1 (/reflect) = 118 total
         // task #557 v2.2.17: +1 (/rewind) = 119 total
         // v2.2.18: +1 (/heal — task #667 self-healing modal) = 120 total
-        assert_eq!(slash_command_specs().len(), 122);
+        assert_eq!(slash_command_specs().len(), 123);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         // v2.2.16: +1 (/layout resume_supported=true) = 25
         // v2.2.17 task #557: +1 (/rewind resume_supported=true) = 26
@@ -3007,6 +3020,7 @@ mod tests {
                 SlashCommand::Ollama { .. } => Some("ollama"),
                 SlashCommand::Schedule { .. } => Some("schedule"),
                 SlashCommand::Daemon { .. } => Some("daemon"),
+                SlashCommand::Release { .. } => Some("release"),
                 SlashCommand::Init => Some("init"),
                 SlashCommand::Diff => Some("diff"),
                 SlashCommand::Version => Some("version"),
@@ -3138,6 +3152,7 @@ mod tests {
             SlashCommand::Ollama { args: None },
             SlashCommand::Schedule { args: None },
             SlashCommand::Daemon { args: None },
+            SlashCommand::Release { args: None },
             SlashCommand::Init,
             SlashCommand::Diff,
             SlashCommand::Version,
@@ -3404,6 +3419,7 @@ mod tests {
         "ollama",
         "schedule",
         "daemon",
+        "release",
         "init",
         "diff",
         "version",

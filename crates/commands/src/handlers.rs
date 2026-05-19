@@ -233,6 +233,10 @@ pub fn handle_slash_command(
             message: "/daemon: intercepted by the CLI in interactive mode. In non-interactive contexts, use `anvil daemon {start|stop|status|foreground|install-service|uninstall-service}` from your shell.".to_string(),
             session: session.clone(),
         }),
+        SlashCommand::Release { .. } => Some(SlashCommandResult {
+            message: "/release: intercepted by the CLI in interactive mode. Operator-only helper — not a public feature.".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Init => Some(SlashCommandResult {
             message: "/init requires an active session. Run `anvil` and use /init to create ANVIL.md and initialize project configuration for the assistant.".to_string(),
             session: session.clone(),

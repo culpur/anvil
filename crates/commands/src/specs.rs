@@ -2425,6 +2425,39 @@ have to drop to a shell. See `/schedule` for routine-level operations.
         requires_arguments: false,
     },
     SlashCommandSpec {
+        name: "release",
+        aliases: &[],
+        summary: "Operator-only release helpers (v2.2.18 #656 F7 — local skill, not public)",
+        argument_hint: Some("[status, preflight, dry-run, help]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/release \u{2014} operator-only release helpers
+
+This is a LOCAL skill — not a public Anvil feature. /release never
+invokes scripts/release.sh: releases need explicit per-release
+authorization (CLAUDE.md) and a stable terminal (alt-screen would
+corrupt cargo / cross output). The actual release is cut from a
+shell by the operator.
+
+USAGE
+  /release help        Show this message (default).
+  /release status      Show current branch + HEAD + workspace version
+                       + last tag + worktree clean/dirty.
+  /release preflight   Read-only pre-flight: working tree clean,
+                       branch up to date with upstream, Cargo vs
+                       latest-tag agreement, scripts/release.sh present.
+  /release dry-run     Same as preflight plus the shell command the
+                       operator would run next.
+",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
+    SlashCommandSpec {
         name: "file-cache",
         aliases: &["fc"],
         summary: "Inspect and manage the file-fingerprint cache (W11 token economy)",

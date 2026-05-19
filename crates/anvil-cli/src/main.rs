@@ -54,6 +54,7 @@ mod ollama_bench;
 mod ollama_cmds;
 mod ollama_manage;
 mod ollama_requantize;
+mod release_cmds;
 mod schedule_cmds;
 mod providers;
 mod remote_control;
@@ -1980,6 +1981,10 @@ fn run_resume_command(
         SlashCommand::Daemon { args } => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(crate::schedule_cmds::run_daemon_command(args.as_deref())),
+        }),
+        SlashCommand::Release { args } => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(crate::release_cmds::run_release_command(args.as_deref())),
         }),
         SlashCommand::Init => Ok(ResumeCommandOutcome {
             session: session.clone(),
@@ -6479,6 +6484,10 @@ impl LiveCli {
             }
             SlashCommand::Daemon { args } => {
                 let out = crate::schedule_cmds::run_daemon_command(args.as_deref());
+                (out, false)
+            }
+            SlashCommand::Release { args } => {
+                let out = crate::release_cmds::run_release_command(args.as_deref());
                 (out, false)
             }
             SlashCommand::Diff => {
