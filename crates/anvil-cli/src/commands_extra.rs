@@ -48,29 +48,23 @@ impl LiveCli {
                 lines.join("\n")
             }
             "builder" | "build" | "new" | "scaffold" => {
-                // The MCP builder is fully interactive (prompts read from
-                // stdin, results print to stdout). When invoked from the
-                // TUI we must leave the alt-screen first — mirroring
-                // /provider ollama's pattern — so println in the
-                // mcp_builder module is safe per
-                // feedback-tui-stdout-anti-pattern's exception clause.
+                // Task #678: `/mcp builder` is now a TUI-modal wizard
+                // (see `mcp_builder_wizard.rs`). The wizard owns its
+                // own brief alt-screen WizardSession; we leave the
+                // main TUI alt-screen first and re-enter after so the
+                // session lifecycles do not collide. No stdout / stdin
+                // prompts anywhere — every step is a modal.
                 let Some(settings_path) = settings_path else {
                     return "MCP builder unavailable: $HOME is not set.".to_string();
                 };
-                // Best-effort: ensure the .anvil directory exists so the
-                // wizard can write settings.json on the first run.
                 if let Some(parent) = settings_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let _ = crossterm::terminal::disable_raw_mode();
                 crate::tui::leave_alt_screen_for_inline_op();
-                let status = crate::mcp_builder::run_mcp_builder(&settings_path);
-                let _ = crossterm::terminal::enable_raw_mode();
-                // Wait briefly so the user can read the output.
-                use std::time::Duration;
-                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
-                    let _ = crossterm::event::read();
-                }
+                let status = crate::mcp_builder_wizard::run_mcp_builder_wizard(
+                    &settings_path,
+                    &self.model,
+                );
                 crate::tui::restore_alt_screen();
                 status
             }

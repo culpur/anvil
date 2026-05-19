@@ -40,6 +40,7 @@ pub mod command_cache;
 pub mod release_notes;
 pub mod prompt_section;
 pub mod update_check;
+pub mod mcp_builder_ai;
 mod compact;
 mod config;
 mod content_filter;

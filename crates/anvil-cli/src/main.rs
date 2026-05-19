@@ -48,6 +48,7 @@ mod help;
 mod init;
 mod input;
 mod mcp_builder;
+mod mcp_builder_wizard;
 mod mcp_server_mode;
 mod mcp_server_tools;
 mod ollama_bench;
