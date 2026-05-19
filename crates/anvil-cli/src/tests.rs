@@ -1439,3 +1439,111 @@ fn slash_reflect_command_emits_user_invoked_otel() {
         result.message
     );
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Task #661 (v2.2.18 / Agent A2) — `--setup` must route to the
+// alt-screen wizard, not the legacy `setup::run_setup_wizard` ASCII-box
+// path.  The bug fixed by this regression suite: a user running
+// `curl … | bash` was dropped into the legacy box wizard because
+// `install.sh` ended with `exec anvil --setup` and `CliAction::Setup`
+// was wired to `run_setup_wizard()`.  Three complementary tests:
+//
+//   1. Parser test — `anvil --setup` parses to `CliAction::Setup`.
+//      Sanity check that the flag wiring didn't change names.
+//   2. Source-level guard — assert that the dispatch site in `main.rs`
+//      no longer references `run_setup_wizard`, which is the only
+//      callable that emits the legacy `╔═══╗` box.  An in-process
+//      runtime test would have to fork a child and capture terminal
+//      output (`script` / `expect`), which doesn't run reliably on
+//      every CI runner; this static check catches the same regression
+//      with zero overhead.
+//   3. Import guard — assert that `use setup::run_setup_wizard;` is
+//      no longer present in main.rs (a regression re-adding it is
+//      almost certainly trying to re-wire the legacy path).
+//
+// A separate integration test at
+// `crates/anvil-cli/tests/setup_flag_routing.rs` spawns the actual
+// binary with stdin redirected + `ANVIL_CONFIG_HOME` sandboxed and
+// asserts the welcome banner from `wizard.rs` appears — the
+// end-to-end proof for the same regression.
+// ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn cli_action_setup_flag_parses() {
+    // `anvil --setup` must produce `CliAction::Setup`.
+    let action = parse_args(&["--setup".to_string()])
+        .expect("--setup must parse");
+    assert_eq!(
+        action,
+        CliAction::Setup,
+        "`anvil --setup` parsing changed — installer scripts may break"
+    );
+
+    // `anvil setup` (positional) must also produce `CliAction::Setup`.
+    let action = parse_args(&["setup".to_string()])
+        .expect("setup positional must parse");
+    assert_eq!(
+        action,
+        CliAction::Setup,
+        "`anvil setup` positional parsing changed",
+    );
+}
+
+#[test]
+fn main_rs_setup_dispatch_no_longer_routes_to_legacy_wizard() {
+    // Read main.rs and assert the CliAction::Setup arm does NOT call
+    // `run_setup_wizard` (the legacy entry point in setup.rs).  This is
+    // the static-source guardrail for task #661 — if a future refactor
+    // brings the legacy ASCII-box wizard back into the dispatch table,
+    // this test fires.
+    let main_rs = include_str!("main.rs");
+
+    // Locate the dispatch arm for `CliAction::Setup`.  We use the
+    // single-line form ("CliAction::Setup =>") because that's what the
+    // dispatch table looks like; a multi-line arm would have its body
+    // on subsequent lines and we'd scan those too.
+    let setup_arm_idx = main_rs
+        .find("CliAction::Setup =>")
+        .expect("CliAction::Setup arm must exist in main.rs dispatch");
+
+    // Grab a window large enough to cover both the single-line arm and
+    // a multi-line `{ … }` block — 400 bytes is plenty.
+    let end = (setup_arm_idx + 400).min(main_rs.len());
+    let window = &main_rs[setup_arm_idx..end];
+
+    // The arm body must call `run_first_run_wizard`, NOT
+    // `run_setup_wizard`.  An exact-string `run_setup_wizard(` check
+    // avoids false-positives on the explanatory comments above the
+    // arm (those reference `run_setup_wizard` in prose with no `(`).
+    assert!(
+        !window.contains("run_setup_wizard("),
+        "CliAction::Setup dispatch must not call run_setup_wizard() — \
+         that's the legacy ASCII-box wizard.  Route to run_first_run_wizard() \
+         instead. Window:\n{window}"
+    );
+    assert!(
+        window.contains("run_first_run_wizard"),
+        "CliAction::Setup dispatch must call run_first_run_wizard() so \
+         installer scripts get the alt-screen wizard. Window:\n{window}"
+    );
+}
+
+#[test]
+fn main_rs_no_longer_imports_run_setup_wizard() {
+    // The `use setup::run_setup_wizard;` import in main.rs was the
+    // historical wiring for the legacy dispatch.  As of #661 the
+    // import is removed (the module itself stays compiled — other
+    // agents scavenge helpers from it — but the wizard entry point
+    // is unused at runtime).  A regression that re-introduces the
+    // import is almost certainly trying to re-wire the legacy path.
+    let main_rs = include_str!("main.rs");
+
+    // Allow `use setup;` (mod declaration) and prose mentions in
+    // comments — only the specific `use setup::run_setup_wizard;`
+    // top-level import is banned.
+    assert!(
+        !main_rs.contains("use setup::run_setup_wizard"),
+        "main.rs must not `use setup::run_setup_wizard` — that import \
+         is the wiring for the legacy ASCII-box wizard (task #661)."
+    );
+}

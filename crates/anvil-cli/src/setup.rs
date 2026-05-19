@@ -1,8 +1,8 @@
 //! `anvil --setup` / `anvil setup` — first-run installation wizard.
 //!
 //! Distinct from `wizard.rs` (which is the interactive provider-configuration
-//! wizard used inside the running REPL).  This module handles the post-install
-//! flow triggered by the installer scripts:
+//! wizard used inside the running REPL).  This module historically handled
+//! the post-install flow triggered by the installer scripts:
 //!
 //! 1. Create `~/.anvil/` directory structure
 //! 2. Prompt the user to pick an AI provider
@@ -10,10 +10,20 @@
 //! 4. Optionally prompt about Ollama
 //! 5. Install shell completions to the appropriate location
 //! 6. Print a success summary
+//!
+//! As of v2.2.18 (task #661) the runtime entry points all route through
+//! `wizard::run_first_run_wizard` (the alt-screen modal wizard); this
+//! module is kept in the tree because other agents are scavenging helper
+//! functions from it (`check_ollama_installed`, `install_completions`,
+//! `detect_shells`, etc.) for the v2.2.18 wizard polish work.  The
+//! `dead_code` allow below silences warnings until those helpers find
+//! their new homes.
 
-// Task #626: SAFE-HEADLESS — entered only via `CliAction::Setup`
-// (`anvil --setup`); the TUI never starts on this code path.
+// Task #626: SAFE-HEADLESS — even though no runtime path enters this
+// module any more, retain the print discipline allow so future imports
+// don't surprise the audit.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
+#![allow(dead_code)]
 
 use std::fs;
 use std::io::{self, Write};

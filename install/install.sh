@@ -1,37 +1,47 @@
 #!/usr/bin/env bash
-# Anvil installer — macOS + Linux
+# Anvil installer — macOS / Linux / BSD
 # Usage:  curl -fsSL https://anvilhub.culpur.net/install.sh | bash
-#   or:   bash install.sh [--no-setup] [--no-completions] [--dir /usr/local/bin]
+#   or:   bash install.sh [--no-setup] [--no-completions] [--dir /usr/local/bin] [--verbose] [--quiet]
+#
+# Design: silent by default. The installer is plumbing — Anvil's first-run
+# wizard is the UX. We download, SHA256-verify, put the binary on PATH, and
+# exec the wizard. No banners, no warnings about optional tools the wizard
+# can guide the user to itself.
+#
+# Headless fallback (v2.2.18 #663 gap 14): the first-run wizard requires a
+# TTY (it enters an alt-screen).  When stdin/stdout aren't both terminals
+# (CI bootstrap, ssh-without-pty, container provisioning, pipe-fed
+# shells), launching it would crash on `enter_alternate_screen()`.  We
+# detect non-TTY and print a one-line "run anvil from a TTY" hint instead
+# of exec'ing.
 #
 # Exit codes:
 #   0 — success
 #   1 — network failure
 #   2 — checksum failure
-#   3 — dependency install failure
+#   3 — unsupported platform / permission error
 #   4 — user declined
 
 set -euo pipefail
 
-# ── Colour helpers ────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-info()    { printf "  ${CYAN}>${NC} %s\n" "$*"; }
-success() { printf "  ${GREEN}\u2714${NC} %s\n" "$*"; }
-warn()    { printf "  ${YELLOW}\u26A0${NC}  %s\n" "$*"; }
-error()   { printf "  ${RED}\u2718${NC}  %s\n" "$*" >&2; }
-die()     { error "$*"; exit 1; }
-
-# ── Banner ────────────────────────────────────────────────────────────────────
-printf "\n${BOLD}${CYAN}"
-printf '\u2554%.0s' $(seq 1 60); printf '\n'
-printf '\u2551  Anvil installer                                          \u2551\n'
-printf '\u2551  https://anvilhub.culpur.net                              \u2551\n'
-printf '\u255A%.0s' $(seq 1 60); printf '\n'
-printf "${NC}\n"
+# ── Bash sanity (BSDs often don't ship bash in base) ──────────────────────────
+# If someone pipes us into /bin/sh on FreeBSD/NetBSD by accident, fail loud
+# with an actionable message instead of mystery `[[`-syntax errors.
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "error: this installer requires bash."
+    echo "  FreeBSD:  pkg install bash, then re-run"
+    echo "  NetBSD:   pkgin install bash, then re-run"
+    echo "  Linux:    bash is in every distro's base — check your PATH"
+    echo "  macOS:    bash is built in"
+    exit 3
+fi
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 INSTALL_DIR=""
 RUN_SETUP=true
 INSTALL_COMPLETIONS=true
+VERBOSE=false
+QUIET=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,9 +49,51 @@ while [[ $# -gt 0 ]]; do
         --no-completions)  INSTALL_COMPLETIONS=false; shift ;;
         --dir)             INSTALL_DIR="$2"; shift 2 ;;
         --dir=*)           INSTALL_DIR="${1#--dir=}"; shift ;;
-        *)                 warn "Unknown flag: $1"; shift ;;
+        --verbose|-v)      VERBOSE=true; shift ;;
+        --quiet|-q)        QUIET=true; shift ;;
+        *)                 shift ;;
     esac
 done
+
+# --quiet wins over --verbose if someone passes both: package managers and
+# CI bootstrap may set --quiet through a wrapper while a debug env var
+# enables --verbose; in that combination the package manager intent (no
+# noise) takes priority.
+if $QUIET; then VERBOSE=false; fi
+
+# ── Output helpers ────────────────────────────────────────────────────────────
+# In default (quiet-ish) mode we print exactly one progress line and overwrite
+# it in place. In verbose mode each step prints its own line. In --quiet mode
+# we print nothing until the final summary (or an error).
+if [[ -t 1 ]]; then
+    DIM='\033[2m'; RESET='\033[0m'; CR='\r\033[K'
+else
+    DIM=''; RESET=''; CR='\n'
+fi
+
+step() {
+    if $QUIET; then
+        :  # eat the message
+    elif $VERBOSE; then
+        printf "%s\n" "$*"
+    else
+        printf "${CR}${DIM}%s${RESET}" "$*"
+    fi
+}
+
+step_end() {
+    if $QUIET || $VERBOSE; then
+        :
+    else
+        # Erase the progress line — wizard will own the screen from here
+        printf "${CR}"
+    fi
+}
+
+die() {
+    printf "\nerror: %s\n" "$*" >&2
+    exit 1
+}
 
 # ── Platform detection ────────────────────────────────────────────────────────
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -72,22 +124,20 @@ case "$PLATFORM" in
 esac
 
 # BSD support matrix:
-#   - FreeBSD x86_64: shipped as a binary (Tier-2)
-#   - FreeBSD ARM64:  source-only (Rust has no aarch64-unknown-freebsd rust-std)
-#   - NetBSD x86_64:  shipped as a binary (Tier-3; may be source-only on some releases)
-#   - OpenBSD x86_64: source-only (Rust has no usable cross sysroot today)
+#   - FreeBSD x86_64: shipped binary (Tier-2)
+#   - FreeBSD ARM64:  source-only (no rust-std)
+#   - NetBSD x86_64:  shipped binary (Tier-3)
+#   - OpenBSD x86_64: source-only
 #   - All other BSD arch combos: source-only.
 if [[ "$PLATFORM" == "openbsd" ]]; then
-    die "OpenBSD binary not available — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+    die "OpenBSD binary not available — build from source: cargo install --git https://github.com/culpur/anvil-source"
 fi
 if [[ "$PLATFORM" == "freebsd" && "$ARCH_STD" == "aarch64" ]]; then
-    die "FreeBSD ARM64 binary not available — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+    die "FreeBSD ARM64 binary not available — build from source: cargo install --git https://github.com/culpur/anvil-source"
 fi
 if [[ "$PLATFORM" == "netbsd" && "$ARCH_STD" != "x86_64" ]]; then
-    die "Binary not available for netbsd/$ARCH_STD — build from source with: cargo install --git https://github.com/culpur/anvil-source"
+    die "Binary not available for netbsd/$ARCH_STD — build from source: cargo install --git https://github.com/culpur/anvil-source"
 fi
-
-info "Platform: ${PLATFORM} / ${ARCH_STD}  (target: ${TARGET})"
 
 # ── Install directory selection ───────────────────────────────────────────────
 if [[ -z "$INSTALL_DIR" ]]; then
@@ -101,88 +151,17 @@ if [[ -z "$INSTALL_DIR" ]]; then
     fi
 fi
 
-info "Install directory: ${INSTALL_DIR}"
-
-# Ensure INSTALL_DIR is on PATH
-if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
-    warn "${INSTALL_DIR} is not on your PATH."
-    warn "Add the following to your shell rc file:"
-    warn "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-fi
-
-# ── Dependency checks ─────────────────────────────────────────────────────────
-need() { command -v "$1" &>/dev/null; }
-
-# Detect package manager
-detect_pkg_manager() {
-    if need brew;    then echo "brew";    return; fi
-    if need apt-get; then echo "apt";     return; fi
-    if need dnf;     then echo "dnf";     return; fi
-    if need yum;     then echo "yum";     return; fi
-    if need pacman;  then echo "pacman";  return; fi
-    if need apk;     then echo "apk";     return; fi
-    echo "none"
-}
-
-PKG_MGR="$(detect_pkg_manager)"
-info "Package manager: ${PKG_MGR}"
-
-install_pkg() {
-    local pkg="$1"
-    local brew_pkg="${2:-$1}"
-    info "Installing ${pkg}..."
-    case "$PKG_MGR" in
-        brew)   brew install "$brew_pkg" || return 1 ;;
-        apt)    sudo apt-get install -y "$pkg" || return 1 ;;
-        dnf)    sudo dnf install -y "$pkg" || return 1 ;;
-        yum)    sudo yum install -y "$pkg" || return 1 ;;
-        pacman) sudo pacman -S --noconfirm "$pkg" || return 1 ;;
-        apk)    sudo apk add --no-cache "$pkg" || return 1 ;;
-        *)
-            warn "${pkg} not found and no supported package manager detected."
-            warn "Install it manually and re-run this script."
-            return 1
-            ;;
-    esac
-}
-
-# curl is required for downloads
-if ! need curl; then
-    install_pkg curl || { error "curl is required"; exit 3; }
-fi
-
-# git
-if ! need git; then
-    warn "git not found — attempting to install..."
-    install_pkg git || warn "Could not install git automatically."
-fi
-
-# Node.js + npm
-if ! need node || ! need npm; then
-    warn "Node.js / npm not found — attempting to install..."
-    case "$PKG_MGR" in
-        brew)    install_pkg node || warn "Install Node.js from https://nodejs.org" ;;
-        apt)     install_pkg nodejs nodejs && install_pkg npm || warn "Install Node.js from https://nodejs.org" ;;
-        dnf|yum) install_pkg nodejs nodejs && install_pkg npm || warn "Install Node.js from https://nodejs.org" ;;
-        pacman)  install_pkg nodejs nodejs && install_pkg npm || warn "Install Node.js from https://nodejs.org" ;;
-        apk)     install_pkg nodejs nodejs && install_pkg npm || warn "Install Node.js from https://nodejs.org" ;;
-        *)       warn "Install Node.js from https://nodejs.org" ;;
-    esac
-fi
-
-# QMD (optional — just warn, not a hard failure)
-if ! need qmd && [[ ! -f "$HOME/.local/bin/qmd" ]] && [[ ! -f "/usr/local/bin/qmd" ]]; then
-    warn "qmd not found — install it from https://anvilhub.culpur.net"
+# ── Curl (required) ───────────────────────────────────────────────────────────
+# curl is on every modern macOS and almost every Linux distro out of the box.
+# If it's missing, we cannot proceed.
+if ! command -v curl &>/dev/null; then
+    die "curl is required but not installed. Install curl, then re-run."
 fi
 
 # ── Download Anvil binary ─────────────────────────────────────────────────────
 GITHUB_BASE="https://github.com/culpur/anvil/releases/latest/download"
 BINARY_NAME="anvil-${TARGET}"
 BINARY_URL="${GITHUB_BASE}/${BINARY_NAME}"
-# Primary (out-of-band) SHA256 source: anvilhub.culpur.net. Served from a
-# separate origin so a GitHub release compromise cannot also forge the hash.
-# Fallback: the .sha256 sibling on GitHub releases. We only accept the
-# fallback if the primary returns a clear 404, never on network errors.
 SHA256_URL_PRIMARY="https://anvilhub.culpur.net/sha256/${BINARY_NAME}.sha256"
 SHA256_URL_FALLBACK="${BINARY_URL}.sha256"
 
@@ -193,135 +172,173 @@ TMP_SHA256="${TMP_DIR}/anvil.sha256"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
-info "Downloading ${BINARY_URL}..."
-if ! curl -fSL --max-time 180 -o "$TMP_BINARY" "$BINARY_URL"; then
-    die "Download failed — check network connection."
-    exit 1
+step "Downloading Anvil for ${PLATFORM} ${ARCH_STD}…"
+if ! curl -fSL --max-time 180 -o "$TMP_BINARY" "$BINARY_URL" >/dev/null 2>&1; then
+    step_end
+    die "Download failed: $BINARY_URL"
 fi
 
-# ── SHA256 verification ───────────────────────────────────────────────────────
-# Integrity is non-negotiable. If we cannot fetch or verify the checksum we
-# abort — never fall back to "trust the binary we just downloaded." An
-# attacker who can suppress the checksum URL (DNS block, CDN outage, 404)
-# would otherwise bypass the entire integrity check.
-info "Fetching checksum from ${SHA256_URL_PRIMARY}..."
+# ── SHA256 verification (mandatory) ───────────────────────────────────────────
+# Out-of-band primary source on anvilhub.culpur.net; GitHub mirror is fallback.
+# We never trust the binary without a verified checksum.
+step "Verifying signature…"
+# 5s timeout on the primary so an unreachable anvilhub mirror fails fast
+# to the GitHub fallback rather than hanging the install for 30+ seconds.
+# Fallback gets 15s — by the time we're there we KNOW the primary is
+# unreachable and the GitHub release endpoint is our last hope.
 SHA256_SOURCE="primary"
-if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_PRIMARY"; then
-    warn "Primary checksum source unreachable — trying GitHub mirror..."
+if ! curl -fsSL --max-time 5 -o "$TMP_SHA256" "$SHA256_URL_PRIMARY" 2>/dev/null; then
     SHA256_SOURCE="fallback"
-    if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_FALLBACK"; then
-        error "Could not fetch checksum from either ${SHA256_URL_PRIMARY} or ${SHA256_URL_FALLBACK}"
-        error "Refusing to install an unverified binary. If this persists, download"
-        error "manually from https://github.com/culpur/anvil/releases and verify the"
-        error "SHA256 yourself against https://anvilhub.culpur.net/sha256/"
-        exit 2
+    if ! curl -fsSL --max-time 15 -o "$TMP_SHA256" "$SHA256_URL_FALLBACK" 2>/dev/null; then
+        step_end
+        die "Could not fetch checksum. Refusing to install an unverified binary."
     fi
-fi
-
-# Track which source the checksum came from so the error message is accurate.
-if [[ "${SHA256_SOURCE}" == "primary" ]]; then
-    SHA256_SOURCE_URL="${SHA256_URL_PRIMARY}"
-else
-    SHA256_SOURCE_URL="${SHA256_URL_FALLBACK}"
 fi
 
 EXPECTED="$(awk '{print $1}' "$TMP_SHA256")"
 if [[ -z "${EXPECTED}" ]]; then
-    error "Checksum file at ${SHA256_SOURCE_URL} is empty or malformed."
-    exit 2
+    step_end
+    die "Checksum file is empty or malformed."
 fi
 
-if [[ "$PLATFORM" == "macos" ]]; then
-    ACTUAL="$(shasum -a 256 "$TMP_BINARY" | awk '{print $1}')"
-else
-    ACTUAL="$(sha256sum "$TMP_BINARY" | awk '{print $1}')"
+# SHA256 tooling differs by platform:
+#   macOS:        shasum -a 256
+#   Linux:        sha256sum (coreutils)
+#   FreeBSD:      sha256 -q   (base system; sha256sum exists if coreutils pkg installed)
+#   NetBSD:       cksum -a sha256 -n   (base system)
+# Probe in order of preference so we pick whatever the host actually has.
+sha256_of() {
+    if command -v sha256sum &>/dev/null; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum &>/dev/null; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256 &>/dev/null; then
+        # FreeBSD: -q prints just the hash
+        sha256 -q "$1"
+    elif command -v cksum &>/dev/null && cksum -a sha256 /dev/null &>/dev/null; then
+        # NetBSD: cksum -a sha256 file → "SHA256 (file) = hash"
+        cksum -a sha256 -n "$1" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+if ! ACTUAL="$(sha256_of "$TMP_BINARY")" || [[ -z "$ACTUAL" ]]; then
+    step_end
+    die "No SHA256 tool found (need one of: sha256sum, shasum, sha256, cksum)."
 fi
 
 if [[ "${ACTUAL}" != "${EXPECTED}" ]]; then
-    error "SHA256 mismatch!"
-    error "  expected: ${EXPECTED}"
-    error "  got:      ${ACTUAL}"
-    exit 2
+    step_end
+    die "SHA256 mismatch. expected=${EXPECTED} got=${ACTUAL}"
 fi
-success "Checksum verified."
 
 # ── Install binary ────────────────────────────────────────────────────────────
 chmod +x "$TMP_BINARY"
 INSTALL_PATH="${INSTALL_DIR}/anvil"
 
+step "Installing to ${INSTALL_PATH}…"
 if [[ -w "$INSTALL_DIR" ]]; then
     cp "$TMP_BINARY" "$INSTALL_PATH"
 else
-    sudo cp "$TMP_BINARY" "$INSTALL_PATH"
+    # Need sudo. Tell the user once, in line, so the password prompt isn't
+    # mystery-shell behavior.
+    step_end
+    printf "Installing to %s requires sudo:\n" "$INSTALL_PATH"
+    sudo cp "$TMP_BINARY" "$INSTALL_PATH" || die "Could not install to $INSTALL_PATH"
 fi
 
-success "Anvil installed to ${INSTALL_PATH}"
-
-# Verify it runs
-if command -v anvil &>/dev/null; then
-    INSTALLED_VERSION="$(anvil --version 2>/dev/null | head -1 || echo "unknown")"
-    success "Anvil version: ${INSTALLED_VERSION}"
+# ── PATH hint (only if actually needed, and only once) ────────────────────────
+PATH_HINT=""
+if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
+    PATH_HINT="${INSTALL_DIR} is not on your PATH. Add this to your shell rc:
+  export PATH=\"${INSTALL_DIR}:\$PATH\""
 fi
 
-# ── Shell completions ─────────────────────────────────────────────────────────
+# ── Shell completions (silent, best-effort) ───────────────────────────────────
 if [[ "$INSTALL_COMPLETIONS" == "true" ]]; then
     COMPLETION_BASE="$(dirname "$0")/completions"
-    # If running from curl, completions might not be alongside the script.
-    # We ship them embedded as separate downloads or in the binary's share dir.
     SHARE_DIR="${INSTALL_DIR%/bin}/share/anvil/completions"
-
     if [[ -d "$COMPLETION_BASE" ]]; then
-        mkdir -p "$SHARE_DIR"
+        mkdir -p "$SHARE_DIR" 2>/dev/null || true
         cp "$COMPLETION_BASE"/* "$SHARE_DIR"/ 2>/dev/null || true
     fi
-
-    # Install for detected shell
     CURRENT_SHELL="${SHELL##*/}"
     case "$CURRENT_SHELL" in
         bash)
             BASH_COMP="$HOME/.local/share/bash-completion/completions"
-            mkdir -p "$BASH_COMP"
-            if [[ -f "$SHARE_DIR/anvil.bash" ]]; then
-                cp "$SHARE_DIR/anvil.bash" "$BASH_COMP/anvil"
-                success "Bash completions installed to ${BASH_COMP}/anvil"
-            fi
+            mkdir -p "$BASH_COMP" 2>/dev/null || true
+            [[ -f "$SHARE_DIR/anvil.bash" ]] && cp "$SHARE_DIR/anvil.bash" "$BASH_COMP/anvil" 2>/dev/null || true
             ;;
         zsh)
             ZSH_COMP="$HOME/.zfunc"
-            mkdir -p "$ZSH_COMP"
-            if [[ -f "$SHARE_DIR/anvil.zsh" ]]; then
-                cp "$SHARE_DIR/anvil.zsh" "$ZSH_COMP/_anvil"
-                success "Zsh completions installed to ${ZSH_COMP}/_anvil"
-                info "Add 'fpath=(~/.zfunc \$fpath)' + 'autoload -Uz compinit && compinit' to ~/.zshrc"
-            fi
+            mkdir -p "$ZSH_COMP" 2>/dev/null || true
+            [[ -f "$SHARE_DIR/anvil.zsh" ]] && cp "$SHARE_DIR/anvil.zsh" "$ZSH_COMP/_anvil" 2>/dev/null || true
             ;;
         fish)
             FISH_COMP="$HOME/.config/fish/completions"
-            mkdir -p "$FISH_COMP"
-            if [[ -f "$SHARE_DIR/anvil.fish" ]]; then
-                cp "$SHARE_DIR/anvil.fish" "$FISH_COMP/anvil.fish"
-                success "Fish completions installed to ${FISH_COMP}/anvil.fish"
-            fi
+            mkdir -p "$FISH_COMP" 2>/dev/null || true
+            [[ -f "$SHARE_DIR/anvil.fish" ]] && cp "$SHARE_DIR/anvil.fish" "$FISH_COMP/anvil.fish" 2>/dev/null || true
             ;;
     esac
 fi
 
-# ── First-run wizard ──────────────────────────────────────────────────────────
+# ── Hand off to the wizard ────────────────────────────────────────────────────
+# Erase the progress line so the wizard's welcome card is the first thing on
+# screen. The wizard handles QMD discovery, MEMORY setup, OAuth, vault — none
+# of which the installer needs to mention.
+step_end
+
+# If we have a PATH hint to give, print it BEFORE launching the wizard so it
+# stays in the user's scrollback above the alt-screen.
+if [[ -n "$PATH_HINT" ]] && ! $QUIET; then
+    printf "%s\n\n" "$PATH_HINT"
+fi
+
 if [[ "$RUN_SETUP" == "true" ]]; then
-    printf "\n"
-    info "Launching first-run setup wizard..."
-    printf "\n"
+    # Headless detection (v2.2.18 #663 gap 14). The wizard enters an
+    # alt-screen via crossterm `EnterAlternateScreen`; without a TTY on
+    # both stdin AND stdout the alt-screen entry would either crash
+    # (`Inappropriate ioctl`) or print escape sequences into the
+    # surrounding pipe.  Common non-TTY contexts:
+    #
+    #   * CI bootstrap   — github-actions, gitlab, jenkins
+    #   * ssh-no-pty     — `ssh host 'curl … | bash'`
+    #   * provisioner    — packer, ansible, terraform user-data
+    #   * dockerfile     — `RUN curl … | bash`
+    #
+    # In all of these the user (or their automation) wanted the binary
+    # installed; they did NOT want a wizard.  Print the install path and
+    # a one-line hint, exit clean.  `[ -t 0 ] && [ -t 1 ]` covers stdin
+    # AND stdout — either one being a pipe means alt-screen is unsafe.
+    if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
+        if $QUIET; then
+            printf "%s\n" "$INSTALL_PATH"
+        else
+            printf "Installed: %s. Run \`anvil\` from a TTY to complete setup.\n" "$INSTALL_PATH"
+        fi
+        exit 0
+    fi
+
+    # IMPORTANT: do NOT pass --setup at the historical level.  As of
+    # v2.2.18 task #661, `--setup` correctly routes to the alt-screen
+    # wizard (was previously wired to legacy setup.rs), but we still
+    # prefer the bare `exec anvil` form so the first-run-no-config gate
+    # in `wizard.rs::anvil_config_json_exists` is what triggers the
+    # wizard — which is the same path users hit on every fresh install
+    # whether the installer ran or not.  Single code path.
     if command -v anvil &>/dev/null; then
-        anvil --setup || warn "Setup wizard exited with an error — run 'anvil --setup' to retry."
+        exec anvil
+    elif [[ -x "$INSTALL_PATH" ]]; then
+        exec "$INSTALL_PATH"
     else
-        warn "anvil not found on PATH after install — run '${INSTALL_PATH} --setup' to configure."
+        die "Installed anvil to $INSTALL_PATH but cannot execute it."
     fi
 fi
 
-# ── Done ──────────────────────────────────────────────────────────────────────
-printf "\n${GREEN}${BOLD}"
-printf '\u2554%.0s' $(seq 1 60); printf '\n'
-printf '\u2551  Installation complete!                                    \u2551\n'
-printf '\u2551  Run: anvil                                                \u2551\n'
-printf '\u2551  Docs: https://anvilhub.culpur.net/docs                   \u2551\n'
-printf '\u255A%.0s' $(seq 1 60); printf "\n${NC}\n"
+# RUN_SETUP=false path — print a single line telling the user what to run.
+# --quiet path: be even quieter (one line, just the install path).
+if $QUIET; then
+    printf "%s\n" "$INSTALL_PATH"
+else
+    printf "Installed: %s\nRun: anvil\n" "$INSTALL_PATH"
+fi
