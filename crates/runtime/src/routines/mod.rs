@@ -8,6 +8,9 @@
 /// - [`archive`] — per-run markdown archive on disk
 /// - [`packet`] — run output packet schema with input hash and injection delimiters
 pub mod archive;
+pub mod definition;
+pub mod delivery;
+pub mod executor;
 pub mod packet;
 pub mod schedule;
 
