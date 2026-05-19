@@ -125,6 +125,46 @@ impl RoutinePermissionMode {
             Self::Danger => "danger",
         }
     }
+
+    /// Tier derived from the permission mode.  `Plan` and `Auto` are
+    /// considered safe enough for the daemon to fire on its own; `Accept`
+    /// (every tool needs approval) and `Danger` (full access) both demand
+    /// a human pre-approving the run.
+    #[must_use]
+    pub fn tier(self) -> RoutineTier {
+        match self {
+            Self::Plan | Self::Auto => RoutineTier::Auto,
+            Self::Accept | Self::Danger => RoutineTier::Ask,
+        }
+    }
+}
+
+/// Tier the daemon applies to a routine when its `next_fire` arrives.
+///
+/// - `Auto` — the routine runs immediately (its permission mode is `plan`
+///   or `auto`, both of which the workspace already considers safe for
+///   tool execution).
+/// - `Ask` — the routine has elevated tool access (`accept` requires
+///   per-tool approval; `danger` grants full access). The daemon writes a
+///   proposal to `~/.anvil/routines/pending/` and surfaces it in the TUI
+///   + remote viewer; the user runs `/schedule approve <name>` to fire it
+///   once, or `/schedule reject <name>` to drop it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoutineTier {
+    Auto,
+    Ask,
+}
+
+impl RoutineTier {
+    /// Short human-readable label for `/schedule status` and proposal banners.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Ask => "ask",
+        }
+    }
 }
 
 /// Delivery target for a routine's output.
@@ -569,6 +609,14 @@ mod tests {
             let def = parse(&raw).unwrap();
             assert_eq!(def.permission_mode.as_cli_arg(), mode);
         }
+    }
+
+    #[test]
+    fn permission_mode_tier_mapping() {
+        assert_eq!(RoutinePermissionMode::Plan.tier(), RoutineTier::Auto);
+        assert_eq!(RoutinePermissionMode::Auto.tier(), RoutineTier::Auto);
+        assert_eq!(RoutinePermissionMode::Accept.tier(), RoutineTier::Ask);
+        assert_eq!(RoutinePermissionMode::Danger.tier(), RoutineTier::Ask);
     }
 
     #[test]

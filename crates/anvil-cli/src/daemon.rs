@@ -52,10 +52,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use runtime::routines::definition::{load_all, LoadAllResult, RoutineDef};
+use runtime::routines::definition::{load_all, LoadAllResult, RoutineDef, RoutineTier};
 use runtime::routines::executor::{
     collect_context, run_once, validate_anvil_binary, ExecRequest,
 };
+use runtime::routines::proposal::{self, RoutineProposal};
 use runtime::routines::schedule::next_fire;
 
 // ─── Subcommand enum ────────────────────────────────────────────────────────
@@ -100,6 +101,16 @@ pub struct DaemonStatus {
     pub last_tick_at: u64,
     pub last_tick_routines_loaded: usize,
     pub last_tick_routines_fired: usize,
+    /// Number of routines that were ask-tier (permission_mode = accept or
+    /// danger) and would have fired this tick had they been auto-tier.
+    /// Each one wrote a proposal to `~/.anvil/routines/pending/` instead.
+    #[serde(default)]
+    pub last_tick_proposals_written: usize,
+    /// Total pending proposals on disk after this tick.  Read by the TUI
+    /// status footer to decide whether to render the "N pending approval"
+    /// badge.
+    #[serde(default)]
+    pub pending_proposals_total: usize,
     /// Most recent non-fatal error encountered in the loop (load error,
     /// archive write error, etc.).  Cleared after a successful tick with
     /// no errors.
@@ -236,6 +247,8 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         last_tick_at: started_at,
         last_tick_routines_loaded: 0,
         last_tick_routines_fired: 0,
+        last_tick_proposals_written: 0,
+        pending_proposals_total: 0,
         last_error: None,
         anvil_version: anvil_version.to_string(),
     };
@@ -257,6 +270,7 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         let LoadAllResult { defs, errors } = load_all(&home.join("routines"));
         status.last_tick_routines_loaded = defs.len();
         status.last_tick_routines_fired = 0;
+        status.last_tick_proposals_written = 0;
         status.last_error = errors
             .first()
             .map(|e| format!("definition load: {e}"));
@@ -276,39 +290,74 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
                 continue;
             }
 
-            // It's go time.  Spawn the routine on a worker thread so the loop
-            // can move on; we'll re-cache `next_fire` after the worker
-            // returns by writing the next time on the spot.
-            let def_clone = def.clone();
-            let binary = anvil_binary.to_path_buf();
-            let config_home = home.to_path_buf();
-            let version = anvil_version.to_string();
-            let output_root = home.join("routines").join("output");
+            // Tier gate: read-only/safe modes (plan, auto) fire on their
+            // own; modes with elevated tool access (accept, danger) write
+            // a proposal and wait for `/schedule approve <name>` instead.
+            // See `feedback-anvil-capability-contract` — running danger
+            // routines unsupervised is the kind of capability we never
+            // ship without an explicit on-ramp.
+            match def.permission_mode.tier() {
+                RoutineTier::Auto => {
+                    // It's go time.  Spawn on a worker so the loop can move on.
+                    let def_clone = def.clone();
+                    let binary = anvil_binary.to_path_buf();
+                    let config_home = home.to_path_buf();
+                    let version = anvil_version.to_string();
+                    let output_root = home.join("routines").join("output");
 
-            std::thread::spawn(move || {
-                let ctx = collect_context(&output_root, &def_clone);
-                let req = ExecRequest {
-                    routine: def_clone.clone(),
-                    anvil_binary: binary,
-                    config_home,
-                    anvil_version: version,
-                    timeout: Duration::from_secs(300),
-                    context_blocks: ctx,
-                };
-                let outcome = run_once(&req, |_| None);
-                eprintln!(
-                    "[anvild] {} run {} → {:?} ({} ms; deliveries: {})",
-                    def_clone.name,
-                    outcome.run_id,
-                    outcome.status,
-                    outcome.duration_ms,
-                    outcome
-                        .deliveries
-                        .iter()
-                        .filter(|d| d.ok)
-                        .count()
-                );
-            });
+                    std::thread::spawn(move || {
+                        let ctx = collect_context(&output_root, &def_clone);
+                        let req = ExecRequest {
+                            routine: def_clone.clone(),
+                            anvil_binary: binary,
+                            config_home,
+                            anvil_version: version,
+                            timeout: Duration::from_secs(300),
+                            context_blocks: ctx,
+                        };
+                        let outcome = run_once(&req, |_| None);
+                        eprintln!(
+                            "[anvild] {} run {} → {:?} ({} ms; deliveries: {})",
+                            def_clone.name,
+                            outcome.run_id,
+                            outcome.status,
+                            outcome.duration_ms,
+                            outcome
+                                .deliveries
+                                .iter()
+                                .filter(|d| d.ok)
+                                .count()
+                        );
+                    });
+                    status.last_tick_routines_fired += 1;
+                }
+                RoutineTier::Ask => {
+                    // Drop a proposal so the user can approve/reject from
+                    // the TUI.  Skip if an unapproved proposal already
+                    // exists for this routine — no point piling up.
+                    if !proposal::has_pending_for(home, &def.name) {
+                        let p = RoutineProposal::from_def(def, next, now);
+                        match proposal::write_proposal(home, &p) {
+                            Ok(path) => {
+                                eprintln!(
+                                    "[anvild] {} ask-tier ({}): wrote proposal {}",
+                                    def.name,
+                                    def.permission_mode.as_cli_arg(),
+                                    path.display(),
+                                );
+                                status.last_tick_proposals_written += 1;
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[anvild] {} proposal write failed: {e}",
+                                    def.name
+                                );
+                                status.last_error = Some(format!("proposal write: {e}"));
+                            }
+                        }
+                    }
+                }
+            }
 
             // Compute the routine's next fire so we don't re-fire on the
             // next tick (most schedules use interval; we add the interval
@@ -316,8 +365,11 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
             let after = if def.enabled { now + 1 } else { now };
             let new_next = next_fire(&def.schedule, after).unwrap_or(u64::MAX);
             next_fire_cache.insert(def.name.clone(), new_next);
-            status.last_tick_routines_fired += 1;
         }
+
+        // Refresh the on-disk pending count once per tick (expiry sweep
+        // also happens here as a side effect).
+        status.pending_proposals_total = proposal::list_pending(home, now).len();
 
         status.last_tick_at = now;
         write_status(home, &status);
@@ -918,6 +970,8 @@ mod tests {
             last_tick_at: 200,
             last_tick_routines_loaded: 4,
             last_tick_routines_fired: 1,
+            last_tick_proposals_written: 1,
+            pending_proposals_total: 2,
             last_error: Some("bad routine".into()),
             anvil_version: "2.2.18-test".into(),
         };
@@ -926,5 +980,7 @@ mod tests {
         let back: DaemonStatus = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.pid, 12345);
         assert_eq!(back.last_tick_routines_fired, 1);
+        assert_eq!(back.last_tick_proposals_written, 1);
+        assert_eq!(back.pending_proposals_total, 2);
     }
 }

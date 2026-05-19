@@ -12,6 +12,7 @@ pub mod definition;
 pub mod delivery;
 pub mod executor;
 pub mod packet;
+pub mod proposal;
 pub mod schedule;
 
 /// When an LLM response contains this exact string the dispatcher writes the

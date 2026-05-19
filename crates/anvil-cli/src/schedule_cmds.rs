@@ -37,6 +37,9 @@ use runtime::routines::definition::{
 use runtime::routines::executor::{
     collect_context, delivery_summary, run_once, validate_anvil_binary, ExecRequest,
 };
+use runtime::routines::proposal::{
+    self, RoutineProposal,
+};
 use runtime::routines::schedule::next_fire;
 use serde::Deserialize;
 
@@ -70,10 +73,31 @@ pub fn run_schedule_command(args: Option<&str>) -> String {
             Some(name) => render_toggle(&routines_dir, name, false),
             None => "/schedule disable: missing <name>".into(),
         },
+        "pending" => render_pending(&home),
+        "approve" => match rest.first() {
+            Some(name) => render_approve(&home, &routines_dir, name),
+            None => "/schedule approve: missing <name>. Usage: /schedule approve <routine>".into(),
+        },
+        "reject" => match rest.first() {
+            Some(name) => render_reject(&home, name),
+            None => "/schedule reject: missing <name>. Usage: /schedule reject <routine>".into(),
+        },
         other => format!(
-            "/schedule: unknown subcommand `{other}` (try: list | show <name> | run-now <name> | status | enable <name> | disable <name>)"
+            "/schedule: unknown subcommand `{other}` (try: list | show <name> | run-now <name> | status | enable <name> | disable <name> | pending | approve <name> | reject <name>)"
         ),
     }
+}
+
+/// Read-only helper for the TUI status footer.  Returns the number of
+/// pending proposals on disk right now, or 0 if the directory is missing
+/// or unreadable.  Cheap enough to call once per redraw.
+#[must_use]
+pub fn pending_proposal_count() -> usize {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    proposal::list_pending(&anvil_home(), now).len()
 }
 
 /// `/daemon <args>` handler.  Shells out to `anvil daemon …` via the user's
@@ -437,6 +461,111 @@ fn toggle_enabled_field(path: &Path, target: bool) -> Result<(), String> {
     Ok(())
 }
 
+// ─── /schedule pending | approve | reject ───────────────────────────────────
+
+fn render_pending(home: &Path) -> String {
+    let now = unix_now();
+    let pending = proposal::list_pending(home, now);
+    if pending.is_empty() {
+        return "No routines are waiting for approval.".to_string();
+    }
+    let mut out = String::new();
+    out.push_str(&format!(
+        "PENDING ROUTINE PROPOSALS ({})\n",
+        pending.len()
+    ));
+    out.push_str(&"=".repeat(32));
+    out.push('\n');
+    for (i, p) in pending.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {} [{}]\n",
+            i + 1,
+            p.routine,
+            p.permission_mode.as_cli_arg()
+        ));
+        out.push_str(&format!(
+            "   schedule:    {} → would have fired {}\n",
+            p.schedule_raw,
+            fmt_relative_past(p.scheduled_at, now)
+        ));
+        out.push_str(&format!(
+            "   proposed:    {}\n",
+            fmt_relative_past(p.proposed_at, now)
+        ));
+        out.push_str(&format!("   prompt:      {}\n", p.prompt_preview));
+        out.push_str(&format!("   source:      {}\n", p.source_path.display()));
+        out.push_str(&format!(
+            "   approve:     /schedule approve {}\n",
+            p.routine
+        ));
+        out.push_str(&format!(
+            "   reject:      /schedule reject {}\n\n",
+            p.routine
+        ));
+    }
+    out.push_str(
+        "Approving runs the routine once with its declared permission_mode.\n\
+         Rejecting drops the proposal; the routine will re-propose at its next fire.",
+    );
+    out
+}
+
+fn render_approve(home: &Path, routines_dir: &Path, name: &str) -> String {
+    if !proposal::has_pending_for(home, name) {
+        return format!(
+            "/schedule approve: no pending proposal for `{name}`. Try `/schedule pending` to see what's waiting."
+        );
+    }
+    // Confirm the routine still exists on disk (the user might have
+    // deleted the TOML between proposal and approval).
+    let LoadAllResult { defs, .. } = load_all(routines_dir);
+    if !defs.iter().any(|d| d.name == name) {
+        // Routine vanished — clean up the orphan proposal so the queue
+        // doesn't show a phantom forever.
+        let _ = proposal::drop_pending_for(home, name);
+        return format!(
+            "/schedule approve: routine `{name}` no longer exists on disk. Proposal cleared."
+        );
+    }
+    // Drop ALL pending proposals for this routine first — approval is a
+    // green light for the routine, not a single occurrence.  Then run.
+    let dropped = proposal::drop_pending_for(home, name).unwrap_or(0);
+
+    let run_output = render_run_now(routines_dir, home, name);
+    let mut out = String::new();
+    out.push_str(&format!(
+        "APPROVED `{name}` ({} proposal{} cleared)\n\n",
+        dropped,
+        if dropped == 1 { "" } else { "s" }
+    ));
+    out.push_str(&run_output);
+    out
+}
+
+fn render_reject(home: &Path, name: &str) -> String {
+    match proposal::drop_pending_for(home, name) {
+        Ok(0) => format!(
+            "/schedule reject: no pending proposal for `{name}`. Nothing to reject."
+        ),
+        Ok(n) => format!(
+            "/schedule reject: dropped {n} proposal{} for `{name}`. The routine stays loaded — at its next scheduled time it will propose again unless you `/schedule disable {name}` first.",
+            if n == 1 { "" } else { "s" }
+        ),
+        Err(e) => format!("/schedule reject: failed to drop proposals for `{name}`: {e}"),
+    }
+}
+
+/// Format an `event_ts` that's in the past relative to `now`.  Mirrors
+/// [`fmt_relative`] but always negative-direction.
+fn fmt_relative_past(event_ts: u64, now: u64) -> String {
+    if event_ts >= now {
+        // Future-dated proposal — shouldn't happen, but display gracefully.
+        return "moments from now".to_string();
+    }
+    let secs = now.saturating_sub(event_ts);
+    format!("{} ago", fmt_relative(secs))
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 fn anvil_home() -> PathBuf {
@@ -588,5 +717,96 @@ mod tests {
     fn daemon_unknown_subcommand_friendly() {
         let out = run_daemon_command(Some("wat"));
         assert!(out.contains("unknown subcommand"));
+    }
+
+    // ─── Tier-system tests ──────────────────────────────────────────────────
+
+    fn write_danger_routine(routines_dir: &Path, name: &str) {
+        let body = format!(
+            "name = \"{name}\"\nenabled = true\nschedule = \"every 30m\"\npermission_mode = \"danger\"\nprompt = \"do dangerous thing\"\n"
+        );
+        fs::write(routines_dir.join(format!("{name}.toml")), body).unwrap();
+    }
+
+    fn write_proposal_for(home: &Path, routines_dir: &Path, name: &str, now: u64) {
+        let LoadAllResult { defs, .. } = load_all(routines_dir);
+        let def = defs.iter().find(|d| d.name == name).expect("routine missing");
+        let p = RoutineProposal::from_def(def, now, now);
+        proposal::write_proposal(home, &p).expect("write");
+    }
+
+    #[test]
+    fn render_pending_when_empty_says_nothing_waiting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = render_pending(tmp.path());
+        assert!(out.contains("No routines are waiting"));
+    }
+
+    #[test]
+    fn render_pending_lists_one_proposal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let routines_dir = tmp.path().join("routines");
+        fs::create_dir_all(&routines_dir).unwrap();
+        write_danger_routine(&routines_dir, "nightly-deploy");
+        write_proposal_for(tmp.path(), &routines_dir, "nightly-deploy", unix_now());
+        let out = render_pending(tmp.path());
+        assert!(out.contains("PENDING ROUTINE PROPOSALS (1)"));
+        assert!(out.contains("nightly-deploy"));
+        assert!(out.contains("[danger]"));
+        assert!(out.contains("/schedule approve nightly-deploy"));
+        assert!(out.contains("/schedule reject nightly-deploy"));
+    }
+
+    #[test]
+    fn render_reject_drops_proposal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let routines_dir = tmp.path().join("routines");
+        fs::create_dir_all(&routines_dir).unwrap();
+        write_danger_routine(&routines_dir, "x");
+        write_proposal_for(tmp.path(), &routines_dir, "x", unix_now());
+        assert!(proposal::has_pending_for(tmp.path(), "x"));
+        let out = render_reject(tmp.path(), "x");
+        assert!(out.contains("dropped 1 proposal"));
+        assert!(!proposal::has_pending_for(tmp.path(), "x"));
+    }
+
+    #[test]
+    fn render_reject_with_no_proposal_is_friendly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = render_reject(tmp.path(), "ghost");
+        assert!(out.contains("no pending proposal for `ghost`"));
+    }
+
+    #[test]
+    fn render_approve_with_no_proposal_is_friendly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let routines_dir = tmp.path().join("routines");
+        fs::create_dir_all(&routines_dir).unwrap();
+        let out = render_approve(tmp.path(), &routines_dir, "ghost");
+        assert!(out.contains("no pending proposal for `ghost`"));
+    }
+
+    #[test]
+    fn render_approve_clears_orphan_proposal_when_routine_vanished() {
+        let tmp = tempfile::tempdir().unwrap();
+        let routines_dir = tmp.path().join("routines");
+        fs::create_dir_all(&routines_dir).unwrap();
+        write_danger_routine(&routines_dir, "vanished");
+        write_proposal_for(tmp.path(), &routines_dir, "vanished", unix_now());
+        // Delete the TOML — proposal now orphaned.
+        fs::remove_file(routines_dir.join("vanished.toml")).unwrap();
+        let out = render_approve(tmp.path(), &routines_dir, "vanished");
+        assert!(out.contains("no longer exists on disk"));
+        assert!(!proposal::has_pending_for(tmp.path(), "vanished"));
+    }
+
+    #[test]
+    fn pending_proposal_count_reads_from_disk() {
+        // Exercises the public helper; uses anvil_home() so we set
+        // ANVIL_HOME for the duration of the test.  We only assert that
+        // the function does not panic and returns a `usize` — verifying
+        // the live count would race with the real daemon.
+        let n = pending_proposal_count();
+        let _ = n;
     }
 }

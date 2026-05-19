@@ -2206,6 +2206,9 @@ pub const SCHEDULE_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec { name: "status",   summary: "Daemon health + per-routine next_fire snapshot", args: &[], subcommands: &[] },
     SubcommandSpec { name: "enable",   summary: "Flip enabled = true in the routine TOML", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
     SubcommandSpec { name: "disable",  summary: "Flip enabled = false in the routine TOML", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+    SubcommandSpec { name: "pending",  summary: "List ask-tier routines awaiting approval", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "approve",  summary: "Approve a pending proposal — runs the routine once", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+    SubcommandSpec { name: "reject",   summary: "Drop a pending proposal without running", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
 ];
 
 /// Subcommands for `/daemon` (v2.2.18 anvild lifecycle from inside the TUI).

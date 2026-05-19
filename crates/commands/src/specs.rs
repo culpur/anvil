@@ -2341,7 +2341,7 @@ EXAMPLES
         name: "schedule",
         aliases: &[],
         summary: "Inspect + invoke routines without leaving the TUI (v2.2.18 #657)",
-        argument_hint: Some("[list|show <name>|run-now <name>|status|enable <name>|disable <name>]"),
+        argument_hint: Some("[list|show <name>|run-now <name>|status|enable <name>|disable <name>|pending|approve <name>|reject <name>]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "\
@@ -2363,10 +2363,23 @@ USAGE
                                 true into the TOML).
   /schedule disable <name>      Temporarily disable a routine without deleting
                                 its TOML.
+  /schedule pending             List ask-tier routines waiting for approval.
+  /schedule approve <name>      Approve a pending proposal — fires the routine
+                                once with its declared permission_mode and
+                                clears the queue for it.
+  /schedule reject <name>       Drop a pending proposal without running. The
+                                routine will re-propose at its next fire
+                                (use /schedule disable to silence it).
+
+TIERS
+  permission_mode = plan / auto    fire automatically when due (auto-tier).
+  permission_mode = accept/danger  write a proposal instead; user must approve
+                                   (ask-tier). Proposals expire after 24h.
 
 ON-DISK LAYOUT
   ~/.anvil/routines/<name>.toml       Routine definitions.
   ~/.anvil/routines/output/<name>/    Per-run archive + packet sidecar.
+  ~/.anvil/routines/pending/*.json    Pending ask-tier proposals.
   ~/.anvil/run/anvild.status.json     Daemon liveness + per-tick counts.
 
 The anvild daemon picks up TOML changes on its next 30s tick — no restart
