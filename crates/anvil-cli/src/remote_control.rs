@@ -141,24 +141,53 @@ impl LiveCli {
         &mut self,
         command: &str,
     ) -> Result<String, String> {
-        let command = command.trim();
-        // Split into head + rest so we can match on the head.
-        let mut parts = command.splitn(2, char::is_whitespace);
-        let head = parts.next().unwrap_or("");
-        let rest = parts.next().map(str::trim);
-        match head {
-            "schedule" => Ok(crate::schedule_cmds::run_schedule_command(rest)),
-            "daemon" => Ok(crate::schedule_cmds::run_daemon_command(rest)),
-            "remote-control" | "share" => {
-                Ok(self.run_remote_control_command(rest))
+        match slash_dispatch_route(command) {
+            SlashDispatchRoute::Schedule(rest) => {
+                Ok(crate::schedule_cmds::run_schedule_command(rest.as_deref()))
             }
-            "" => Err("Remote /dispatch: empty command".to_string()),
-            _ => Err(format!(
+            SlashDispatchRoute::Daemon(rest) => {
+                Ok(crate::schedule_cmds::run_daemon_command(rest.as_deref()))
+            }
+            SlashDispatchRoute::RemoteControl(rest) => {
+                Ok(self.run_remote_control_command(rest.as_deref()))
+            }
+            SlashDispatchRoute::Empty => {
+                Err("Remote /dispatch: empty command".to_string())
+            }
+            SlashDispatchRoute::NotWhitelisted(head) => Err(format!(
                 "Remote /{head}: not whitelisted for remote dispatch in v2.2.18 \
                  (allowed: schedule, daemon, remote-control). \
                  See task #647 for expansion plan."
             )),
         }
+    }
+}
+
+/// Outcome of routing a slash dispatch from the web side.
+///
+/// Pure-data enum extracted so the whitelist can be unit-tested without
+/// constructing a `LiveCli`.  See `run_slash_dispatch_for_remote`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SlashDispatchRoute {
+    Schedule(Option<String>),
+    Daemon(Option<String>),
+    RemoteControl(Option<String>),
+    Empty,
+    NotWhitelisted(String),
+}
+
+/// Classify a slash command for remote dispatch.  No I/O.
+pub(crate) fn slash_dispatch_route(command: &str) -> SlashDispatchRoute {
+    let command = command.trim();
+    let mut parts = command.splitn(2, char::is_whitespace);
+    let head = parts.next().unwrap_or("");
+    let rest = parts.next().map(|s| s.trim().to_string());
+    match head {
+        "" => SlashDispatchRoute::Empty,
+        "schedule" => SlashDispatchRoute::Schedule(rest),
+        "daemon" => SlashDispatchRoute::Daemon(rest),
+        "remote-control" | "share" => SlashDispatchRoute::RemoteControl(rest),
+        other => SlashDispatchRoute::NotWhitelisted(other.to_string()),
     }
 }
 
@@ -321,6 +350,70 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Slash-dispatch whitelist (R3 in audit doc) ──────────────────────
+
+    #[test]
+    fn slash_dispatch_route_schedule_with_args() {
+        assert_eq!(
+            slash_dispatch_route("schedule pending"),
+            SlashDispatchRoute::Schedule(Some("pending".to_string()))
+        );
+    }
+
+    #[test]
+    fn slash_dispatch_route_schedule_bare() {
+        assert_eq!(
+            slash_dispatch_route("schedule"),
+            SlashDispatchRoute::Schedule(None)
+        );
+    }
+
+    #[test]
+    fn slash_dispatch_route_daemon_status() {
+        assert_eq!(
+            slash_dispatch_route("daemon status"),
+            SlashDispatchRoute::Daemon(Some("status".to_string()))
+        );
+    }
+
+    #[test]
+    fn slash_dispatch_route_remote_control_and_share_are_aliases() {
+        assert_eq!(
+            slash_dispatch_route("remote-control status"),
+            SlashDispatchRoute::RemoteControl(Some("status".to_string()))
+        );
+        assert_eq!(
+            slash_dispatch_route("share status"),
+            SlashDispatchRoute::RemoteControl(Some("status".to_string()))
+        );
+    }
+
+    #[test]
+    fn slash_dispatch_route_empty_returns_empty() {
+        assert_eq!(slash_dispatch_route(""), SlashDispatchRoute::Empty);
+        assert_eq!(slash_dispatch_route("   "), SlashDispatchRoute::Empty);
+    }
+
+    #[test]
+    fn slash_dispatch_route_unknown_is_not_whitelisted() {
+        assert_eq!(
+            slash_dispatch_route("bash rm -rf /"),
+            SlashDispatchRoute::NotWhitelisted("bash".to_string())
+        );
+        assert_eq!(
+            slash_dispatch_route("compact"),
+            SlashDispatchRoute::NotWhitelisted("compact".to_string())
+        );
+    }
+
+    #[test]
+    fn slash_dispatch_route_strips_leading_whitespace() {
+        assert_eq!(
+            slash_dispatch_route("  schedule  pending  "),
+            SlashDispatchRoute::Schedule(Some("pending".to_string()))
+        );
+    }
 
     #[test]
     fn read_daemon_status_missing_file_says_not_running() {
