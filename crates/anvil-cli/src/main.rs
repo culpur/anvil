@@ -2680,8 +2680,8 @@ fn run_phase_0_5_health_check() {
                 }
             }
         }
-        health::Severity::Breakage => match health::modal::show_healing_modal_live(&report) {
-            Ok(health::HealActionChoice::Repair(selection)) => {
+        health::Severity::Breakage => match run_health_probe_in_alt_screen(&report) {
+            Ok(HealProbeOutcome::Repair(selection)) => {
                 let outcomes = health::repair_selected(&report, &selection);
                 for outcome in &outcomes {
                     let prefix = if outcome.success {
@@ -2696,21 +2696,172 @@ fn run_phase_0_5_health_check() {
                     );
                 }
             }
-            Ok(health::HealActionChoice::Skip) => {
-                // User chose to continue — log + surface a single warn line.
+            Ok(HealProbeOutcome::Skip) => {
                 eprintln!(
                     "\x1b[33m⚠\x1b[0m Continuing without repair. Run `/heal` inside Anvil to fix later."
                 );
             }
-            Ok(health::HealActionChoice::Quit) => {
+            Ok(HealProbeOutcome::Quit) => {
                 eprintln!("Exiting on user request.");
                 std::process::exit(0);
             }
             Err(e) => {
-                // Modal-renderer error (non-TTY, EOF, …) — never block startup.
-                eprintln!("\x1b[33m⚠\x1b[0m Healing modal could not render ({e}). Continuing.");
+                // Modal-renderer error (non-TTY, terminal resize race, …) —
+                // never block startup. Fall back to the legacy line-mode
+                // modal so the user still sees what's broken.
+                eprintln!(
+                    "\x1b[33m⚠\x1b[0m Alt-screen health modal could not render ({e}). \
+                     Falling back to line-mode."
+                );
+                if let Ok(health::HealActionChoice::Repair(selection)) =
+                    health::modal::show_healing_modal_live(&report)
+                {
+                    let outcomes = health::repair_selected(&report, &selection);
+                    for outcome in &outcomes {
+                        let prefix = if outcome.success {
+                            "\x1b[32m✓\x1b[0m"
+                        } else {
+                            "\x1b[31m✗\x1b[0m"
+                        };
+                        eprintln!(
+                            "  {prefix} {} — {}",
+                            outcome.component.label(),
+                            outcome.message
+                        );
+                    }
+                }
             }
         },
+    }
+}
+
+/// Outcome of `run_health_probe_in_alt_screen` — local mirror of
+/// `health::HealActionChoice` but produced by the ratatui modal path
+/// (v2.2.18 fix: A5's original modal used line-mode stdin/stdout which
+/// looked like Anvil was dropping back to the shell).
+enum HealProbeOutcome {
+    /// User picked one or more components to repair.
+    Repair(Vec<health::Component>),
+    /// User pressed `c` / Enter on an empty selection — continue without
+    /// repairing.
+    Skip,
+    /// User pressed `q` / Esc — exit the process.
+    Quit,
+}
+
+/// Drive the health checklist via A1's `HealthProbeModal` instead of
+/// A5's line-mode `show_healing_modal_live`.
+///
+/// The original modal printed an ANSI box to stdout and called
+/// `stdin.read_line()`, which looked like Anvil dropped back to the
+/// shell.  This wraps the same probe report in A1's ratatui modal so
+/// the prompt renders inside an alt-screen session like every other
+/// wizard interaction.
+fn run_health_probe_in_alt_screen(
+    report: &health::ProbeReport,
+) -> Result<HealProbeOutcome, String> {
+    use crossterm::execute;
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use std::time::Duration;
+    use crate::tui::modals::health_probe::{HealthIssue, HealthProbeModal, HealthStatus};
+    use crate::tui::modals::queue::ModalAnswer;
+    use crate::wizard_runner::{CrosstermHooks, CrosstermKeySource, WizardModalRunner, WizardSession};
+
+    // Build the modal's issue list from the probe report. Each
+    // repairable probe (Drift or Broken) becomes one row; healthy
+    // probes are skipped — the breakage-severity branch only fires when
+    // there are issues to show, so the modal is never empty.
+    //
+    // Mapping rules:
+    //   ProbeStatus::Drift(_)  → HealthStatus::Warn  (yellow ⚠)
+    //   ProbeStatus::Broken(_) → HealthStatus::Fail  (red ✗)
+    // The label combines the component's name + the underlying reason
+    // so the row is self-explanatory.
+    let mut issues: Vec<HealthIssue> = Vec::with_capacity(report.probes.len());
+    let mut repair_index_to_component: Vec<health::Component> = Vec::new();
+    for probe in &report.probes {
+        let (status, repair_index) = match &probe.status {
+            health::ProbeStatus::Healthy | health::ProbeStatus::NotApplicable(_) => continue,
+            health::ProbeStatus::Drift(_) => (HealthStatus::Warn, Some(probe.component)),
+            health::ProbeStatus::Broken(_) => (HealthStatus::Fail, Some(probe.component)),
+        };
+        let label = format!(
+            "{} — {}",
+            probe.component.label(),
+            probe.status.reason()
+        );
+        // Fail rows are pre-selected for repair (the contract in the
+        // health-probe modal's design doc); Warn rows are not.
+        let issue = match status {
+            HealthStatus::Fail => HealthIssue::new_repair(status, label),
+            _ => HealthIssue::new(status, label),
+        };
+        issues.push(issue);
+        if let Some(c) = repair_index {
+            repair_index_to_component.push(c);
+        }
+    }
+
+    if issues.is_empty() {
+        return Ok(HealProbeOutcome::Skip);
+    }
+
+    // Enter alt-screen + raw mode for the modal session.
+    enable_raw_mode().map_err(|e| format!("enable raw: {e}"))?;
+    execute!(io::stdout(), EnterAlternateScreen).map_err(|e| format!("alt-screen: {e}"))?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let terminal = Terminal::new(backend).map_err(|e| format!("terminal: {e}"))?;
+
+    // We use the same session/runner machinery the first-run wizard uses.
+    let session_result = WizardSession::enter(terminal, CrosstermHooks::new());
+    let answer = match session_result {
+        Ok(mut session) => {
+            let keys = CrosstermKeySource {
+                poll_timeout: Duration::from_millis(50),
+            };
+            let mut runner = WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Yellow);
+            let modal = HealthProbeModal::new(
+                "Anvil setup needs attention",
+                "We checked your install and found:",
+            )
+            .with_issues(issues);
+            runner.run_health_probe("startup-heal", modal)
+        }
+        Err(e) => {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            return Err(format!("enter session: {e:?}"));
+        }
+    };
+
+    // Tear the alt-screen back down before returning so the eprintln!
+    // outcome lines render in the user's normal scrollback.
+    let _ = execute!(io::stdout(), LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+
+    match answer {
+        Ok(ModalAnswer::HealthCheck { repair, quit }) if quit => {
+            // `quit: true` with a non-empty `repair` would be a bug in
+            // the modal runner; treat it as Quit, defensively.
+            let _ = repair;
+            Ok(HealProbeOutcome::Quit)
+        }
+        Ok(ModalAnswer::HealthCheck { repair, .. }) if repair.is_empty() => {
+            Ok(HealProbeOutcome::Skip)
+        }
+        Ok(ModalAnswer::HealthCheck { repair, .. }) => {
+            let selected: Vec<health::Component> = repair
+                .into_iter()
+                .filter_map(|i| repair_index_to_component.get(i).copied())
+                .collect();
+            Ok(HealProbeOutcome::Repair(selected))
+        }
+        Ok(other) => Err(format!("unexpected modal answer: {other:?}")),
+        Err(e) => Err(format!("modal runner: {e:?}")),
     }
 }
 
