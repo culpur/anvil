@@ -2435,280 +2435,6 @@ mod tests {
     // module. It superseded a one-directional legacy test that failed to
     // catch orphan specs (a spec entry with no corresponding parser variant).
 
-    /// Exhaustiveness: every SlashCommand variant must have a matching spec entry.
-    ///
-    /// This test intentionally uses an exhaustive match so that the compiler
-    /// forces a spec update whenever a new variant is added.  If you add a
-    /// variant, add the corresponding spec and extend the set below.
-    #[test]
-    fn every_slash_command_variant_has_a_spec() {
-        use super::{slash_command_specs, SlashCommand};
-
-        // Walk every variant and collect the primary name.
-        // New variants MUST be added here — no `_` arm.
-        // Returns "" for Unknown (no spec by design).
-        fn variant_name(cmd: &SlashCommand) -> &'static str {
-            match cmd {
-                SlashCommand::Help { .. } => "help",
-                SlashCommand::Status => "status",
-                SlashCommand::Compact => "compact",
-                SlashCommand::Branch { .. } => "branch",
-                SlashCommand::Bughunter { .. } => "bughunter",
-                SlashCommand::Worktree { .. } => "worktree",
-                SlashCommand::Commit => "commit",
-                SlashCommand::CommitPushPr { .. } => "commit-push-pr",
-                SlashCommand::Pr { .. } => "pr",
-                SlashCommand::Issue { .. } => "issue",
-                SlashCommand::Ultraplan { .. } => "ultraplan",
-                SlashCommand::Teleport { .. } => "teleport",
-                SlashCommand::DebugToolCall => "debug-tool-call",
-                SlashCommand::Model { .. } => "model",
-                SlashCommand::Permissions { .. } => "permissions",
-                SlashCommand::Clear { .. } => "clear",
-                SlashCommand::Cost => "cost",
-                SlashCommand::Resume { .. } => "resume",
-                SlashCommand::Config { .. } => "config",
-                SlashCommand::Memory { .. } => "memory",
-                SlashCommand::Ollama { .. } => "ollama",
-                SlashCommand::Init => "init",
-                SlashCommand::Diff => "diff",
-                SlashCommand::Version => "version",
-                SlashCommand::Export { .. } => "export",
-                SlashCommand::Session { .. } => "session",
-                SlashCommand::Plugins { .. } => "plugin",
-                SlashCommand::Agents { .. } => "agents",
-                SlashCommand::Skills { .. } => "skills",
-                SlashCommand::Qmd { .. } => "qmd",
-                SlashCommand::Undo => "undo",
-                SlashCommand::History { .. } => "history",
-                SlashCommand::Context { .. } => "context",
-                SlashCommand::Pin { .. } => "pin",
-                SlashCommand::Unpin { .. } => "unpin",
-                SlashCommand::Chat => "chat",
-                SlashCommand::Vim => "vim",
-                SlashCommand::Web { .. } => "web",
-                SlashCommand::Doctor { .. } => "doctor",
-                SlashCommand::Tokens => "tokens",
-                SlashCommand::Provider { .. } => "provider",
-                SlashCommand::Login { .. } => "login",
-                SlashCommand::Search { .. } => "search",
-                SlashCommand::Failover { .. } => "failover",
-                SlashCommand::GenerateImage { .. } => "generate-image",
-                SlashCommand::HistoryArchive { .. } => "history-archive",
-                SlashCommand::Configure { .. } => "configure",
-                SlashCommand::Theme { .. } => "theme",
-                SlashCommand::SemanticSearch { .. } => "semantic-search",
-                SlashCommand::Docker { .. } => "docker",
-                SlashCommand::Test { .. } => "test",
-                SlashCommand::Git { .. } => "git",
-                SlashCommand::Refactor { .. } => "refactor",
-                SlashCommand::Screenshot => "screenshot",
-                SlashCommand::Db { .. } => "db",
-                SlashCommand::Security { .. } => "security",
-                SlashCommand::Api { .. } => "api",
-                SlashCommand::Docs { .. } => "docs",
-                SlashCommand::Scaffold { .. } => "scaffold",
-                SlashCommand::Perf { .. } => "perf",
-                SlashCommand::Debug { .. } => "debug",
-                SlashCommand::Voice { .. } => "voice",
-                SlashCommand::Collab { .. } => "collab",
-                SlashCommand::Changelog => "changelog",
-                SlashCommand::Env { .. } => "env",
-                SlashCommand::Hub { .. } => "hub",
-                SlashCommand::Language { .. } => "language",
-                SlashCommand::Lsp { .. } => "lsp",
-                SlashCommand::Notebook { .. } => "notebook",
-                SlashCommand::K8s { .. } => "k8s",
-                SlashCommand::Iac { .. } => "iac",
-                SlashCommand::Pipeline { .. } => "pipeline",
-                SlashCommand::Review { .. } => "review",
-                SlashCommand::Deps { .. } => "deps",
-                SlashCommand::Mono { .. } => "mono",
-                SlashCommand::Browser { .. } => "browser",
-                SlashCommand::Notify { .. } => "notify",
-                SlashCommand::Vault { .. } => "vault",
-                SlashCommand::Migrate { .. } => "migrate",
-                SlashCommand::Regex { .. } => "regex",
-                SlashCommand::Ssh { .. } => "ssh",
-                SlashCommand::Logs { .. } => "logs",
-                SlashCommand::Markdown { .. } => "markdown",
-                SlashCommand::Snippets { .. } => "snippets",
-                SlashCommand::Finetune { .. } => "finetune",
-                SlashCommand::Webhook { .. } => "webhook",
-                SlashCommand::PluginSdk { .. } => "plugin-sdk",
-                SlashCommand::Sleep => "sleep",
-                SlashCommand::Think => "think",
-                SlashCommand::Fast => "fast",
-                SlashCommand::ReviewPr { .. } => "review-pr",
-                SlashCommand::RemoteControl { .. } => "remote-control",
-                SlashCommand::Loop { .. } => "loop",
-                SlashCommand::Focus => "focus",
-                SlashCommand::Mcp { .. } => "mcp",
-                SlashCommand::Productivity => "productivity",
-                SlashCommand::Knowledge { .. } => "knowledge",
-                SlashCommand::Daily { .. } => "daily",
-                // Ghost commands promoted in v2.2.6:
-                SlashCommand::Tab { .. } => "tab",
-                SlashCommand::Fork => "fork",
-                SlashCommand::Share { .. } => "share",
-                SlashCommand::Audit => "audit",
-                // Respawn mechanism (v2.2.6 Phase 5):
-                SlashCommand::Restart { .. } => "restart",
-                // Agent composition (v2.2.7):
-                SlashCommand::Agent { .. } => "agent",
-                // Output style axis (v2.2.8):
-                SlashCommand::OutputStyle { .. } => "output-style",
-                // Effort/reasoning slider (v2.2.11):
-                SlashCommand::Effort { .. } => "effort",
-                // Skill dispatch (v2.2.7):
-                SlashCommand::Skill { .. } => "skill",
-                // Goal tracking (v2.2.11):
-                SlashCommand::Goal { .. } => "goal",
-                SlashCommand::FileCache { .. } => "file-cache",
-                SlashCommand::CmdCache { .. } => "cmd-cache",
-                // /scroll-speed (v2.2.14 CC-139-F3):
-                SlashCommand::ScrollSpeed { .. } => "scroll-speed",
-                // Named profiles (v2.2.11 W4):
-                SlashCommand::Profile { .. } => "profile",
-                // Self-healing modal (v2.2.18 task #667):
-                SlashCommand::Heal => "heal",
-                SlashCommand::Unknown(_) => "", // unknown has no spec by design
-            }
-        }
-
-        // Build a representative instance of each variant.
-        // variant_name returns "" for Unknown — we skip those.
-        let variants: Vec<SlashCommand> = vec![
-            SlashCommand::Help { command: None },
-            SlashCommand::Status,
-            SlashCommand::Compact,
-            SlashCommand::Branch { action: None, target: None },
-            SlashCommand::Bughunter { scope: None },
-            SlashCommand::Worktree { action: None, path: None, branch: None },
-            SlashCommand::Commit,
-            SlashCommand::CommitPushPr { context: None },
-            SlashCommand::Pr { context: None },
-            SlashCommand::Issue { context: None },
-            SlashCommand::Ultraplan { task: None },
-            SlashCommand::Teleport { target: None },
-            SlashCommand::DebugToolCall,
-            SlashCommand::Model { model: None },
-            SlashCommand::Permissions { mode: None },
-            SlashCommand::Clear { confirm: false, all_tabs: false },
-            SlashCommand::Cost,
-            SlashCommand::Resume { session_path: None },
-            SlashCommand::Config { section: None },
-            SlashCommand::Memory { action: None },
-            SlashCommand::Init,
-            SlashCommand::Diff,
-            SlashCommand::Version,
-            SlashCommand::Export { format: None, path: None },
-            SlashCommand::Session { action: None, target: None },
-            SlashCommand::Plugins { action: None, target: None },
-            SlashCommand::Agents { args: None },
-            SlashCommand::Skills { args: None },
-            SlashCommand::Qmd { query: None },
-            SlashCommand::Undo,
-            SlashCommand::History { show_all: false },
-            SlashCommand::Context { path: None },
-            SlashCommand::Pin { path: None },
-            SlashCommand::Unpin { path: String::new() },
-            SlashCommand::Chat,
-            SlashCommand::Vim,
-            SlashCommand::Web { query: String::new() },
-            SlashCommand::Doctor { mode: None },
-            SlashCommand::Tokens,
-            SlashCommand::Provider { action: None },
-            SlashCommand::Login { provider: None },
-            SlashCommand::Search { args: None },
-            SlashCommand::Failover { action: None },
-            SlashCommand::GenerateImage { prompt: String::new(), wp_post_id: None },
-            SlashCommand::HistoryArchive { action: None },
-            SlashCommand::Configure { args: None },
-            SlashCommand::Theme { action: None },
-            SlashCommand::SemanticSearch { args: None },
-            SlashCommand::Docker { action: None },
-            SlashCommand::Test { action: None },
-            SlashCommand::Git { action: None },
-            SlashCommand::Refactor { action: None },
-            SlashCommand::Screenshot,
-            SlashCommand::Db { action: None },
-            SlashCommand::Security { action: None },
-            SlashCommand::Api { action: None },
-            SlashCommand::Docs { action: None },
-            SlashCommand::Scaffold { action: None },
-            SlashCommand::Perf { action: None },
-            SlashCommand::Debug { action: None },
-            SlashCommand::Voice { action: None },
-            SlashCommand::Collab { action: None },
-            SlashCommand::Changelog,
-            SlashCommand::Env { action: None },
-            SlashCommand::Hub { action: None },
-            SlashCommand::Language { lang: None },
-            SlashCommand::Lsp { action: None },
-            SlashCommand::Notebook { action: None },
-            SlashCommand::K8s { action: None },
-            SlashCommand::Iac { action: None },
-            SlashCommand::Pipeline { action: None },
-            SlashCommand::Review { action: None },
-            SlashCommand::Deps { action: None },
-            SlashCommand::Mono { action: None },
-            SlashCommand::Browser { action: None },
-            SlashCommand::Notify { action: None },
-            SlashCommand::Vault { action: None },
-            SlashCommand::Migrate { action: None },
-            SlashCommand::Regex { action: None },
-            SlashCommand::Logs { action: None },
-            SlashCommand::Markdown { action: None },
-            SlashCommand::Snippets { action: None },
-            SlashCommand::Finetune { action: None },
-            SlashCommand::Webhook { action: None },
-            SlashCommand::Ssh { args: None },
-            SlashCommand::PluginSdk { action: None },
-            SlashCommand::Sleep,
-            SlashCommand::Think,
-            SlashCommand::Fast,
-            SlashCommand::ReviewPr { number: None },
-            SlashCommand::RemoteControl { action: None },
-            SlashCommand::Loop { prompt: None },
-            SlashCommand::Focus,
-            SlashCommand::Mcp { action: None },
-            SlashCommand::Productivity,
-            SlashCommand::Knowledge { action: None },
-            SlashCommand::Daily { date: None },
-            SlashCommand::Tab { action: None },
-            SlashCommand::Fork,
-            SlashCommand::Share { action: None },
-            SlashCommand::Audit,
-            SlashCommand::Restart { soft: false },
-            SlashCommand::Agent { subcommand: AgentSubcommand::Traits },
-            SlashCommand::OutputStyle { style: None },
-            SlashCommand::Effort { level: None },
-            SlashCommand::Skill { subcommand: SkillSubcommand::List },
-            SlashCommand::Goal { action: None },
-            // Named profiles (v2.2.11 W4):
-            SlashCommand::FileCache { action: None },
-            SlashCommand::CmdCache { action: None },
-            SlashCommand::ScrollSpeed { lines: None },
-            SlashCommand::Profile { action: None },
-            SlashCommand::Heal,
-        ];
-
-        let specs = slash_command_specs();
-        let spec_names: std::collections::HashSet<&str> =
-            specs.iter().map(|s| s.name).collect();
-
-        for variant in &variants {
-            let name = variant_name(variant);
-            if name.is_empty() {
-                continue; // Unknown variant — no spec by design
-            }
-            assert!(
-                spec_names.contains(name),
-                "SlashCommand variant has no matching spec: '{name}'"
-            );
-        }
-    }
 
     /// Verify suggest_completions returns root commands when input is empty.
     #[test]
@@ -3356,6 +3082,7 @@ mod tests {
                 SlashCommand::Chain { .. } => Some("chain"),
                 SlashCommand::Reflect { .. } => Some("reflect"),
                 SlashCommand::Rewind { .. } => Some("rewind"),
+                SlashCommand::Heal => Some("heal"),
                 // Unknown is the parser's "no such command" sentinel
                 // and intentionally has no spec.
                 SlashCommand::Unknown(_) => None,
@@ -3493,6 +3220,7 @@ mod tests {
             },
             SlashCommand::Reflect { action: None },
             SlashCommand::Rewind { target: None, summarize: false },
+            SlashCommand::Heal,
             SlashCommand::Unknown(String::new()),
         ];
 
@@ -3746,6 +3474,7 @@ mod tests {
         "cursor",
         "chain",
         "reflect",
+        "heal",
     ];
 
     /// Gate 1a: every spec name has a corresponding handler arm.
