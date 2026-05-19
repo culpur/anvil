@@ -56,6 +56,7 @@ mod permission_memory;
 mod permissions;
 mod prompt;
 pub mod relay;
+pub mod relay_daemon;
 mod remote;
 pub mod sandbox;
 mod session;
