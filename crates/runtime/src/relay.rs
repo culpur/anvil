@@ -911,6 +911,55 @@ impl RelayHost {
                                                 let _ = sync_tx.send((0, "__respawn_request".to_string()));
                                             }
                                     }
+                                    // ── v2.2.18 task #647 web→host arms ─────────────────
+                                    // G2: focus a specific tab.
+                                    RelayMessage::RequestFocusTab { tab_id } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__focus_tab:{tab_id}")));
+                                            }
+                                    }
+                                    // G4: layout switch.
+                                    RelayMessage::RequestLayout { ref kind, tabs } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__layout_set:{kind}:{tabs}")));
+                                            }
+                                    }
+                                    // G5: slash-command dispatch.
+                                    RelayMessage::SlashDispatch { tab_id, ref command } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((tab_id, format!("__slash_dispatch:{command}")));
+                                            }
+                                    }
+                                    // G8: routine approve / reject — route through
+                                    // schedule_cmds::run_schedule_command.
+                                    RelayMessage::RequestRoutineApprove { ref routine } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__routine_approve:{routine}")));
+                                            }
+                                    }
+                                    RelayMessage::RequestRoutineReject { ref routine } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((0, format!("__routine_reject:{routine}")));
+                                            }
+                                    }
+                                    // G10: permission decision from the web user.
+                                    RelayMessage::PermissionDecision { tab_id, ref prompt_id, ref choice } => {
+                                        let st = state.lock().await;
+                                        if st.paired_count() > 0
+                                            && let Some(ref sync_tx) = user_input_tx {
+                                                let _ = sync_tx.send((tab_id, format!("__permission_decision:{prompt_id}:{choice}")));
+                                            }
+                                    }
                                     RelayMessage::PeerDisconnected { client_id } => {
                                         // A web client disconnected — remove from state + notify TUI
                                         let mut st = state.lock().await;
