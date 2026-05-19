@@ -137,7 +137,13 @@ use session::{
 };
 use help::print_help;
 use check::run_check;
-use setup::run_setup_wizard;
+// `setup::run_setup_wizard` (the legacy ASCII-box wizard) is intentionally
+// NOT imported here as of v2.2.18 (task #661).  Both `--setup` and the
+// first-run gate now route to `wizard::run_first_run_wizard` — the
+// alt-screen modal wizard — so installer scripts cannot accidentally
+// drop users into the legacy path.  The module stays compiled (other
+// agents scavenge helpers like `check_ollama_installed`,
+// `install_completions`, `detect_shells` from it).
 use uninstall::run_uninstall;
 use update::{check_for_update, run_self_update};
 use upgrade::run_upgrade;
@@ -447,7 +453,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
         CliAction::FirstRunWizard => { let _ = run_first_run_wizard(); }
-        CliAction::Setup => run_setup_wizard(),
+        // Task #661 (v2.2.18): `--setup` previously routed to
+        // `setup::run_setup_wizard` (the legacy ASCII-box wizard).  That
+        // path emitted `\u{2554}` boxes + "Step 1 of 4" prompts and
+        // dropped piped-installer users straight onto stdin API-key paste
+        // — the OPPOSITE of the polished alt-screen experience the new
+        // wizard delivers.  Route `--setup` to the same alt-screen entry
+        // the first-run-no-config gate uses, so installers, manual
+        // re-runs, and curl|bash all converge on one UX.
+        CliAction::Setup => { let _ = run_first_run_wizard(); }
         CliAction::Check => {
             let fails = run_check();
             std::process::exit(if fails == 0 { 0 } else { 1 });
