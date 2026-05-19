@@ -375,6 +375,12 @@ pub const MCP_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[ArgSpec::DynamicEnum(DynamicEnumSource::McpServers)],
         subcommands: &[],
     },
+    SubcommandSpec {
+        name: "builder",
+        summary: "Scaffold a new MCP server from a guided wizard (Node.js or Python)",
+        args: &[],
+        subcommands: &[],
+    },
 ];
 
 pub const PLUGINS_SUBCOMMANDS: &[SubcommandSpec] = &[

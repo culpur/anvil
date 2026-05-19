@@ -1819,8 +1819,8 @@ Examples:
     SlashCommandSpec {
         name: "mcp",
         aliases: &[],
-        summary: "MCP server management — list, status, tools",
-        argument_hint: Some("[list|status|tools <server>]"),
+        summary: "MCP server management — list, status, tools, builder",
+        argument_hint: Some("[list|status|tools <server>|builder]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
         detailed_help: "",
