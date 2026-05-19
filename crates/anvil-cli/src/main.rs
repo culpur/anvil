@@ -47,6 +47,7 @@ mod format_tool;
 mod help;
 mod init;
 mod input;
+mod mcp_builder;
 mod mcp_server_mode;
 mod mcp_server_tools;
 mod ollama_bench;
@@ -3664,6 +3665,117 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    }
+                    continue;
+                }
+
+                // ── v2.2.18 task #647 dispatch arms ──────────────────────────
+                //
+                // G2: focus a specific tab.  The relay arm forwards
+                // `__focus_tab:<id>` carrying the logical Tab.id.
+                if let Some(rest) = message.strip_prefix("__focus_tab:") {
+                    if let Ok(tab_id) = rest.parse::<usize>() {
+                        if let Some(idx) = (0..tui.tab_count()).find(|i| tui.tab_id_at(*i) == Some(tab_id)) {
+                            tui.switch_tab(idx);
+                            // switch_tab already emits TabSwitched to the relay.
+                        }
+                    }
+                    continue;
+                }
+                // G4: layout switch.  Wire format `__layout_set:<kind>:<tabs>`,
+                // kind in snake_case ("vertical_split"); translate to the
+                // canonical dash-alias the parser understands.
+                if let Some(rest) = message.strip_prefix("__layout_set:") {
+                    if let Some((kind, tabs)) = rest.split_once(':') {
+                        let dash_kind = kind.replace('_', "-");
+                        let alias = if tabs == "true" {
+                            format!("{dash_kind}-tabs")
+                        } else {
+                            dash_kind
+                        };
+                        match runtime::tui_layout_kind_from_alias(&alias) {
+                            Some(cfg) => {
+                                tui.set_layout(cfg);
+                                // set_layout already emits LayoutChanged.
+                                tui.push_system(format!("[Remote] Layout → {alias}"));
+                            }
+                            None => {
+                                tui.push_system(format!("[Remote] Unknown layout alias `{alias}`"));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                // G5: slash-command dispatch.  Run through the same canonical
+                // pipeline LiveCli uses for in-TUI slash commands and ship the
+                // captured output back as a SlashResult.
+                if let Some(command) = message.strip_prefix("__slash_dispatch:") {
+                    let trimmed = command.trim();
+                    let output = cli.run_slash_dispatch_for_remote(trimmed);
+                    let (ok, body) = match output {
+                        Ok(s) => (true, s),
+                        Err(s) => (false, s),
+                    };
+                    if !body.trim().is_empty() {
+                        tui.push_system(format!("[Remote /{trimmed}] {body}"));
+                    }
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::SlashResult {
+                            tab_id: 0,
+                            command: trimmed.to_string(),
+                            ok,
+                            output: body,
+                        });
+                    }
+                    continue;
+                }
+                // G8: routine approve / reject.  Both round-trip through the
+                // existing schedule_cmds handler so the slash and remote paths
+                // share one source of truth (8-axis dispatch alignment).
+                if let Some(routine) = message.strip_prefix("__routine_approve:") {
+                    let out = crate::schedule_cmds::run_schedule_command(Some(&format!("approve {routine}")));
+                    tui.push_system(format!("[Remote] /schedule approve {routine}\n{out}"));
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::SlashResult {
+                            tab_id: 0,
+                            command: format!("schedule approve {routine}"),
+                            ok: true,
+                            output: out,
+                        });
+                        // Approve drops the proposal; tell the viewer.
+                        let _ = tx.send(runtime::relay::RelayMessage::ProposalDropped {
+                            routine: routine.to_string(),
+                        });
+                    }
+                    continue;
+                }
+                if let Some(routine) = message.strip_prefix("__routine_reject:") {
+                    let out = crate::schedule_cmds::run_schedule_command(Some(&format!("reject {routine}")));
+                    tui.push_system(format!("[Remote] /schedule reject {routine}\n{out}"));
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::SlashResult {
+                            tab_id: 0,
+                            command: format!("schedule reject {routine}"),
+                            ok: true,
+                            output: out,
+                        });
+                        let _ = tx.send(runtime::relay::RelayMessage::ProposalDropped {
+                            routine: routine.to_string(),
+                        });
+                    }
+                    continue;
+                }
+                // G10: permission decision from the web user.  The host wiring
+                // for per-tool prompts is task #648 (D1 in the audit doc); this
+                // arm exists today so the protocol round-trips, the
+                // RelayHost::run paired-only gate is exercised, and the viewer
+                // pipeline doesn't need a re-wire when #648 lands.
+                if let Some(rest) = message.strip_prefix("__permission_decision:") {
+                    if let Some((prompt_id, choice)) = rest.split_once(':') {
+                        tui.push_system(format!(
+                            "[Remote] Permission decision (prompt {prompt_id}): {choice} — \
+                             per-tool wiring lands in task #648"
+                        ));
                     }
                     continue;
                 }

@@ -781,6 +781,14 @@ impl AnvilTui {
         self.tabs.get(index).map(|t| t.id)
     }
 
+    /// Total number of currently-open tabs.  Added for task #647 so the
+    /// remote-control dispatch path can iterate without exposing the
+    /// `tabs: Vec<Tab>` field.
+    #[must_use]
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
     /// Mark the tab at a 0-based index as having a runtime installed.
     ///
     /// Called from `run_repl_tui` after `push_tab_runtime` succeeds for a new

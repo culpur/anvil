@@ -127,6 +127,39 @@ impl LiveCli {
             }
         }
     }
+
+    /// Task #647 (G5): dispatch a slash command originating from the web
+    /// viewer over the relay.  Returns `Ok(output)` on success and
+    /// `Err(output)` on dispatch failure so the caller can flip the
+    /// `ok` bool when shipping the `SlashResult` frame back.
+    ///
+    /// Only a subset of slash commands is safe to run unattended over
+    /// the network — those whose handlers return a `String` synchronously
+    /// without driving TUI modals.  The whitelist below is the v2.2.18
+    /// rollout; expand alongside follow-up tasks #648/#649.
+    pub(crate) fn run_slash_dispatch_for_remote(
+        &mut self,
+        command: &str,
+    ) -> Result<String, String> {
+        let command = command.trim();
+        // Split into head + rest so we can match on the head.
+        let mut parts = command.splitn(2, char::is_whitespace);
+        let head = parts.next().unwrap_or("");
+        let rest = parts.next().map(str::trim);
+        match head {
+            "schedule" => Ok(crate::schedule_cmds::run_schedule_command(rest)),
+            "daemon" => Ok(crate::schedule_cmds::run_daemon_command(rest)),
+            "remote-control" | "share" => {
+                Ok(self.run_remote_control_command(rest))
+            }
+            "" => Err("Remote /dispatch: empty command".to_string()),
+            _ => Err(format!(
+                "Remote /{head}: not whitelisted for remote dispatch in v2.2.18 \
+                 (allowed: schedule, daemon, remote-control). \
+                 See task #647 for expansion plan."
+            )),
+        }
+    }
 }
 
 // ─── Daemon-status + proposal poller (task #647 G6 + G7) ───────────────────
