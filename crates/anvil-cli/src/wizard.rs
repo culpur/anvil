@@ -1077,6 +1077,17 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
         &runtime::default_config_home(),
     )?;
 
+    // v2.2.18 task #664 rebuild: real in-wizard QMD install.  Anvil
+    // fetches the @tobilu/qmd npm tarball directly from
+    // registry.npmjs.org, extracts under ~/.anvil/node_modules/, and
+    // writes a launcher shim that uses the user's Node runtime.  No
+    // `npm install` shell-out.  Falls back cleanly when Node is
+    // absent.  Idempotent on re-entry like the Ollama step.
+    let _qmd_outcome = crate::wizard_qmd::run_qmd_step(
+        &mut runner,
+        &runtime::default_config_home(),
+    )?;
+
     // Step 9 — optional CC migration. Stays inside the same alt-screen
     // session so the wizard → Anvil TUI handoff has ZERO inline stdin
     // moments (#643, v2.2.17). The step is silent when ~/.claude/ is

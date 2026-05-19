@@ -255,7 +255,7 @@ where
 
     // ── Step A: download binary (skip if already at target) ─────────────
     if !state.binary_at_anvil_path {
-        match download_ollama_with_banner(runner, &target_path)? {
+        match download_ollama_with_banner(runner, home, &target_path)? {
             DownloadResult::Ok => {}
             DownloadResult::Failed(reason) => {
                 let body = format!(
@@ -388,6 +388,7 @@ enum DownloadResult {
 /// shell-out.
 fn download_ollama_with_banner<B, H, K>(
     runner: &mut WizardModalRunner<'_, B, H, K>,
+    home: &Path,
     target_path: &Path,
 ) -> Result<DownloadResult, RunnerError>
 where
@@ -458,7 +459,7 @@ where
         ],
         accent,
     )?;
-    if let Err(e) = extract_and_place(&bytes, &url, target_path) {
+    if let Err(e) = extract_and_place(&bytes, &url, home, target_path) {
         return Ok(DownloadResult::Failed(e));
     }
 
@@ -475,22 +476,15 @@ fn release_url() -> Result<String, String> {
     let url = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => format!("{base}/{OLLAMA_VERSION}/ollama-linux-amd64.tgz"),
         ("linux", "aarch64") => format!("{base}/{OLLAMA_VERSION}/ollama-linux-arm64.tgz"),
-        ("macos", _) => {
-            return Err(
-                "macOS Ollama ships as a .app bundle that must be installed via Finder. \
-                 Download from https://ollama.com/download manually, then re-run \
-                 the wizard and pick 'I'll handle Ollama myself'."
-                    .into(),
-            );
-        }
-        ("windows", _) => {
-            return Err(
-                "Windows Ollama ships as an .exe installer. Download from \
-                 https://ollama.com/download, run the installer, then re-run \
-                 the wizard and pick 'I'll handle Ollama myself'."
-                    .into(),
-            );
-        }
+        // macOS ships as a universal .zip containing Ollama.app. We replicate
+        // what `curl … ollama.com/install.sh | sh` does on Darwin in-process:
+        // download → unzip → place .app → write CLI shim. Nothing escalates.
+        ("macos", _) => format!("https://ollama.com/download/Ollama-darwin.zip"),
+        // Windows ships as OllamaSetup.exe. We do NOT auto-run installers —
+        // see the comment in `extract_and_place`.  The download path here
+        // returns the URL; the extract step writes an error card pointing
+        // the user at the .exe they just downloaded.
+        ("windows", _) => format!("https://ollama.com/download/OllamaSetup.exe"),
         (os, arch) => return Err(format!("no Ollama prebuilt for {os}/{arch}")),
     };
     Ok(url)
@@ -528,7 +522,23 @@ fn blocking_download(
     Ok(out)
 }
 
-fn extract_and_place(bytes: &[u8], url: &str, target: &Path) -> Result<(), String> {
+/// Extract the Ollama download (tarball or zip) and place the binary
+/// so `target` (~/.anvil/bin/ollama) launches it.
+///
+/// Three formats:
+///  - `.tgz` → Linux. Extract `bin/ollama` from the tarball directly into
+///    `target`. This is what `install.sh` does for Linux.
+///  - `.zip` → macOS. The archive contains `Ollama.app`. We unzip into
+///    `~/Applications/Ollama.app` (user-writable; install.sh uses
+///    `/Applications` but that needs sudo, so we go user-scope), then
+///    write `target` as a shell shim that execs the CLI inside the
+///    bundle at `Ollama.app/Contents/Resources/ollama`. This mirrors
+///    install.sh:79-83's symlink step but stays in the user's HOME.
+///  - `.exe` → Windows. We do NOT auto-run installers. Write the
+///    `OllamaSetup.exe` next to the target so the wizard can point the
+///    user at it, then return an error card via the caller. Future
+///    work: a silent/unattended install flag if Ollama exposes one.
+fn extract_and_place(bytes: &[u8], url: &str, home: &Path, target: &Path) -> Result<(), String> {
     if url.ends_with(".tgz") || url.ends_with(".tar.gz") {
         let gz = flate2::read::GzDecoder::new(bytes);
         let mut ar = tar::Archive::new(gz);
@@ -543,6 +553,86 @@ fn extract_and_place(bytes: &[u8], url: &str, target: &Path) -> Result<(), Strin
             }
         }
         Err("ollama binary not found inside tarball".into())
+    } else if url.ends_with(".zip") {
+        // macOS: unpack Ollama.app into ~/Applications, write a shim at
+        // ~/.anvil/bin/ollama that execs the CLI inside the bundle.
+        let user_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "HOME not set; cannot install Ollama.app".to_string())?;
+        let apps_dir = user_home.join("Applications");
+        let _ = fs::create_dir_all(&apps_dir);
+        let app_dest = apps_dir.join("Ollama.app");
+
+        // Remove any prior Anvil-installed copy. We deliberately do NOT
+        // touch /Applications/Ollama.app — that's the user's choice.
+        if app_dest.exists() {
+            let _ = fs::remove_dir_all(&app_dest);
+        }
+
+        let cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| format!("open zip: {e}"))?;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("zip entry {i}: {e}"))?;
+            let name = entry
+                .enclosed_name()
+                .ok_or_else(|| format!("zip entry {i} has unsafe path"))?
+                .to_path_buf();
+            let dest = apps_dir.join(&name);
+            if entry.is_dir() {
+                fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+            } else {
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                let mut out = fs::File::create(&dest)
+                    .map_err(|e| format!("create {}: {e}", dest.display()))?;
+                std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Some(mode) = entry.unix_mode() {
+                        let _ = fs::set_permissions(&dest, fs::Permissions::from_mode(mode));
+                    }
+                }
+            }
+        }
+
+        // Verify the CLI is where we expect it, then write the shim.
+        let cli = app_dest.join("Contents/Resources/ollama");
+        if !cli.is_file() {
+            return Err(format!(
+                "extracted Ollama.app but CLI not found at {}",
+                cli.display()
+            ));
+        }
+        let shim = format!(
+            "#!/bin/sh\n# Anvil-owned Ollama launcher (v2.2.18 wizard install).\nexec \"{cli}\" \"$@\"\n",
+            cli = cli.display()
+        );
+        let _ = fs::create_dir_all(home.join("bin"));
+        fs::write(target, shim).map_err(|e| format!("write shim {}: {e}", target.display()))?;
+        set_executable(target).map_err(|e| e.to_string())?;
+        Ok(())
+    } else if url.ends_with(".exe") {
+        // Windows: stage the installer in ~/.anvil/cache/ but do not run
+        // it. The wizard surfaces a confirm card pointing the user at
+        // the .exe; running attended installers behind a TUI risks
+        // hiding UAC prompts and breaking everything.
+        let cache = home.join("cache");
+        let _ = fs::create_dir_all(&cache);
+        let staged = cache.join("OllamaSetup.exe");
+        let mut f = fs::File::create(&staged)
+            .map_err(|e| format!("write {}: {e}", staged.display()))?;
+        f.write_all(bytes).map_err(|e| e.to_string())?;
+        Err(format!(
+            "Anvil downloaded OllamaSetup.exe to {}. Open that file in Explorer to run \
+             the installer, then re-run the wizard and pick 'I'll handle Ollama myself' \
+             so Anvil reuses it.",
+            staged.display()
+        ))
     } else {
         // Raw binary fallback — write bytes directly.
         let mut f = fs::File::create(target).map_err(|e| e.to_string())?;
@@ -696,9 +786,13 @@ mod tests {
                 assert!(url.is_ok());
                 assert!(url.unwrap().ends_with(".tgz"));
             }
-            ("macos", _) | ("windows", _) => {
-                // Both currently return Err pointing the user at the manual download.
-                assert!(url.is_err());
+            ("macos", _) => {
+                assert!(url.is_ok());
+                assert!(url.unwrap().ends_with(".zip"));
+            }
+            ("windows", _) => {
+                assert!(url.is_ok());
+                assert!(url.unwrap().ends_with(".exe"));
             }
             _ => {}
         }

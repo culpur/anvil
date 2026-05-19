@@ -1,0 +1,45 @@
+---
+source: crates/anvil-cli/src/tui/layouts/journal.rs
+assertion_line: 741
+expression: rendered
+---
+ anvil-dev · aegis-fix · +                                                                                Ctrl+Tab cycle
+ main · v2.2.17 · claude-sonnet-4-6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ▌ ctrl-k for command palette · ↑ history · enter to send
