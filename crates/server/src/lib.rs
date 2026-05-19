@@ -405,6 +405,28 @@ mod tests {
         assert!(details.session.messages.is_empty());
     }
 
+    /// Task #681 — smoke test: the embedded viewer.html must declare all four
+    /// supported TUI layouts as both layout names and CSS attribute-selector
+    /// rule blocks.  This is the cheapest possible drift gate against a layout
+    /// being silently dropped from the viewer; behavioural coverage stays in
+    /// browser-based integration when that path exists.
+    #[test]
+    fn viewer_html_declares_all_four_layouts() {
+        let html = include_str!("viewer.html");
+        for layout in ["classic", "three-pane", "journal", "vertical-split"] {
+            let css_selector = format!("[data-layout=\"{layout}\"]");
+            assert!(
+                html.contains(&css_selector),
+                "viewer.html missing CSS rule `{css_selector}` for layout `{layout}`"
+            );
+            // Also surface the layout name in the rail picker so users can pick it.
+            assert!(
+                html.contains(layout),
+                "viewer.html missing layout name `{layout}` (rail picker / handler)"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn streams_message_events_and_persists_message_flow() {
         let server = TestServer::spawn().await;

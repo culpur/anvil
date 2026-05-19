@@ -168,19 +168,21 @@ a { color:var(--accent); }
   white-space:pre-wrap; max-height:30vh; overflow-y:auto; font-family:monospace; }
 /* Layout-mirror CSS classes applied to <body> so existing flex column rules
    stay intact but the messages pane gets layout-specific styling hooks.
-   Task #672: three-pane + journal get full parity with the local TUI. */
-body.layout-classic .messages { /* baseline */ }
-body.layout-vertical-split .messages { border-right:2px solid var(--border); }
+   Task #672: three-pane + journal get full parity with the local TUI.
+   Task #681: vertical-split + 4-layout switcher (Cmd/Ctrl+L cycle).
+   Rules use [data-layout="..."] attribute selectors so the smoke-test in
+   crates/server/src/lib.rs can verify all 4 layouts are present. */
+body[data-layout="classic"] .messages { /* baseline */ }
 
 /* THREE-PANE layout (#672) — three visually distinct columns: gutter (role +
    tab badge + timestamp) | conversation | trailing focus stripe. We do this
    by turning each .msg into a grid row instead of touching the parent. The
    conversation pane already paginates correctly; we just dress its rows. */
-body.layout-three-pane .messages {
+body[data-layout="three-pane"] .messages {
   background:linear-gradient(180deg, transparent 0, rgba(255,255,255,0.015) 100%);
   padding:8px 0 16px;
 }
-body.layout-three-pane .msg {
+body[data-layout="three-pane"] .msg {
   max-width:100%;
   align-self:stretch;
   display:grid;
@@ -193,11 +195,11 @@ body.layout-three-pane .msg {
   background:transparent;
   position:relative;
 }
-body.layout-three-pane .msg.user { background:transparent; }
-body.layout-three-pane .msg.assistant { background:rgba(15,188,255,0.025); }
-body.layout-three-pane .msg.tool { background:rgba(255,255,255,0.02); border-left:0; }
-body.layout-three-pane .msg.system { background:transparent; text-align:left; align-self:stretch; }
-body.layout-three-pane .msg::before {
+body[data-layout="three-pane"] .msg.user { background:transparent; }
+body[data-layout="three-pane"] .msg.assistant { background:rgba(15,188,255,0.025); }
+body[data-layout="three-pane"] .msg.tool { background:rgba(255,255,255,0.02); border-left:0; }
+body[data-layout="three-pane"] .msg.system { background:transparent; text-align:left; align-self:stretch; }
+body[data-layout="three-pane"] .msg::before {
   content:attr(data-meta);
   grid-column:1;
   padding:0 12px 0 14px;
@@ -208,27 +210,27 @@ body.layout-three-pane .msg::before {
   line-height:1.6;
   border-right:1px solid rgba(255,255,255,0.06);
 }
-body.layout-three-pane .msg.user::before { color:#0fbcff; }
-body.layout-three-pane .msg.assistant::before { color:#e6c989; }
-body.layout-three-pane .msg.tool::before { color:#9ca3af; }
-body.layout-three-pane .msg::after {
+body[data-layout="three-pane"] .msg.user::before { color:#0fbcff; }
+body[data-layout="three-pane"] .msg.assistant::before { color:#e6c989; }
+body[data-layout="three-pane"] .msg.tool::before { color:#9ca3af; }
+body[data-layout="three-pane"] .msg::after {
   content:"";
   grid-column:3;
   background:transparent;
   border-radius:2px;
 }
-body.layout-three-pane .msg.focused::after { background:var(--accent); }
+body[data-layout="three-pane"] .msg.focused::after { background:var(--accent); }
 
 /* JOURNAL layout (#672) — dense, monospace, timestamp gutter on every row,
    no tab badges (the journal is a single chronological stream view). */
-body.layout-journal .messages {
+body[data-layout="journal"] .messages {
   font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:12px;
   line-height:1.5;
   padding:6px 0;
   gap:0;
 }
-body.layout-journal .msg {
+body[data-layout="journal"] .msg {
   max-width:100%;
   align-self:stretch;
   display:grid;
@@ -240,12 +242,12 @@ body.layout-journal .msg {
   background:transparent;
   border-top:1px solid transparent;
 }
-body.layout-journal .msg:hover { background:rgba(255,255,255,0.025); }
-body.layout-journal .msg.user { background:rgba(15,188,255,0.04); }
-body.layout-journal .msg.assistant { background:transparent; }
-body.layout-journal .msg.tool { background:rgba(230,201,137,0.04); }
-body.layout-journal .msg.system { background:transparent; font-style:italic; color:var(--text-dim); }
-body.layout-journal .msg::before {
+body[data-layout="journal"] .msg:hover { background:rgba(255,255,255,0.025); }
+body[data-layout="journal"] .msg.user { background:rgba(15,188,255,0.04); }
+body[data-layout="journal"] .msg.assistant { background:transparent; }
+body[data-layout="journal"] .msg.tool { background:rgba(230,201,137,0.04); }
+body[data-layout="journal"] .msg.system { background:transparent; font-style:italic; color:var(--text-dim); }
+body[data-layout="journal"] .msg::before {
   content:attr(data-ts);
   grid-column:1;
   color:var(--text-dim);
@@ -253,7 +255,7 @@ body.layout-journal .msg::before {
   white-space:nowrap;
   text-align:right;
 }
-body.layout-journal .msg::after {
+body[data-layout="journal"] .msg::after {
   content:attr(data-role);
   grid-column:2;
   font-size:11px;
@@ -262,12 +264,54 @@ body.layout-journal .msg::after {
   letter-spacing:.5px;
   color:var(--text-dim);
 }
-body.layout-journal .msg.user::after { color:#0fbcff; }
-body.layout-journal .msg.assistant::after { color:#e6c989; }
-body.layout-journal .msg.tool::after { color:#e6c989; }
-body.layout-journal .msg.system::after { color:#9ca3af; }
-body.layout-journal .msg > .tool-name,
-body.layout-journal .msg > .tool-detail { grid-column:3; }
+body[data-layout="journal"] .msg.user::after { color:#0fbcff; }
+body[data-layout="journal"] .msg.assistant::after { color:#e6c989; }
+body[data-layout="journal"] .msg.tool::after { color:#e6c989; }
+body[data-layout="journal"] .msg.system::after { color:#9ca3af; }
+body[data-layout="journal"] .msg > .tool-name,
+body[data-layout="journal"] .msg > .tool-detail { grid-column:3; }
+
+/* VERTICAL-SPLIT layout (#681) — consolidate ALL chrome into a left rail;
+   the right column is conversation + input only.  The mockup at task #594
+   is the visual reference: editor-style clean deck on the right, dashboard
+   rail on the left with tabs, model, tokens, cost, agents, MEMORY block. */
+body[data-layout="vertical-split"] { display:grid;
+  grid-template-columns: 320px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "header header"
+    "vsrail main"; }
+body[data-layout="vertical-split"] .header { grid-area:header; }
+body[data-layout="vertical-split"] #vs-rail { grid-area:vsrail; display:flex; }
+body[data-layout="vertical-split"] #view-messages { grid-area:main; }
+/* Hide chrome that lives in the header/tab-bar — it migrates into the rail. */
+body[data-layout="vertical-split"] .tab-bar { display:none; }
+body[data-layout="vertical-split"] .header .status-rail { display:none; }
+body[data-layout="vertical-split"] .header #session-info { display:none; }
+/* By default, the inline rail is hidden; vertical-split reveals it. */
+#vs-rail { display:none; flex-direction:column; background:var(--card);
+  border-right:1px solid var(--border); overflow-y:auto; min-height:0;
+  font-size:12px; }
+.vs-section { padding:10px 14px; border-bottom:1px solid var(--border); }
+.vs-section-title { font-size:10px; font-weight:700; color:var(--text-dim);
+  text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
+.vs-tabs { display:flex; flex-direction:column; gap:2px; }
+.vs-tab { padding:5px 8px; border-radius:4px; cursor:pointer;
+  color:var(--text-dim); border-left:2px solid transparent; }
+.vs-tab:hover { color:var(--text); background:rgba(15,188,255,0.04); }
+.vs-tab.active { color:var(--accent); border-left-color:var(--accent);
+  background:rgba(15,188,255,0.08); }
+.vs-meta-row { display:flex; justify-content:space-between; padding:2px 0;
+  color:var(--text-dim); font-variant-numeric:tabular-nums; }
+.vs-meta-row .v { color:var(--text); }
+.vs-memory { color:var(--text-dim); white-space:pre-wrap; line-height:1.5;
+  font-size:11px; max-height:240px; overflow-y:auto; }
+.vs-spacer { flex:1; }
+
+/* CLASSIC + VERTICAL-SPLIT keep an empty stub so the smoke test that searches
+   `[data-layout="classic"]` and `[data-layout="vertical-split"]` finds at
+   least one CSS rule for each of the 4 layouts.  Already covered above for
+   classic + the grid rules for vertical-split. */
 /* Permission prompt modal (task #648 future) */
 .rc-prompt-overlay { position:fixed; inset:0; background:rgba(0,2,12,0.9);
   display:flex; align-items:center; justify-content:center; z-index:120; }
@@ -512,7 +556,7 @@ body.layout-journal .msg > .tool-detail { grid-column:3; }
 .cron-empty { font-size:11px; color:var(--text-dim); font-style:italic; }
 </style>
 </head>
-<body>
+<body data-layout="classic">
 
 <!-- Header -->
 <div class="header">
@@ -530,6 +574,38 @@ body.layout-journal .msg > .tool-detail { grid-column:3; }
 
 <!-- Tab bar -->
 <div class="tab-bar" id="tab-bar"></div>
+
+<!-- Vertical-split rail (Task #681) — consolidated chrome for the rail+deck
+     layout: tabs, model, tokens, cost, memory.  Hidden by default; revealed
+     by `body[data-layout="vertical-split"] #vs-rail`. -->
+<aside id="vs-rail" aria-label="Session rail">
+  <div class="vs-section">
+    <div class="vs-section-title">Tabs</div>
+    <div class="vs-tabs" id="vs-rail-tabs"></div>
+  </div>
+  <div class="vs-section">
+    <div class="vs-section-title">Model</div>
+    <div id="vs-rail-model" style="color:var(--text);font-size:11px">—</div>
+  </div>
+  <div class="vs-section">
+    <div class="vs-section-title">Tokens</div>
+    <div class="vs-meta-row"><span>in</span><span class="v" id="vs-rail-tokens-in">0</span></div>
+    <div class="vs-meta-row"><span>out</span><span class="v" id="vs-rail-tokens-out">0</span></div>
+    <div class="vs-meta-row"><span>cost</span><span class="v" id="vs-rail-cost">$0.00</span></div>
+  </div>
+  <div class="vs-section">
+    <div class="vs-section-title">Status</div>
+    <div id="vs-rail-status" style="color:var(--text-dim);font-size:11px">idle</div>
+  </div>
+  <div class="vs-section">
+    <div class="vs-section-title">Memory</div>
+    <div class="vs-memory" id="vs-rail-memory">— no memory snapshot yet —</div>
+  </div>
+  <div class="vs-spacer"></div>
+  <div class="vs-section" style="color:var(--text-dim);font-size:10px">
+    Press <strong style="color:var(--accent)">Ctrl+L</strong> to cycle layouts
+  </div>
+</aside>
 
 <!-- Messages view (session tabs) -->
 <div class="view-messages" id="view-messages">
@@ -897,6 +973,9 @@ function renderTabBar() {
     };
     bar.appendChild(cfgTab);
   }
+  // Task #681 — also refresh the vertical-split rail tab list.  Cheap when
+  // the rail is hidden (display:none); just sets innerHTML.
+  if (typeof renderVsRail === 'function') renderVsRail();
 }
 
 // ─── Message Rendering ────────────────────────────────────────────
@@ -1059,6 +1138,7 @@ function showThinking(tabId, label) {
     if (el) el.classList.add('active');
     if (lbl) lbl.textContent = label || 'Thinking…';
   }
+  if (typeof renderVsRail === 'function') renderVsRail();
 }
 
 function hideThinking(tabId) {
@@ -1068,6 +1148,7 @@ function hideThinking(tabId) {
     const el = document.getElementById('rail-thinking');
     if (el) el.classList.remove('active');
   }
+  if (typeof renderVsRail === 'function') renderVsRail();
 }
 
 // Task #680.d — header rail helpers.
@@ -1079,6 +1160,7 @@ function updateRailTokens(input, output) {
   inEl.textContent = String(input || 0);
   outEl.textContent = String(output || 0);
   wrap.hidden = false;
+  if (typeof renderVsRail === 'function') renderVsRail();
 }
 function updateRailCost(usd) {
   const wrap = document.getElementById('rail-cost');
@@ -1087,6 +1169,7 @@ function updateRailCost(usd) {
   // Round to two decimals — matches the TUI's `${:.2}` formatter.
   val.textContent = (Number(usd) || 0).toFixed(2);
   wrap.hidden = false;
+  if (typeof renderVsRail === 'function') renderVsRail();
 }
 
 // ─── Input ────────────────────────────────────────────────────────
@@ -2800,18 +2883,92 @@ function handleDaemonStatus(msg) {
   }
 }
 
-function handleLayoutChanged(msg) {
-  rcCurrentLayout = msg.kind;
-  // Strip every layout-* class and apply the new one to <body>.
-  const classes = ['layout-classic', 'layout-vertical-split',
-                   'layout-three-pane', 'layout-journal'];
-  classes.forEach(c => document.body.classList.remove(c));
-  document.body.classList.add(`layout-${msg.kind.replace('_', '-')}`);
+// Task #681 — Layout switcher.  Applies a layout to the viewer DOM and
+// reflects the selection in the rail picker.  Layout names are the same
+// canonical strings the TUI uses, with a kebab-cased alias for the
+// `data-layout` attribute selector ("vertical_split" → "vertical-split").
+const VIEWER_LAYOUTS = ['classic', 'three-pane', 'journal', 'vertical-split'];
+function _layoutAlias(kind) {
+  // Accept either the snake-case (wire) or kebab-case (CSS) form.
+  return (kind || 'classic').replaceAll('_', '-');
+}
+function applyLayout(kind, tabs) {
+  const alias = _layoutAlias(kind);
+  rcCurrentLayout = alias;
+  document.body.dataset.layout = alias;
+  // Keep the legacy `layout-*` class around too so any external CSS that
+  // hooks the class form keeps working.  Belt + suspenders.
+  ['layout-classic', 'layout-vertical-split', 'layout-three-pane',
+   'layout-journal'].forEach(c => document.body.classList.remove(c));
+  document.body.classList.add(`layout-${alias}`);
   // Reflect in the layout picker.
   const sel = document.getElementById('rc-layout-select');
   if (sel) {
-    const alias = msg.kind.replace('_', '-') + (msg.tabs ? '-tabs' : '');
-    sel.value = alias;
+    sel.value = alias + (tabs ? '-tabs' : '');
+  }
+  // Refresh the vertical-split rail (cheap; no-op when hidden).
+  renderVsRail();
+}
+function handleLayoutChanged(msg) {
+  applyLayout(msg.kind, !!msg.tabs);
+}
+
+// Task #681 — vertical-split rail content.  Reads from existing in-memory
+// session state (tabs, header rail values) and updates rail elements.
+// Always safe to call; if the rail isn't visible the writes are invisible.
+function renderVsRail() {
+  // Tabs list.
+  const tabList = document.getElementById('vs-rail-tabs');
+  if (tabList) {
+    tabList.innerHTML = '';
+    Object.entries(tabs).forEach(([id, tab]) => {
+      const el = document.createElement('div');
+      const isActive = parseInt(id) === activeTab;
+      el.className = 'vs-tab' + (isActive ? ' active' : '');
+      el.textContent = tab.name || `tab ${id}`;
+      el.onclick = () => {
+        activeTab = parseInt(id);
+        renderTabBar();
+        renderMessages();
+        renderVsRail();
+      };
+      tabList.appendChild(el);
+    });
+  }
+  // Model + tokens mirror the header status-rail values.
+  const tab = tabs[activeTab];
+  const modelEl = document.getElementById('vs-rail-model');
+  if (modelEl) modelEl.textContent = (tab && tab.model) || '—';
+  const tIn = document.getElementById('vs-rail-tokens-in');
+  const tOut = document.getElementById('vs-rail-tokens-out');
+  const headerIn = document.getElementById('rail-tokens-in');
+  const headerOut = document.getElementById('rail-tokens-out');
+  if (tIn && headerIn) tIn.textContent = headerIn.textContent || '0';
+  if (tOut && headerOut) tOut.textContent = headerOut.textContent || '0';
+  const costEl = document.getElementById('vs-rail-cost');
+  const headerCost = document.getElementById('rail-cost-value');
+  if (costEl) costEl.textContent = '$' + ((headerCost && headerCost.textContent) || '0.00');
+  // Thinking status.
+  const statusEl = document.getElementById('vs-rail-status');
+  const headerThinking = document.getElementById('rail-thinking');
+  if (statusEl) {
+    statusEl.textContent = (headerThinking && headerThinking.classList.contains('active'))
+      ? 'thinking…' : 'idle';
+  }
+}
+
+// Cycle through the 4 supported layouts (Cmd+L on macOS, Ctrl+L elsewhere).
+function cycleLayout() {
+  const current = rcCurrentLayout || 'classic';
+  const idx = VIEWER_LAYOUTS.indexOf(current);
+  const next = VIEWER_LAYOUTS[(idx + 1) % VIEWER_LAYOUTS.length];
+  applyLayout(next, false);
+  if (ws && paired) {
+    ws.send(JSON.stringify({
+      type: 'request_layout',
+      kind: next.replaceAll('-', '_'),
+      tabs: false,
+    }));
   }
 }
 
@@ -2853,11 +3010,16 @@ function rcReject(routine) {
   ws.send(JSON.stringify({type: 'request_routine_reject', routine}));
 }
 function rcLayoutPick() {
-  if (!ws || !paired) return;
   const alias = document.getElementById('rc-layout-select').value;
   const tabs = alias.endsWith('-tabs');
-  const kind = alias.replace(/-tabs$/, '').replace('-', '_');
-  ws.send(JSON.stringify({type: 'request_layout', kind, tabs}));
+  const kebab = alias.replace(/-tabs$/, '');
+  const kind = kebab.replaceAll('-', '_');
+  // Optimistic apply so the viewer feels snappy even before the host echoes
+  // a LayoutChanged confirmation.
+  applyLayout(kebab, tabs);
+  if (ws && paired) {
+    ws.send(JSON.stringify({type: 'request_layout', kind, tabs}));
+  }
 }
 function rcSlashSend() {
   if (!ws || !paired) return;
@@ -2891,7 +3053,7 @@ function handlePermissionPrompt(msg) {
   overlay.classList.remove('hidden');
 }
 
-// Enter key sends slash command.
+// Enter key sends slash command + Ctrl/Cmd+L cycles layouts (task #681).
 document.addEventListener('DOMContentLoaded', () => {
   const slashInput = document.getElementById('rc-slash-input');
   if (slashInput) {
@@ -2899,6 +3061,21 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.key === 'Enter') rcSlashSend();
     });
   }
+  // Global Ctrl+L / Cmd+L → cycle through the 4 supported layouts.  Skip
+  // when an input/textarea has focus so users can still Ctrl+L to clear.
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+      const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+      cycleLayout();
+    }
+  });
+  // Initial body data-layout (in case the markup default was lost).
+  if (!document.body.dataset.layout) {
+    document.body.dataset.layout = 'classic';
+  }
+  rcCurrentLayout = document.body.dataset.layout;
 });
 
 </script>
