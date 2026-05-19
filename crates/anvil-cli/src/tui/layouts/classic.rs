@@ -766,6 +766,7 @@ pub(super) fn build_sl_data(snap: &LayoutSnapshot, cost_usd: String) -> StatusLi
                 .unwrap_or(0)
         },
         effort_level: snap.effort_level.clone(),
+        routine_proposals_pending: crate::schedule_cmds::pending_proposal_count(),
         accent: snap.theme.accent,
         warning: snap.theme.warning,
         success: snap.theme.success,

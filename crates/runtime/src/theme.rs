@@ -393,6 +393,8 @@ pub enum StatusWidget {
     CacheHitRate,
     // Productivity
     CodeProductivity,
+    // Routines daemon — count of ask-tier routines waiting for /schedule approve
+    RoutineProposals,
     // Custom
     Text { content: String },
     Spacer,
@@ -438,6 +440,7 @@ impl StatusWidget {
             Self::CostProjection => "cost_projection",
             Self::CacheHitRate => "cache_hit_rate",
             Self::CodeProductivity => "code_productivity",
+            Self::RoutineProposals => "routine_proposals",
             Self::Text { .. } => "text",
             Self::Spacer => "spacer",
             Self::Separator => "separator",
@@ -482,6 +485,7 @@ impl StatusWidget {
             Self::CostProjection => "Cost Projection",
             Self::CacheHitRate => "Cache Hit Rate",
             Self::CodeProductivity => "Code Productivity",
+            Self::RoutineProposals => "Routine Approvals",
             Self::Text { .. } => "Text",
             Self::Spacer => "Spacer",
             Self::Separator => "Separator",
@@ -504,6 +508,7 @@ impl StatusWidget {
             Self::BurnRate | Self::CostDaily | Self::CostWeekly | Self::CostMonthly
             | Self::CostProjection | Self::CacheHitRate => "cost_detail",
             Self::CodeProductivity => "productivity",
+            Self::RoutineProposals => "system",
             Self::Text { .. } | Self::Spacer | Self::Separator => "layout",
         }
     }
@@ -523,6 +528,7 @@ impl StatusWidget {
             Self::BurnRate, Self::CostDaily, Self::CostWeekly, Self::CostMonthly,
             Self::CostProjection, Self::CacheHitRate,
             Self::CodeProductivity,
+            Self::RoutineProposals,
             Self::Spacer, Self::Separator,
         ]
     }
@@ -565,6 +571,7 @@ impl StatusWidget {
             "cost_projection" => Some(Self::CostProjection),
             "cache_hit_rate" => Some(Self::CacheHitRate),
             "code_productivity" => Some(Self::CodeProductivity),
+            "routine_proposals" => Some(Self::RoutineProposals),
             "spacer" => Some(Self::Spacer),
             "separator" => Some(Self::Separator),
             _ => None,
@@ -1467,7 +1474,8 @@ mod tests {
             StatusWidget::ArchiveStatus, StatusWidget::McpStatus, StatusWidget::TimeDisplay,
             StatusWidget::BurnRate, StatusWidget::CostDaily, StatusWidget::CostWeekly,
             StatusWidget::CostMonthly, StatusWidget::CostProjection, StatusWidget::CacheHitRate,
-            StatusWidget::CodeProductivity, StatusWidget::Spacer, StatusWidget::Separator,
+            StatusWidget::CodeProductivity, StatusWidget::RoutineProposals,
+            StatusWidget::Spacer, StatusWidget::Separator,
         ];
         let mut ids: Vec<&str> = widgets.iter().map(super::StatusWidget::id).collect();
         let len_before = ids.len();
@@ -1479,7 +1487,7 @@ mod tests {
     #[test]
     fn all_widgets_count() {
         let all = StatusWidget::all_widgets();
-        assert_eq!(all.len(), 36, "expected 36 concrete widget variants (excluding Text)");
+        assert_eq!(all.len(), 37, "expected 37 concrete widget variants (excluding Text)");
     }
 
     #[test]

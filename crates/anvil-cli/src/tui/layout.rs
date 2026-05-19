@@ -162,6 +162,10 @@ pub(super) struct StatusLineData {
     pub mcp_server_count: u32,
     /// Current effort level, e.g. "medium" or "high".
     pub effort_level: String,
+    /// Count of ask-tier routines waiting for `/schedule approve`.  Polled
+    /// from `~/.anvil/routines/pending/*.json` once per redraw — cheap
+    /// directory read, no IPC.
+    pub routine_proposals_pending: usize,
     // Theme colors
     pub accent: Rgb,
     pub warning: Rgb,
@@ -525,6 +529,23 @@ fn render_widget(
                 )]
             } else {
                 vec![]
+            }
+        }
+        StatusWidget::RoutineProposals => {
+            let n = data.routine_proposals_pending;
+            if n == 0 {
+                vec![]
+            } else {
+                // 1-2 pending → amber heads-up; 3+ → red ("you're piling up").
+                let color = if n >= 3 {
+                    Color::Red
+                } else {
+                    Color::Rgb(0xCC, 0xAA, 0x55)
+                };
+                vec![Span::styled(
+                    format!("⏳ {n} approve"),
+                    Style::default().fg(color),
+                )]
             }
         }
         StatusWidget::Text { content } => {
