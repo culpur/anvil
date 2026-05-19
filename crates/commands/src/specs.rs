@@ -2581,6 +2581,22 @@ Examples:
         requires_restart: RestartRequirement::None,
         requires_arguments: false,
     },
+    // v2.2.18 / task #667 — self-healing health check + modal.
+    SlashCommandSpec {
+        name: "heal",
+        aliases: &[],
+        summary: "Inspect install health and repair drift",
+        argument_hint: None,
+        resume_supported: false,
+        category: SlashCommandCategory::Core,
+        detailed_help: "/heal — Inspect install health and repair drift\n\nUsage:\n  /heal     Run every health probe and open the HealingModal\n\nProbes cover: config, vault, default provider, Ollama, QMD, filesystem,\ncompletions, binary, MCP servers, daemon.  Each probe ships its own\nrepair closure (most reuse the wizard's install code).  Skip/defer state\nfrom the first-run wizard is respected.\n\nAlso runnable headlessly: `anvil --check` prints a structured report and\nexits 1 on any failure (suitable for cron monitoring).",
+        subcommands: &[],
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
 ];
 
 #[must_use]

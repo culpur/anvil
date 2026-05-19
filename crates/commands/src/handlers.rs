@@ -831,19 +831,6 @@ pub fn handle_slash_command(
             Some(SlashCommandResult { message: msg, session: session.clone() })
         }
         // ── Phase 6.0 — /import foundation ───────────────────────────────────
-        //
-        // The handler returns guidance text describing what /import does and
-        // what is currently available (Phase 6.0 foundation only).  Buckets
-        // 1–4 will replace this message with live artifact enumeration and
-        // the staged-diff confirmation flow.
-        //
-        // Gate compliance:
-        //   - Gate 2 (every_spec_has_a_callable_handler): returns non-empty
-        //     message, does not contain "(stub)".
-        //   - Gate 5.0.5 (no_stub_messages_in_resolved_dispatch): does not
-        //     contain "not yet implemented".
-        //   - `requires_arguments: false` — the no-arg form returns useful
-        //     guidance, so Gate 2 exercises it normally.
         SlashCommand::Import { source, dry_run, scope, include_sessions } => {
             Some(SlashCommandResult {
                 message: handle_import_command(
@@ -857,6 +844,14 @@ pub fn handle_slash_command(
         }
         SlashCommand::Cursor { subcommand } => Some(SlashCommandResult {
             message: handle_cursor_command(&subcommand),
+            session: session.clone(),
+        }),
+        SlashCommand::Heal => Some(SlashCommandResult {
+            // /heal opens an interactive modal — this static handler can
+            // only point users at the live dispatcher in main.rs (TUI) /
+            // `anvil --check` (CLI).
+            message: "Run `anvil --check` for a structured health report,\nor invoke /heal inside a live Anvil session to open the modal."
+                .to_string(),
             session: session.clone(),
         }),
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {

@@ -62,6 +62,7 @@ mod session;
 mod session_meta;
 mod tui;
 mod check;
+mod health;
 mod project;
 mod setup;
 mod uninstall;
@@ -761,6 +762,15 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--check" => {
                 return Ok(CliAction::Check);
+            }
+            "--no-heal" => {
+                // Honoured by run_repl()'s Phase 0.5 — the flag is read
+                // from env::args directly there, so we set a marker env
+                // var to keep this code path uniform.
+                // SAFETY: matches the existing env::set_var pattern in this
+                // function for OLLAMA_HOST, ANVIL_PROFILE, etc.
+                unsafe { std::env::set_var("ANVIL_SKIP_HEAL", "1"); }
+                index += 1;
             }
             "--uninstall" => {
                 return Ok(CliAction::Uninstall);
@@ -2068,6 +2078,7 @@ fn run_resume_command(
         | SlashCommand::Reflect { .. }
         | SlashCommand::HubStatus { .. }
         | SlashCommand::Layout { .. }
+        | SlashCommand::Heal
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
         SlashCommand::HistoryArchive { action } => {
             let archiver = HistoryArchiver::new();
@@ -2615,6 +2626,77 @@ fn load_credentials_to_env() {
     }
 }
 
+/// Phase 0.5 — runs after the wizard gate, before the TUI launches.
+///
+/// Probes every health component; routes on severity:
+///   * Green     → silent, continue
+///   * Drift     → silent, register a rail nudge for the first session
+///   * Breakage  → show HealingModal, run user-selected repairs
+///
+/// Never aborts startup — the worst outcome is "modal shows, user types `q`",
+/// which exits cleanly via `std::process::exit(0)` from inside the modal
+/// dispatcher.  Skip/defer state from #666 is honoured by `probe_all`.
+fn run_phase_0_5_health_check() {
+    let report = health::probe_all(health::HAPPY_PATH_BUDGET);
+    match report.severity() {
+        health::Severity::Green => {
+            // Silent — nothing to surface.  The probe sweep itself is
+            // logged at debug level only.
+        }
+        health::Severity::Drift => {
+            // Register a rail nudge for the first session.  We don't
+            // currently have a "post-TUI-launch rail bus" wired from
+            // here, so for v2.2.18 we surface the nudge as a pre-TUI
+            // stderr line — the user sees it once, the TUI continues.
+            let drifted = report.drifted();
+            if !drifted.is_empty() {
+                eprintln!(
+                    "\x1b[33m⚠\x1b[0m Anvil drift detected ({} item(s)) — run `/heal` to fix.",
+                    drifted.len()
+                );
+                for probe in drifted {
+                    eprintln!(
+                        "    \x1b[33m·\x1b[0m {} — {}",
+                        probe.component.label(),
+                        probe.status.reason()
+                    );
+                }
+            }
+        }
+        health::Severity::Breakage => match health::modal::show_healing_modal_live(&report) {
+            Ok(health::HealActionChoice::Repair(selection)) => {
+                let outcomes = health::repair_selected(&report, &selection);
+                for outcome in &outcomes {
+                    let prefix = if outcome.success {
+                        "\x1b[32m✓\x1b[0m"
+                    } else {
+                        "\x1b[31m✗\x1b[0m"
+                    };
+                    eprintln!(
+                        "  {prefix} {} — {}",
+                        outcome.component.label(),
+                        outcome.message
+                    );
+                }
+            }
+            Ok(health::HealActionChoice::Skip) => {
+                // User chose to continue — log + surface a single warn line.
+                eprintln!(
+                    "\x1b[33m⚠\x1b[0m Continuing without repair. Run `/heal` inside Anvil to fix later."
+                );
+            }
+            Ok(health::HealActionChoice::Quit) => {
+                eprintln!("Exiting on user request.");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                // Modal-renderer error (non-TTY, EOF, …) — never block startup.
+                eprintln!("\x1b[33m⚠\x1b[0m Healing modal could not render ({e}). Continuing.");
+            }
+        },
+    }
+}
+
 fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -2647,6 +2729,19 @@ fn run_repl(
     } else {
         (model, false)
     };
+
+    // Phase 0.5 — self-healing health check (#667, v2.2.18).
+    //
+    // Runs ONLY when the user has an existing install (config.json exists)
+    // and hasn't asked us to skip via --no-heal / ANVIL_SKIP_HEAL.  Fresh
+    // installs go through the wizard above; in that case we don't probe
+    // (nothing to heal yet).
+    if io::stdout().is_terminal()
+        && anvil_config_json_exists()
+        && env::var("ANVIL_SKIP_HEAL").is_err()
+    {
+        run_phase_0_5_health_check();
+    }
 
     // Unlock the vault (or offer migration) once before the REPL starts.
     //
@@ -6730,6 +6825,15 @@ impl LiveCli {
                 let msg = self.run_hub_command(Some(&format!("status {package}")));
                 (msg, false)
             }
+            SlashCommand::Heal => {
+                // /heal opens the HealingModal whether or not probes
+                // detect issues — the user wants to inspect/repair on
+                // demand.  Return the rendered report; actual modal
+                // I/O is handled by the TUI dispatcher when this runs
+                // outside Phase 0.5.
+                let report = health::probe_all(health::HAPPY_PATH_BUDGET);
+                (report.render_cli(), false)
+            }
             SlashCommand::Unknown(name) => {
                 // Intercepted in handle_repl_command_tui. This arm is unreachable.
                 (format!("Unknown slash command: /{name}"), false)
@@ -7411,6 +7515,34 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
                 }
                 let output = self.run_share_command_repl(action.as_deref());
                 println!("{output}");
+                return Ok(false);
+            }
+            SlashCommand::Heal => {
+                // Plain REPL path (no TUI active) — print the structured
+                // health report and offer the modal interactively.
+                let report = health::probe_all(health::HAPPY_PATH_BUDGET);
+                println!("{}", report.render_cli());
+                if matches!(report.severity(), health::Severity::Drift | health::Severity::Breakage) {
+                    match health::modal::show_healing_modal_live(&report) {
+                        Ok(health::HealActionChoice::Repair(sel)) => {
+                            let outcomes = health::repair_selected(&report, &sel);
+                            for o in &outcomes {
+                                let icon = if o.success { "✓" } else { "✗" };
+                                println!("  {icon} {} — {}", o.component.label(), o.message);
+                            }
+                        }
+                        Ok(health::HealActionChoice::Skip) => {
+                            println!("Skipped — no repairs run.");
+                        }
+                        Ok(health::HealActionChoice::Quit) => {
+                            println!("Exiting on user request.");
+                            return Ok(true);
+                        }
+                        Err(e) => {
+                            eprintln!("Modal error: {e}");
+                        }
+                    }
+                }
                 return Ok(false);
             }
             SlashCommand::Unknown(name) => {
