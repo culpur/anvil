@@ -40,7 +40,8 @@
 
 use std::fmt;
 use std::io;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyEvent};
 
@@ -118,10 +119,14 @@ pub(crate) fn wrap_paragraph(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-use crate::tui::modals::confirm::{ConfirmAction, ConfirmModal};
+use crate::tui::modals::confirm::{ConfirmAction, ConfirmChoice, ConfirmModal};
+use crate::tui::modals::health_probe::{HealthProbeAction, HealthProbeModal};
 use crate::tui::modals::password::{PasswordAction, PasswordModal};
 use crate::tui::modals::queue::{
     ChoiceAction, ModalAnswer, ModalQueue, QueuedModal, WizardChoiceModal,
+};
+use crate::tui::modals::streaming::{
+    self, StreamingAction, StreamingOutputModal, StreamingState, SubprocessHandle,
 };
 use crate::tui::modals::text_input::{TextInputAction, TextInputModal};
 
@@ -882,6 +887,9 @@ where
                             QueuedModal::TextInput { modal, .. } => {
                                 modal.render(frame, area, &modal.buffer, modal.cursor, accent);
                             }
+                            QueuedModal::HealthProbe { modal, .. } => {
+                                modal.render(frame, area, accent);
+                            }
                         }
                     })
                     .map_err(|e| RunnerError::Draw(e.to_string()))?;
@@ -898,6 +906,10 @@ where
                     QueuedModal::TextInput { modal, .. } => {
                         ModalAnswer::TextInput(modal.default.clone())
                     }
+                    QueuedModal::HealthProbe { .. } => ModalAnswer::HealthCheck {
+                        repair: Vec::new(),
+                        quit: true,
+                    },
                 });
             };
 
@@ -937,6 +949,199 @@ where
                         return Ok(ModalAnswer::TextInput(default));
                     }
                 },
+                QueuedModal::HealthProbe { modal, .. } => match modal.handle_key(key) {
+                    HealthProbeAction::Continue => continue,
+                    HealthProbeAction::Repair(repair) => {
+                        return Ok(ModalAnswer::HealthCheck {
+                            repair,
+                            quit: false,
+                        });
+                    }
+                    HealthProbeAction::Continue_ => {
+                        return Ok(ModalAnswer::HealthCheck {
+                            repair: Vec::new(),
+                            quit: false,
+                        });
+                    }
+                    HealthProbeAction::Quit => {
+                        return Ok(ModalAnswer::HealthCheck {
+                            repair: Vec::new(),
+                            quit: true,
+                        });
+                    }
+                },
+            }
+        }
+    }
+
+    // ─── v2.2.18 task #666 (Agent A1): streaming + health probe ──────
+
+    /// Drive a single health-probe modal to resolution. Convenience
+    /// wrapper that pushes the modal onto a throwaway queue, drains
+    /// it, and returns the `ModalAnswer::HealthCheck` outcome.
+    #[allow(dead_code)]
+    pub(crate) fn run_health_probe(
+        &mut self,
+        tag: &str,
+        modal: HealthProbeModal,
+    ) -> Result<ModalAnswer, RunnerError> {
+        let mut q = ModalQueue::new();
+        q.push(QueuedModal::HealthProbe {
+            tag: tag.to_string(),
+            modal,
+        });
+        self.run_queue(&mut q)?;
+        Ok(q.answer_for(tag).cloned().unwrap_or(ModalAnswer::HealthCheck {
+            repair: Vec::new(),
+            quit: true,
+        }))
+    }
+
+    /// Drive a `StreamingOutputModal` to completion.
+    ///
+    /// Primary entry point for v2.2.18's commissioning subprocesses
+    /// (Ollama install, `ollama pull`, `npm install`, `qmd update`,
+    /// `qmd embed`, etc.). The modal:
+    ///
+    /// 1. Spawns the attached `Command` with stdout/stderr piped.
+    /// 2. Reads lines via `mpsc::channel` (subprocess output never
+    ///    bypasses the TUI — feedback-tui-stdout-anti-pattern.md).
+    /// 3. Renders the rolling N-line tail at most once per 100ms.
+    /// 4. On Esc, opens a nested `ConfirmModal` ("Cancel install?").
+    ///    On Yes the runner sends SIGTERM, waits 5s, then SIGKILL.
+    /// 5. Returns `ModalAnswer::StreamingResult { exit_code,
+    ///    output_tail }`. `exit_code = -1` is the cancel signal.
+    ///
+    /// Any key OTHER than Esc is ignored while the subprocess is
+    /// running.
+    ///
+    /// The `_tag` is accepted only for API consistency with the rest
+    /// of the runner; it is NOT written to a modal queue (streaming
+    /// modals are single-call, never enqueued).
+    #[allow(dead_code)]
+    pub(crate) fn run_streaming_output(
+        &mut self,
+        _tag: &str,
+        mut modal: StreamingOutputModal,
+    ) -> Result<ModalAnswer, RunnerError> {
+        let accent = self.accent;
+        // Pull the command out of the modal — the modal carries the
+        // pre-built Command in the builder, the runner consumes it.
+        let Some(cmd) = modal.command.take() else {
+            // No subprocess attached → nothing to run. Return an
+            // "exit_code = 0" with whatever tail was preloaded (so
+            // tests can drive the modal without a real Command).
+            let tail = modal.drain_tail();
+            return Ok(ModalAnswer::StreamingResult {
+                exit_code: 0,
+                output_tail: tail,
+            });
+        };
+        let mut handle = SubprocessHandle::spawn(cmd)
+            .map_err(|e| RunnerError::Draw(format!("spawn failed: {e}")))?;
+
+        // Force the first draw to render immediately.
+        let mut last_draw = Instant::now() - Duration::from_secs(1);
+        let key_poll = Duration::from_millis(streaming::REDRAW_BUDGET_MS);
+        let mut cancel_pending = false;
+
+        loop {
+            // 1. Drain pending output lines (non-blocking).
+            for line in handle.drain(32) {
+                modal.push_line(line);
+            }
+
+            // 2. Poll subprocess exit (non-blocking).
+            let exited = handle.poll_exit();
+
+            // 3. Cancelling state: wait for the subprocess to die.
+            if matches!(modal.state, StreamingState::Cancelling) {
+                if let Some(_code) = exited {
+                    modal.state = StreamingState::Exited(-1);
+                    let tail = modal.drain_tail();
+                    return Ok(ModalAnswer::StreamingResult {
+                        exit_code: -1,
+                        output_tail: tail,
+                    });
+                }
+            } else if let Some(code) = exited {
+                // Clean exit — drain any final lines, then return.
+                for line in handle.drain(64) {
+                    modal.push_line(line);
+                }
+                modal.state = StreamingState::Exited(code);
+                let tail = modal.drain_tail();
+                return Ok(ModalAnswer::StreamingResult {
+                    exit_code: code,
+                    output_tail: tail,
+                });
+            }
+
+            // 4. Throttle redraws to one per REDRAW_BUDGET_MS.
+            if last_draw.elapsed() >= Duration::from_millis(streaming::REDRAW_BUDGET_MS) {
+                modal.tick_spinner();
+                self.session
+                    .terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        modal.render(frame, area, accent);
+                    })
+                    .map_err(|e| RunnerError::Draw(e.to_string()))?;
+                last_draw = Instant::now();
+            }
+
+            // 5. Bounded key poll. Route to cancel-confirm if open,
+            //    otherwise to the streaming modal itself.
+            if let Some(key) = self.keys.try_next_key(key_poll) {
+                if let Some(confirm) = modal.cancel_confirm.as_mut() {
+                    match confirm.handle_key(key) {
+                        ConfirmAction::Continue => continue,
+                        ConfirmAction::Committed(ConfirmChoice::Yes) => {
+                            modal.cancel_confirm = None;
+                            modal.state = StreamingState::Cancelling;
+                            cancel_pending = true;
+                        }
+                        ConfirmAction::Committed(ConfirmChoice::No) => {
+                            modal.cancel_confirm = None;
+                        }
+                    }
+                } else {
+                    match modal.handle_key(key) {
+                        StreamingAction::Continue => {}
+                        StreamingAction::RequestCancel => {
+                            modal.cancel_confirm = Some(ConfirmModal::new(
+                                "Cancel install?",
+                                "The subprocess is still running. \
+                                 Press y to send SIGTERM (then SIGKILL after 5s), \
+                                 n / Esc to keep waiting.",
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 6. If a cancel was confirmed this tick, run the grace+kill.
+            if cancel_pending {
+                let code = streaming::cancel_with_grace(&mut handle, streaming::CANCEL_GRACE);
+                for line in handle.drain(64) {
+                    modal.push_line(line);
+                }
+                modal.state = StreamingState::Exited(-1);
+                let tail = modal.drain_tail();
+                let _ = code; // always `-1` for user-cancel
+                return Ok(ModalAnswer::StreamingResult {
+                    exit_code: -1,
+                    output_tail: tail,
+                });
+            }
+
+            // 7. Scripted-source backoff: if the key source is
+            //    exhausted and we're still running, sleep briefly so
+            //    the reader threads get scheduled.
+            if self.keys.is_exhausted_hint()
+                && !matches!(modal.state, StreamingState::Exited(_))
+            {
+                thread::sleep(Duration::from_millis(20));
             }
         }
     }
@@ -1659,5 +1864,115 @@ mod tests {
             Some(&ModalAnswer::Confirm(ConfirmChoice::No)),
             "mouse capture must default to OFF (No)"
         );
+    }
+
+    // ─── v2.2.18 task #666 (Agent A1): streaming + health probe ──────
+
+    /// Acceptance criterion #4: `run_streaming_output` with
+    /// `Command::new("echo").arg("hello")` resolves to a
+    /// `StreamingResult { exit_code: 0, .. }` with `hello` in the
+    /// output tail.
+    #[test]
+    fn run_streaming_output_echo_hello_resolves_to_zero_exit() {
+        use crate::tui::modals::streaming::StreamingOutputModal;
+        use std::process::Command;
+
+        let mut session = make_session();
+        let mut runner = make_runner(&mut session, vec![]);
+
+        let mut cmd = Command::new("echo");
+        cmd.arg("hello");
+        let modal = StreamingOutputModal::new("Test echo", "Running echo…")
+            .with_subprocess(cmd);
+        let answer = runner
+            .run_streaming_output("test-echo", modal)
+            .expect("run_streaming_output");
+        match answer {
+            ModalAnswer::StreamingResult { exit_code, output_tail } => {
+                assert_eq!(exit_code, 0, "echo must exit 0");
+                assert!(
+                    output_tail.iter().any(|l| l.contains("hello")),
+                    "output_tail must contain echo output, got {output_tail:?}",
+                );
+            }
+            other => panic!("unexpected answer: {other:?}"),
+        }
+    }
+
+    /// `run_streaming_output` with no subprocess attached returns
+    /// `StreamingResult { exit_code: 0 }` immediately — the empty-
+    /// command early return.
+    #[test]
+    fn run_streaming_output_no_subprocess_returns_zero() {
+        use crate::tui::modals::streaming::StreamingOutputModal;
+
+        let mut session = make_session();
+        let mut runner = make_runner(&mut session, vec![]);
+
+        let modal = StreamingOutputModal::new("No subprocess", "n/a");
+        let answer = runner
+            .run_streaming_output("none", modal)
+            .expect("run_streaming_output");
+        match answer {
+            ModalAnswer::StreamingResult { exit_code, .. } => {
+                assert_eq!(exit_code, 0);
+            }
+            other => panic!("expected StreamingResult, got {other:?}"),
+        }
+    }
+
+    /// `run_health_probe` round-trips through the queue and surfaces
+    /// the `ModalAnswer::HealthCheck { repair, quit }` shape. We
+    /// press `r` immediately — the runner should pick up the pre-
+    /// selected `Fail`/`Warn` repair flags.
+    #[test]
+    fn run_health_probe_with_r_returns_preselected_repair_set() {
+        use crate::tui::modals::health_probe::{
+            HealthIssue, HealthProbeModal, HealthStatus,
+        };
+
+        let modal = HealthProbeModal::new("Health", "We checked").with_issues(vec![
+            HealthIssue::new(HealthStatus::Ok, "Vault OK"),
+            HealthIssue::new_repair(HealthStatus::Fail, "Ollama not running"),
+            HealthIssue::new_repair(HealthStatus::Warn, "QMD stale"),
+        ]);
+        let mut session = make_session();
+        let mut runner = make_runner(&mut session, vec![key(KeyCode::Char('r'))]);
+
+        let answer = runner
+            .run_health_probe("health-1", modal)
+            .expect("run_health_probe");
+        match answer {
+            ModalAnswer::HealthCheck { repair, quit } => {
+                assert!(!quit, "user pressed `r`, not `q`");
+                assert_eq!(repair, vec![1, 2], "Fail+Warn rows must be selected");
+            }
+            other => panic!("expected HealthCheck, got {other:?}"),
+        }
+    }
+
+    /// `q` resolves with `quit = true` so callers can detect a
+    /// wizard-abort from the health-probe modal.
+    #[test]
+    fn run_health_probe_with_q_sets_quit_true() {
+        use crate::tui::modals::health_probe::{
+            HealthIssue, HealthProbeModal, HealthStatus,
+        };
+
+        let modal = HealthProbeModal::new("Health", "We checked").with_issues(vec![
+            HealthIssue::new_repair(HealthStatus::Fail, "Issue"),
+        ]);
+        let mut session = make_session();
+        let mut runner = make_runner(&mut session, vec![key(KeyCode::Char('q'))]);
+        let answer = runner
+            .run_health_probe("health-2", modal)
+            .expect("run_health_probe");
+        match answer {
+            ModalAnswer::HealthCheck { repair, quit } => {
+                assert!(quit, "q must set quit=true");
+                assert!(repair.is_empty(), "q must not report any repairs");
+            }
+            other => panic!("expected HealthCheck, got {other:?}"),
+        }
     }
 }

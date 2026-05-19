@@ -544,15 +544,29 @@ where
 
     let mut tui_answers = WizardTuiAnswers::defaults();
 
-    let layout_kind_modal = WizardChoiceModal::new(
+    // v2.2.18 (task #666): migrate Step 7 layout picker to the rich
+    // `Choice` API. Same call-site shape, additional badge + per-row
+    // description. Proves the back-compat contract holds: every other
+    // WizardChoiceModal::new(title, vec) call site in this file
+    // still compiles untouched (theme + permission pickers below).
+    use crate::tui::modals::Choice;
+    let layout_kind_modal = WizardChoiceModal::new_titled(
         "TUI Layout — pick architecture",
-        vec![
-            "Vertical Split  (default — sessions rail + swappable deck)".into(),
-            "Classic         (single-deck, pre-v2.2.16)".into(),
-            "Three-Pane      (FOCUS / LOG / CONTEXT)".into(),
-            "Journal         (timestamped column, Ctrl-K palette)".into(),
-        ],
-    );
+    )
+    .with_choices(vec![
+        Choice::new("Vertical Split")
+            .with_badge("recommended")
+            .with_description(
+                "Sessions rail + swappable deck (default in v2.2.16+)",
+            ),
+        Choice::new("Classic")
+            .with_description("Single-deck, pre-v2.2.16 layout"),
+        Choice::new("Three-Pane")
+            .with_description("FOCUS / LOG / CONTEXT split (wide terminals)"),
+        Choice::new("Journal")
+            .with_description("Timestamped column with Ctrl-K palette"),
+    ])
+    .with_footer_hint("press 1-4, or ↑/↓ + Enter · Esc to keep default");
     let layout_kind_answer = runner.run_choice("step7-layout-kind", layout_kind_modal)?;
     tui_answers.layout_kind = match layout_kind_answer {
         ModalAnswer::Choice(0) => "vertical-split".to_string(),
@@ -1063,15 +1077,29 @@ pub(crate) fn run_post_auth_modals_in_alt_screen(
 
     let mut tui_answers = WizardTuiAnswers::defaults();
 
-    let layout_kind_modal = WizardChoiceModal::new(
+    // v2.2.18 (task #666): migrate Step 7 layout picker to the rich
+    // `Choice` API. Same call-site shape, additional badge + per-row
+    // description. Proves the back-compat contract holds: every other
+    // WizardChoiceModal::new(title, vec) call site in this file
+    // still compiles untouched (theme + permission pickers below).
+    use crate::tui::modals::Choice;
+    let layout_kind_modal = WizardChoiceModal::new_titled(
         "TUI Layout — pick architecture",
-        vec![
-            "Vertical Split  (default — sessions rail + swappable deck)".into(),
-            "Classic         (single-deck, pre-v2.2.16)".into(),
-            "Three-Pane      (FOCUS / LOG / CONTEXT)".into(),
-            "Journal         (timestamped column, Ctrl-K palette)".into(),
-        ],
-    );
+    )
+    .with_choices(vec![
+        Choice::new("Vertical Split")
+            .with_badge("recommended")
+            .with_description(
+                "Sessions rail + swappable deck (default in v2.2.16+)",
+            ),
+        Choice::new("Classic")
+            .with_description("Single-deck, pre-v2.2.16 layout"),
+        Choice::new("Three-Pane")
+            .with_description("FOCUS / LOG / CONTEXT split (wide terminals)"),
+        Choice::new("Journal")
+            .with_description("Timestamped column with Ctrl-K palette"),
+    ])
+    .with_footer_hint("press 1-4, or ↑/↓ + Enter · Esc to keep default");
     let layout_kind_answer = runner.run_choice("step7-layout-kind", layout_kind_modal)?;
     tui_answers.layout_kind = match layout_kind_answer {
         ModalAnswer::Choice(0) => "vertical-split".to_string(),

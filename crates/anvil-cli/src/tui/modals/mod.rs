@@ -43,8 +43,10 @@
 //!                         wired-site coverage in main.rs tests module.
 
 pub mod confirm;
+pub mod health_probe;
 pub mod password;
 pub mod queue;
+pub mod streaming;
 pub mod text_input;
 
 use ratatui::style::Color;
@@ -106,6 +108,21 @@ pub(crate) use queue::{ModalQueue, ModalAnswer, QueuedModal, WizardChoiceModal};
 // and ModalAnswer::TextInput variants in queue.rs.
 #[allow(unused_imports)]
 pub(crate) use text_input::{TextInputAction, TextInputModal};
+// Task #666 (v2.2.18, Agent A1): streaming output + health probe.
+// StreamingOutputModal is driven by WizardModalRunner::run_streaming_output
+// directly; HealthProbeModal is queue-able via QueuedModal::HealthProbe and
+// has its own runner entry `run_health_probe`.
+#[allow(unused_imports)]
+pub(crate) use streaming::{
+    StreamingAction, StreamingOutputModal, StreamingState, SubprocessHandle,
+};
+#[allow(unused_imports)]
+pub(crate) use health_probe::{
+    HealthIssue, HealthProbeAction, HealthProbeModal, HealthStatus,
+};
+// Re-export `Choice` for the rich WizardChoiceModal API.
+#[allow(unused_imports)]
+pub(crate) use queue::Choice;
 
 // ─── Pending action enums (held alongside the modal on AnvilTui) ─────────────
 
