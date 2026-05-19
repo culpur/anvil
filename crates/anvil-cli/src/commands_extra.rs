@@ -15,12 +15,13 @@ use crate::{
 };
 
 impl LiveCli {
-    /// `/mcp [list|status|tools <server>]` — MCP server management.
+    /// `/mcp [list|status|tools <server>|builder]` — MCP server management.
     pub(crate) fn run_mcp_command(&self, action: Option<&str>) -> String {
         // Read MCP server config from settings.json
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let settings_path = home.as_ref().map(|h| h.join(".anvil").join("settings.json"));
         let servers: Vec<String> = settings_path
+            .clone()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| v.get("mcpServers").cloned())
@@ -33,7 +34,7 @@ impl LiveCli {
                 if servers.is_empty() {
                     return "No MCP servers configured.\n\n\
                         Configure MCP servers in ~/.anvil/settings.json under \"mcpServers\".\n\
-                        Example:\n  \"mcpServers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path\"]\n    }\n  }"
+                        Example:\n  \"mcpServers\": {\n    \"filesystem\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/path\"]\n    }\n  }\n\nOr scaffold a brand-new MCP server interactively:\n  /mcp builder"
                         .to_string();
                 }
                 let mut lines = vec![format!("🔌 MCP Servers ({count} configured):")];
@@ -43,9 +44,39 @@ impl LiveCli {
                 lines.push(String::new());
                 lines.push("MCP tools are auto-discovered at startup and available to the AI.".to_string());
                 lines.push("Configure in ~/.anvil/settings.json under \"mcpServers\".".to_string());
+                lines.push("Scaffold a brand-new MCP server: /mcp builder".to_string());
                 lines.join("\n")
             }
-            other => format!("Unknown MCP action: {other}\nUsage: /mcp [list|status]"),
+            "builder" | "build" | "new" | "scaffold" => {
+                // The MCP builder is fully interactive (prompts read from
+                // stdin, results print to stdout). When invoked from the
+                // TUI we must leave the alt-screen first — mirroring
+                // /provider ollama's pattern — so println in the
+                // mcp_builder module is safe per
+                // feedback-tui-stdout-anti-pattern's exception clause.
+                let Some(settings_path) = settings_path else {
+                    return "MCP builder unavailable: $HOME is not set.".to_string();
+                };
+                // Best-effort: ensure the .anvil directory exists so the
+                // wizard can write settings.json on the first run.
+                if let Some(parent) = settings_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = crossterm::terminal::disable_raw_mode();
+                crate::tui::leave_alt_screen_for_inline_op();
+                let status = crate::mcp_builder::run_mcp_builder(&settings_path);
+                let _ = crossterm::terminal::enable_raw_mode();
+                // Wait briefly so the user can read the output.
+                use std::time::Duration;
+                if crossterm::event::poll(Duration::from_secs(60)).unwrap_or(false) {
+                    let _ = crossterm::event::read();
+                }
+                crate::tui::restore_alt_screen();
+                status
+            }
+            other => format!(
+                "Unknown MCP action: {other}\nUsage: /mcp [list|status|tools <server>|builder]"
+            ),
         }
     }
 
