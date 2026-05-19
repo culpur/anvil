@@ -836,6 +836,10 @@ impl AnvilTui {
             self.burst_tracker.reset();
             self.active_tab = index;
             self.tabs[index].has_unread = false;
+            // Task #647 (G1): mirror focus to remote viewers using the
+            // stable logical tab_id, not the Vec position.
+            let tab_id = self.tabs[index].id;
+            self.relay_forward(runtime::relay::RelayMessage::TabSwitched { tab_id });
         }
     }
 
@@ -1935,6 +1939,18 @@ impl AnvilTui {
         // Layout switch is a structural event — ratatui's back-buffer
         // dimensions/regions change. Hard clear required (task #629).
         self.request_redraw_reason(RedrawReason::InlineOpReturn);
+
+        // Task #647 (G3): mirror layout change to remote viewers.
+        let kind_str = match new.kind {
+            runtime::TuiLayoutKind::Classic => "classic",
+            runtime::TuiLayoutKind::VerticalSplit => "vertical_split",
+            runtime::TuiLayoutKind::ThreePane => "three_pane",
+            runtime::TuiLayoutKind::Journal => "journal",
+        };
+        self.relay_forward(runtime::relay::RelayMessage::LayoutChanged {
+            kind: kind_str.to_string(),
+            tabs: new.tabs,
+        });
     }
 
     /// Backward-compat alias: `set_layout(new)` → `set_active_tab_layout(new, global=true)`.
