@@ -84,6 +84,67 @@ a { color:var(--accent); }
 .disconnected h2 { color:var(--error); font-size:20px; margin-bottom:8px; }
 .disconnected p { color:var(--text-dim); }
 
+/* Task #647: Remote-control sidebar — daemon, approvals, layout, slash */
+.rc-sidebar { position:fixed; right:0; top:48px; bottom:0; width:320px;
+  background:rgba(0,2,12,0.94); border-left:1px solid var(--border);
+  padding:0; overflow-y:auto; z-index:40; font-size:12px;
+  box-shadow:-2px 0 10px rgba(0,0,0,0.4); }
+.rc-sidebar.hidden { display:none; }
+.rc-sidebar-header { display:flex; justify-content:space-between;
+  align-items:center; padding:10px 14px; background:rgba(255,255,255,0.04);
+  color:var(--text-dim); font-weight:600; text-transform:uppercase;
+  font-size:10px; letter-spacing:1px; border-bottom:1px solid var(--border); }
+.rc-pending-count { background:var(--accent); color:#000; padding:1px 8px;
+  border-radius:10px; font-weight:700; }
+.rc-proposal-list { padding:8px; max-height:35vh; overflow-y:auto; }
+.rc-proposal { background:rgba(255,255,255,0.03); border:1px solid var(--border);
+  border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+.rc-proposal-name { font-weight:600; color:var(--text); }
+.rc-proposal-meta { color:var(--text-dim); font-size:11px; margin:2px 0 6px; }
+.rc-proposal-prompt { color:var(--text-dim); font-size:11px; margin-bottom:6px;
+  font-style:italic; max-height:3em; overflow:hidden; }
+.rc-proposal-actions { display:flex; gap:6px; }
+.rc-proposal-actions button { flex:1; padding:4px 8px; border-radius:4px;
+  border:1px solid var(--border); background:rgba(255,255,255,0.04);
+  color:var(--text); cursor:pointer; font-size:11px; }
+.rc-proposal-actions .approve { color:var(--accent); border-color:var(--accent); }
+.rc-proposal-actions .reject { color:var(--error); border-color:var(--error); }
+.rc-empty { color:var(--text-dim); padding:8px; text-align:center; font-style:italic; }
+.rc-daemon-card { display:flex; align-items:center; gap:8px; padding:10px 14px; }
+.rc-daemon-dot { width:8px; height:8px; border-radius:50%; background:var(--text-dim); }
+.rc-daemon-dot.alive { background:#2ecc71; }
+.rc-daemon-dot.dead  { background:var(--error); }
+.rc-daemon-dot.error { background:#e67e22; }
+.rc-daemon-text { color:var(--text-dim); font-size:11px; }
+.rc-layout-picker { padding:8px 14px; }
+.rc-layout-picker select { width:100%; padding:6px 8px;
+  background:rgba(255,255,255,0.05); border:1px solid var(--border);
+  color:var(--text); border-radius:4px; font-size:11px; }
+.rc-slash-bar { display:flex; gap:6px; padding:8px 14px; }
+.rc-slash-bar input { flex:1; padding:6px 8px; background:rgba(255,255,255,0.05);
+  border:1px solid var(--border); color:var(--text); border-radius:4px; font-size:11px; }
+.rc-slash-bar button { padding:6px 12px; background:var(--accent); color:#000;
+  border:0; border-radius:4px; cursor:pointer; font-size:11px; font-weight:600; }
+.rc-slash-output { padding:0 14px 12px; color:var(--text-dim); font-size:11px;
+  white-space:pre-wrap; max-height:30vh; overflow-y:auto; font-family:monospace; }
+/* Layout-mirror CSS classes applied to <body> so existing flex column rules
+   stay intact but the messages pane gets layout-specific styling hooks. */
+body.layout-classic .messages { /* baseline */ }
+body.layout-vertical-split .messages { border-right:2px solid var(--border); }
+body.layout-three-pane .messages { background:linear-gradient(180deg, transparent 0, rgba(255,255,255,0.02) 100%); }
+body.layout-journal .messages { font-family:monospace; }
+/* Permission prompt modal (task #648 future) */
+.rc-prompt-overlay { position:fixed; inset:0; background:rgba(0,2,12,0.9);
+  display:flex; align-items:center; justify-content:center; z-index:120; }
+.rc-prompt-overlay.hidden { display:none; }
+.rc-prompt-modal { background:#0a1020; border:1px solid var(--border);
+  border-radius:8px; padding:20px; max-width:480px; width:90%; }
+.rc-prompt-modal h3 { color:var(--accent); margin-bottom:8px; }
+.rc-prompt-modal p { color:var(--text); margin-bottom:14px; }
+.rc-prompt-actions { display:flex; gap:8px; justify-content:flex-end; }
+.rc-prompt-actions button { padding:6px 14px; border-radius:4px; cursor:pointer;
+  border:1px solid var(--border); background:rgba(255,255,255,0.05); color:var(--text); }
+
 .hidden { display:none !important; }
 
 /* ── Tab view visibility ─────────────────────────────── */
@@ -380,6 +441,56 @@ a { color:var(--accent); }
   </div>
 </div>
 
+<!-- Task #647: Remote-control rewire UI surfaces -->
+<div class="rc-sidebar hidden" id="rc-sidebar">
+  <div class="rc-sidebar-header">
+    <span>Pending routine approvals</span>
+    <span class="rc-pending-count" id="rc-pending-count">0</span>
+  </div>
+  <div class="rc-proposal-list" id="rc-proposal-list">
+    <div class="rc-empty">No routines waiting.</div>
+  </div>
+  <div class="rc-sidebar-header">
+    <span>Daemon</span>
+  </div>
+  <div class="rc-daemon-card" id="rc-daemon-card">
+    <span class="rc-daemon-dot" id="rc-daemon-dot"></span>
+    <span class="rc-daemon-text" id="rc-daemon-text">No status yet…</span>
+  </div>
+  <div class="rc-sidebar-header">
+    <span>Layout</span>
+  </div>
+  <div class="rc-layout-picker">
+    <select id="rc-layout-select" onchange="rcLayoutPick()">
+      <option value="classic">classic</option>
+      <option value="classic-tabs">classic-tabs</option>
+      <option value="vertical-split">vertical-split</option>
+      <option value="vertical-split-tabs" selected>vertical-split-tabs</option>
+      <option value="three-pane">three-pane</option>
+      <option value="three-pane-tabs">three-pane-tabs</option>
+      <option value="journal">journal</option>
+      <option value="journal-tabs">journal-tabs</option>
+    </select>
+  </div>
+  <div class="rc-sidebar-header">
+    <span>Slash dispatch</span>
+  </div>
+  <div class="rc-slash-bar">
+    <input type="text" id="rc-slash-input" placeholder="schedule pending" autocomplete="off">
+    <button onclick="rcSlashSend()">Run</button>
+  </div>
+  <div class="rc-slash-output" id="rc-slash-output"></div>
+</div>
+
+<!-- Permission prompt modal (task #648 wiring; protocol surface today) -->
+<div class="rc-prompt-overlay hidden" id="rc-prompt-overlay">
+  <div class="rc-prompt-modal">
+    <h3>Permission Required</h3>
+    <p id="rc-prompt-body"></p>
+    <div class="rc-prompt-actions" id="rc-prompt-actions"></div>
+  </div>
+</div>
+
 <!-- Disconnected overlay -->
 <div class="disconnected hidden" id="disconnected">
   <div class="inner">
@@ -481,7 +592,39 @@ function handleMessage(msg) {
       renderTabBar();
       break;
     case 'tab_switched':
-      // Host switched tabs — optionally follow
+      // Task #647 (G1): host moved focus — mirror the active tab.
+      if (tabs[msg.tab_id]) {
+        activeTab = msg.tab_id;
+        renderTabBar();
+        renderMessages();
+        scrollToBottom();
+      }
+      break;
+    // Task #647 (G3): layout mirror.
+    case 'layout_changed':
+      handleLayoutChanged(msg);
+      break;
+    // Task #647 (G5): slash-command output.
+    case 'slash_result':
+      handleSlashResult(msg);
+      break;
+    // Task #647 (G6): anvild status snapshot.
+    case 'daemon_status':
+      handleDaemonStatus(msg);
+      break;
+    // Task #647 (G7): routine proposal feed.
+    case 'proposal_snapshot':
+      handleProposalSnapshot(msg.proposals || []);
+      break;
+    case 'proposal_added':
+      handleProposalAdded(msg.proposal);
+      break;
+    case 'proposal_dropped':
+      handleProposalDropped(msg.routine);
+      break;
+    // Task #647 (G10): per-tool permission prompt protocol surface.
+    case 'permission_prompt':
+      handlePermissionPrompt(msg);
       break;
     case 'user_message':
       addMsg(msg.tab_id, 'user', msg.message);
@@ -2293,6 +2436,177 @@ function escCfg(s) {
   d.textContent = String(s);
   return d.innerHTML;
 }
+
+// ─── Task #647: Remote-control rewire — sidebar + slash + daemon ──────
+
+// State
+let rcPendingProposals = {};   // routine name -> ProposalSummary
+let rcLastDaemonStatus = null;
+let rcCurrentLayout = null;
+let rcRenderScheduled = false;
+
+function rcShowSidebar() {
+  document.getElementById('rc-sidebar').classList.remove('hidden');
+}
+function rcRequestRender() {
+  // Idle-redraw guard (BUG-122-8 analogue): batch repeated state changes
+  // into a single rAF tick so we don't thrash the DOM when the daemon
+  // emits a burst.
+  if (rcRenderScheduled) return;
+  rcRenderScheduled = true;
+  requestAnimationFrame(() => {
+    rcRenderScheduled = false;
+    rcRenderSidebar();
+  });
+}
+
+function rcRenderSidebar() {
+  const list = document.getElementById('rc-proposal-list');
+  const names = Object.keys(rcPendingProposals).sort();
+  document.getElementById('rc-pending-count').textContent = names.length;
+  if (names.length === 0) {
+    list.innerHTML = '<div class="rc-empty">No routines waiting.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  names.forEach(name => {
+    const p = rcPendingProposals[name];
+    const wrap = document.createElement('div');
+    wrap.className = 'rc-proposal';
+    wrap.innerHTML = `
+      <div class="rc-proposal-name">${esc(p.routine)} <span style="color:var(--text-dim);font-size:10px">[${esc(p.permission_mode)}]</span></div>
+      <div class="rc-proposal-meta">${esc(p.schedule_raw)}</div>
+      <div class="rc-proposal-prompt">${esc(p.prompt_preview)}</div>
+      <div class="rc-proposal-actions">
+        <button class="approve" onclick="rcApprove('${esc(p.routine)}')">Approve</button>
+        <button class="reject"  onclick="rcReject('${esc(p.routine)}')">Reject</button>
+      </div>
+    `;
+    list.appendChild(wrap);
+  });
+}
+
+function handleProposalSnapshot(proposals) {
+  rcShowSidebar();
+  rcPendingProposals = {};
+  proposals.forEach(p => { rcPendingProposals[p.routine] = p; });
+  rcRequestRender();
+}
+function handleProposalAdded(p) {
+  rcPendingProposals[p.routine] = p;
+  rcRequestRender();
+}
+function handleProposalDropped(routine) {
+  delete rcPendingProposals[routine];
+  rcRequestRender();
+}
+
+function handleDaemonStatus(msg) {
+  rcShowSidebar();
+  rcLastDaemonStatus = msg;
+  const dot = document.getElementById('rc-daemon-dot');
+  const text = document.getElementById('rc-daemon-text');
+  dot.className = 'rc-daemon-dot';
+  if (msg.last_error) {
+    dot.classList.add('error');
+    text.textContent = `anvild error: ${msg.last_error}`;
+  } else if (msg.running) {
+    dot.classList.add('alive');
+    const fired = msg.routines_fired_last_tick || 0;
+    const loaded = msg.routines_loaded || 0;
+    const v = msg.anvil_version ? ` v${msg.anvil_version}` : '';
+    const pid = msg.pid ? ` pid ${msg.pid}` : '';
+    text.textContent = `anvild running${v}${pid} — ${loaded} routine${loaded === 1 ? '' : 's'} loaded, ${fired} fired last tick`;
+  } else {
+    dot.classList.add('dead');
+    text.textContent = 'anvild not running — use /daemon start';
+  }
+}
+
+function handleLayoutChanged(msg) {
+  rcCurrentLayout = msg.kind;
+  // Strip every layout-* class and apply the new one to <body>.
+  const classes = ['layout-classic', 'layout-vertical-split',
+                   'layout-three-pane', 'layout-journal'];
+  classes.forEach(c => document.body.classList.remove(c));
+  document.body.classList.add(`layout-${msg.kind.replace('_', '-')}`);
+  // Reflect in the layout picker.
+  const sel = document.getElementById('rc-layout-select');
+  if (sel) {
+    const alias = msg.kind.replace('_', '-') + (msg.tabs ? '-tabs' : '');
+    sel.value = alias;
+  }
+}
+
+function handleSlashResult(msg) {
+  const out = document.getElementById('rc-slash-output');
+  if (!out) return;
+  const stamp = new Date().toLocaleTimeString();
+  const tag = msg.ok ? '[ok]' : '[err]';
+  out.textContent = `${stamp} ${tag} /${msg.command}\n${msg.output || ''}\n\n` + out.textContent;
+  // Cap to last 8 KB so the sidebar never grows unbounded.
+  if (out.textContent.length > 8192) {
+    out.textContent = out.textContent.slice(0, 8192);
+  }
+}
+
+function rcApprove(routine) {
+  if (!ws || !paired) return;
+  ws.send(JSON.stringify({type: 'request_routine_approve', routine}));
+}
+function rcReject(routine) {
+  if (!ws || !paired) return;
+  ws.send(JSON.stringify({type: 'request_routine_reject', routine}));
+}
+function rcLayoutPick() {
+  if (!ws || !paired) return;
+  const alias = document.getElementById('rc-layout-select').value;
+  const tabs = alias.endsWith('-tabs');
+  const kind = alias.replace(/-tabs$/, '').replace('-', '_');
+  ws.send(JSON.stringify({type: 'request_layout', kind, tabs}));
+}
+function rcSlashSend() {
+  if (!ws || !paired) return;
+  const input = document.getElementById('rc-slash-input');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  ws.send(JSON.stringify({type: 'slash_dispatch', tab_id: activeTab || 0, command: cmd}));
+  input.value = '';
+}
+
+// Permission prompt protocol surface (task #648 wiring).
+function handlePermissionPrompt(msg) {
+  const overlay = document.getElementById('rc-prompt-overlay');
+  document.getElementById('rc-prompt-body').textContent = msg.prompt || '';
+  const actions = document.getElementById('rc-prompt-actions');
+  actions.innerHTML = '';
+  (msg.options || ['allow', 'deny']).forEach(choice => {
+    const btn = document.createElement('button');
+    btn.textContent = choice;
+    btn.onclick = () => {
+      ws.send(JSON.stringify({
+        type: 'permission_decision',
+        tab_id: msg.tab_id || 0,
+        prompt_id: msg.prompt_id || '',
+        choice
+      }));
+      overlay.classList.add('hidden');
+    };
+    actions.appendChild(btn);
+  });
+  overlay.classList.remove('hidden');
+}
+
+// Enter key sends slash command.
+document.addEventListener('DOMContentLoaded', () => {
+  const slashInput = document.getElementById('rc-slash-input');
+  if (slashInput) {
+    slashInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') rcSlashSend();
+    });
+  }
+});
+
 </script>
 </body>
 </html>
