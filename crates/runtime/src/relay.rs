@@ -302,6 +302,89 @@ pub enum RelayMessage {
         message: String,
     },
 
+    // ── v2.2.18 task #647: full TUI parity rewire ────────────────────────────
+    //
+    // The next block of variants closes the gaps documented in
+    // `audit/remote-control-rewire-2026-05-19.md` (G1–G10).  Every variant
+    // pairs a host emitter (or web→host handler) with a viewer rendering
+    // path and is enforced by the `relay_drift_gate` test below.
+
+    // G2 — Web → Host: request that the TUI focus a specific tab.
+    RequestFocusTab {
+        tab_id: usize,
+    },
+    // G3 — Host → Web: TUI layout changed (kind + tabs flag).
+    LayoutChanged {
+        /// One of: "classic" | "vertical_split" | "three_pane" | "journal"
+        kind: String,
+        tabs: bool,
+    },
+    // G4 — Web → Host: request layout change.
+    RequestLayout {
+        kind: String,
+        tabs: bool,
+    },
+    // G5 — Bidirectional slash dispatch.
+    /// Web → Host: dispatch a slash command (without the leading "/").
+    SlashDispatch {
+        tab_id: usize,
+        command: String,
+    },
+    /// Host → Web: result of a `SlashDispatch`, captured as the string the
+    /// dispatcher pushed into TUI scrollback.
+    SlashResult {
+        tab_id: usize,
+        command: String,
+        ok: bool,
+        output: String,
+    },
+    // G6 — Host → Web: anvild daemon status snapshot.  Emitted on pair,
+    // then again only when the status JSON bytes change (every 5s poll).
+    DaemonStatus {
+        running: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pid: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_tick_at: Option<u64>,
+        routines_loaded: usize,
+        routines_fired_last_tick: usize,
+        pending_proposals_total: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        anvil_version: Option<String>,
+    },
+    // G7 — Routine proposal feed (host → web).
+    ProposalSnapshot {
+        proposals: Vec<ProposalSummary>,
+    },
+    ProposalAdded {
+        proposal: ProposalSummary,
+    },
+    ProposalDropped {
+        routine: String,
+    },
+    // G8 — Web → Host: routine approve / reject.
+    RequestRoutineApprove {
+        routine: String,
+    },
+    RequestRoutineReject {
+        routine: String,
+    },
+    // G10 — Bidirectional permission prompt round-trip.  Per-tool wiring
+    // is task #648 (follow-up); this variant pair is the protocol surface.
+    PermissionPrompt {
+        tab_id: usize,
+        prompt_id: String,
+        prompt: String,
+        options: Vec<String>,
+    },
+    PermissionDecision {
+        tab_id: usize,
+        prompt_id: String,
+        choice: String,
+    },
+
     // ── Connection lifecycle ──
     PeerConnected,
     PeerDisconnected {
@@ -312,6 +395,172 @@ pub enum RelayMessage {
         message: String,
     },
 }
+
+/// Summary of a routine proposal pending operator approval.
+///
+/// Mirrors the fields the web viewer needs to render an approve/reject
+/// row.  Kept narrower than [`runtime::routines::proposal::RoutineProposal`]
+/// so the wire format stays stable when that internal struct evolves.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProposalSummary {
+    pub routine: String,
+    pub schedule_raw: String,
+    pub permission_mode: String,
+    pub prompt_preview: String,
+    pub scheduled_at: u64,
+    pub proposed_at: u64,
+}
+
+impl RelayMessage {
+    /// Discriminant string as it appears on the wire (matches `serde(tag = "type")`).
+    ///
+    /// Used by the drift-gate test to assert every variant has an emitter
+    /// or handler.  Keep this in sync with the `serde(rename_all =
+    /// "snake_case")` on the enum.
+    #[must_use]
+    pub fn type_tag(&self) -> &'static str {
+        match self {
+            Self::HostHello { .. } => "host_hello",
+            Self::ClientHello { .. } => "client_hello",
+            Self::ClientConnected { .. } => "client_connected",
+            Self::PairingRequired => "pairing_required",
+            Self::PairingAttempt { .. } => "pairing_attempt",
+            Self::PairingResult { .. } => "pairing_result",
+            Self::SessionSnapshot { .. } => "session_snapshot",
+            Self::TextDelta { .. } => "text_delta",
+            Self::TextDone { .. } => "text_done",
+            Self::ToolStart { .. } => "tool_start",
+            Self::ToolResult { .. } => "tool_result",
+            Self::ThinkLabel { .. } => "think_label",
+            Self::TurnDone { .. } => "turn_done",
+            Self::Tokens { .. } => "tokens",
+            Self::System { .. } => "system",
+            Self::TabOpened { .. } => "tab_opened",
+            Self::TabClosed { .. } => "tab_closed",
+            Self::TabRenamed { .. } => "tab_renamed",
+            Self::TabSwitched { .. } => "tab_switched",
+            Self::SessionMeta { .. } => "session_meta",
+            Self::RequestNewTab { .. } => "request_new_tab",
+            Self::RequestCloseTab { .. } => "request_close_tab",
+            Self::RequestRenameTab { .. } => "request_rename_tab",
+            Self::ConfigGet => "config_get",
+            Self::ConfigData { .. } => "config_data",
+            Self::ConfigSet { .. } => "config_set",
+            Self::ConfigUpdated { .. } => "config_updated",
+            Self::ConfigSnapshot { .. } => "config_snapshot",
+            Self::ConfigSaved { .. } => "config_saved",
+            Self::ConfigError { .. } => "config_error",
+            Self::VaultState { .. } => "vault_state",
+            Self::ConfigUpdate { .. } => "config_update",
+            Self::HubInstall { .. } => "hub_install",
+            Self::RespawnRequest => "respawn_request",
+            Self::HubInstalled { .. } => "hub_installed",
+            Self::HubInstallError { .. } => "hub_install_error",
+            Self::HubInstallProgress { .. } => "hub_install_progress",
+            Self::UserMessage { .. } => "user_message",
+            Self::RequestFocusTab { .. } => "request_focus_tab",
+            Self::LayoutChanged { .. } => "layout_changed",
+            Self::RequestLayout { .. } => "request_layout",
+            Self::SlashDispatch { .. } => "slash_dispatch",
+            Self::SlashResult { .. } => "slash_result",
+            Self::DaemonStatus { .. } => "daemon_status",
+            Self::ProposalSnapshot { .. } => "proposal_snapshot",
+            Self::ProposalAdded { .. } => "proposal_added",
+            Self::ProposalDropped { .. } => "proposal_dropped",
+            Self::RequestRoutineApprove { .. } => "request_routine_approve",
+            Self::RequestRoutineReject { .. } => "request_routine_reject",
+            Self::PermissionPrompt { .. } => "permission_prompt",
+            Self::PermissionDecision { .. } => "permission_decision",
+            Self::PeerConnected => "peer_connected",
+            Self::PeerDisconnected { .. } => "peer_disconnected",
+            Self::Error { .. } => "error",
+        }
+    }
+}
+
+/// Direction a `RelayMessage` flows on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelayDirection {
+    /// Emitted by the CLI host, consumed by the web viewer.
+    HostToWeb,
+    /// Sent by the web viewer, dispatched by the CLI host.
+    WebToHost,
+    /// Exchanged with the Passage relay itself (not a client event).
+    PassageInternal,
+}
+
+/// Compile-time list of every wire tag the protocol carries.
+///
+/// The drift gate (`relay_drift_gate_every_variant_is_known`) asserts that
+/// every constructible `RelayMessage` value emits a tag that appears in
+/// this list, and that no tag in the list is missing from the
+/// `RelayMessage::type_tag` match.
+pub const KNOWN_RELAY_TAGS: &[(&str, RelayDirection)] = &[
+    // Connection setup
+    ("host_hello", RelayDirection::PassageInternal),
+    ("client_hello", RelayDirection::PassageInternal),
+    ("client_connected", RelayDirection::PassageInternal),
+    ("pairing_required", RelayDirection::HostToWeb),
+    ("pairing_attempt", RelayDirection::WebToHost),
+    ("pairing_result", RelayDirection::HostToWeb),
+    // Session data
+    ("session_snapshot", RelayDirection::HostToWeb),
+    ("text_delta", RelayDirection::HostToWeb),
+    ("text_done", RelayDirection::HostToWeb),
+    ("tool_start", RelayDirection::HostToWeb),
+    ("tool_result", RelayDirection::HostToWeb),
+    ("think_label", RelayDirection::HostToWeb),
+    ("turn_done", RelayDirection::HostToWeb),
+    ("tokens", RelayDirection::HostToWeb),
+    ("system", RelayDirection::HostToWeb),
+    // Tab lifecycle
+    ("tab_opened", RelayDirection::HostToWeb),
+    ("tab_closed", RelayDirection::HostToWeb),
+    ("tab_renamed", RelayDirection::HostToWeb),
+    ("tab_switched", RelayDirection::HostToWeb),
+    ("session_meta", RelayDirection::HostToWeb),
+    // Tab requests
+    ("request_new_tab", RelayDirection::WebToHost),
+    ("request_close_tab", RelayDirection::WebToHost),
+    ("request_rename_tab", RelayDirection::WebToHost),
+    // Legacy config protocol
+    ("config_get", RelayDirection::WebToHost),
+    ("config_data", RelayDirection::HostToWeb),
+    ("config_set", RelayDirection::WebToHost),
+    ("config_updated", RelayDirection::HostToWeb),
+    // Panel-aware config protocol
+    ("config_snapshot", RelayDirection::HostToWeb),
+    ("config_saved", RelayDirection::HostToWeb),
+    ("config_error", RelayDirection::HostToWeb),
+    ("vault_state", RelayDirection::HostToWeb),
+    ("config_update", RelayDirection::WebToHost),
+    // Hub installer
+    ("hub_install", RelayDirection::WebToHost),
+    ("respawn_request", RelayDirection::WebToHost),
+    ("hub_installed", RelayDirection::HostToWeb),
+    ("hub_install_error", RelayDirection::HostToWeb),
+    ("hub_install_progress", RelayDirection::HostToWeb),
+    // Client input
+    ("user_message", RelayDirection::WebToHost),
+    // v2.2.18 task #647 — full TUI parity + anvild
+    ("request_focus_tab", RelayDirection::WebToHost),
+    ("layout_changed", RelayDirection::HostToWeb),
+    ("request_layout", RelayDirection::WebToHost),
+    ("slash_dispatch", RelayDirection::WebToHost),
+    ("slash_result", RelayDirection::HostToWeb),
+    ("daemon_status", RelayDirection::HostToWeb),
+    ("proposal_snapshot", RelayDirection::HostToWeb),
+    ("proposal_added", RelayDirection::HostToWeb),
+    ("proposal_dropped", RelayDirection::HostToWeb),
+    ("request_routine_approve", RelayDirection::WebToHost),
+    ("request_routine_reject", RelayDirection::WebToHost),
+    ("permission_prompt", RelayDirection::HostToWeb),
+    ("permission_decision", RelayDirection::WebToHost),
+    // Connection lifecycle
+    ("peer_connected", RelayDirection::HostToWeb),
+    ("peer_disconnected", RelayDirection::HostToWeb),
+    ("error", RelayDirection::HostToWeb),
+];
 
 // ─── Tab Snapshot (serializable session state) ──────────────────────────────
 
@@ -1195,6 +1444,493 @@ mod tests {
         assert_eq!(restart_for_type("theme"), "soft");
         assert_eq!(restart_for_type("skill"), "none");
         assert_eq!(restart_for_type("agent"), "none");
+    }
+
+    // ── v2.2.18 task #647: full TUI parity rewire — variant round-trips ─
+
+    #[test]
+    fn request_focus_tab_round_trips() {
+        let msg = RelayMessage::RequestFocusTab { tab_id: 7 };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"request_focus_tab\""));
+        assert!(json.contains("\"tab_id\":7"));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::RequestFocusTab { tab_id } => assert_eq!(tab_id, 7),
+            other => panic!("Expected RequestFocusTab, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn layout_changed_round_trips() {
+        let msg = RelayMessage::LayoutChanged {
+            kind: "vertical_split".into(),
+            tabs: true,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"layout_changed\""));
+        assert!(json.contains("\"kind\":\"vertical_split\""));
+        assert!(json.contains("\"tabs\":true"));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::LayoutChanged { kind, tabs } => {
+                assert_eq!(kind, "vertical_split");
+                assert!(tabs);
+            }
+            other => panic!("Expected LayoutChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_layout_round_trips() {
+        let msg = RelayMessage::RequestLayout {
+            kind: "three_pane".into(),
+            tabs: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"request_layout\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::RequestLayout { kind, tabs } => {
+                assert_eq!(kind, "three_pane");
+                assert!(!tabs);
+            }
+            other => panic!("Expected RequestLayout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_dispatch_round_trips() {
+        let msg = RelayMessage::SlashDispatch {
+            tab_id: 0,
+            command: "schedule pending".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"slash_dispatch\""));
+        assert!(json.contains("\"command\":\"schedule pending\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::SlashDispatch { tab_id, command } => {
+                assert_eq!(tab_id, 0);
+                assert_eq!(command, "schedule pending");
+            }
+            other => panic!("Expected SlashDispatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_result_round_trips() {
+        let msg = RelayMessage::SlashResult {
+            tab_id: 2,
+            command: "schedule list".into(),
+            ok: true,
+            output: "ROUTINES\n--------\n  ● daily-summary".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"slash_result\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::SlashResult { ok, output, .. } => {
+                assert!(ok);
+                assert!(output.contains("daily-summary"));
+            }
+            other => panic!("Expected SlashResult, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_status_round_trips_running() {
+        let msg = RelayMessage::DaemonStatus {
+            running: true,
+            pid: Some(42_801),
+            last_tick_at: Some(1_700_000_000),
+            routines_loaded: 4,
+            routines_fired_last_tick: 1,
+            pending_proposals_total: 2,
+            last_error: None,
+            anvil_version: Some("2.2.18".into()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"daemon_status\""));
+        assert!(json.contains("\"running\":true"));
+        assert!(json.contains("\"pid\":42801"));
+        assert!(json.contains("\"pending_proposals_total\":2"));
+        // last_error skipped when None.
+        assert!(!json.contains("\"last_error\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::DaemonStatus {
+                running,
+                pid,
+                pending_proposals_total,
+                ..
+            } => {
+                assert!(running);
+                assert_eq!(pid, Some(42_801));
+                assert_eq!(pending_proposals_total, 2);
+            }
+            other => panic!("Expected DaemonStatus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_status_round_trips_not_running() {
+        let msg = RelayMessage::DaemonStatus {
+            running: false,
+            pid: None,
+            last_tick_at: None,
+            routines_loaded: 0,
+            routines_fired_last_tick: 0,
+            pending_proposals_total: 0,
+            last_error: Some("could not bind socket".into()),
+            anvil_version: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"running\":false"));
+        assert!(json.contains("\"last_error\":\"could not bind socket\""));
+        // Optional fields skipped when None.
+        assert!(!json.contains("\"pid\""));
+        assert!(!json.contains("\"anvil_version\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::DaemonStatus { running: false, .. }));
+    }
+
+    fn sample_proposal_summary() -> ProposalSummary {
+        ProposalSummary {
+            routine: "nightly-recap".into(),
+            schedule_raw: "every 24h at 02:00".into(),
+            permission_mode: "accept".into(),
+            prompt_preview: "Summarize today's work and write to ~/.anvil/journal/…".into(),
+            scheduled_at: 1_700_000_000,
+            proposed_at: 1_700_000_001,
+        }
+    }
+
+    #[test]
+    fn proposal_snapshot_round_trips() {
+        let msg = RelayMessage::ProposalSnapshot {
+            proposals: vec![sample_proposal_summary()],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"proposal_snapshot\""));
+        assert!(json.contains("\"routine\":\"nightly-recap\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::ProposalSnapshot { proposals } => {
+                assert_eq!(proposals.len(), 1);
+                assert_eq!(proposals[0].routine, "nightly-recap");
+                assert_eq!(proposals[0].permission_mode, "accept");
+            }
+            other => panic!("Expected ProposalSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn proposal_added_round_trips() {
+        let msg = RelayMessage::ProposalAdded {
+            proposal: sample_proposal_summary(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"proposal_added\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::ProposalAdded { .. }));
+    }
+
+    #[test]
+    fn proposal_dropped_round_trips() {
+        let msg = RelayMessage::ProposalDropped {
+            routine: "nightly-recap".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"proposal_dropped\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::ProposalDropped { routine } => {
+                assert_eq!(routine, "nightly-recap");
+            }
+            other => panic!("Expected ProposalDropped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn request_routine_approve_round_trips() {
+        let msg = RelayMessage::RequestRoutineApprove {
+            routine: "daily-summary".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"request_routine_approve\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::RequestRoutineApprove { .. }));
+    }
+
+    #[test]
+    fn request_routine_reject_round_trips() {
+        let msg = RelayMessage::RequestRoutineReject {
+            routine: "daily-summary".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"request_routine_reject\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, RelayMessage::RequestRoutineReject { .. }));
+    }
+
+    #[test]
+    fn permission_prompt_round_trips() {
+        let msg = RelayMessage::PermissionPrompt {
+            tab_id: 1,
+            prompt_id: "ask-bash-rm".into(),
+            prompt: "Allow `rm -rf ~/scratch`?".into(),
+            options: vec!["allow".into(), "deny".into()],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"permission_prompt\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::PermissionPrompt { prompt_id, options, .. } => {
+                assert_eq!(prompt_id, "ask-bash-rm");
+                assert_eq!(options.len(), 2);
+            }
+            other => panic!("Expected PermissionPrompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn permission_decision_round_trips() {
+        let msg = RelayMessage::PermissionDecision {
+            tab_id: 1,
+            prompt_id: "ask-bash-rm".into(),
+            choice: "deny".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"permission_decision\""));
+        match serde_json::from_str::<RelayMessage>(&json).unwrap() {
+            RelayMessage::PermissionDecision { choice, .. } => {
+                assert_eq!(choice, "deny");
+            }
+            other => panic!("Expected PermissionDecision, got {other:?}"),
+        }
+    }
+
+    // ── Drift gate (R2) ───────────────────────────────────────────────────────
+    //
+    // Two-way assertion: every constructible `RelayMessage` value must have
+    // a `type_tag` that appears in `KNOWN_RELAY_TAGS`, AND every entry in
+    // `KNOWN_RELAY_TAGS` must be reachable by at least one constructed
+    // value.  This is the gate referenced by
+    // `audit/remote-control-rewire-2026-05-19.md` (R2).
+    //
+    // When you add a new variant:
+    //   1. Add it to `RelayMessage`.
+    //   2. Extend the `type_tag` match.
+    //   3. Add a `(tag, direction)` row in `KNOWN_RELAY_TAGS`.
+    //   4. Add a constructor below.
+    //
+    // The drift gate fires if any of these four steps drift apart.
+
+    fn one_of_each_variant() -> Vec<RelayMessage> {
+        vec![
+            RelayMessage::HostHello {
+                hash: "h".into(),
+                protocol_version: RELAY_PROTOCOL_VERSION,
+            },
+            RelayMessage::ClientHello { hash: "h".into() },
+            RelayMessage::ClientConnected { client_id: "c".into() },
+            RelayMessage::PairingRequired,
+            RelayMessage::PairingAttempt {
+                client_id: "c".into(),
+                code: "000000".into(),
+            },
+            RelayMessage::PairingResult {
+                client_id: "c".into(),
+                success: true,
+                error: None,
+            },
+            RelayMessage::SessionSnapshot { tabs: vec![] },
+            RelayMessage::TextDelta { tab_id: 0, text: String::new() },
+            RelayMessage::TextDone { tab_id: 0 },
+            RelayMessage::ToolStart {
+                tab_id: 0,
+                name: String::new(),
+                detail: String::new(),
+            },
+            RelayMessage::ToolResult {
+                tab_id: 0,
+                name: String::new(),
+                summary: String::new(),
+                is_error: false,
+            },
+            RelayMessage::ThinkLabel { tab_id: 0, label: String::new() },
+            RelayMessage::TurnDone { tab_id: 0 },
+            RelayMessage::Tokens { tab_id: 0, input: 0, output: 0 },
+            RelayMessage::System { tab_id: 0, message: String::new() },
+            RelayMessage::TabOpened {
+                tab_id: 0,
+                name: String::new(),
+                model: String::new(),
+                session_id: String::new(),
+            },
+            RelayMessage::TabClosed { tab_id: 0 },
+            RelayMessage::TabRenamed { tab_id: 0, name: String::new() },
+            RelayMessage::TabSwitched { tab_id: 0 },
+            RelayMessage::SessionMeta {
+                session_id: String::new(),
+                model: String::new(),
+                version: String::new(),
+                permission_mode: String::new(),
+                thinking_enabled: false,
+                qmd_status: None,
+                block_time: None,
+                status_line_preset: None,
+            },
+            RelayMessage::RequestNewTab { name: None },
+            RelayMessage::RequestCloseTab { tab_id: 0 },
+            RelayMessage::RequestRenameTab { tab_id: 0, name: String::new() },
+            RelayMessage::ConfigGet,
+            RelayMessage::ConfigData { data: serde_json::json!({}) },
+            RelayMessage::ConfigSet {
+                key: String::new(),
+                value: String::new(),
+            },
+            RelayMessage::ConfigUpdated {
+                key: String::new(),
+                success: true,
+                message: String::new(),
+            },
+            RelayMessage::ConfigSnapshot { config: serde_json::json!({}) },
+            RelayMessage::ConfigSaved { config: serde_json::json!({}) },
+            RelayMessage::ConfigError {
+                panel: String::new(),
+                field: String::new(),
+                message: String::new(),
+            },
+            RelayMessage::VaultState { locked: false },
+            RelayMessage::ConfigUpdate {
+                panel: String::new(),
+                field: String::new(),
+                value: serde_json::json!(null),
+            },
+            RelayMessage::HubInstall {
+                slug: String::new(),
+                version: String::new(),
+            },
+            RelayMessage::RespawnRequest,
+            RelayMessage::HubInstalled {
+                slug: String::new(),
+                version: String::new(),
+                requires_restart: "none".into(),
+            },
+            RelayMessage::HubInstallError {
+                slug: String::new(),
+                reason: String::new(),
+                message: String::new(),
+            },
+            RelayMessage::HubInstallProgress {
+                slug: String::new(),
+                phase: String::new(),
+                percent: 0,
+            },
+            RelayMessage::UserMessage { tab_id: 0, message: String::new() },
+            // v2.2.18 #647 — full TUI parity rewire
+            RelayMessage::RequestFocusTab { tab_id: 0 },
+            RelayMessage::LayoutChanged {
+                kind: "classic".into(),
+                tabs: false,
+            },
+            RelayMessage::RequestLayout {
+                kind: "classic".into(),
+                tabs: false,
+            },
+            RelayMessage::SlashDispatch {
+                tab_id: 0,
+                command: String::new(),
+            },
+            RelayMessage::SlashResult {
+                tab_id: 0,
+                command: String::new(),
+                ok: true,
+                output: String::new(),
+            },
+            RelayMessage::DaemonStatus {
+                running: false,
+                pid: None,
+                last_tick_at: None,
+                routines_loaded: 0,
+                routines_fired_last_tick: 0,
+                pending_proposals_total: 0,
+                last_error: None,
+                anvil_version: None,
+            },
+            RelayMessage::ProposalSnapshot { proposals: vec![] },
+            RelayMessage::ProposalAdded {
+                proposal: ProposalSummary {
+                    routine: String::new(),
+                    schedule_raw: String::new(),
+                    permission_mode: "auto".into(),
+                    prompt_preview: String::new(),
+                    scheduled_at: 0,
+                    proposed_at: 0,
+                },
+            },
+            RelayMessage::ProposalDropped { routine: String::new() },
+            RelayMessage::RequestRoutineApprove { routine: String::new() },
+            RelayMessage::RequestRoutineReject { routine: String::new() },
+            RelayMessage::PermissionPrompt {
+                tab_id: 0,
+                prompt_id: String::new(),
+                prompt: String::new(),
+                options: vec![],
+            },
+            RelayMessage::PermissionDecision {
+                tab_id: 0,
+                prompt_id: String::new(),
+                choice: String::new(),
+            },
+            RelayMessage::PeerConnected,
+            RelayMessage::PeerDisconnected { client_id: None },
+            RelayMessage::Error { message: String::new() },
+        ]
+    }
+
+    #[test]
+    fn relay_drift_gate_every_variant_is_known() {
+        // Forward: every constructed variant's tag is in the manifest.
+        let known: std::collections::HashSet<&str> =
+            KNOWN_RELAY_TAGS.iter().map(|(t, _)| *t).collect();
+        for msg in one_of_each_variant() {
+            let tag = msg.type_tag();
+            assert!(
+                known.contains(tag),
+                "RelayMessage variant emits tag `{tag}` but it is missing from \
+                 KNOWN_RELAY_TAGS — add a (tag, direction) entry."
+            );
+            // Also assert the serde wire tag matches the manual table.
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(
+                json.contains(&format!("\"type\":\"{tag}\"")),
+                "serde wire tag for {msg:?} does not match type_tag(); \
+                 update one to match the other"
+            );
+        }
+    }
+
+    #[test]
+    fn relay_drift_gate_every_known_tag_is_constructible() {
+        // Reverse: every entry in the manifest is reachable by a
+        // constructor in `one_of_each_variant`.
+        let constructed: std::collections::HashSet<&str> = one_of_each_variant()
+            .iter()
+            .map(RelayMessage::type_tag)
+            .collect();
+        for (tag, _dir) in KNOWN_RELAY_TAGS {
+            assert!(
+                constructed.contains(tag),
+                "KNOWN_RELAY_TAGS lists `{tag}` but no constructor in \
+                 one_of_each_variant produced it — add a row so the drift \
+                 gate stays bidirectional."
+            );
+        }
+    }
+
+    #[test]
+    fn relay_drift_gate_no_duplicate_tags() {
+        let mut seen = std::collections::HashSet::new();
+        for (tag, _) in KNOWN_RELAY_TAGS {
+            assert!(
+                seen.insert(*tag),
+                "Duplicate tag `{tag}` in KNOWN_RELAY_TAGS"
+            );
+        }
     }
 
     #[test]
