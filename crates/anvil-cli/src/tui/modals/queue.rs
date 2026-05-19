@@ -43,10 +43,19 @@
 //! "choice" steps (layout, mouse capture, default model) are the
 //! candidate first migrations and use the `WizardChoiceModal` defined
 //! here.
+//!
+//! v2.2.18 (task #666, Agent A1): rich `Choice` rows on
+//! `WizardChoiceModal` (badge + description), a `StreamingOutputModal`
+//! primitive in `super::streaming`, and a `HealthProbeModal` primitive
+//! in `super::health_probe`. The streaming modal is NOT queue-able
+//! (subprocess lifecycle is bound to a single call into
+//! `WizardModalRunner::run_streaming_output`); the health-probe modal
+//! is queue-able via `QueuedModal::HealthProbe`.
 
 use std::collections::VecDeque;
 
 use super::confirm::{ConfirmModal, ConfirmChoice};
+use super::health_probe::HealthProbeModal;
 use super::password::PasswordModal;
 use super::text_input::TextInputModal;
 
@@ -78,6 +87,15 @@ pub(crate) enum QueuedModal {
         tag: String,
         modal: TextInputModal,
     },
+    /// v2.2.18 task #666: a multi-issue health-probe checklist with
+    /// spacebar-toggle repair flags. Renders the detected-issues list
+    /// with status icons (✓ ✗ ⚠) and lets the user pick which to
+    /// repair. Resolves to `ModalAnswer::HealthCheck`.
+    #[allow(dead_code)]
+    HealthProbe {
+        tag: String,
+        modal: HealthProbeModal,
+    },
 }
 
 impl QueuedModal {
@@ -90,6 +108,7 @@ impl QueuedModal {
             Self::Password { tag, .. } => tag,
             Self::Choice { tag, .. } => tag,
             Self::TextInput { tag, .. } => tag,
+            Self::HealthProbe { tag, .. } => tag,
         }
     }
 }
@@ -122,6 +141,26 @@ pub(crate) enum ModalAnswer {
     /// `Ctrl+C` on a TextInputModal — caller should abort the step.
     #[allow(dead_code)]
     TextInputCancelled,
+    /// v2.2.18 task #666: outcome of a `StreamingOutputModal`. The
+    /// subprocess exited with `exit_code` and the modal captured the
+    /// last N lines of its merged stdout/stderr in `output_tail` (in
+    /// arrival order, oldest first). `exit_code = -1` means the user
+    /// cancelled via Esc → confirm → SIGTERM/SIGKILL.
+    #[allow(dead_code)]
+    StreamingResult {
+        exit_code: i32,
+        output_tail: Vec<String>,
+    },
+    /// v2.2.18 task #666: outcome of a `HealthProbeModal`. `repair`
+    /// lists the indices the user marked for repair (via `[r]`/`[a]`);
+    /// `quit` is `true` only if the user pressed `q`/Esc (caller
+    /// should treat as wizard-abort). Continue-without-repair is
+    /// signaled by `repair.is_empty() && !quit`.
+    #[allow(dead_code)]
+    HealthCheck {
+        repair: Vec<usize>,
+        quit: bool,
+    },
 }
 
 /// FIFO queue of pending modals plus a parallel log of recorded answers.
@@ -187,6 +226,69 @@ impl ModalQueue {
     }
 }
 
+/// A single row in a `WizardChoiceModal`.
+///
+/// v2.2.18 (task #666): adds the optional `badge` + `description`
+/// fields so the wizard can render the 4-state install pattern:
+///
+/// ```text
+///   [1] Install Ollama now            [recommended]
+///       Full installer + benchmark, ~5min
+///   [2] I have it elsewhere
+///       Point Anvil at an existing Ollama URL
+/// ```
+///
+/// Backward-compatible: bare labels (the legacy
+/// `WizardChoiceModal::new(title, vec!["A".into(), "B".into()])` API)
+/// still produce a flat list with no badges or descriptions because
+/// `From<S: AsRef<str>>` is implemented for `Choice`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Choice {
+    pub(crate) label: String,
+    pub(crate) badge: Option<String>,
+    pub(crate) description: Option<String>,
+}
+
+impl Choice {
+    /// New row with just a label.
+    #[allow(dead_code)]
+    pub(crate) fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            badge: None,
+            description: None,
+        }
+    }
+
+    /// Builder: attach a short badge rendered to the right of the
+    /// label (e.g. `[recommended]`, `[detected]`). The modal wraps it
+    /// in square brackets, so callers pass the bare text.
+    #[allow(dead_code)]
+    pub(crate) fn with_badge(mut self, badge: impl Into<String>) -> Self {
+        self.badge = Some(badge.into());
+        self
+    }
+
+    /// Builder: attach a one-line description rendered under the label
+    /// in the modal-secondary color. Pass a single line; the modal
+    /// does not wrap.
+    #[allow(dead_code)]
+    pub(crate) fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
+impl<S: AsRef<str>> From<S> for Choice {
+    fn from(s: S) -> Self {
+        Choice {
+            label: s.as_ref().to_string(),
+            badge: None,
+            description: None,
+        }
+    }
+}
+
 /// A numbered-list choice modal — the wizard's "Step 7: TUI Layout"
 /// pattern (`[1] Vertical Split [2] Classic [3] Three-Pane [4]
 /// Journal`). Up/Down navigate, Enter commits, Esc cancels.
@@ -194,24 +296,76 @@ impl ModalQueue {
 /// The rendered overlay is intentionally minimal; the wizard adapter
 /// supplies the title + option labels and reads the selected index
 /// back from `ModalAnswer::Choice(idx)`.
+///
+/// v2.2.18 (task #666): each row may carry a badge + description, and
+/// the modal may carry a custom footer hint. The legacy `new(title,
+/// vec![label, label])` constructor is preserved verbatim.
 #[derive(Debug, Clone)]
 pub(crate) struct WizardChoiceModal {
     pub(crate) title: String,
-    pub(crate) options: Vec<String>,
+    pub(crate) options: Vec<Choice>,
     pub(crate) selected: usize,
+    /// Optional footer help line. `None` falls back to the default
+    /// hint ("↑↓ navigate · Enter select · 1-9 jump · Esc cancel").
+    pub(crate) footer_hint: Option<String>,
 }
 
 impl WizardChoiceModal {
-    /// Construct with a list of labels and `0` highlighted by default.
-    /// Panics if `options` is empty — that's a programming error
-    /// (a zero-option choice is meaningless).
+    /// Legacy constructor: title + list of label strings.
+    /// Equivalent to
+    /// `WizardChoiceModal::new_titled(title).with_choices(vec![Choice::new(l), ...])`.
+    /// Panics on an empty `options` vec — a zero-option choice is meaningless.
+    ///
+    /// Signature preserved verbatim from v2.2.17 so every existing
+    /// caller compiles without change. The new rich form is
+    /// `WizardChoiceModal::new_titled(...).with_choices(...)`.
     pub(crate) fn new(title: impl Into<String>, options: Vec<String>) -> Self {
-        assert!(!options.is_empty(), "WizardChoiceModal requires at least one option");
+        assert!(
+            !options.is_empty(),
+            "WizardChoiceModal requires at least one option"
+        );
         Self {
             title: title.into(),
-            options,
+            options: options.into_iter().map(Choice::from).collect(),
             selected: 0,
+            footer_hint: None,
         }
+    }
+
+    /// v2.2.18 (task #666) rich constructor: start with just a title,
+    /// then chain `.with_choices(...)` + optional `.with_footer_hint(...)`.
+    /// The modal is unusable until `with_choices` is called — calling
+    /// `render` on an empty modal early-returns; `handle_key` returns
+    /// `Continue` for navigation and `Cancelled` for Esc.
+    #[allow(dead_code)]
+    pub(crate) fn new_titled(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            options: Vec::new(),
+            selected: 0,
+            footer_hint: None,
+        }
+    }
+
+    /// Builder: replace the options list with the supplied `Choice`
+    /// rows. Panics on an empty vec — matches `new()`'s contract.
+    #[allow(dead_code)]
+    pub(crate) fn with_choices(mut self, choices: Vec<Choice>) -> Self {
+        assert!(
+            !choices.is_empty(),
+            "WizardChoiceModal requires at least one choice"
+        );
+        self.options = choices;
+        self.selected = 0;
+        self
+    }
+
+    /// Builder: override the default footer hint. Pass an empty string
+    /// to suppress the footer entirely.
+    #[allow(dead_code)]
+    pub(crate) fn with_footer_hint(mut self, hint: impl Into<String>) -> Self {
+        self.footer_hint = Some(hint.into());
+        self
     }
 
     /// Outcome of `handle_key`.
@@ -220,6 +374,12 @@ impl WizardChoiceModal {
         key: crossterm::event::KeyEvent,
     ) -> ChoiceAction {
         use crossterm::event::KeyCode;
+        if self.options.is_empty() {
+            return match key.code {
+                KeyCode::Esc => ChoiceAction::Cancelled,
+                _ => ChoiceAction::Continue,
+            };
+        }
         match key.code {
             KeyCode::Up => {
                 if self.selected > 0 {
@@ -250,12 +410,13 @@ impl WizardChoiceModal {
         }
     }
 
-    /// Task #579: render the choice modal as a centered overlay. Used by
-    /// the wizard's standalone runner (`tui::wizard_runner`) and any
-    /// future in-TUI caller that drains the queue from inside an alt
-    /// screen. Mirrors the visual contract of `ConfirmModal::render`:
-    /// rounded border, accent-colored title, dim-numbered options, the
-    /// `selected` index drawn with reverse video.
+    /// Task #579 + #666: render the choice modal as a centered overlay.
+    /// Used by the wizard's standalone runner (`tui::wizard_runner`) and
+    /// any future in-TUI caller that drains the queue from inside an
+    /// alt-screen. Mirrors the visual contract of `ConfirmModal::render`
+    /// (rounded border, accent-colored title, dim-numbered options, the
+    /// `selected` index drawn with reverse video) and additionally
+    /// renders per-row badges + descriptions when present.
     pub(crate) fn render(
         &self,
         frame: &mut ratatui::Frame,
@@ -267,14 +428,26 @@ impl WizardChoiceModal {
         use ratatui::text::{Line, Span};
         use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
-        // Width: at most 70, at least 30, padded against the screen edges.
-        let modal_w = area.width.saturating_sub(8).min(70).max(30);
-        // Height: 2 padding + 1 line per option + 1 footer + 2 border = N + 5.
-        let opts_rows = self.options.len() as u16;
-        let modal_h: u16 = opts_rows + 5;
-        if area.width < 12 || area.height < modal_h {
+        if self.options.is_empty() {
             return;
         }
+
+        let modal_w = area.width.saturating_sub(8).min(80).max(30);
+
+        // Row count: 1 line per option + 1 extra for each option that
+        // carries a non-empty description. Then 2 padding + 1 footer +
+        // 2 border = N + 5.
+        let desc_rows: u16 = self
+            .options
+            .iter()
+            .filter(|c| c.description.as_deref().map(|s| !s.is_empty()).unwrap_or(false))
+            .count() as u16;
+        let opts_rows = self.options.len() as u16 + desc_rows;
+        let needed_h: u16 = opts_rows + 5;
+        if area.width < 12 || area.height < needed_h.min(7) {
+            return;
+        }
+        let modal_h = needed_h.min(area.height.saturating_sub(2));
         let modal_x = (area.width.saturating_sub(modal_w)) / 2;
         let modal_y = (area.height.saturating_sub(modal_h)) / 2;
         let modal_area = Rect {
@@ -295,11 +468,12 @@ impl WizardChoiceModal {
         let inner = block.inner(modal_area);
         frame.render_widget(block, modal_area);
 
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.options.len() + 2);
+        let mut lines: Vec<Line<'static>> =
+            Vec::with_capacity(self.options.len() + desc_rows as usize + 3);
         lines.push(Line::from(""));
         for (idx, opt) in self.options.iter().enumerate() {
-            let label = format!("  [{}] {}", idx + 1, opt);
-            let style = if idx == self.selected {
+            let prefix = format!("  [{}] ", idx + 1);
+            let label_style = if idx == self.selected {
                 Style::default()
                     .fg(Color::Black)
                     .bg(accent)
@@ -307,13 +481,37 @@ impl WizardChoiceModal {
             } else {
                 Style::default().fg(Color::White)
             };
-            lines.push(Line::from(Span::styled(label, style)));
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
+            spans.push(Span::styled(format!("{prefix}{}", opt.label), label_style));
+            if let Some(badge) = opt.badge.as_ref().filter(|b| !b.is_empty()) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    format!("[{badge}]"),
+                    Style::default()
+                        .fg(super::modal_secondary_color())
+                        .add_modifier(Modifier::ITALIC),
+                ));
+            }
+            lines.push(Line::from(spans));
+
+            if let Some(desc) = opt.description.as_ref().filter(|d| !d.is_empty()) {
+                lines.push(Line::from(Span::styled(
+                    format!("      {desc}"),
+                    Style::default().fg(super::modal_secondary_color()),
+                )));
+            }
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  ↑↓ navigate · Enter select · 1-9 jump · Esc cancel",
-            Style::default().fg(super::modal_secondary_color()),
-        )));
+        let footer = self
+            .footer_hint
+            .as_deref()
+            .unwrap_or("↑↓ navigate · Enter select · 1-9 jump · Esc cancel");
+        if !footer.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("  {footer}"),
+                Style::default().fg(super::modal_secondary_color()),
+            )));
+        }
 
         frame.render_widget(Paragraph::new(lines), inner);
     }
@@ -349,7 +547,7 @@ mod tests {
             tag: "step7-layout".to_string(),
             modal: WizardChoiceModal::new(
                 "Layout",
-                vec!["Vertical".into(), "Classic".into()],
+                vec!["Vertical".to_string(), "Classic".to_string()],
             ),
         });
         q.push(QueuedModal::Confirm {
@@ -369,7 +567,10 @@ mod tests {
         let mut q = ModalQueue::new();
         q.push(QueuedModal::Choice {
             tag: "layout".to_string(),
-            modal: WizardChoiceModal::new("L", vec!["A".into(), "B".into()]),
+            modal: WizardChoiceModal::new(
+                "L",
+                vec!["A".to_string(), "B".to_string()],
+            ),
         });
         q.resolve_front(ModalAnswer::Choice(1));
         assert_eq!(q.answer_for("layout"), Some(&ModalAnswer::Choice(1)));
@@ -382,53 +583,177 @@ mod tests {
         assert!(q.resolve_front(ModalAnswer::ChoiceCancelled).is_none());
     }
 
-    // ─── WizardChoiceModal ─────────────────────────────────────────
+    // ─── WizardChoiceModal (legacy v2.2.17 API) ────────────────────
 
     #[test]
     fn choice_modal_arrow_keys_navigate() {
-        let mut m = WizardChoiceModal::new("t", vec!["a".into(), "b".into(), "c".into()]);
+        let mut m = WizardChoiceModal::new(
+            "t",
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        );
         assert_eq!(m.selected, 0);
         assert_eq!(m.handle_key(key(KeyCode::Down)), ChoiceAction::Continue);
         assert_eq!(m.selected, 1);
         assert_eq!(m.handle_key(key(KeyCode::Down)), ChoiceAction::Continue);
         assert_eq!(m.selected, 2);
-        // Bound: Down at the bottom stays.
         assert_eq!(m.handle_key(key(KeyCode::Down)), ChoiceAction::Continue);
         assert_eq!(m.selected, 2);
-        // Up walks back.
         assert_eq!(m.handle_key(key(KeyCode::Up)), ChoiceAction::Continue);
         assert_eq!(m.selected, 1);
     }
 
     #[test]
     fn choice_modal_enter_commits() {
-        let mut m = WizardChoiceModal::new("t", vec!["x".into(), "y".into()]);
+        let mut m = WizardChoiceModal::new(
+            "t",
+            vec!["x".to_string(), "y".to_string()],
+        );
         m.handle_key(key(KeyCode::Down));
-        assert_eq!(m.handle_key(key(KeyCode::Enter)), ChoiceAction::Committed(1));
+        assert_eq!(
+            m.handle_key(key(KeyCode::Enter)),
+            ChoiceAction::Committed(1)
+        );
     }
 
     #[test]
     fn choice_modal_digit_jumps_and_commits() {
         let mut m = WizardChoiceModal::new(
             "t",
-            vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ],
         );
-        // `3` jumps to and commits the 3rd option (index 2).
-        assert_eq!(m.handle_key(key(KeyCode::Char('3'))), ChoiceAction::Committed(2));
+        assert_eq!(
+            m.handle_key(key(KeyCode::Char('3'))),
+            ChoiceAction::Committed(2)
+        );
         assert_eq!(m.selected, 2);
-        // Out-of-range digit is ignored.
-        assert_eq!(m.handle_key(key(KeyCode::Char('9'))), ChoiceAction::Continue);
+        assert_eq!(
+            m.handle_key(key(KeyCode::Char('9'))),
+            ChoiceAction::Continue
+        );
     }
 
     #[test]
     fn choice_modal_esc_cancels() {
-        let mut m = WizardChoiceModal::new("t", vec!["a".into(), "b".into()]);
+        let mut m = WizardChoiceModal::new(
+            "t",
+            vec!["a".to_string(), "b".to_string()],
+        );
         assert_eq!(m.handle_key(key(KeyCode::Esc)), ChoiceAction::Cancelled);
     }
 
     #[test]
     #[should_panic(expected = "at least one option")]
     fn choice_modal_panics_on_zero_options() {
-        let _ = WizardChoiceModal::new("t", vec![]);
+        let _ = WizardChoiceModal::new("t", Vec::<String>::new());
+    }
+
+    // ─── v2.2.18 task #666: rich Choice rows ───────────────────────
+
+    #[test]
+    fn rich_choice_modal_builder_chain() {
+        let m = WizardChoiceModal::new_titled("Install Ollama?")
+            .with_choices(vec![
+                Choice::new("Install Ollama now")
+                    .with_badge("recommended")
+                    .with_description("Full installer + benchmark, ~5min"),
+                Choice::new("I have it elsewhere")
+                    .with_description("Point Anvil at an existing Ollama URL"),
+                Choice::new("Skip — don't ask again"),
+                Choice::new("Maybe later"),
+            ])
+            .with_footer_hint("press 1-4, or ↑/↓ + Enter");
+        assert_eq!(m.options.len(), 4);
+        assert_eq!(m.options[0].badge.as_deref(), Some("recommended"));
+        assert_eq!(
+            m.options[0].description.as_deref(),
+            Some("Full installer + benchmark, ~5min"),
+        );
+        assert!(m.options[2].badge.is_none());
+        assert_eq!(
+            m.footer_hint.as_deref(),
+            Some("press 1-4, or ↑/↓ + Enter")
+        );
+        assert_eq!(m.selected, 0);
+    }
+
+    #[test]
+    fn rich_choice_modal_handles_digit_and_arrows() {
+        let mut m = WizardChoiceModal::new_titled("Pick").with_choices(vec![
+            Choice::new("one").with_badge("recommended"),
+            Choice::new("two"),
+            Choice::new("three").with_description("desc"),
+            Choice::new("four"),
+        ]);
+        assert_eq!(
+            m.handle_key(key(KeyCode::Char('3'))),
+            ChoiceAction::Committed(2)
+        );
+        assert_eq!(m.selected, 2);
+        let mut m = WizardChoiceModal::new_titled("Pick").with_choices(vec![
+            Choice::new("one"),
+            Choice::new("two"),
+        ]);
+        m.handle_key(key(KeyCode::Down));
+        assert_eq!(
+            m.handle_key(key(KeyCode::Enter)),
+            ChoiceAction::Committed(1)
+        );
+    }
+
+    #[test]
+    fn rich_choice_modal_render_emits_badge_and_description() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::style::Color;
+
+        let backend = TestBackend::new(80, 20);
+        let mut term = Terminal::new(backend).unwrap();
+        let m = WizardChoiceModal::new_titled("Install?").with_choices(vec![
+            Choice::new("Install now")
+                .with_badge("recommended")
+                .with_description("Full installer"),
+            Choice::new("Skip"),
+        ]);
+        term.draw(|f| {
+            m.render(f, f.area(), Color::Cyan);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let dump: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            dump.contains("[recommended]"),
+            "badge missing from render: {dump:?}"
+        );
+        assert!(
+            dump.contains("Full installer"),
+            "description missing from render: {dump:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_choice_constructor_still_works() {
+        // Bare-string constructor must continue to work — this is
+        // the back-compat guarantee for every existing caller that
+        // has not migrated to the rich `Choice` form.
+        let mut m = WizardChoiceModal::new(
+            "Theme",
+            vec!["Dark".to_string(), "Light".to_string()],
+        );
+        assert_eq!(m.options.len(), 2);
+        assert!(m.options[0].badge.is_none());
+        assert!(m.options[0].description.is_none());
+        assert_eq!(
+            m.handle_key(key(KeyCode::Char('2'))),
+            ChoiceAction::Committed(1)
+        );
     }
 }
