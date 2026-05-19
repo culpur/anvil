@@ -225,6 +225,14 @@ pub fn handle_slash_command(
             message: "/ollama: intercepted by the CLI in interactive mode. In non-interactive contexts, use `anvil ollama …` from your shell instead.".to_string(),
             session: session.clone(),
         }),
+        SlashCommand::Schedule { .. } => Some(SlashCommandResult {
+            message: "/schedule: intercepted by the CLI in interactive mode. In non-interactive contexts, manage routines via `~/.anvil/routines/*.toml` and inspect output under `~/.anvil/routines/output/<name>/`. The daemon writes a fresh status sidecar at `~/.anvil/run/anvild.status.json` every 30s.".to_string(),
+            session: session.clone(),
+        }),
+        SlashCommand::Daemon { .. } => Some(SlashCommandResult {
+            message: "/daemon: intercepted by the CLI in interactive mode. In non-interactive contexts, use `anvil daemon {start|stop|status|foreground|install-service|uninstall-service}` from your shell.".to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Init => Some(SlashCommandResult {
             message: "/init requires an active session. Run `anvil` and use /init to create ANVIL.md and initialize project configuration for the assistant.".to_string(),
             session: session.clone(),

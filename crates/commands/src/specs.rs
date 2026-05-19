@@ -2338,6 +2338,80 @@ EXAMPLES
         requires_arguments: false,
     },
     SlashCommandSpec {
+        name: "schedule",
+        aliases: &[],
+        summary: "Inspect + invoke routines without leaving the TUI (v2.2.18 #657)",
+        argument_hint: Some("[list|show <name>|run-now <name>|status|enable <name>|disable <name>]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/schedule \u{2014} routines management from inside the TUI
+
+USAGE
+  /schedule list                List every routine in ~/.anvil/routines/*.toml
+                                with its schedule, enable/disable state, and
+                                most-recent run outcome.
+  /schedule show <name>         Print the routine's prompt, schedule_raw,
+                                permission_mode, model, delivery targets, and
+                                last archive entry.
+  /schedule run-now <name>      Fire the routine immediately via the executor.
+                                Blocks until the subprocess exits + delivery
+                                dispatches; output is streamed to the chat log.
+  /schedule status              Daemon health + per-routine next_fire timing
+                                from the live status sidecar.
+  /schedule enable <name>       Re-enable a disabled routine (writes enabled =
+                                true into the TOML).
+  /schedule disable <name>      Temporarily disable a routine without deleting
+                                its TOML.
+
+ON-DISK LAYOUT
+  ~/.anvil/routines/<name>.toml       Routine definitions.
+  ~/.anvil/routines/output/<name>/    Per-run archive + packet sidecar.
+  ~/.anvil/run/anvild.status.json     Daemon liveness + per-tick counts.
+
+The anvild daemon picks up TOML changes on its next 30s tick — no restart
+required. See `/daemon` for daemon lifecycle commands.
+",
+        subcommands: crate::subcommands::SCHEDULE_SUBCOMMANDS,
+        tui_available: true,
+        web_available: true,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
+    SlashCommandSpec {
+        name: "daemon",
+        aliases: &[],
+        summary: "Control the anvild routines daemon from inside the TUI (v2.2.18 #657)",
+        argument_hint: Some("[start|stop|status|install-service|uninstall-service]"),
+        resume_supported: false,
+        category: SlashCommandCategory::Automation,
+        detailed_help: "\
+/daemon \u{2014} anvild routines daemon lifecycle
+
+USAGE
+  /daemon status                  Is anvild running? uptime, last tick, last
+                                  error. Reads ~/.anvil/run/anvild.status.json.
+  /daemon start                   Spawn anvild as a detached background
+                                  process. PID at ~/.anvil/run/anvild.pid.
+  /daemon stop                    SIGTERM the running anvild and wait for
+                                  graceful exit (5s); cleans up the PID file.
+  /daemon install-service         Generate a per-platform service unit that
+                                  starts anvild at login (LaunchAgent /
+                                  systemd —user / Task Scheduler).
+  /daemon uninstall-service       Remove the service unit we generated.
+
+These mirror the headless `anvil daemon …` subcommand so users never
+have to drop to a shell. See `/schedule` for routine-level operations.
+",
+        subcommands: crate::subcommands::DAEMON_SUBCOMMANDS,
+        tui_available: true,
+        web_available: false,
+        requires_vault: false,
+        requires_restart: RestartRequirement::None,
+        requires_arguments: false,
+    },
+    SlashCommandSpec {
         name: "file-cache",
         aliases: &["fc"],
         summary: "Inspect and manage the file-fingerprint cache (W11 token economy)",

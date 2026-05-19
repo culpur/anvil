@@ -53,6 +53,7 @@ mod ollama_bench;
 mod ollama_cmds;
 mod ollama_manage;
 mod ollama_requantize;
+mod schedule_cmds;
 mod providers;
 mod remote_control;
 mod render;
@@ -1971,6 +1972,14 @@ fn run_resume_command(
                 message: Some(crate::ollama_cmds::run_ollama_command(args.as_deref(), &ollama_host)),
             })
         }
+        SlashCommand::Schedule { args } => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(crate::schedule_cmds::run_schedule_command(args.as_deref())),
+        }),
+        SlashCommand::Daemon { args } => Ok(ResumeCommandOutcome {
+            session: session.clone(),
+            message: Some(crate::schedule_cmds::run_daemon_command(args.as_deref())),
+        }),
         SlashCommand::Init => Ok(ResumeCommandOutcome {
             session: session.clone(),
             message: Some(init_anvil_md()?),
@@ -6301,6 +6310,14 @@ impl LiveCli {
                 let ollama_host = std::env::var("OLLAMA_HOST")
                     .unwrap_or_else(|_| "http://localhost:11434".to_string());
                 let out = crate::ollama_cmds::run_ollama_command(args.as_deref(), &ollama_host);
+                (out, false)
+            }
+            SlashCommand::Schedule { args } => {
+                let out = crate::schedule_cmds::run_schedule_command(args.as_deref());
+                (out, false)
+            }
+            SlashCommand::Daemon { args } => {
+                let out = crate::schedule_cmds::run_daemon_command(args.as_deref());
                 (out, false)
             }
             SlashCommand::Diff => {

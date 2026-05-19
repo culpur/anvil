@@ -2197,3 +2197,22 @@ pub const LAYOUT_SUBCOMMANDS: &[SubcommandSpec] = &[
     SubcommandSpec { name: "journal",             summary: "Layout C: journal + Ctrl-K palette",          args: &[], subcommands: &[] },
     SubcommandSpec { name: "journal-tabs",        summary: "Layout F: C + thread switcher",               args: &[], subcommands: &[] },
 ];
+
+/// Subcommands for `/schedule` (v2.2.18 routines).
+pub const SCHEDULE_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec { name: "list",     summary: "List every routine + state + next-fire", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "show",     summary: "Print one routine's prompt and metadata", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+    SubcommandSpec { name: "run-now",  summary: "Fire a routine immediately via the executor", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+    SubcommandSpec { name: "status",   summary: "Daemon health + per-routine next_fire snapshot", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "enable",   summary: "Flip enabled = true in the routine TOML", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+    SubcommandSpec { name: "disable",  summary: "Flip enabled = false in the routine TOML", args: &[ArgSpec::FreeText { hint: "<name>" }], subcommands: &[] },
+];
+
+/// Subcommands for `/daemon` (v2.2.18 anvild lifecycle from inside the TUI).
+pub const DAEMON_SUBCOMMANDS: &[SubcommandSpec] = &[
+    SubcommandSpec { name: "status",             summary: "Is anvild running? uptime + last tick + last error", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "start",              summary: "Spawn anvild as a detached background process", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "stop",               summary: "SIGTERM the running anvild and wait for exit", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "install-service",    summary: "Generate a platform service unit (LaunchAgent / systemd / Task Scheduler)", args: &[], subcommands: &[] },
+    SubcommandSpec { name: "uninstall-service",  summary: "Remove the generated service unit", args: &[], subcommands: &[] },
+];

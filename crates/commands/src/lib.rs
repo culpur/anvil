@@ -153,6 +153,21 @@ pub enum SlashCommand {
         /// Sub-command and arguments, e.g. `Some("tune qwen3:8b")`.
         args: Option<String>,
     },
+    /// `/schedule [list|show <name>|run-now <name>|status|enable <name>|disable <name>]`
+    /// Inspect + invoke routines without leaving the TUI (v2.2.18 #657 D5).
+    /// Reads `~/.anvil/routines/*.toml` and `~/.anvil/run/anvild.status.json`;
+    /// `run-now` blocks until the routine finishes via routines::executor.
+    Schedule {
+        /// Sub-command and arguments, e.g. `Some("show release-watch")`.
+        args: Option<String>,
+    },
+    /// `/daemon [start|stop|status|install-service|uninstall-service]`
+    /// In-TUI mirror of the `anvil daemon` subcommand so users never have to
+    /// drop to a shell to manage anvild (v2.2.18 #657 D5).
+    Daemon {
+        /// Sub-command, e.g. `Some("start")`.
+        args: Option<String>,
+    },
     Init,
     Diff,
     Version,
@@ -740,6 +755,12 @@ impl SlashCommand {
                 action: remainder_after_command(trimmed, command),
             },
             "ollama" => Self::Ollama {
+                args: remainder_after_command(trimmed, command),
+            },
+            "schedule" => Self::Schedule {
+                args: remainder_after_command(trimmed, command),
+            },
+            "daemon" => Self::Daemon {
                 args: remainder_after_command(trimmed, command),
             },
             "init" => Self::Init,
@@ -1847,7 +1868,7 @@ mod tests {
         // task #636 v2.2.17: +1 (/reflect) = 118 total
         // task #557 v2.2.17: +1 (/rewind) = 119 total
         // v2.2.18: +1 (/heal — task #667 self-healing modal) = 120 total
-        assert_eq!(slash_command_specs().len(), 120);
+        assert_eq!(slash_command_specs().len(), 122);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         // v2.2.16: +1 (/layout resume_supported=true) = 25
         // v2.2.17 task #557: +1 (/rewind resume_supported=true) = 26
@@ -2984,6 +3005,8 @@ mod tests {
                 SlashCommand::Config { .. } => Some("config"),
                 SlashCommand::Memory { .. } => Some("memory"),
                 SlashCommand::Ollama { .. } => Some("ollama"),
+                SlashCommand::Schedule { .. } => Some("schedule"),
+                SlashCommand::Daemon { .. } => Some("daemon"),
                 SlashCommand::Init => Some("init"),
                 SlashCommand::Diff => Some("diff"),
                 SlashCommand::Version => Some("version"),
@@ -3113,6 +3136,8 @@ mod tests {
             SlashCommand::Config { section: None, value: None },
             SlashCommand::Memory { action: None },
             SlashCommand::Ollama { args: None },
+            SlashCommand::Schedule { args: None },
+            SlashCommand::Daemon { args: None },
             SlashCommand::Init,
             SlashCommand::Diff,
             SlashCommand::Version,
@@ -3377,6 +3402,8 @@ mod tests {
         "config",
         "memory",
         "ollama",
+        "schedule",
+        "daemon",
         "init",
         "diff",
         "version",
