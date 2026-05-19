@@ -315,12 +315,29 @@ fn check_relay() -> CheckRow {
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Run all checks and print the report.  Returns the number of failed checks.
+///
+/// v2.2.18: also runs the new `health::probe_all` layer (#667) and prints
+/// its structured report below the legacy checklist.  The exit code is
+/// non-zero if either the legacy checks have a failure or the health
+/// probes detect Breakage / Drift severity.
 pub(crate) fn run_check() -> u32 {
     let rows = collect_checks();
     print_check_report(&rows);
-    rows.iter()
+    let legacy_fails = rows
+        .iter()
         .filter(|r| r.status == CheckStatus::Fail)
-        .count() as u32
+        .count() as u32;
+
+    // New health probe layer (v2.2.18 / task #667).
+    let report = crate::health::probe_all(crate::health::HAPPY_PATH_BUDGET);
+    println!("{}", report.render_cli());
+    let health_fails = match report.severity() {
+        crate::health::Severity::Green => 0,
+        crate::health::Severity::Drift => 1,
+        crate::health::Severity::Breakage => 1,
+    };
+
+    legacy_fails + health_fails
 }
 
 /// Collect all check results (separated for testability).

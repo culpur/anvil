@@ -638,6 +638,17 @@ pub fn handle_slash_command(
             };
             Some(SlashCommandResult { message: msg, session: session.clone() })
         }
+        SlashCommand::Heal => Some(SlashCommandResult {
+            // /heal opens an interactive modal — this static handler can
+            // only point users at the live dispatcher in main.rs (TUI) /
+            // `anvil --check` (CLI).  Intercepted before this arm fires
+            // in live runs; this fallback exists so the slash command is
+            // a no-op (rather than "not recognized") when dispatched
+            // through code paths that haven't been TUI-wired.
+            message: "Run `anvil --check` for a structured health report,\nor invoke /heal inside a live Anvil session to open the modal."
+                .to_string(),
+            session: session.clone(),
+        }),
         SlashCommand::Unknown(cmd) => Some(SlashCommandResult {
             message: format!("/{cmd} is not a recognized command. Type /help to see all available commands."),
             session: session.clone(),

@@ -474,6 +474,8 @@ pub enum SlashCommand {
     ScrollSpeed {
         lines: Option<String>,
     },
+    /// `/heal` — open the HealingModal to inspect and repair install drift (v2.2.18, task #667).
+    Heal,
     Unknown(String),
 }
 
@@ -887,6 +889,7 @@ impl SlashCommand {
             "scroll-speed" | "scroll_speed" | "scrollspeed" => Self::ScrollSpeed {
                 lines: remainder_after_command(trimmed, command).filter(|s| !s.is_empty()),
             },
+            "heal" => Self::Heal,
             other => Self::Unknown(other.to_string()),
         })
     }
@@ -1395,7 +1398,8 @@ mod tests {
         // v2.2.11 W2: +1 (effort), W3: +1 (goal), W4: +1 (profile) = 108 total
         // v2.3 W11: +1 (file-cache), W12: +1 (cmd-cache) = 110 total
         // v2.2.14: +1 (scroll-speed CC-139-F3) = 111 total
-        assert_eq!(slash_command_specs().len(), 111);
+        // v2.2.18: +1 (heal — task #667 self-healing modal) = 112 total
+        assert_eq!(slash_command_specs().len(), 112);
         // v2.2.6: added knowledge (resume) + daily (resume) + productivity (resume) = +3
         assert_eq!(resume_supported_slash_commands().len(), 24);
     }
@@ -2042,6 +2046,8 @@ mod tests {
                 SlashCommand::ScrollSpeed { .. } => "scroll-speed",
                 // Named profiles (v2.2.11 W4):
                 SlashCommand::Profile { .. } => "profile",
+                // Self-healing modal (v2.2.18 task #667):
+                SlashCommand::Heal => "heal",
                 SlashCommand::Unknown(_) => "", // unknown has no spec by design
             }
         }
@@ -2161,6 +2167,7 @@ mod tests {
             SlashCommand::CmdCache { action: None },
             SlashCommand::ScrollSpeed { lines: None },
             SlashCommand::Profile { action: None },
+            SlashCommand::Heal,
         ];
 
         let specs = slash_command_specs();
