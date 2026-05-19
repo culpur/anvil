@@ -106,6 +106,7 @@ dependencies = [
  "russh-keys",
  "rust-i18n",
  "rustyline",
+ "serde",
  "serde_json",
  "serial_test",
  "syntect",

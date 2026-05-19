@@ -41,6 +41,7 @@ mod cmd_static;
 mod commands_extra;
 mod commands_util;
 mod configure;
+mod daemon;
 mod file_drop;
 mod format_tool;
 mod help;
@@ -533,6 +534,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
+        CliAction::Daemon { subcommand } => {
+            // v2.2.18 #657: routines daemon.  All daemon subcommands manage
+            // an OS process, so they own their own exit code — we pass it
+            // straight through `std::process::exit` so shells can chain.
+            let anvil_binary = std::env::current_exe()
+                .unwrap_or_else(|_| std::path::PathBuf::from("anvil"));
+            let anvil_version = env!("CARGO_PKG_VERSION").to_string();
+            let code = daemon::run(subcommand, anvil_binary, anvil_version);
+            std::process::exit(code);
+        }
     }
     Ok(())
 }
@@ -696,6 +707,13 @@ enum CliAction {
     /// when any node ends in `Failed` so CI can pipeline it.
     Chain {
         subcommand: commands::ChainSubcommand,
+    },
+    /// `anvil daemon <subcommand>` — v2.2.18 routines daemon (#657).
+    ///
+    /// First local `anvild` server.  Subcommands: start | stop | status |
+    /// foreground | install-service | uninstall-service.
+    Daemon {
+        subcommand: daemon::DaemonSubcommand,
     },
 }
 
@@ -1102,6 +1120,10 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
         }
         "chain" | "chains" => parse_chain_args(&rest[1..]),
+        "daemon" => {
+            let subcommand = daemon::parse(&rest[1..])?;
+            Ok(CliAction::Daemon { subcommand })
+        }
         "mcp-server" => parse_mcp_server_args(&rest[1..]),
         "prompt" => {
             let prompt = rest[1..].join(" ");
