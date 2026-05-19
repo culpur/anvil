@@ -1749,17 +1749,6 @@ pub const OLLAMA_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[ArgSpec::DynamicEnum(DynamicEnumSource::InstalledOllamaModels)],
         subcommands: &[],
     },
-    // Task #666 (v2.2.18, Agent A3): standalone re-entry to the
-    // wizard's Step-5 install + fit-rank + bench flow.  Routes through
-    // `crate::anvil_cli::ollama_cmds::run_ollama_command` in production;
-    // the dispatch arm spawns a fresh WizardSession so the entire flow
-    // runs inside an alt-screen modal (same UX as first-run setup).
-    SubcommandSpec {
-        name: "setup",
-        summary: "Open the hw-aware Ollama setup wizard (install + model pick + benchmark)",
-        args: &[],
-        subcommands: &[],
-    },
 ];
 
 // ─── /file-cache subcommands (v2.2.14 — drift-prevention) ────────────────────

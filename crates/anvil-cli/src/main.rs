@@ -73,12 +73,6 @@ mod bg_handlers;
 mod utils;
 mod vault;
 mod wizard;
-/// Task #666 (v2.2.18, Agent A3): hardware-aware Ollama setup as a
-/// new Step 5. Replaces the v2.2.17 "Ollama URL" text input with a
-/// 4-state choice (Install / Existing / Skip / Defer) and ranks
-/// curated + discovered models against detected hardware.
-#[allow(dead_code)] // Wired into wizard.rs Step 5 + /ollama setup once A1's StreamingOutputModal lands.
-mod wizard_ollama;
 /// Task #579: standalone modal-queue runner used by the first-run
 /// wizard to drive `WizardChoiceModal` / `ConfirmModal` steps before
 /// the full `AnvilTui` exists.

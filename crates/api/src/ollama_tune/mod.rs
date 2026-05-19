@@ -18,13 +18,10 @@
 
 pub mod auto_tune;
 pub mod bench;
-pub mod fit;
 pub mod flash_attn_bridge;
 pub mod oom_suggestions;
 pub mod policy_config;
 pub mod tuner;
-
-pub use fit::{params_billions_from_tag, rank_models, FitResult, ModelCandidate, ModelKind};
 
 pub use auto_tune::{
     apply_env_overrides, cpu_fallback_options, invalidate_cache, options_to_request_json,

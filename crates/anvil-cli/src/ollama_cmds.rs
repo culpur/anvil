@@ -115,19 +115,6 @@ pub fn run_ollama_command(arg: Option<&str>, ollama_host: &str) -> String {
             "/ollama {route_sub} is handled by the manage-side dispatcher (see crate::ollama_manage)."
         );
     }
-    // Task #666 (v2.2.18, Agent A3): `/ollama setup` re-opens the
-    // hw-aware install + fit-rank + bench wizard.  Dispatch returns a
-    // sentinel string here; the live-CLI site in main.rs intercepts
-    // and spawns the WizardSession (alt-screen modal flow).  The
-    // sentinel keeps headless / resume contexts safe — they can't
-    // open an alt-screen, so they report what would happen and route
-    // the user to `anvil` with no further harm.
-    if route_sub == "setup" {
-        let _ = ollama_host;
-        return "/ollama setup launches the hw-aware install + fit + benchmark wizard. \
-Re-run from an interactive Anvil session (alt-screen required)."
-            .to_string();
-    }
 
     let daemon = LiveOllamaDaemon::new(ollama_host);
     let mut config = OllamaConfig::load();
