@@ -2295,9 +2295,9 @@ or the session ends. Set a persistent default in settings.json with:
     SlashCommandSpec {
         name: "ollama",
         aliases: &[],
-        summary: "Read + manage local Ollama models (list, show, ps, tune, ...)",
+        summary: "Read + manage local Ollama models (list, show, ps, tune, setup, ...)",
         argument_hint: Some(
-            "[list|show <model>|ps|tune <model>|option <model> <k> <v>|policy <model> <k> <v>|pull <model>|rm <model>|cp <src> <dst>|create <model>|bench [<model>]|requantize <model>]",
+            "[list|show <model>|ps|tune <model>|option <model> <k> <v>|policy <model> <k> <v>|pull <model>|rm <model>|cp <src> <dst>|create <model>|bench [<model>]|requantize <model>|setup]",
         ),
         resume_supported: false,
         category: SlashCommandCategory::Core,
@@ -2321,6 +2321,7 @@ USAGE
   /ollama bench [<model>]               Run the benchmark harness against a model
                                         (defaults to the active model)
   /ollama requantize <model>            Helper to suggest/execute a re-quantization
+  /ollama setup                         Open the hw-aware install + bench wizard
 
 EXAMPLES
   /ollama list
@@ -2329,6 +2330,7 @@ EXAMPLES
   /ollama option qwen3:8b num_ctx 8192
   /ollama policy qwen3:8b vram_target 0.85
   /ollama bench qwen3:8b
+  /ollama setup
 ",
         subcommands: crate::subcommands::OLLAMA_SUBCOMMANDS,
         tui_available: true,
