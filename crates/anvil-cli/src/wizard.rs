@@ -138,7 +138,12 @@ pub(crate) fn wizard_save_credential_plaintext(key: &str, value: &str) -> io::Re
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default())
+    fs::write(&path, serde_json::to_string_pretty(&root).unwrap_or_default())?;
+    // Task #663 Gap 3: chmod 0o600 on credentials.json. This file holds
+    // plaintext API keys when the vault is skipped — tighten perms so
+    // it is owner-readable only.  No-op on non-Unix.
+    let _ = crate::wizard_gaps::tighten_credential_perms(&path);
+    Ok(())
 }
 
 /// The public URL where `config-schema.json` is published.
@@ -158,6 +163,10 @@ pub(crate) fn wizard_save_config(
     // runtime loads from).
     let dir = runtime::default_config_home();
     fs::create_dir_all(&dir)?;
+    // Task #663 Gap 6: ensure the canonical subdir set exists on first
+    // run. Idempotent — no-op when the user has already run the wizard
+    // and ~/.anvil/{sessions,logs,...} are already populated.
+    let _ = crate::wizard_gaps::ensure_anvil_subdirs(&dir);
     let path = dir.join("config.json");
     let is_new_config = !path.exists();
     let mut existing = if is_new_config {
@@ -185,6 +194,10 @@ pub(crate) fn wizard_save_config(
         serde_json::to_string_pretty(&serde_json::Value::Object(existing))
             .unwrap_or_else(|_| "{}".to_string()),
     )?;
+    // Task #663 Gap 3: chmod 0o600 on config.json. Plaintext provider
+    // keys may live here until the user migrates them into the vault;
+    // 0600 means only the owning user can read.  No-op on non-Unix.
+    let _ = crate::wizard_gaps::tighten_credential_perms(&path);
     Ok(path)
 }
 
@@ -805,6 +818,117 @@ fn run_cc_import_pipeline_capture_summary(claude_dir: &std::path::Path) -> Strin
     }
 }
 
+/// Task #663 Gap 1 + Gap 8 — shell-completion install step.
+///
+/// Detects the user's shell from `$SHELL`, locates the on-disk
+/// completion source (next to the binary or in the canonical share
+/// dir), copies it to the canonical destination, and offers to append
+/// the `fpath+=~/.zsh/completions` hint to `~/.zshrc` when zsh is
+/// detected.  Silent (returns Ok without opening any modal) when no
+/// completion source can be found — that path means we're running
+/// from a dev `cargo run` build that does not ship completion files.
+///
+/// All UI flows through the modal runner — no `println!` while
+/// alt-screen is active (per `feedback-tui-stdout-anti-pattern`).
+pub(crate) fn run_completion_install_step_in_alt_screen<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+) -> Result<(), RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: crate::wizard_runner::TerminalHooks,
+    K: crate::wizard_runner::KeySource,
+{
+    use crate::tui::modals::ConfirmChoice;
+    use crate::tui::modals::confirm::ConfirmModal;
+    use crate::tui::modals::queue::ModalAnswer;
+
+    let Some(shell) = crate::wizard_gaps::detect_user_shell() else {
+        return Ok(());
+    };
+    let Some(source) = crate::wizard_gaps::locate_completion_source(shell) else {
+        // Dev build or stripped install — nothing to do, silent.
+        return Ok(());
+    };
+    let Some(home) = dirs_next::home_dir() else {
+        return Ok(());
+    };
+    let dest = crate::wizard_gaps::completion_dest_path(shell, &home);
+
+    let confirm_body = format!(
+        "Install {} completion to:\n  {}\n\nRestart your shell after install for completions to take effect.",
+        shell.name(),
+        dest.display(),
+    );
+    let confirm = ConfirmModal::new("Install shell completion?", confirm_body);
+    let answer = runner.run_confirm("step-completion-install", confirm)?;
+    if !matches!(answer, ModalAnswer::Confirm(ConfirmChoice::Yes)) {
+        return Ok(());
+    }
+
+    match crate::wizard_gaps::install_completion_for(shell, &home, &source) {
+        Ok(installed_at) => {
+            let body = format!("Installed: {}", installed_at.display());
+            runner.session.render_banner(
+                "Shell completion installed",
+                &[body.as_str()],
+                ratatui::style::Color::Green,
+            )?;
+        }
+        Err(e) => {
+            let body = format!("Could not install completion: {e}");
+            runner.session.render_banner(
+                "Completion install failed",
+                &[
+                    body.as_str(),
+                    "See https://anvilhub.culpur.net/docs/completions for manual steps.",
+                ],
+                ratatui::style::Color::Yellow,
+            )?;
+            return Ok(());
+        }
+    }
+
+    // Task #663 Gap 8 — zsh fpath hint.  Only relevant for zsh + only
+    // when `~/.zshrc` does not already contain the line.
+    if matches!(shell, crate::wizard_gaps::DetectedShell::Zsh) {
+        let modal = ConfirmModal::new(
+            "Add zsh fpath hint?",
+            "Add `fpath+=~/.zsh/completions` to your `~/.zshrc` before `compinit`\n\
+             so zsh picks up the completion file. Add it now?",
+        );
+        let ans = runner.run_confirm("step-completion-zsh-fpath", modal)?;
+        if matches!(ans, ModalAnswer::Confirm(ConfirmChoice::Yes)) {
+            match crate::wizard_gaps::append_zsh_fpath_hint(&home) {
+                Ok(true) => {
+                    runner.session.render_banner(
+                        "Added fpath hint to ~/.zshrc",
+                        &["Restart your shell or `source ~/.zshrc` to pick it up."],
+                        ratatui::style::Color::Green,
+                    )?;
+                }
+                Ok(false) => {
+                    runner.session.render_banner(
+                        "fpath hint already present",
+                        &["~/.zshrc already contains the completion fpath line."],
+                        ratatui::style::Color::DarkGray,
+                    )?;
+                }
+                Err(e) => {
+                    let body = format!("Could not update ~/.zshrc: {e}");
+                    runner.session.render_banner(
+                        "fpath hint not added",
+                        &[body.as_str()],
+                        ratatui::style::Color::Yellow,
+                    )?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Result of running ALL 8 wizard steps + the step-9 CC migration
 /// step inside a single alt-screen session (task #642 + #643 finisher).
 ///
@@ -943,6 +1067,12 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
     // moments (#643, v2.2.17). The step is silent when ~/.claude/ is
     // not present or the user already declined on a previous run.
     let migration_summary = run_step_9_cc_migration_in_alt_screen(&mut runner)?;
+
+    // Task #663 Gap 1 + Gap 8: shell-completion installation +
+    // optional zsh fpath hint.  Renders inside the same alt-screen so
+    // there is no second transition; silent when no completion source
+    // can be located (cargo-run dev builds).
+    let _ = run_completion_install_step_in_alt_screen(&mut runner);
 
     // Final "Starting Anvil..." banner so the user sees a clean
     // transition out of the wizard rather than an unexplained Drop.
@@ -1463,12 +1593,32 @@ where
                 }
             }
         } else {
-            // Manual API key.
-            let key_modal = PasswordModal::new(
-                "Anthropic API key",
-                "Paste sk-ant-...",
-            );
-            if let Some(api_key) = runner.run_password_capture(key_modal)?
+            // Task #663 Gap 2: env-var detection for Anthropic, too.
+            // Offers `$ANTHROPIC_API_KEY` if set before showing the
+            // PasswordModal paste prompt.
+            let mut api_key_opt: Option<String> = None;
+            if let Some((env_name, env_value)) =
+                crate::wizard_gaps::detect_env_credential("anthropic")
+            {
+                let body = format!(
+                    "Use ${env_name} from your environment? (recommended)\n\n\
+                     Yes — re-use the existing key, no paste needed\n\
+                     No  — paste a different key manually"
+                );
+                let env_modal = ConfirmModal::new("Env-var key detected", body);
+                let env_answer = runner.run_confirm("step3-anthropic-env-key", env_modal)?;
+                if matches!(env_answer, ModalAnswer::Confirm(ConfirmChoice::Yes)) {
+                    api_key_opt = Some(env_value);
+                }
+            }
+            if api_key_opt.is_none() {
+                let key_modal = PasswordModal::new(
+                    "Anthropic API key",
+                    "Paste sk-ant-...",
+                );
+                api_key_opt = runner.run_password_capture(key_modal)?;
+            }
+            if let Some(api_key) = api_key_opt
                 && api_key.len() > 10
             {
                 let _ = wizard_save_credential("anthropic_api_key", &api_key);
@@ -1494,6 +1644,27 @@ where
     }
 
     // All other providers — API key paste.
+    let provider_id = provider_config_id(provider);
+
+    // Task #663 Gap 12: DeepSeek / Kimi data-residency disclosure.
+    // For Chinese-mainland-routed providers, show the disclosure modal
+    // BEFORE any key entry.  Default is No — the user must explicitly
+    // confirm before configuring the provider.  Non-disclosure
+    // providers short-circuit `true` and proceed normally.
+    if crate::wizard_gaps::is_data_residency_provider(provider_id) {
+        let proceed = crate::wizard_gaps::run_data_residency_gate(runner, provider_id)?;
+        if !proceed {
+            runner.session.render_banner(
+                "Skipped",
+                &[
+                    "Provider not configured — run `anvil login <provider>` later.",
+                ],
+                ratatui::style::Color::DarkGray,
+            )?;
+            return Ok(out);
+        }
+    }
+
     runner.session.render_banner(
         &format!("Step 3 of 8 — Sign In to {provider_label}"),
         &[
@@ -1501,16 +1672,43 @@ where
         ],
         ratatui::style::Color::Cyan,
     )?;
-    let prompt = format!("{provider_label} API key");
-    let key_modal = PasswordModal::new(prompt, "Paste key");
-    if let Some(api_key) = runner.run_password_capture(key_modal)?
+
+    // Task #663 Gap 2: provider env-var detection.  If the user already
+    // has `$ANTHROPIC_API_KEY` / `$OPENAI_API_KEY` / etc. in their env,
+    // offer to use that value instead of forcing a paste.  Default Yes
+    // since the env path is the recommended workflow for CI + dev
+    // shells.  We re-prompt for paste when the user says No or when no
+    // env var is set.
+    let mut api_key_opt: Option<String> = None;
+    if let Some((env_name, env_value)) = crate::wizard_gaps::detect_env_credential(provider_id) {
+        use crate::tui::modals::ConfirmChoice;
+        use crate::tui::modals::confirm::ConfirmModal;
+        use crate::tui::modals::queue::ModalAnswer;
+        let body = format!(
+            "Use ${env_name} from your environment? (recommended)\n\n\
+             Yes — re-use the existing key, no paste needed\n\
+             No  — paste a different key manually"
+        );
+        let env_modal = ConfirmModal::new("Env-var key detected", body);
+        let env_answer = runner.run_confirm("step3-env-key", env_modal)?;
+        if matches!(env_answer, ModalAnswer::Confirm(ConfirmChoice::Yes)) {
+            api_key_opt = Some(env_value);
+        }
+    }
+
+    if api_key_opt.is_none() {
+        let prompt = format!("{provider_label} API key");
+        let key_modal = PasswordModal::new(prompt, "Paste key");
+        api_key_opt = runner.run_password_capture(key_modal)?;
+    }
+
+    if let Some(api_key) = api_key_opt
         && api_key.len() > 10
     {
         // Save under the canonical vault key for the provider.
         let vault_key = vault_key_for_provider(provider);
         let _ = wizard_save_credential(vault_key, &api_key);
-        let id = provider_config_id(provider);
-        out.configured_providers.push(id.to_string());
+        out.configured_providers.push(provider_id.to_string());
         push_default_model_candidates(provider, &mut out.model_candidates);
     }
 
@@ -1815,6 +2013,18 @@ pub(crate) struct WizardResult {
 
 #[allow(clippy::too_many_lines, clippy::single_match_else)]
 pub(crate) fn run_first_run_wizard() -> WizardResult {
+    // Task #663 Gap 6: create ~/.anvil/{sessions,logs,benchmarks,...}
+    // BEFORE any modal/banner renders so a panic later in the flow
+    // doesn't leave the user with a half-populated profile.  Idempotent;
+    // no-op on repeat runs.
+    crate::wizard_gaps::ensure_anvil_subdirs_default();
+
+    // Task #663 Gap 10: headless TTY fallback.  When stdout is NOT a
+    // TTY (CI, piped input, `--print` chains) we cannot enter the
+    // alt-screen, so route to the stdin path that prints plain banners
+    // without raw-mode.  install.sh already guards against this in
+    // shell, but a direct `anvil` invocation from a CI script needs the
+    // same gate here.
     if io::stdout().is_terminal() {
         run_first_run_wizard_modal()
     } else {
@@ -1824,6 +2034,17 @@ pub(crate) fn run_first_run_wizard() -> WizardResult {
         // config.json in that path.
         WizardResult::default()
     }
+}
+
+/// Task #663 Gap 9 — public entry for the `--no-setup` closing card.
+///
+/// Called from main.rs when the user passes `--no-setup` or when the
+/// installer explicitly asks anvil to render the skip card without
+/// running the wizard.  Always headless: this never enters alt-screen,
+/// so plain `println!` is safe (SAFE-HEADLESS per the print-discipline
+/// audit).
+pub(crate) fn run_no_setup_card() {
+    crate::wizard_gaps::print_no_setup_card();
 }
 
 /// Modal-driven first-run wizard (the TTY happy path).
@@ -2002,6 +2223,11 @@ fn run_first_run_wizard_modal() -> WizardResult {
     wizard_box_line("");
     wizard_box_line("  Run `anvil` to start coding.");
     wizard_box_line("  Type `/help` for all commands.");
+    wizard_box_line("");
+    // Task #663 Gap 4: surface the health-check command so the user
+    // always knows how to diagnose later.  A5's `anvil --check` wires
+    // up the verification pipeline this hint points at.
+    wizard_box_line(&format!("  {}", crate::wizard_gaps::POST_WIZARD_CHECK_HINT));
     wizard_box_line("");
     wizard_box_bot();
     println!();
@@ -2749,6 +2975,10 @@ fn run_first_run_wizard_via_stdin() {
     wizard_box_line("");
     wizard_box_line("  Run `anvil` to start coding.");
     wizard_box_line("  Type `/help` for all commands.");
+    wizard_box_line("");
+    // Task #663 Gap 4: post-wizard health-check pointer on the stdin
+    // path as well, so CI / piped-input users see the same hint.
+    wizard_box_line(&format!("  {}", crate::wizard_gaps::POST_WIZARD_CHECK_HINT));
     wizard_box_line("");
     wizard_box_bot();
     println!();

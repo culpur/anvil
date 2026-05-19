@@ -84,6 +84,11 @@ mod wizard_ollama;
 /// the full `AnvilTui` exists.
 #[allow(dead_code)] // Wired to wizard.rs callsites in a follow-up commit.
 mod wizard_runner;
+/// Task #663 (v2.2.18, Agent B1): 12 first-run UX features ported from
+/// legacy setup.rs to the modal wizard. Helpers + tests live here; the
+/// integration points live in `wizard.rs`.
+#[allow(dead_code)] // Several helpers are wired only at runtime entry points.
+mod wizard_gaps;
 
 /// A4 task #664 (v2.2.18): cross-OS refresh scheduler (LaunchAgent / systemd-user / cron).
 /// Used by the wizard's QMD step + healer's "refresh schedule missing" repair.
@@ -481,6 +486,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // the first-run-no-config gate uses, so installers, manual
         // re-runs, and curl|bash all converge on one UX.
         CliAction::Setup => { let _ = run_first_run_wizard(); }
+        // Task #663 Gap 9: render the `--no-setup` closing card.
+        CliAction::NoSetup => wizard::run_no_setup_card(),
         CliAction::Check => {
             let fails = run_check();
             std::process::exit(if fails == 0 { 0 } else { 1 });
@@ -657,6 +664,10 @@ enum CliAction {
     FirstRunWizard,
     /// Run the post-install setup wizard (new, called by installer scripts).
     Setup,
+    /// Task #663 Gap 9: print the `--no-setup` closing card without
+    /// running the wizard.  Used by the installer's `--no-setup` flag
+    /// (install.sh) and by users who want to defer commissioning.
+    NoSetup,
     /// Print the installation health checklist.
     Check,
     /// Upgrade Anvil to the latest release.
@@ -777,6 +788,13 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
             }
             "--setup" => {
                 return Ok(CliAction::Setup);
+            }
+            "--no-setup" => {
+                // Task #663 Gap 9: explanatory card when the installer
+                // (or the user) bypasses commissioning.  Print + exit
+                // so subsequent flags do not accidentally drag us into
+                // the wizard.
+                return Ok(CliAction::NoSetup);
             }
             "--first-run" => {
                 return Ok(CliAction::FirstRunWizard);
