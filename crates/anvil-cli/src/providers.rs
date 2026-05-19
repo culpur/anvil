@@ -701,6 +701,20 @@ pub(crate) fn build_runtime_for_provider(
     ))
 }
 
+/// Task #671: collision-resistant prompt id without a uuid dep on this crate.
+/// Format: `pp-<nanos-since-epoch>-<atomic-counter>`. Local-only — the
+/// remote viewer just round-trips it back unchanged.
+fn generate_prompt_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("pp-{nanos}-{n}")
+}
+
 pub(crate) struct CliPermissionPrompter {
     current_mode: PermissionMode,
     /// When `Some`, permission decisions go through the TUI channel rather than
@@ -708,11 +722,31 @@ pub(crate) struct CliPermissionPrompter {
     /// worker is asking.  `None` means "fall through to the stdin/stdout path"
     /// (used by `--print`, batch subcommands, and anything without a TUI).
     tui_sender: Option<TuiSender>,
+    /// Task #671: relay event broadcast sender. When Some AND
+    /// [`Self::prompt_registry`] is also Some, the prompter fans the
+    /// permission request out to the remote viewer as a
+    /// `RelayMessage::PermissionPrompt` and races the remote viewer's
+    /// `PermissionDecision` against the local TUI modal — first answer wins.
+    relay_event_tx:
+        Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
+    /// Task #671: shared pending-prompt registry, cloned from the
+    /// `RelayHost`. The wire side of `register_prompt`/`resolve_prompt`.
+    prompt_registry: Option<runtime::relay::PromptRegistryHandle>,
+    /// Task #671: tab id used when fanning out PermissionPrompt frames so
+    /// the viewer can route the modal into the right tab pane. Defaults
+    /// to 0 (the main tab) when not explicitly threaded in.
+    relay_tab_id: usize,
 }
 
 impl CliPermissionPrompter {
     pub(crate) const fn new(current_mode: PermissionMode) -> Self {
-        Self { current_mode, tui_sender: None }
+        Self {
+            current_mode,
+            tui_sender: None,
+            relay_event_tx: None,
+            prompt_registry: None,
+            relay_tab_id: 0,
+        }
     }
 
     /// Wire in a TUI sender so that permission prompts are routed through the
@@ -720,6 +754,21 @@ impl CliPermissionPrompter {
     /// `spawn_turn_for_tab` before passing the prompter to `run_turn`.
     pub(crate) fn with_tui_sender(mut self, sender: TuiSender) -> Self {
         self.tui_sender = Some(sender);
+        self
+    }
+
+    /// Task #671: wire in the relay event broadcast + shared prompt registry
+    /// so per-tool prompts are fanned out to paired remote viewers.
+    /// Pass the tab id for the worker calling this prompter.
+    pub(crate) fn with_relay(
+        mut self,
+        event_tx: tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>,
+        registry: runtime::relay::PromptRegistryHandle,
+        tab_id: usize,
+    ) -> Self {
+        self.relay_event_tx = Some(event_tx);
+        self.prompt_registry = Some(registry);
+        self.relay_tab_id = tab_id;
         self
     }
 }
@@ -757,6 +806,15 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
             // TUI path: emit event, block on reply channel.
             // The TUI will show the modal when the user is on this tab and
             // dispatch a `PermissionReply` back through `response_tx`.
+            //
+            // Task #671: when both a relay event_tx AND a prompt registry
+            // are wired AND we want to fan the request out to a paired
+            // remote viewer, also register a PromptRegistry slot keyed on
+            // a fresh `prompt_id` and emit `RelayMessage::PermissionPrompt`
+            // over the broadcast. The remote viewer's `PermissionDecision`
+            // resolves the registry slot, which sends a `"allow"|"deny"|
+            // "allow_always"` string into `remote_reply_rx`. We race that
+            // against the local TUI reply on a dedicated bridge thread.
             let (reply_tx, reply_rx) = mpsc::sync_channel::<crate::tui::PermissionReply>(1);
             tui_sender.send(TuiEvent::PermissionRequired {
                 tool_name: request.tool_name.clone(),
@@ -765,14 +823,108 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
                 input_summary: input_summary.clone(),
                 response_tx: reply_tx,
             });
-            match reply_rx.recv() {
-                Ok(crate::tui::PermissionReply::Allow) => runtime::PermissionPromptDecision::Allow,
-                Ok(crate::tui::PermissionReply::AllowAlways) => runtime::PermissionPromptDecision::AllowAlways,
-                Ok(crate::tui::PermissionReply::Deny) => runtime::PermissionPromptDecision::Deny {
+
+            // Generate prompt_id and fan out to remote viewer if wired.
+            // No uuid dep on this crate; combine session-scoped monotonic
+            // counter with high-resolution clock for collision resistance.
+            let prompt_id = generate_prompt_id();
+            let mut remote_reply_rx_opt: Option<mpsc::Receiver<String>> = None;
+            if let (Some(event_tx), Some(registry)) =
+                (&self.relay_event_tx, &self.prompt_registry)
+            {
+                // Only fan out when at least one viewer is paired —
+                // receiver_count() == 0 means no listeners; we'd be
+                // burning prompt-ids for nobody.
+                if event_tx.receiver_count() > 0 {
+                    let (remote_reply_tx, remote_reply_rx) =
+                        mpsc::sync_channel::<String>(1);
+                    let registered = registry
+                        .lock()
+                        .ok()
+                        .is_some_and(|mut r| {
+                            r.register(prompt_id.clone(), remote_reply_tx)
+                        });
+                    if registered {
+                        let prompt_text = format!(
+                            "Tool `{}` requires `{}` permission (current: `{}`)\n\n{}",
+                            request.tool_name,
+                            request.required_mode.as_str(),
+                            self.current_mode.as_str(),
+                            input_summary,
+                        );
+                        let _ = event_tx.send(runtime::relay::RelayMessage::PermissionPrompt {
+                            tab_id: self.relay_tab_id,
+                            prompt_id: prompt_id.clone(),
+                            prompt: prompt_text,
+                            options: vec![
+                                "allow".to_string(),
+                                "allow_always".to_string(),
+                                "deny".to_string(),
+                            ],
+                        });
+                        remote_reply_rx_opt = Some(remote_reply_rx);
+                    }
+                }
+            }
+
+            // Race: whichever channel produces a reply first wins. If
+            // there's no remote registered we just block on the TUI.
+            //
+            // The choice is normalized to one of:
+            //   "allow" | "allow_always" | "deny" | "" (closed → deny)
+            let choice: String = if let Some(remote_reply_rx) = remote_reply_rx_opt {
+                let (combined_tx, combined_rx) = mpsc::sync_channel::<String>(2);
+                let tx_for_tui = combined_tx.clone();
+                std::thread::spawn(move || {
+                    let s = match reply_rx.recv() {
+                        Ok(crate::tui::PermissionReply::Allow) => "allow",
+                        Ok(crate::tui::PermissionReply::AllowAlways) => "allow_always",
+                        Ok(crate::tui::PermissionReply::Deny) => "deny",
+                        Err(_) => "",
+                    };
+                    let _ = tx_for_tui.send(s.to_string());
+                });
+                let tx_for_remote = combined_tx;
+                std::thread::spawn(move || {
+                    let s = remote_reply_rx.recv().unwrap_or_default();
+                    let _ = tx_for_remote.send(s);
+                });
+
+                // First non-empty answer wins. A closed channel sends ""
+                // — keep listening for the other side's real reply.
+                let mut first = combined_rx.recv().unwrap_or_default();
+                if first.is_empty() {
+                    first = combined_rx.recv().unwrap_or_default();
+                }
+
+                // Whichever side lost the race: cancel its registry slot
+                // so a late remote PermissionDecision is a no-op.
+                if let Some(registry) = &self.prompt_registry {
+                    if let Ok(mut reg) = registry.lock() {
+                        reg.cancel(&prompt_id);
+                    }
+                }
+                first
+            } else {
+                match reply_rx.recv() {
+                    Ok(crate::tui::PermissionReply::Allow) => "allow".to_string(),
+                    Ok(crate::tui::PermissionReply::AllowAlways) => "allow_always".to_string(),
+                    Ok(crate::tui::PermissionReply::Deny) => "deny".to_string(),
+                    Err(_) => String::new(),
+                }
+            };
+
+            match choice.as_str() {
+                "allow" => runtime::PermissionPromptDecision::Allow,
+                "allow_always" => runtime::PermissionPromptDecision::AllowAlways,
+                "deny" => runtime::PermissionPromptDecision::Deny {
                     reason: format!("tool '{}' denied by user", request.tool_name),
                 },
-                Err(_) => runtime::PermissionPromptDecision::Deny {
+                "" => runtime::PermissionPromptDecision::Deny {
                     reason: "permission reply channel closed".to_string(),
+                },
+                other => runtime::PermissionPromptDecision::Deny {
+                    reason: format!("unknown permission choice '{other}'"),
                 },
             }
         } else {

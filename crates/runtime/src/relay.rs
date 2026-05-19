@@ -639,16 +639,124 @@ pub struct RelayHostState {
     code_display_tx: mpsc::UnboundedSender<(String, String)>, // (client_id, code)
     /// Fixed pairing code set by the CLI — all clients use this same code.
     fixed_code: Option<String>,
+    /// Task #671: shared handle to the pending PermissionPrompt registry.
+    /// Held here so the WS read loop can resolve prompts on the same data the
+    /// main thread sees. The actual storage lives in a [`PromptRegistry`]
+    /// behind a sync mutex so blocking callers (the CLI permission prompter,
+    /// the main.rs slash dispatcher) can lock it without a tokio runtime.
+    prompt_registry: PromptRegistryHandle,
+}
+
+/// Max outstanding [`RelayMessage::PermissionPrompt`] entries the host keeps
+/// around. If a remote viewer never replies, the next prompts still go
+/// through and we drop the oldest slot rather than leaking forever.
+pub const PENDING_PROMPTS_CAP: usize = 16;
+
+/// Task #671: shared, sync-mutex registry of pending PermissionPrompt
+/// round-trips, keyed by `prompt_id`.
+///
+/// The registry lives behind [`std::sync::Mutex`] (not tokio) so it can be
+/// locked from both the async WS read loop and the blocking CLI permission
+/// prompter without requiring a tokio runtime. The same handle is given to
+/// `RelayHost`, `LiveCli`, and `CliPermissionPrompter`.
+#[derive(Debug, Default)]
+pub struct PromptRegistry {
+    pending: HashMap<String, std::sync::mpsc::SyncSender<String>>,
+    order: Vec<String>,
+}
+
+/// `Arc<std::sync::Mutex<PromptRegistry>>` — clone freely, lock briefly.
+pub type PromptRegistryHandle = std::sync::Arc<std::sync::Mutex<PromptRegistry>>;
+
+impl PromptRegistry {
+    #[must_use]
+    pub fn new_handle() -> PromptRegistryHandle {
+        std::sync::Arc::new(std::sync::Mutex::new(PromptRegistry::default()))
+    }
+
+    /// Register a pending prompt. `reply_tx` is the channel the prompter is
+    /// blocking on; whichever reply arrives first (local TUI or remote
+    /// viewer) wins. Bounded growth: oldest entry evicted at
+    /// [`PENDING_PROMPTS_CAP`].
+    pub fn register(
+        &mut self,
+        prompt_id: String,
+        reply_tx: std::sync::mpsc::SyncSender<String>,
+    ) -> bool {
+        if self.order.len() >= PENDING_PROMPTS_CAP {
+            if let Some(oldest) = self.order.first().cloned() {
+                self.pending.remove(&oldest);
+                self.order.remove(0);
+            }
+        }
+        self.pending.insert(prompt_id.clone(), reply_tx);
+        self.order.push(prompt_id);
+        true
+    }
+
+    /// Resolve a pending prompt with a wire `choice` string. Returns
+    /// `true` if a matching `prompt_id` was found and forwarded.
+    pub fn resolve(&mut self, prompt_id: &str, choice: &str) -> bool {
+        if let Some(tx) = self.pending.remove(prompt_id) {
+            self.order.retain(|id| id != prompt_id);
+            let _ = tx.try_send(choice.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Drop a registered prompt without resolving (used by the prompter
+    /// when the local TUI reply wins; the remote `PermissionDecision`,
+    /// if it ever arrives, becomes a no-op).
+    pub fn cancel(&mut self, prompt_id: &str) -> bool {
+        if self.pending.remove(prompt_id).is_some() {
+            self.order.retain(|id| id != prompt_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Test helper: current count of pending entries.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// Test helper: whether the registry is empty.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
 }
 
 impl RelayHostState {
-    #[must_use] 
+    #[must_use]
     pub fn new(code_display_tx: mpsc::UnboundedSender<(String, String)>) -> Self {
+        Self::with_registry(code_display_tx, PromptRegistry::new_handle())
+    }
+
+    #[must_use]
+    pub fn with_registry(
+        code_display_tx: mpsc::UnboundedSender<(String, String)>,
+        prompt_registry: PromptRegistryHandle,
+    ) -> Self {
         Self {
             clients: HashMap::new(),
             code_display_tx,
             fixed_code: None,
+            prompt_registry,
         }
+    }
+
+    /// Get a clone of the shared prompt-registry handle. Holders use it to
+    /// register/resolve prompts in the same shared registry the host uses.
+    #[must_use]
+    pub fn prompt_registry(&self) -> PromptRegistryHandle {
+        self.prompt_registry.clone()
     }
 
     /// Set a fixed pairing code — all clients will use this code instead of random ones.
@@ -699,6 +807,35 @@ impl RelayHostState {
     pub fn client_disconnected(&mut self, client_id: &str) {
         self.clients.remove(client_id);
     }
+
+    /// Task #671: register a pending permission-prompt round-trip via the
+    /// shared registry. Convenience shim that locks
+    /// [`Self::prompt_registry`] briefly.
+    pub fn register_prompt(
+        &mut self,
+        prompt_id: String,
+        reply_tx: std::sync::mpsc::SyncSender<String>,
+    ) -> bool {
+        match self.prompt_registry.lock() {
+            Ok(mut reg) => reg.register(prompt_id, reply_tx),
+            Err(_) => false,
+        }
+    }
+
+    /// Task #671: resolve a pending prompt via the shared registry.
+    pub fn resolve_prompt(&mut self, prompt_id: &str, choice: &str) -> bool {
+        match self.prompt_registry.lock() {
+            Ok(mut reg) => reg.resolve(prompt_id, choice),
+            Err(_) => false,
+        }
+    }
+
+    /// Test helper: current count of pending prompt entries via shared registry.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn pending_prompts_len(&self) -> usize {
+        self.prompt_registry.lock().map(|r| r.len()).unwrap_or(0)
+    }
 }
 
 // ─── Relay Host (WebSocket client) ──────────────────────────────────────────
@@ -715,6 +852,10 @@ pub struct RelayHost {
     input_tx: mpsc::UnboundedSender<(usize, String)>,
     /// State tracking for connected clients.
     state: Arc<Mutex<RelayHostState>>,
+    /// Task #671: sync-mutex prompt registry, shared with the caller so the
+    /// blocking permission prompter and slash dispatcher can register +
+    /// resolve PermissionPrompt round-trips without a tokio runtime.
+    prompt_registry: PromptRegistryHandle,
 }
 
 impl RelayHost {
@@ -728,7 +869,11 @@ impl RelayHost {
         let session = RelaySession::new(hash, hub_base_url);
         let (event_tx, _) = broadcast::channel(256);
         let (input_tx, input_rx) = mpsc::unbounded_channel();
-        let state = Arc::new(Mutex::new(RelayHostState::new(code_display_tx)));
+        let prompt_registry = PromptRegistry::new_handle();
+        let state = Arc::new(Mutex::new(RelayHostState::with_registry(
+            code_display_tx,
+            prompt_registry.clone(),
+        )));
 
         Self {
             session,
@@ -736,7 +881,17 @@ impl RelayHost {
             input_rx,
             input_tx,
             state,
+            prompt_registry,
         }
+    }
+
+    /// Task #671: clone of the shared prompt registry. Hand this out to the
+    /// CLI permission prompter and the relay-input dispatcher in `main.rs`
+    /// so they can register/resolve PermissionPrompt round-trips against
+    /// the same data the host's WS read loop touches.
+    #[must_use]
+    pub fn prompt_registry(&self) -> PromptRegistryHandle {
+        self.prompt_registry.clone()
     }
 
     /// Set the fixed pairing code that all clients must enter.
@@ -1119,6 +1274,129 @@ mod tests {
 
         state.client_disconnected("c1");
         assert_eq!(state.paired_count(), 0);
+    }
+
+    // ── Pending-prompt registry (task #671) ───────────────────────────────────
+
+    #[test]
+    fn pending_prompt_registry_round_trip() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = RelayHostState::new(tx);
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+
+        assert!(state.register_prompt("p1".to_string(), reply_tx));
+        assert_eq!(state.pending_prompts_len(), 1);
+
+        assert!(state.resolve_prompt("p1", "approve"));
+        assert_eq!(state.pending_prompts_len(), 0);
+
+        let got = reply_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("reply must be delivered");
+        assert_eq!(got, "approve");
+    }
+
+    #[test]
+    fn pending_prompt_registry_resolve_unknown_is_noop() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = RelayHostState::new(tx);
+        assert!(!state.resolve_prompt("does-not-exist", "approve"));
+        assert_eq!(state.pending_prompts_len(), 0);
+    }
+
+    #[test]
+    fn pending_prompt_registry_bounded_growth_evicts_oldest() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = RelayHostState::new(tx);
+
+        let mut keep_alive = Vec::new();
+        for i in 0..PENDING_PROMPTS_CAP {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+            keep_alive.push(reply_rx);
+            state.register_prompt(format!("p{i}"), reply_tx);
+        }
+        assert_eq!(state.pending_prompts_len(), PENDING_PROMPTS_CAP);
+
+        let (reply_tx, _reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+        state.register_prompt("overflow".to_string(), reply_tx);
+
+        // Still capped, oldest evicted, new entry present
+        assert_eq!(state.pending_prompts_len(), PENDING_PROMPTS_CAP);
+        assert!(!state.resolve_prompt("p0", "approve"));
+        assert!(state.resolve_prompt("overflow", "approve"));
+    }
+
+    #[test]
+    fn pending_prompt_registry_resolves_only_once() {
+        // Race: TUI answers, then remote tries to answer same prompt
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut state = RelayHostState::new(tx);
+        let (reply_tx, _reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+
+        state.register_prompt("p1".to_string(), reply_tx);
+        assert!(state.resolve_prompt("p1", "approve"));
+        // Second resolve is a no-op — entry already gone
+        assert!(!state.resolve_prompt("p1", "deny"));
+    }
+
+    #[test]
+    fn prompt_registry_handle_shared_between_owners() {
+        // RelayHostState and an external holder both see the same data
+        // when constructed via with_registry. Models the real wiring:
+        // RelayHost owns the registry, hands a clone to CliPermissionPrompter,
+        // and both must agree on what's pending.
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let handle = PromptRegistry::new_handle();
+        let mut state = RelayHostState::with_registry(tx, handle.clone());
+
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+        handle.lock().unwrap().register("shared".to_string(), reply_tx);
+
+        // RelayHostState sees the entry the external holder registered.
+        assert_eq!(state.pending_prompts_len(), 1);
+
+        // External holder can resolve via its own clone; state observes it.
+        let resolved = handle.lock().unwrap().resolve("shared", "deny");
+        assert!(resolved);
+        assert_eq!(state.pending_prompts_len(), 0);
+
+        let got = reply_rx
+            .recv_timeout(Duration::from_millis(100))
+            .expect("reply must be delivered");
+        assert_eq!(got, "deny");
+    }
+
+    #[test]
+    fn prompt_registry_cancel_drops_without_send() {
+        // When the local TUI reply wins, the prompter cancels the registry
+        // slot; if the remote PermissionDecision later arrives it must be
+        // a no-op (returns false from resolve).
+        let handle = PromptRegistry::new_handle();
+        let (reply_tx, _reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+
+        handle.lock().unwrap().register("p1".to_string(), reply_tx);
+        assert!(handle.lock().unwrap().cancel("p1"));
+        assert!(handle.lock().unwrap().is_empty());
+
+        // Late remote reply: resolve returns false.
+        assert!(!handle.lock().unwrap().resolve("p1", "approve"));
+    }
+
+    #[test]
+    fn relay_host_exposes_shared_prompt_registry() {
+        // RelayHost::new + RelayHost::prompt_registry must hand back a
+        // clone that points at the same Mutex the host's WS read loop
+        // touches via state.lock().resolve_prompt().
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = RelayHost::new("test-hash".to_string(), "http://example.invalid", tx);
+        let external = host.prompt_registry();
+
+        let (reply_tx, _reply_rx) = std::sync::mpsc::sync_channel::<String>(1);
+        external.lock().unwrap().register("p1".to_string(), reply_tx);
+
+        // The host's internal state sees it (Arc-shared).
+        let internal_len = host.state.blocking_lock().pending_prompts_len();
+        assert_eq!(internal_len, 1);
     }
 
     #[test]

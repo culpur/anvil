@@ -27,6 +27,7 @@ impl LiveCli {
                 self.relay_session = None;
                 self.relay_event_tx = None;
                 self.relay_input_rx = None;
+                self.relay_prompt_registry = None;
                 "Remote control: session stopped.".to_string()
             }
             "status" => {
@@ -69,6 +70,10 @@ impl LiveCli {
                     HUB_BASE_URL,
                     code_display_tx,
                 );
+                // Task #671: keep a clone of the shared prompt registry
+                // so the slash dispatcher + CliPermissionPrompter can
+                // resolve PermissionPrompt round-trips.
+                let prompt_registry = relay_host.prompt_registry();
 
                 // Subscribe to the event broadcast for the relay WS loop
                 let event_rx = event_tx.subscribe();
@@ -117,6 +122,7 @@ impl LiveCli {
                 self.relay_session = Some(session);
                 self.relay_event_tx = Some(event_tx);
                 self.relay_input_rx = Some(relay_input_rx);
+                self.relay_prompt_registry = Some(prompt_registry);
 
                 // Auto-open the viewer URL in the default browser
                 let _ = open::that(&url);

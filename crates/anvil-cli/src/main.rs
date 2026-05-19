@@ -3765,17 +3765,29 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     continue;
                 }
-                // G10: permission decision from the web user.  The host wiring
-                // for per-tool prompts is task #648 (D1 in the audit doc); this
-                // arm exists today so the protocol round-trips, the
-                // RelayHost::run paired-only gate is exercised, and the viewer
-                // pipeline doesn't need a re-wire when #648 lands.
+                // Task #671: PermissionDecision from the web viewer.
+                // Resolves the pending prompt registered by
+                // `CliPermissionPrompter::decide` when the host paired with
+                // a remote viewer. If no entry exists (late reply / unknown
+                // id / local TUI already won the race) the resolve returns
+                // false and we log it as informational.
                 if let Some(rest) = message.strip_prefix("__permission_decision:") {
                     if let Some((prompt_id, choice)) = rest.split_once(':') {
-                        tui.push_system(format!(
-                            "[Remote] Permission decision (prompt {prompt_id}): {choice} — \
-                             per-tool wiring lands in task #648"
-                        ));
+                        let resolved = cli
+                            .relay_prompt_registry
+                            .as_ref()
+                            .and_then(|r| r.lock().ok())
+                            .is_some_and(|mut r| r.resolve(prompt_id, choice));
+                        if resolved {
+                            tui.push_system(format!(
+                                "[Remote] Permission decision: {choice} (prompt {prompt_id})"
+                            ));
+                        } else {
+                            tui.push_system(format!(
+                                "[Remote] Permission decision (prompt {prompt_id}): \
+                                 no matching pending prompt — ignored"
+                            ));
+                        }
                     }
                     continue;
                 }
@@ -5137,6 +5149,12 @@ struct LiveCli {
     relay_event_tx: Option<tokio::sync::broadcast::Sender<runtime::relay::RelayMessage>>,
     /// Receiver for messages from remote control web clients.
     relay_input_rx: Option<std::sync::mpsc::Receiver<(usize, String)>>,
+    /// Task #671: shared registry of pending PermissionPrompt round-trips.
+    /// Cloned from the RelayHost when a session starts; handed to
+    /// CliPermissionPrompter so per-tool prompts can be fanned out to the
+    /// remote viewer and resolved when the viewer's PermissionDecision
+    /// arrives. None until `/remote-control` starts a session.
+    relay_prompt_registry: Option<runtime::relay::PromptRegistryHandle>,
     /// Manager for ephemeral read-only share URLs (`/share` command).
     share_manager: share::ShareManager,
     /// Wall-clock start time of this session (used by daily summaries).
@@ -5237,6 +5255,7 @@ impl LiveCli {
             relay_session: None,
             relay_event_tx: None,
             relay_input_rx: None,
+            relay_prompt_registry: None,
             share_manager: share::ShareManager::new(),
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
@@ -5381,6 +5400,14 @@ impl LiveCli {
             .ok()
             .and_then(|g| g.clone());
 
+        // Task #671: snapshot the relay broadcast + prompt registry +
+        // tab id so the worker's prompter can fan permission prompts
+        // out to paired remote viewers and resolve them on the right
+        // shared registry.
+        let relay_event_tx = self.relay_event_tx.clone();
+        let relay_registry = self.relay_prompt_registry.clone();
+        let relay_tab_id = tui_sender.as_ref().map(TuiSender::tab_id).unwrap_or(0);
+
         // CC parity v2.2.14: capture per-session env for the worker thread to
         // install via session_ctx::set(). The thread-local partitions across
         // parallel tabs (see #433 per-tab inference); each spawned thread
@@ -5407,9 +5434,18 @@ impl LiveCli {
             // Bug-3 Commit 4: wire the per-tab TuiSender into the prompter so
             // permission decisions go through the TUI modal rather than
             // blocking stdin.
+            //
+            // Task #671: when a relay session is active, also wire the
+            // broadcast + prompt registry + tab id so per-tool prompts
+            // fan out to paired remote viewers.
             let mut prompter = CliPermissionPrompter::new(permission_mode);
             if let Some(sender) = tui_sender.clone() {
                 prompter = prompter.with_tui_sender(sender);
+            }
+            if let (Some(ev_tx), Some(registry)) =
+                (relay_event_tx.clone(), relay_registry.clone())
+            {
+                prompter = prompter.with_relay(ev_tx, registry, relay_tab_id);
             }
             // Surface the thinking indicator on the target tab's TUI sender so
             // background-tab spawns get the same "Thinking..." line that the
@@ -5463,6 +5499,13 @@ impl LiveCli {
             .ok()
             .and_then(|g| g.clone());
 
+        // Task #671: same relay snapshot as spawn_turn_for_tab so the
+        // file-drop worker can also fan permission prompts to a remote
+        // viewer.
+        let relay_event_tx = self.relay_event_tx.clone();
+        let relay_registry = self.relay_prompt_registry.clone();
+        let relay_tab_id = tui_sender.as_ref().map(TuiSender::tab_id).unwrap_or(0);
+
         // CC parity v2.2.14: same per-session env propagation as
         // spawn_turn_for_tab — keep this branch in sync if you change either.
         let session_ctx_snapshot = runtime::session_ctx::SessionContext {
@@ -5477,9 +5520,15 @@ impl LiveCli {
                 .lock()
                 .map_err(|_| "runtime mutex poisoned".to_string())?;
             // Bug-3 Commit 4: wire per-tab TuiSender for modal prompts.
+            // Task #671: wire relay fan-out too.
             let mut prompter = CliPermissionPrompter::new(permission_mode);
             if let Some(sender) = tui_sender.clone() {
                 prompter = prompter.with_tui_sender(sender);
+            }
+            if let (Some(ev_tx), Some(registry)) =
+                (relay_event_tx.clone(), relay_registry.clone())
+            {
+                prompter = prompter.with_relay(ev_tx, registry, relay_tab_id);
             }
             // Surface the thinking indicator on the target tab's TUI sender so
             // background-tab preloaded spawns get the same "Thinking..." line
