@@ -3,7 +3,7 @@ source: crates/anvil-cli/src/tui/layouts/journal.rs
 expression: rendered
 ---
  anvil-dev · aegis-fix · +                                                                                Ctrl+Tab cycle
- main · v2.2.18 · claude-sonnet-4-6
+ main · v2.2.16 · claude-sonnet-4-6
 
 
 
