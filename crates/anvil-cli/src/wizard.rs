@@ -1062,6 +1062,21 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
     let (chosen_model, ollama_url_modal, profile_name, tui_answers) =
         run_steps_4_to_8_in_alt_screen(&mut runner, &steps123.model_candidates)?;
 
+    // v2.2.18 task #662 rebuild: real in-wizard Ollama install + model
+    // pull.  Renders inside the same alt-screen.  When the user picks
+    // "Install", Anvil downloads the official Ollama tarball via
+    // reqwest (no curl|sh, no system installer), extracts to
+    // ~/.anvil/bin/ollama, spawns the daemon as an owned child, and
+    // pulls a curated model.  Errors render as confirm cards — the
+    // wizard always completes.
+    //
+    // Idempotent: on re-run with an existing daemon + model, the step
+    // shows ✓ and skips.  Matches the corrective-not-destructive rule.
+    let _ollama_outcome = crate::wizard_ollama::run_ollama_step(
+        &mut runner,
+        &runtime::default_config_home(),
+    )?;
+
     // Step 9 — optional CC migration. Stays inside the same alt-screen
     // session so the wizard → Anvil TUI handoff has ZERO inline stdin
     // moments (#643, v2.2.17). The step is silent when ~/.claude/ is
