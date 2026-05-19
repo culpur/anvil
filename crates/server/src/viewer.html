@@ -128,11 +128,107 @@ a { color:var(--accent); }
 .rc-slash-output { padding:0 14px 12px; color:var(--text-dim); font-size:11px;
   white-space:pre-wrap; max-height:30vh; overflow-y:auto; font-family:monospace; }
 /* Layout-mirror CSS classes applied to <body> so existing flex column rules
-   stay intact but the messages pane gets layout-specific styling hooks. */
+   stay intact but the messages pane gets layout-specific styling hooks.
+   Task #672: three-pane + journal get full parity with the local TUI. */
 body.layout-classic .messages { /* baseline */ }
 body.layout-vertical-split .messages { border-right:2px solid var(--border); }
-body.layout-three-pane .messages { background:linear-gradient(180deg, transparent 0, rgba(255,255,255,0.02) 100%); }
-body.layout-journal .messages { font-family:monospace; }
+
+/* THREE-PANE layout (#672) — three visually distinct columns: gutter (role +
+   tab badge + timestamp) | conversation | trailing focus stripe. We do this
+   by turning each .msg into a grid row instead of touching the parent. The
+   conversation pane already paginates correctly; we just dress its rows. */
+body.layout-three-pane .messages {
+  background:linear-gradient(180deg, transparent 0, rgba(255,255,255,0.015) 100%);
+  padding:8px 0 16px;
+}
+body.layout-three-pane .msg {
+  max-width:100%;
+  align-self:stretch;
+  display:grid;
+  grid-template-columns:108px 1fr 4px;
+  gap:0;
+  padding:6px 14px 6px 0;
+  border-radius:0;
+  border:0;
+  border-top:1px solid rgba(255,255,255,0.04);
+  background:transparent;
+  position:relative;
+}
+body.layout-three-pane .msg.user { background:transparent; }
+body.layout-three-pane .msg.assistant { background:rgba(15,188,255,0.025); }
+body.layout-three-pane .msg.tool { background:rgba(255,255,255,0.02); border-left:0; }
+body.layout-three-pane .msg.system { background:transparent; text-align:left; align-self:stretch; }
+body.layout-three-pane .msg::before {
+  content:attr(data-meta);
+  grid-column:1;
+  padding:0 12px 0 14px;
+  font-size:11px;
+  font-family:ui-monospace,Menlo,Consolas,monospace;
+  color:var(--text-dim);
+  white-space:pre;
+  line-height:1.6;
+  border-right:1px solid rgba(255,255,255,0.06);
+}
+body.layout-three-pane .msg.user::before { color:#0fbcff; }
+body.layout-three-pane .msg.assistant::before { color:#e6c989; }
+body.layout-three-pane .msg.tool::before { color:#9ca3af; }
+body.layout-three-pane .msg::after {
+  content:"";
+  grid-column:3;
+  background:transparent;
+  border-radius:2px;
+}
+body.layout-three-pane .msg.focused::after { background:var(--accent); }
+
+/* JOURNAL layout (#672) — dense, monospace, timestamp gutter on every row,
+   no tab badges (the journal is a single chronological stream view). */
+body.layout-journal .messages {
+  font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:12px;
+  line-height:1.5;
+  padding:6px 0;
+  gap:0;
+}
+body.layout-journal .msg {
+  max-width:100%;
+  align-self:stretch;
+  display:grid;
+  grid-template-columns:72px 60px 1fr;
+  gap:8px;
+  padding:3px 14px;
+  border-radius:0;
+  border:0;
+  background:transparent;
+  border-top:1px solid transparent;
+}
+body.layout-journal .msg:hover { background:rgba(255,255,255,0.025); }
+body.layout-journal .msg.user { background:rgba(15,188,255,0.04); }
+body.layout-journal .msg.assistant { background:transparent; }
+body.layout-journal .msg.tool { background:rgba(230,201,137,0.04); }
+body.layout-journal .msg.system { background:transparent; font-style:italic; color:var(--text-dim); }
+body.layout-journal .msg::before {
+  content:attr(data-ts);
+  grid-column:1;
+  color:var(--text-dim);
+  font-size:11px;
+  white-space:nowrap;
+  text-align:right;
+}
+body.layout-journal .msg::after {
+  content:attr(data-role);
+  grid-column:2;
+  font-size:11px;
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.5px;
+  color:var(--text-dim);
+}
+body.layout-journal .msg.user::after { color:#0fbcff; }
+body.layout-journal .msg.assistant::after { color:#e6c989; }
+body.layout-journal .msg.tool::after { color:#e6c989; }
+body.layout-journal .msg.system::after { color:#9ca3af; }
+body.layout-journal .msg > .tool-name,
+body.layout-journal .msg > .tool-detail { grid-column:3; }
 /* Permission prompt modal (task #648 future) */
 .rc-prompt-overlay { position:fixed; inset:0; background:rgba(0,2,12,0.9);
   display:flex; align-items:center; justify-content:center; z-index:120; }
@@ -751,11 +847,22 @@ function renderMessages() {
   container.innerHTML = '';
   const tab = tabs[activeTab];
   if (!tab) return;
+  // Task #672: stamp data-ts / data-role / data-meta on every .msg so the
+  // three-pane and journal layouts can read them via attr() in CSS without
+  // additional DOM mutations. Classic + vertical-split ignore these attrs.
+  const tabBadge = tab.name ? tab.name : `tab ${activeTab}`;
   tab.log.forEach(entry => {
     const div = document.createElement('div');
-    div.className = 'msg ' + entry.kind;
+    const role = (entry.kind === 'tool_call') ? 'tool' : entry.kind;
+    div.className = 'msg ' + ((entry.kind === 'tool_call')
+      ? ('tool' + (entry.is_error ? ' error' : ''))
+      : entry.kind);
+    div.setAttribute('data-ts', entry.ts || '');
+    div.setAttribute('data-role', role);
+    // three-pane gutter cell: "ROLE\n@tab\nHH:MM:SS"
+    const meta = `${role.toUpperCase()}\n${tabBadge}\n${entry.ts || ''}`;
+    div.setAttribute('data-meta', meta);
     if (entry.kind === 'tool_call') {
-      div.className = 'msg tool' + (entry.is_error ? ' error' : '');
       div.innerHTML = `<span class="tool-name">${esc(entry.name)}</span>`;
       if (entry.detail) div.innerHTML += `<div class="tool-detail">${esc(entry.detail)}</div>`;
       if (entry.result) div.innerHTML += `<div class="tool-detail">${esc(entry.result)}</div>`;
@@ -767,21 +874,35 @@ function renderMessages() {
   if (tab.streaming) {
     const div = document.createElement('div');
     div.className = 'msg assistant streaming';
+    const ts = _ts();
+    div.setAttribute('data-ts', ts);
+    div.setAttribute('data-role', 'assistant');
+    div.setAttribute('data-meta', `ASSISTANT\n${tabBadge}\n${ts}`);
     div.textContent = tab.streaming;
     container.appendChild(div);
   }
   scrollToBottom();
 }
 
+// Task #672: stamp each entry with a wall-clock timestamp at add time so
+// the journal layout can render a real timestamp gutter and the three-pane
+// layout can show role + tab + time in its left column. Format HH:MM:SS
+// locally so the user sees their own wall clock, not the host's.
+function _ts() {
+  const d = new Date();
+  const pad = n => n.toString().padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 function addMsg(tabId, kind, text) {
   if (!tabs[tabId]) return;
-  tabs[tabId].log.push({kind, text});
+  tabs[tabId].log.push({kind, text, ts: _ts()});
   if (tabId === activeTab) renderMessages();
 }
 
 function addToolMsg(tabId, name, detail, result, isError) {
   if (!tabs[tabId]) return;
-  tabs[tabId].log.push({kind:'tool_call', name, detail, result: result||'', is_error: isError});
+  tabs[tabId].log.push({kind:'tool_call', name, detail, result: result||'', is_error: isError, ts: _ts()});
   if (tabId === activeTab) renderMessages();
 }
 
@@ -795,7 +916,7 @@ function flushStreaming(tabId) {
   if (!tabs[tabId]) return;
   const text = tabs[tabId].streaming;
   if (text) {
-    tabs[tabId].log.push({kind:'assistant', text});
+    tabs[tabId].log.push({kind:'assistant', text, ts: _ts()});
     tabs[tabId].streaming = '';
     if (tabId === activeTab) renderMessages();
   }
