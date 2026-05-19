@@ -168,6 +168,12 @@ pub enum RelayMessage {
         input: u32,
         output: u32,
     },
+    /// Task #680.d: per-tab spend in USD.  Mirrored from the TUI status line
+    /// so the web viewer can display the same cost figure.
+    Cost {
+        tab_id: usize,
+        cost_usd: f64,
+    },
     System {
         tab_id: usize,
         message: String,
@@ -434,6 +440,7 @@ impl RelayMessage {
             Self::ThinkLabel { .. } => "think_label",
             Self::TurnDone { .. } => "turn_done",
             Self::Tokens { .. } => "tokens",
+            Self::Cost { .. } => "cost",
             Self::System { .. } => "system",
             Self::TabOpened { .. } => "tab_opened",
             Self::TabClosed { .. } => "tab_closed",
@@ -512,6 +519,8 @@ pub const KNOWN_RELAY_TAGS: &[(&str, RelayDirection)] = &[
     ("think_label", RelayDirection::HostToWeb),
     ("turn_done", RelayDirection::HostToWeb),
     ("tokens", RelayDirection::HostToWeb),
+    // Task #680.d: per-tab USD cost mirror.
+    ("cost", RelayDirection::HostToWeb),
     ("system", RelayDirection::HostToWeb),
     // Tab lifecycle
     ("tab_opened", RelayDirection::HostToWeb),
@@ -1235,6 +1244,24 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
         assert!(matches!(parsed, RelayMessage::TextDelta { tab_id: 0, text } if text == "Hello world"));
+    }
+
+    #[test]
+    fn relay_cost_message_round_trips() {
+        // Task #680.d: Cost mirror — wire tag `cost` and floating-point payload
+        // survive a JSON round-trip.
+        let msg = RelayMessage::Cost { tab_id: 3, cost_usd: 1.875 };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"cost\""));
+        assert!(json.contains("\"cost_usd\":1.875"));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            RelayMessage::Cost { tab_id, cost_usd } => {
+                assert_eq!(tab_id, 3);
+                assert!((cost_usd - 1.875).abs() < 1e-9);
+            }
+            other => panic!("expected Cost, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2080,6 +2107,7 @@ mod tests {
             RelayMessage::ThinkLabel { tab_id: 0, label: String::new() },
             RelayMessage::TurnDone { tab_id: 0 },
             RelayMessage::Tokens { tab_id: 0, input: 0, output: 0 },
+            RelayMessage::Cost { tab_id: 0, cost_usd: 0.0 },
             RelayMessage::System { tab_id: 0, message: String::new() },
             RelayMessage::TabOpened {
                 tab_id: 0,

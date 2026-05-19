@@ -52,10 +52,49 @@ a { color:var(--accent); }
 .msg.streaming { border-left:2px solid var(--accent); animation:pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.7} }
 
+/* Task #680.b — tool-call cards: clickable header + collapsible body
+   matched to format_tool.rs color palette. */
+.tool-card { background:var(--tool-bg); border:1px solid var(--border);
+  border-left:3px solid #4a4a4a; border-radius:6px; padding:0;
+  font-size:12px; max-width:90%; align-self:flex-start; overflow:hidden; }
+.tool-card[data-tool-name="bash"]      { border-left-color:#2c5f9e; }
+.tool-card[data-tool-name="read_file"] { border-left-color:#3f8b3a; }
+.tool-card[data-tool-name="edit_file"] { border-left-color:#c2851e; }
+.tool-card[data-tool-name="write_file"]{ border-left-color:#c2851e; }
+.tool-card[data-tool-name="web_search"]{ border-left-color:#8e44ad; }
+.tool-card.error { border-left-color:var(--error) !important; }
+.tool-card-header { display:flex; align-items:center; gap:8px;
+  padding:6px 10px; cursor:pointer; user-select:none;
+  background:rgba(255,255,255,0.02); }
+.tool-card-header:hover { background:rgba(255,255,255,0.05); }
+.tool-card .tool-icon { font-size:13px; }
+.tool-card .tool-name { color:var(--accent); font-weight:600; }
+.tool-card .tool-input-preview { color:var(--text-dim); font-size:11px;
+  flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.tool-card .tool-toggle { color:var(--text-dim); transition:transform 0.15s; }
+.tool-card[data-collapsed="false"] .tool-toggle { transform:rotate(90deg); }
+.tool-card-body { display:none; padding:8px 10px;
+  border-top:1px solid var(--border); background:rgba(0,0,0,0.15); }
+.tool-card[data-collapsed="false"] .tool-card-body { display:block; }
+.tool-card-body .tool-output { white-space:pre-wrap; word-break:break-word;
+  font-family:inherit; font-size:11px; color:var(--text); margin:0; }
+.tool-card-body .tool-output.error { color:var(--error); }
+
 /* Thinking spinner */
 .thinking { display:flex; align-items:center; gap:8px; padding:8px 12px; color:var(--text-dim); font-style:italic; }
 .thinking .spinner { animation:spin 1s linear infinite; }
 @keyframes spin { to{transform:rotate(360deg)} }
+
+/* Task #680.d — live status rail in the header (thinking + tokens + cost). */
+.status-rail { display:flex; align-items:center; gap:12px; font-size:11px;
+  color:var(--text-dim); }
+.status-rail .rail-thinking { display:none; align-items:center; gap:6px;
+  color:var(--accent); }
+.status-rail .rail-thinking.active { display:inline-flex; }
+.status-rail .rail-thinking .spinner { animation:spin 1s linear infinite; }
+.status-rail .rail-tokens { font-variant-numeric:tabular-nums; }
+.status-rail .rail-cost { font-variant-numeric:tabular-nums; color:var(--success); }
+.status-rail .rail-sep { color:#334155; }
 
 /* Input bar */
 .input-bar { display:flex; padding:8px 16px; background:var(--card); border-top:1px solid var(--border); gap:8px; }
@@ -480,6 +519,12 @@ body.layout-journal .msg > .tool-detail { grid-column:3; }
   <span class="logo">⚒ Anvil Remote</span>
   <span class="status"><span class="dot yellow" id="status-dot"></span><span id="status-text">Connecting...</span></span>
   <span style="flex:1"></span>
+  <!-- Task #680.d — live status rail mirrors the TUI footer (thinking + tokens + cost). -->
+  <span class="status-rail" id="status-rail">
+    <span class="rail-thinking" id="rail-thinking"><span class="spinner">⏳</span><span id="rail-thinking-label">Thinking…</span></span>
+    <span class="rail-tokens" id="rail-tokens" hidden>↓ <span id="rail-tokens-in">0</span> ↑ <span id="rail-tokens-out">0</span></span>
+    <span class="rail-cost" id="rail-cost" hidden>$<span id="rail-cost-value">0.00</span></span>
+  </span>
   <span style="color:var(--text-dim);font-size:11px" id="session-info"></span>
 </div>
 
@@ -652,6 +697,10 @@ function handleMessage(msg) {
       flushStreaming(msg.tab_id);
       break;
     case 'tool_start':
+      // Task #680.b — `tool_start` carries (name, detail) but no tool_id on
+      // the wire today; the viewer keys cards on a synthetic id derived from
+      // (tab_id, name, detail) so the matching `tool_result` patches the
+      // same card rather than creating a new one.  Renders collapsed.
       addToolMsg(msg.tab_id, msg.name, msg.detail, null, false);
       break;
     case 'tool_result':
@@ -670,6 +719,16 @@ function handleMessage(msg) {
       if (tabs[msg.tab_id]) {
         tabs[msg.tab_id].tokens = {input: msg.input, output: msg.output};
       }
+      // Task #680.d — also surface tokens in the header rail when this is
+      // the active tab.
+      if (msg.tab_id === activeTab) updateRailTokens(msg.input, msg.output);
+      break;
+    case 'cost':
+      // Task #680.d — per-tab cost mirror.
+      if (tabs[msg.tab_id]) {
+        tabs[msg.tab_id].cost_usd = msg.cost_usd;
+      }
+      if (msg.tab_id === activeTab) updateRailCost(msg.cost_usd);
       break;
     case 'tab_opened':
       tabs[msg.tab_id] = {name: msg.name, model: msg.model, log: [], streaming: ''};
@@ -852,23 +911,50 @@ function renderMessages() {
   // additional DOM mutations. Classic + vertical-split ignore these attrs.
   const tabBadge = tab.name ? tab.name : `tab ${activeTab}`;
   tab.log.forEach(entry => {
+    if (entry.kind === 'tool_call') {
+      // Task #680.b — render every tool call as a collapsible card so the
+      // viewer matches the TUI format_tool.rs colored card layout.  The
+      // outermost element keeps the `.msg` class so existing layout CSS
+      // (three-pane gutter via data-meta, journal timeline, etc.) still
+      // styles it correctly; nested `.tool-card-*` elements provide the
+      // header / body chrome.
+      const role = 'tool';
+      const wrap = document.createElement('div');
+      wrap.className = 'tool-card msg' + (entry.is_error ? ' error' : '');
+      wrap.setAttribute('data-tool-name', entry.name || '');
+      wrap.setAttribute('data-collapsed', 'true');
+      wrap.setAttribute('data-ts', entry.ts || '');
+      wrap.setAttribute('data-role', role);
+      wrap.setAttribute('data-meta',
+        `${role.toUpperCase()}\n${tabBadge}\n${entry.ts || ''}`);
+      const inputPreview = (entry.detail || '').split('\n')[0].slice(0, 120);
+      const toggle = entry.is_error ? '⚠' : '▶';
+      const bodyHtml = entry.result
+        ? `<pre class="tool-output${entry.is_error ? ' error' : ''}">${esc(entry.result)}</pre>`
+        : (entry.pending
+            ? `<pre class="tool-output">(running…)</pre>`
+            : '');
+      wrap.innerHTML = `
+        <div class="tool-card-header" onclick="toggleToolCard(this.parentElement)">
+          <span class="tool-icon">⚒</span>
+          <span class="tool-name">${esc(entry.name || '')}</span>
+          <span class="tool-input-preview">${esc(inputPreview)}</span>
+          <span class="tool-toggle">${toggle}</span>
+        </div>
+        <div class="tool-card-body">${bodyHtml}</div>
+      `;
+      container.appendChild(wrap);
+      return;
+    }
     const div = document.createElement('div');
-    const role = (entry.kind === 'tool_call') ? 'tool' : entry.kind;
-    div.className = 'msg ' + ((entry.kind === 'tool_call')
-      ? ('tool' + (entry.is_error ? ' error' : ''))
-      : entry.kind);
+    const role = entry.kind;
+    div.className = 'msg ' + entry.kind;
     div.setAttribute('data-ts', entry.ts || '');
     div.setAttribute('data-role', role);
     // three-pane gutter cell: "ROLE\n@tab\nHH:MM:SS"
     const meta = `${role.toUpperCase()}\n${tabBadge}\n${entry.ts || ''}`;
     div.setAttribute('data-meta', meta);
-    if (entry.kind === 'tool_call') {
-      div.innerHTML = `<span class="tool-name">${esc(entry.name)}</span>`;
-      if (entry.detail) div.innerHTML += `<div class="tool-detail">${esc(entry.detail)}</div>`;
-      if (entry.result) div.innerHTML += `<div class="tool-detail">${esc(entry.result)}</div>`;
-    } else {
-      div.textContent = entry.text;
-    }
+    div.textContent = entry.text;
     container.appendChild(div);
   });
   if (tab.streaming) {
@@ -900,11 +986,50 @@ function addMsg(tabId, kind, text) {
   if (tabId === activeTab) renderMessages();
 }
 
+// Task #680.b — `tool_start` and `tool_result` patch one card together.
+// The relay doesn't carry a `tool_id` today, so we key cards on a synthetic
+// (tab_id, name, detail) tuple: the start emits the (name, detail) tuple and
+// the matching result merges its summary into the most-recent pending card
+// for the same tab + name with no output yet.  Two parallel tool calls with
+// the same name + detail would collapse here; we accept that — the more
+// common case (collapsed → expanded) covers all of CC parity.
 function addToolMsg(tabId, name, detail, result, isError) {
   if (!tabs[tabId]) return;
-  tabs[tabId].log.push({kind:'tool_call', name, detail, result: result||'', is_error: isError, ts: _ts()});
+  const log = tabs[tabId].log;
+  if (result === null || result === undefined) {
+    // Tool start — push a fresh pending card.
+    log.push({kind:'tool_call', name, detail, result:'', is_error: false,
+              pending:true, ts: _ts()});
+  } else {
+    // Tool result — find the most-recent pending card for this name; patch
+    // it in place.  Fall through to a fresh card if nothing matches (e.g.
+    // a result arriving with no prior start frame, which shouldn't happen
+    // but is defensible).
+    let matched = false;
+    for (let i = log.length - 1; i >= 0; i--) {
+      const e = log[i];
+      if (e.kind === 'tool_call' && e.pending && e.name === name) {
+        e.result = result || '';
+        e.is_error = !!isError;
+        e.pending = false;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      log.push({kind:'tool_call', name, detail:'', result: result||'',
+                is_error: !!isError, pending:false, ts: _ts()});
+    }
+  }
   if (tabId === activeTab) renderMessages();
 }
+
+// Task #680.b — public hook so the card header can toggle expand/collapse.
+window.toggleToolCard = function(cardEl) {
+  if (!cardEl) return;
+  const collapsed = cardEl.getAttribute('data-collapsed') === 'true';
+  cardEl.setAttribute('data-collapsed', collapsed ? 'false' : 'true');
+};
 
 function appendStreaming(tabId, text) {
   if (!tabs[tabId]) return;
@@ -926,11 +1051,42 @@ function showThinking(tabId, label) {
   // Shown via the streaming indicator
   if (!tabs[tabId]) return;
   tabs[tabId].streaming = '';
+  // Task #680.d — also light up the header rail's thinking pill while the
+  // active tab is mid-turn.
+  if (tabId === activeTab) {
+    const el = document.getElementById('rail-thinking');
+    const lbl = document.getElementById('rail-thinking-label');
+    if (el) el.classList.add('active');
+    if (lbl) lbl.textContent = label || 'Thinking…';
+  }
 }
 
 function hideThinking(tabId) {
   // Flush any remaining streaming
   flushStreaming(tabId);
+  if (tabId === activeTab) {
+    const el = document.getElementById('rail-thinking');
+    if (el) el.classList.remove('active');
+  }
+}
+
+// Task #680.d — header rail helpers.
+function updateRailTokens(input, output) {
+  const wrap = document.getElementById('rail-tokens');
+  const inEl = document.getElementById('rail-tokens-in');
+  const outEl = document.getElementById('rail-tokens-out');
+  if (!wrap || !inEl || !outEl) return;
+  inEl.textContent = String(input || 0);
+  outEl.textContent = String(output || 0);
+  wrap.hidden = false;
+}
+function updateRailCost(usd) {
+  const wrap = document.getElementById('rail-cost');
+  const val = document.getElementById('rail-cost-value');
+  if (!wrap || !val) return;
+  // Round to two decimals — matches the TUI's `${:.2}` formatter.
+  val.textContent = (Number(usd) || 0).toFixed(2);
+  wrap.hidden = false;
 }
 
 // ─── Input ────────────────────────────────────────────────────────
@@ -2660,14 +2816,31 @@ function handleLayoutChanged(msg) {
 }
 
 function handleSlashResult(msg) {
+  // Task #680.a — render slash command output in both surfaces:
+  //  1. the dedicated rc-slash-output sidebar (legacy, scoped to the
+  //     remote-control panel)
+  //  2. the active tab's scrollback as a `.msg.system` entry so users who
+  //     trigger /commands locally still see the rendered output through the
+  //     web viewer's main conversation area.
   const out = document.getElementById('rc-slash-output');
-  if (!out) return;
-  const stamp = new Date().toLocaleTimeString();
-  const tag = msg.ok ? '[ok]' : '[err]';
-  out.textContent = `${stamp} ${tag} /${msg.command}\n${msg.output || ''}\n\n` + out.textContent;
-  // Cap to last 8 KB so the sidebar never grows unbounded.
-  if (out.textContent.length > 8192) {
-    out.textContent = out.textContent.slice(0, 8192);
+  if (out) {
+    const stamp = new Date().toLocaleTimeString();
+    const tag = msg.ok ? '[ok]' : '[err]';
+    out.textContent = `${stamp} ${tag} /${msg.command}\n${msg.output || ''}\n\n` + out.textContent;
+    // Cap to last 8 KB so the sidebar never grows unbounded.
+    if (out.textContent.length > 8192) {
+      out.textContent = out.textContent.slice(0, 8192);
+    }
+  }
+  // Mirror into the tab scrollback when output is non-empty.  We don't
+  // recreate the input echo (the host already broadcasts that as a
+  // `[Remote] /cmd` System line for remote-initiated dispatches), so this
+  // only adds the result body.
+  if (msg.output && msg.output.trim().length > 0) {
+    const targetTab = (typeof msg.tab_id === 'number') ? msg.tab_id : activeTab;
+    if (tabs[targetTab]) {
+      addMsg(targetTab, 'system', `/${msg.command}\n${msg.output}`);
+    }
   }
 }
 

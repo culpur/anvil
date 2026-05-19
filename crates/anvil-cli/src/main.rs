@@ -631,6 +631,49 @@ fn chain_target_path(target: &str) -> std::path::PathBuf {
     home.join("chains").join(target).join("chain.yaml")
 }
 
+/// Task #680.a — derive a wire-stable command word from a parsed
+/// [`SlashCommand`].
+///
+/// Used to label `RelayMessage::SlashResult` broadcasts so the web viewer can
+/// surface the same slash output the TUI shows.  We deliberately do NOT
+/// hand-match every one of the ~95 enum variants here (that would drift the
+/// instant a new command lands).  Instead we lean on the variant's [`Debug`]
+/// representation: it begins with the variant identifier in PascalCase
+/// (e.g. `Ollama { args: Some("list") }`), so we split off the leading word,
+/// strip the trailing space/paren/`{`, and lowercase it.  The result matches
+/// the canonical command word used in `parse()` for ~all variants.
+///
+/// `Unknown(name)` is special-cased to surface the user-typed name verbatim.
+fn slash_command_name(command: &SlashCommand) -> String {
+    if let SlashCommand::Unknown(name) = command {
+        return name.clone();
+    }
+    let dbg = format!("{command:?}");
+    // Pull off the leading identifier — bytes until the first non-ASCII-alpha
+    // character (space, brace, paren).
+    let head: String = dbg
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect();
+    if head.is_empty() {
+        return String::from("unknown");
+    }
+    // Convert PascalCase / CamelCase into a hyphenated wire name to match the
+    // way the parser writes them (e.g. `CommitPushPr` → `commit-push-pr`,
+    // `ScrollSpeed` → `scroll-speed`).  A handful of variants are concatenated
+    // in the parser (`reviewpr`, `outputstyle`, `historyarchive` — but we
+    // currently parse those with a hyphen as well, so the hyphenated form is
+    // a reasonable wire label even if `parse()` accepts only one spelling).
+    let mut out = String::with_capacity(head.len() + 4);
+    for (i, ch) in head.chars().enumerate() {
+        if ch.is_ascii_uppercase() && i != 0 {
+            out.push('-');
+        }
+        out.extend(ch.to_lowercase());
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CliAction {
     DumpManifests,
@@ -3281,7 +3324,15 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         let clients = format!("{count} client{}", if count == 1 { "" } else { "s" });
                         tui.set_remote_status(&session.pairing_code, &clients);
                     }
-                    tui.push_system(format!("[Remote] Client connected ({count} active)"));
+                    let banner = format!("[Remote] Client connected ({count} active)");
+                    tui.push_system(banner.clone());
+                    // Task #680.c — mirror banner to web viewer(s).
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::System {
+                            tab_id: 0,
+                            message: banner,
+                        });
+                    }
                     // Phase 3: send ConfigSnapshot + VaultState immediately after pairing.
                     {
                         let data = cli.build_configure_data();
@@ -3301,13 +3352,20 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(count_str) = message.strip_prefix("__client_disconnected:") {
                     let count: usize = count_str.parse().unwrap_or(0);
                     if let Some(session) = &cli.relay_session {
-                        if count == 0 {
+                        let banner = if count == 0 {
                             tui.set_remote_status(&session.pairing_code, "0 clients");
-                            tui.push_system("[Remote] All clients disconnected".to_string());
+                            "[Remote] All clients disconnected".to_string()
                         } else {
                             let clients = format!("{count} client{}", if count == 1 { "" } else { "s" });
                             tui.set_remote_status(&session.pairing_code, &clients);
-                            tui.push_system(format!("[Remote] Client disconnected ({count} remaining)"));
+                            format!("[Remote] Client disconnected ({count} remaining)")
+                        };
+                        tui.push_system(banner.clone());
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::System {
+                                tab_id: 0,
+                                message: banner,
+                            });
                         }
                     }
                     continue;
@@ -3316,12 +3374,24 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(tab_id_str) = message.strip_prefix("__close_tab:") {
                     if let Ok(tab_id) = tab_id_str.parse::<usize>() {
                         if let Some(name) = tui.close_tab_by_id(tab_id) {
-                            tui.push_system(format!("[Remote] Closed tab: {name}"));
+                            let banner = format!("[Remote] Closed tab: {name}");
+                            tui.push_system(banner.clone());
                             if let Some(tx) = &cli.relay_event_tx {
                                 let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id });
+                                let _ = tx.send(runtime::relay::RelayMessage::System {
+                                    tab_id: 0,
+                                    message: banner,
+                                });
                             }
                         } else {
-                            tui.push_system(format!("[Remote] Cannot close tab {tab_id} (last tab or not found)"));
+                            let banner = format!("[Remote] Cannot close tab {tab_id} (last tab or not found)");
+                            tui.push_system(banner.clone());
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::System {
+                                    tab_id: 0,
+                                    message: banner,
+                                });
+                            }
                         }
                     }
                     continue;
@@ -3506,18 +3576,31 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
                     // Vault gate: refuse while locked
                     if !runtime::vault_is_session_unlocked() {
-                        tui.push_system(format!("[Hub] Install blocked: vault locked (slug={slug})"));
+                        let banner = format!("[Hub] Install blocked: vault locked (slug={slug})");
+                        tui.push_system(banner.clone());
                         if let Some(tx) = &cli.relay_event_tx {
                             let _ = tx.send(runtime::relay::RelayMessage::HubInstallError {
                                 slug: slug.clone(),
                                 reason: "vault_locked".to_string(),
                                 message: "Vault is locked — unlock vault to install packages".to_string(),
                             });
+                            // Task #680.c — also mirror the human-readable banner.
+                            let _ = tx.send(runtime::relay::RelayMessage::System {
+                                tab_id: 0,
+                                message: banner,
+                            });
                         }
                         continue;
                     }
 
-                    tui.push_system(format!("[Hub] Installing {slug} v{version}..."));
+                    let banner = format!("[Hub] Installing {slug} v{version}...");
+                    tui.push_system(banner.clone());
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::System {
+                            tab_id: 0,
+                            message: banner,
+                        });
+                    }
 
                     // Progress: downloading
                     if let Some(tx) = &cli.relay_event_tx {
@@ -3799,7 +3882,14 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
 
                 // Phase 4: web client requests respawn
                 if message == "__respawn_request" {
-                    tui.push_system("[Hub] Respawn requested from web client".to_string());
+                    let banner = "[Hub] Respawn requested from web client".to_string();
+                    tui.push_system(banner.clone());
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::System {
+                            tab_id: 0,
+                            message: banner,
+                        });
+                    }
                     let ctx = get_respawn_ctx();
                     let session_id = cli.session_id().to_owned();
                     match respawn::respawn(&ctx, "web hub.install restart", &session_id) {
@@ -3816,7 +3906,15 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         Err(e) => {
-                            tui.push_system(format!("[Restart] Respawn failed: {e}"));
+                            // Task #680.c — also broadcast respawn failures.
+                            let banner = format!("[Restart] Respawn failed: {e}");
+                            tui.push_system(banner.clone());
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::System {
+                                    tab_id: 0,
+                                    message: banner,
+                                });
+                            }
                         }
                     }
                     continue;
@@ -3842,11 +3940,27 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                         cli.permission_mode,
                         cancel_token,
                     ) {
-                        tui.push_system(format!("[Remote] Warning: per-tab runtime failed: {e}"));
+                        let banner = format!("[Remote] Warning: per-tab runtime failed: {e}");
+                        tui.push_system(banner.clone());
+                        if let Some(tx) = &cli.relay_event_tx {
+                            let _ = tx.send(runtime::relay::RelayMessage::System {
+                                tab_id: 0,
+                                message: banner,
+                            });
+                        }
                     } else {
                         tui.mark_tab_has_runtime(tab_idx);
                     }
-                    tui.push_system(format!("[Remote] Opened tab: {tab_name}"));
+                    let banner = format!("[Remote] Opened tab: {tab_name}");
+                    tui.push_system(banner.clone());
+                    // Task #680.c — mirror the banner; TabOpened sent below
+                    // already carries the structured event.
+                    if let Some(tx) = &cli.relay_event_tx {
+                        let _ = tx.send(runtime::relay::RelayMessage::System {
+                            tab_id: 0,
+                            message: banner,
+                        });
+                    }
                     // Broadcast tab_opened to relay so web viewer adds the tab
                     if let Some(tx) = &cli.relay_event_tx {
                         let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
@@ -6367,9 +6481,24 @@ impl LiveCli {
 
         // Handle all remaining commands inline by generating output strings
         // and pushing them to the TUI as system messages.
+        //
+        // Task #680.a: capture the command's wire name *before* it's moved
+        // into `run_command_for_tui` so we can mirror the same output the
+        // user sees in the TUI to any paired web viewer as a SlashResult
+        // event.  Without this the viewer only saw the literal `/foo` echo
+        // and never the handler's report (e.g. /ollama list, /schedule …).
+        let command_name = slash_command_name(&command).to_string();
         let (msg, changed) = self.run_command_for_tui(command)?;
         if !msg.is_empty() {
-            tui.push_system(msg);
+            tui.push_system(msg.clone());
+            if let Some(tx) = &self.relay_event_tx {
+                let _ = tx.send(runtime::relay::RelayMessage::SlashResult {
+                    tab_id: 0,
+                    command: command_name,
+                    ok: true,
+                    output: msg,
+                });
+            }
         }
         Ok(changed)
     }

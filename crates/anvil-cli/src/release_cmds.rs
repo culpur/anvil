@@ -297,10 +297,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("Cargo.toml"),
-            "[workspace.package]\nversion = \"2.2.17\"\nedition = \"2024\"\n",
+            "[workspace.package]\nversion = \"2.2.18\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        assert_eq!(workspace_version(tmp.path()), Some("2.2.17".to_string()));
+        assert_eq!(workspace_version(tmp.path()), Some("2.2.18".to_string()));
     }
 
     #[test]
