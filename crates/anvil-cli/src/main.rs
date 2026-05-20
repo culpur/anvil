@@ -3962,10 +3962,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             message: banner,
                         });
                     }
-                    // Broadcast tab_opened to relay so web viewer adds the tab
+                    // Broadcast tab_opened to relay so web viewer adds the tab.
+                    // Use stable Tab.id (matches the initial broadcast at remote-control start),
+                    // not 0-based tab_idx (which collides with the 'main' tab's id=1).
                     if let Some(tx) = &cli.relay_event_tx {
                         let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
-                            tab_id: tab_idx,
+                            tab_id,
                             name: tab_name.to_string(),
                             model: cli.model.clone(),
                             session_id: new_session.id.clone(),
@@ -4266,14 +4268,15 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     new_session.id,
                 ));
                 // Mirror to relay so the web viewer sees the new tab (Ctrl+T path).
+                // Stable Tab.id, NOT 0-based tab_idx (collision with id=1 'main').
                 if let Some(tx) = &cli.relay_event_tx {
                     let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
-                        tab_id: tab_idx,
+                        tab_id,
                         name: "new".to_string(),
                         model: cli.model.clone(),
                         session_id: new_session.id.clone(),
                     });
-                    let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id: tab_idx });
+                    let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id });
                 }
             }
             // Task #627: confirm modal (/restart, /iac apply) resolved.
@@ -4420,22 +4423,27 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 new_session.id,
                             ));
                             // Broadcast to relay so the web viewer mirrors the new tab.
+                            // tab_id here is the stable Tab.id from tab_id_at() above; using
+                            // tab_idx (0-based position) would collide with id=1 of the existing
+                            // 'main' tab and overwrite it on the viewer side.
                             if let Some(tx) = &cli.relay_event_tx {
                                 let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
-                                    tab_id: tab_idx,
+                                    tab_id,
                                     name: name.to_string(),
                                     model: cli.model.clone(),
                                     session_id: new_session.id.clone(),
                                 });
-                                let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id: tab_idx });
+                                let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id });
                             }
                         }
                         "close" => {
                             let closed_idx = tui.active_tab_index();
+                            // Resolve to stable Tab.id BEFORE closing — index becomes invalid after close.
+                            let closed_tab_id = tui.tab_id_at(closed_idx).unwrap_or(closed_idx + 1);
                             if let Some(name) = tui.close_active_tab() {
                                 tui.push_system(format!("Closed tab: {name}"));
                                 if let Some(tx) = &cli.relay_event_tx {
-                                    let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id: closed_idx });
+                                    let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id: closed_tab_id });
                                 }
                             } else {
                                 tui.push_system("Cannot close the last tab.".to_string());
@@ -4457,11 +4465,12 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.push_system("Usage: /tab rename <name>".to_string());
                             } else {
                                 let renamed_idx = tui.active_tab_index();
+                                let renamed_tab_id = tui.tab_id_at(renamed_idx).unwrap_or(renamed_idx + 1);
                                 tui.rename_active_tab(arg);
                                 tui.push_system(format!("Tab renamed to: {arg}"));
                                 if let Some(tx) = &cli.relay_event_tx {
                                     let _ = tx.send(runtime::relay::RelayMessage::TabRenamed {
-                                        tab_id: renamed_idx,
+                                        tab_id: renamed_tab_id,
                                         name: arg.to_string(),
                                     });
                                 }
@@ -4478,8 +4487,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tui.switch_tab(tab_idx);
                                 cli.active_tab_idx = tui.active_tab_index();
                                 if let Some(tx) = &cli.relay_event_tx {
+                                    let switched_tab_id = tui.tab_id_at(cli.active_tab_idx).unwrap_or(cli.active_tab_idx + 1);
                                     let _ = tx.send(runtime::relay::RelayMessage::TabSwitched {
-                                        tab_id: cli.active_tab_idx,
+                                        tab_id: switched_tab_id,
                                     });
                                 }
                             } else {

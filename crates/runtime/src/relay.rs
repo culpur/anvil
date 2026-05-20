@@ -1049,19 +1049,19 @@ impl RelayHost {
                                         }
                                     }
                                     RelayMessage::UserMessage { tab_id, ref message } => {
-                                        let st = state.lock().await;
-                                        // Only accept input from paired clients
-                                        if st.paired_count() > 0 {
-                                            let _ = input_tx.send((tab_id, message.clone()));
-                                            // Forward to the sync TUI channel if available
-                                            if let Some(ref sync_tx) = user_input_tx {
-                                                let _ = sync_tx.send((tab_id, message.clone()));
-                                            }
+                                        // Trust the relay's pairing decision — passage validates the
+                                        // pairing PIN before forwarding any user_message to the host.
+                                        // The previous `paired_count() > 0` gate silently dropped
+                                        // every message from clients that paired via passage's
+                                        // hasPairedClient shortcut (reconnect path), because the
+                                        // host's local PairingVerifier was never re-triggered.
+                                        let _ = input_tx.send((tab_id, message.clone()));
+                                        if let Some(ref sync_tx) = user_input_tx {
+                                            let _ = sync_tx.send((tab_id, message.clone()));
                                         }
                                     }
                                     RelayMessage::RequestNewTab { ref name } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0 {
+                                        { let _ = &state; // passage validates pairing
                                             let tab_name = name.as_deref().unwrap_or("remote");
                                             if let Some(ref sync_tx) = user_input_tx {
                                                 // Use special prefix so TUI knows this is a tab request
@@ -1070,104 +1070,78 @@ impl RelayHost {
                                         }
                                     }
                                     RelayMessage::RequestCloseTab { tab_id } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__close_tab:{tab_id}")));
                                             }
                                     }
                                     RelayMessage::ConfigGet => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, "__config_get".to_string()));
                                             }
                                     }
                                     RelayMessage::ConfigSet { ref key, ref value } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__config_set:{key}:{value}")));
                                             }
                                     }
                                     // Phase 3 panel-aware config update
                                     RelayMessage::ConfigUpdate { ref panel, ref field, ref value } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let value_json = serde_json::to_string(value).unwrap_or_default();
                                                 let _ = sync_tx.send((0, format!("__config_update:{panel}:{field}:{value_json}")));
                                             }
                                     }
                                     RelayMessage::RequestRenameTab { tab_id, ref name } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__rename_tab:{tab_id}:{name}")));
                                             }
                                     }
                                     // Phase 4: hub install request from web client
                                     RelayMessage::HubInstall { ref slug, ref version } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__hub_install:{slug}:{version}")));
                                             }
                                     }
                                     // Phase 4: web client requests host to respawn
                                     RelayMessage::RespawnRequest => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, "__respawn_request".to_string()));
                                             }
                                     }
                                     // ── v2.2.18 task #647 web→host arms ─────────────────
                                     // G2: focus a specific tab.
                                     RelayMessage::RequestFocusTab { tab_id } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__focus_tab:{tab_id}")));
                                             }
                                     }
                                     // G4: layout switch.
                                     RelayMessage::RequestLayout { ref kind, tabs } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__layout_set:{kind}:{tabs}")));
                                             }
                                     }
                                     // G5: slash-command dispatch.
                                     RelayMessage::SlashDispatch { tab_id, ref command } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((tab_id, format!("__slash_dispatch:{command}")));
                                             }
                                     }
                                     // G8: routine approve / reject — route through
                                     // schedule_cmds::run_schedule_command.
                                     RelayMessage::RequestRoutineApprove { ref routine } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__routine_approve:{routine}")));
                                             }
                                     }
                                     RelayMessage::RequestRoutineReject { ref routine } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((0, format!("__routine_reject:{routine}")));
                                             }
                                     }
                                     // G10: permission decision from the web user.
                                     RelayMessage::PermissionDecision { tab_id, ref prompt_id, ref choice } => {
-                                        let st = state.lock().await;
-                                        if st.paired_count() > 0
-                                            && let Some(ref sync_tx) = user_input_tx {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((tab_id, format!("__permission_decision:{prompt_id}:{choice}")));
                                             }
                                     }
