@@ -17,15 +17,18 @@
 //! │  [cursor]                                                      │
 //! │                                                               │
 //! │  ─────────────────────────────────── 0 words · 0 chars       │
-//! │  Enter: newline   Ctrl+Enter/Alt+Enter: submit   Esc: cancel  │
+//! │  Enter: submit   Ctrl+N: newline   Esc: cancel                │
 //! ╰───────────────────────────────────────────────────────────────╯
 //! ```
 //!
 //! ## Keys
 //!
 //! - Printable chars                insert at cursor
-//! - Enter                          insert newline
-//! - Ctrl+Enter / Alt+Enter         submit
+//! - Enter                          submit
+//! - Ctrl+N                         insert newline (terminal-portable)
+//! - Alt+Enter / Shift+Enter        insert newline (alternates; only fire on
+//!                                  terminals that distinguish them — most
+//!                                  don't, which is why Ctrl+N is primary)
 //! - Esc                            cancel (returns `Cancel(String)`)
 //! - Ctrl+C                         cancel
 //! - Backspace                      delete char before cursor (crosses
@@ -81,7 +84,7 @@ use ratatui::{
 pub(crate) enum TextareaAction {
     /// Stay open, redraw.
     Continue,
-    /// User pressed Ctrl+Enter or Alt+Enter — here is the captured text.
+    /// User pressed Enter — here is the captured text.
     Submit(String),
     /// User pressed Esc or Ctrl+C — returns the current buffer (caller
     /// decides whether to discard it).
@@ -140,15 +143,26 @@ impl TextareaModal {
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> TextareaAction {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         // Ctrl+C / Esc → cancel.
         if ctrl && matches!(key.code, KeyCode::Char('c')) {
             return TextareaAction::Cancel(self.buffer.clone());
         }
 
-        // Ctrl+Enter or Alt+Enter → submit.
-        if (ctrl || alt) && matches!(key.code, KeyCode::Enter) {
-            return TextareaAction::Submit(std::mem::take(&mut self.buffer));
+        // Ctrl+N → newline (works in every terminal). Alt+Enter and
+        // Shift+Enter are accepted as alternates on terminals that emit them
+        // distinctly, but Ctrl+Enter is NOT — most terminals collapse it to
+        // bare Enter, which would submit instead of break the line.
+        if ctrl && matches!(key.code, KeyCode::Char('n') | KeyCode::Char('N')) {
+            self.buffer.insert(self.cursor, '\n');
+            self.cursor += 1;
+            return TextareaAction::Continue;
+        }
+        if (alt || shift) && matches!(key.code, KeyCode::Enter) {
+            self.buffer.insert(self.cursor, '\n');
+            self.cursor += 1;
+            return TextareaAction::Continue;
         }
 
         // Ctrl+U → clear.
@@ -163,10 +177,8 @@ impl TextareaModal {
             KeyCode::Esc => TextareaAction::Cancel(self.buffer.clone()),
 
             KeyCode::Enter => {
-                // Regular Enter inserts a newline.
-                self.buffer.insert(self.cursor, '\n');
-                self.cursor += 1;
-                TextareaAction::Continue
+                // Bare Enter submits. Newlines via Ctrl+N / Alt+Enter / Shift+Enter.
+                TextareaAction::Submit(std::mem::take(&mut self.buffer))
             }
 
             KeyCode::Backspace => {
@@ -381,7 +393,7 @@ impl TextareaModal {
 
         // Hint row.
         lines.push(Line::from(Span::styled(
-            "  Enter: newline   Ctrl+Enter: submit   Esc: cancel".to_string(),
+            "  Enter: submit   Ctrl+N: newline   Esc: cancel".to_string(),
             Style::default().fg(secondary),
         )));
 
@@ -797,21 +809,21 @@ mod tests {
     }
 
     #[test]
-    fn textarea_enter_inserts_newline() {
+    fn textarea_ctrl_n_inserts_newline() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('a')));
-        let action = m.handle_key(key(KeyCode::Enter));
+        let action = m.handle_key(ctrl(KeyCode::Char('n')));
         assert_eq!(action, TextareaAction::Continue);
         assert_eq!(m.buffer, "a\n");
         assert_eq!(m.cursor, 2);
     }
 
     #[test]
-    fn textarea_ctrl_enter_submits() {
+    fn textarea_enter_submits() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('h')));
         m.handle_key(key(KeyCode::Char('i')));
-        match m.handle_key(ctrl(KeyCode::Enter)) {
+        match m.handle_key(key(KeyCode::Enter)) {
             TextareaAction::Submit(s) => assert_eq!(s, "hi"),
             other => panic!("expected Submit, got {other:?}"),
         }
@@ -820,13 +832,21 @@ mod tests {
     }
 
     #[test]
-    fn textarea_alt_enter_submits() {
+    fn textarea_alt_enter_inserts_newline() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('x')));
-        match m.handle_key(alt(KeyCode::Enter)) {
-            TextareaAction::Submit(s) => assert_eq!(s, "x"),
-            other => panic!("expected Submit, got {other:?}"),
-        }
+        let action = m.handle_key(alt(KeyCode::Enter));
+        assert_eq!(action, TextareaAction::Continue);
+        assert_eq!(m.buffer, "x\n");
+    }
+
+    #[test]
+    fn textarea_shift_enter_inserts_newline() {
+        let mut m = TextareaModal::new("T", "p");
+        m.handle_key(key(KeyCode::Char('y')));
+        let action = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(action, TextareaAction::Continue);
+        assert_eq!(m.buffer, "y\n");
     }
 
     #[test]
@@ -866,7 +886,7 @@ mod tests {
     fn textarea_backspace_across_newline() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('a')));
-        m.handle_key(key(KeyCode::Enter)); // "a\n"
+        m.handle_key(ctrl(KeyCode::Char('n'))); // "a\n"
         m.handle_key(key(KeyCode::Char('b'))); // "a\nb"
         m.handle_key(key(KeyCode::Backspace)); // deletes 'b' → "a\n"
         assert_eq!(m.buffer, "a\n");
@@ -878,7 +898,7 @@ mod tests {
     fn textarea_ctrl_u_clears() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('x')));
-        m.handle_key(key(KeyCode::Enter));
+        m.handle_key(ctrl(KeyCode::Char('n')));
         m.handle_key(key(KeyCode::Char('y')));
         m.handle_key(ctrl(KeyCode::Char('u')));
         assert!(m.buffer.is_empty());
@@ -902,7 +922,7 @@ mod tests {
     fn textarea_home_end_on_second_line() {
         let mut m = TextareaModal::new("T", "p");
         m.handle_key(key(KeyCode::Char('a')));
-        m.handle_key(key(KeyCode::Enter));
+        m.handle_key(ctrl(KeyCode::Char('n')));
         m.handle_key(key(KeyCode::Char('b')));
         m.handle_key(key(KeyCode::Char('c')));
         // Cursor at position 4 ("a\nbc", cursor after 'c').
@@ -965,13 +985,13 @@ mod tests {
         assert_eq!(m.cursor, 0);
     }
 
-    /// Ctrl+Enter on a 2000-char buffer must submit the full text.
+    /// Enter on a 2000-char buffer must submit the full text.
     #[test]
-    fn textarea_2000_char_ctrl_enter_submits_full_buffer() {
+    fn textarea_2000_char_enter_submits_full_buffer() {
         let long_text: String = "word ".repeat(400);
         let mut m = TextareaModal::new("T", "p");
         m.handle_paste(&long_text);
-        match m.handle_key(ctrl(KeyCode::Enter)) {
+        match m.handle_key(key(KeyCode::Enter)) {
             TextareaAction::Submit(s) => {
                 assert_eq!(
                     s.len(),
