@@ -1,6 +1,12 @@
 [targets]
 anvilhub_path = "/opt/projects/anvilhub/packages/web"
 anvilhub_pm2_process = "anvilhub"
+# Task #655 (v2.2.18): anvilhub pm2 runs in CT 113 on the proxmox host,
+# NOT on dev0001. The MCP routes pm2 ops through:
+#   bastion → proxmox host → pct exec <container_id> → pm2
+anvilhub_pm2_proxmox_host = "188.40.211.105"
+anvilhub_pm2_container_id = "113"
+anvilhub_pm2_home = "/root/.pm2"
 culpur_wp_page_id = 619
 culpur_wp_slug = "anvil"
 

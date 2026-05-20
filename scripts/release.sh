@@ -595,18 +595,25 @@ sys.stdout.write(new)
         echo "  ✓ WordPress shortcode already at v$VERSION (no change)"
         WP_UPDATE_OK=true
     else
-        # Write through base64 — no shell escaping concerns
+        # Write through base64 — no shell escaping concerns.
+        # Each SSH call uses || true so a network blip or container-not-running
+        # doesn't trigger set -e and silently kill the rest of the pipeline
+        # (v2.2.17 incident: set -e + failing SSH in this block terminated
+        #  release.sh before Phase 7+ ran, with exit 0, no error visible).
         WP_NEW_B64=$(printf '%s' "$WP_NEW" | base64 | tr -d '\n')
-        $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_NEW_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null
-        # php -l verification — roll back on failure
-        if $WP_SSH "$WP_INNER '$WP_DOCKER php -l $WP_PHP_PATH'" 2>&1 | grep -q "No syntax errors detected"; then
-            $WP_SSH "$WP_INNER '$WP_DOCKER rm -rf /var/www/html/wp-content/wphb-cache/'" 2>/dev/null
+        $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_NEW_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null || true
+        # php -l verification — roll back on failure.
+        # The pipeline is captured into a variable first so pipefail can't fire
+        # mid-pipeline and kill the script before we handle the result.
+        WP_LINT_OUT=$($WP_SSH "$WP_INNER '$WP_DOCKER php -l $WP_PHP_PATH'" 2>&1 || true)
+        if echo "$WP_LINT_OUT" | grep -q "No syntax errors detected"; then
+            $WP_SSH "$WP_INNER '$WP_DOCKER rm -rf /var/www/html/wp-content/wphb-cache/'" 2>/dev/null || true
             echo "  ✓ WordPress shortcode updated to v$VERSION + lint passed + cache cleared"
             WP_UPDATE_OK=true
         else
             # Roll back to the original content
             WP_OLD_B64=$(printf '%s' "$WP_OLD" | base64 | tr -d '\n')
-            $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_OLD_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null
+            $WP_SSH "$WP_INNER \"$WP_DOCKER sh -c 'echo $WP_OLD_B64 | base64 -d > $WP_PHP_PATH'\"" 2>/dev/null || true
             echo "  ✘ WordPress php -l REJECTED the new content — rolled back to original" >&2
             echo "    (release continues; manual investigation needed)" >&2
         fi
@@ -732,3 +739,18 @@ echo "║  2. Update feature descriptions if needed     ║"
 echo "║  3. Update docs/usage page if commands added  ║"
 echo "║  4. Post to marketing channels if major       ║"
 echo "╚══════════════════════════════════════════════╝"
+
+# ─── Phase 99: Post-flight sentinel ──────────────────────────────────────────
+#
+# If this line executes, every phase above ran to completion (set -euo pipefail
+# would have terminated the script on any unguarded error before reaching here).
+# The explicit message lets pipeline observers distinguish "script completed all
+# phases" from "script exited 0 mid-way" — the silent-exit mode that caused
+# the v2.2.17 incident where Phases 7+ were skipped without any error output.
+PHASES_RUN="0→1.5→2→2.5→2.6→3→4→4.5→5→6→7→8"
+[ "$SKIP_BUILD" = true ]   && PHASES_RUN="(skipped 1) $PHASES_RUN"
+[ "$BUILD_ONLY" = true ]   && PHASES_RUN="1→1.5→2→2.5→2.6 (build-only)"
+[ "$SKIP_VERIFY" = true ]  && PHASES_RUN="$PHASES_RUN (skipped 8)"
+[ "$DRY_RUN_VERIFY" = true ] && PHASES_RUN="$PHASES_RUN (dry-run 8)"
+echo
+echo "[release.sh complete: phases run = $PHASES_RUN | version = $TAG | exit 0]"
