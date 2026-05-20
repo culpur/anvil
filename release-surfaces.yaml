@@ -190,3 +190,30 @@ surfaces:
         - anvilhub /about (3 mentions in changelog bullets)
       This verifier entry checks the source is computable. Cross-surface count
       drift detection is left to scripts/verify-provider-count.sh (TBD task).
+
+  # ─── v2.2.18 release-specific invariants ─────────────────────────────────
+  # Added: 2026-05-20. These guard the two critical behavioral fixes in v2.2.18.
+
+  - id: v2_2_18_mouse_capture_default_off
+    type: code_constant
+    url: "(source-only — no public URL)"
+    deploy_path: "crates/anvil-cli/src/tui/config.rs (TuiConfig::default)"
+    verify_curl: "grep -c 'mouse_capture_default_off_regression' crates/anvil-cli/src/tui/config.rs 2>/dev/null || grep -rn 'mouse_capture_default_off_regression' crates/ 2>/dev/null | wc -l | tr -d ' '"
+    verify_expect: ">= 1"
+    notes: |
+      Regression test introduced in v2.2.18 (#696 P4).
+      Asserts TuiConfig::default().mouse_capture == false at the type level.
+      If this grep returns 0, the regression test was deleted — treat as a
+      critical regression. Mouse capture must default OFF on all platforms.
+
+  - id: v2_2_18_autocompact_context_window
+    type: code_constant
+    url: "(source-only — no public URL)"
+    deploy_path: "crates/runtime/src/compaction.rs (maybe_auto_compact threshold)"
+    verify_curl: "grep -rn 'context_window' crates/runtime/src/compaction.rs 2>/dev/null | grep -v '^.*//.*context_window' | wc -l | tr -d ' '"
+    verify_expect: ">= 1"
+    notes: |
+      Critical fix in v2.2.18 (#697). maybe_auto_compact must use
+      session.context_window, NOT max_output_tokens, for threshold computation.
+      If this grep returns 0, the fix was reverted — sessions on long-context
+      models will over-compact (fire at 3% of available window instead of 80%).
