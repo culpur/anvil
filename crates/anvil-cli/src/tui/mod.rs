@@ -424,6 +424,30 @@ pub fn take_force_full_redraw() -> bool {
     FORCE_FULL_REDRAW.swap(false, std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Task #688: tracks whether mouse capture is CURRENTLY enabled on the
+/// terminal. AnvilTui::new() sets this when it emits EnableMouseCapture;
+/// `leave_alt_screen_for_inline_op` checks it to know whether to issue
+/// `DisableMouseCapture` (the wizard runs OUTSIDE the alt-screen with raw
+/// stdout — if mouse capture stays on, the terminal floods the user with
+/// raw SGR mouse-tracking escape codes that look like garbage commands).
+/// `restore_alt_screen` re-enables it on the way back in.
+///
+/// User-reported 2026-05-20: opening /mcp builder inside an Ubuntu/Mac
+/// terminal with mouse capture on emits `^[[<35;...M` sequences into the
+/// wizard's text area; after anvil exits cleanly, zsh receives the same
+/// codes as "command not found" errors. Root cause: leave/restore pair
+/// only managed alt-screen state, not mouse-capture state.
+pub(crate) static MOUSE_CAPTURE_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns true iff `AnvilTui::new()` previously enabled mouse capture in
+/// this process. Used by `leave_alt_screen_for_inline_op` /
+/// `restore_alt_screen` to keep the mouse-capture toggle paired with the
+/// alt-screen toggle.
+pub fn mouse_capture_active() -> bool {
+    MOUSE_CAPTURE_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Returns `true` if a TUI session is currently active (alt-screen up).
 ///
 /// Background tasks that emit warnings on error paths should consult this
@@ -512,6 +536,25 @@ pub fn alternate_screen_enabled() -> bool {
 ///
 /// Pairs with [`restore_alt_screen`].
 pub fn leave_alt_screen_for_inline_op() {
+    // Task #688: pair mouse-capture state with alt-screen state. If we
+    // leave the alt-screen while mouse capture is still on, the user
+    // sees raw SGR mouse-tracking codes (^[[<35;...M) dumped into the
+    // wizard's plain stdout — and worse, if the wizard exits abnormally
+    // the user's shell stays in mouse-tracking mode after anvil quits.
+    // DisableBracketedPaste too so the wizard's TextareaModal sees
+    // normal keystrokes (it does its own bracketed paste handling).
+    if mouse_capture_active() {
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::DisableMouseCapture
+        );
+    } else {
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::event::DisableBracketedPaste
+        );
+    }
     if alternate_screen_enabled() {
         let _ = crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen);
     }
@@ -532,6 +575,21 @@ pub fn restore_alt_screen() {
             io::stdout(),
             terminal::EnterAlternateScreen,
             terminal::Clear(terminal::ClearType::All)
+        );
+    }
+    // Task #688: re-arm input modes that leave_alt_screen_for_inline_op
+    // disabled. Bracketed paste is unconditional (matches new() init);
+    // mouse capture is conditional on whether it was on before. Without
+    // this, returning from the wizard leaves the parent TUI unable to
+    // see mouse events.
+    let _ = crossterm::execute!(
+        io::stdout(),
+        crossterm::event::EnableBracketedPaste
+    );
+    if mouse_capture_active() {
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::event::EnableMouseCapture
         );
     }
     // Task #687: raise the force-full-redraw flag so the next main-loop
@@ -603,6 +661,12 @@ impl AnvilTui {
                 stdout,
                 crossterm::event::EnableBracketedPaste
             )?,
+        }
+        // Task #688: record that mouse capture is now ON. Drop and the
+        // inline-op leave/restore pair check this to keep the capture
+        // state paired with the alt-screen state.
+        if mouse_capture {
+            MOUSE_CAPTURE_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
@@ -4392,6 +4456,9 @@ impl Drop for AnvilTui {
                 crossterm::event::DisableMouseCapture,
             );
         }
+        // Task #688: clear the global state flag so panic-recovery /
+        // re-init paths don't see stale capture state.
+        MOUSE_CAPTURE_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -5195,5 +5262,33 @@ mod bug2_bug3_redraw_tests {
         let second = super::take_force_full_redraw();
         assert!(first, "first read must observe the set flag");
         assert!(!second, "flag must clear after being read once");
+    }
+
+    /// Task #688: MOUSE_CAPTURE_ACTIVE tracks whether mouse capture is currently
+    /// on so leave_alt_screen_for_inline_op knows to disable it. Without this,
+    /// the user sees raw SGR mouse-tracking escape codes in the wizard's plain
+    /// stdout — and worse, abnormal exits leave the user's shell in
+    /// mouse-tracking mode where every mouse movement becomes a phantom
+    /// "command not found" error.
+    #[test]
+    fn mouse_capture_active_round_trips() {
+        // Save + restore the global state so this test is isolated.
+        let prior = super::mouse_capture_active();
+
+        super::MOUSE_CAPTURE_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!super::mouse_capture_active(), "default false");
+
+        super::MOUSE_CAPTURE_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(super::mouse_capture_active(), "set true → read true");
+
+        // Read does NOT clear (unlike FORCE_FULL_REDRAW which is swap-and-clear).
+        // The mouse-capture flag is a state mirror, not a one-shot signal.
+        assert!(super::mouse_capture_active(), "repeated read still true");
+
+        super::MOUSE_CAPTURE_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(!super::mouse_capture_active(), "cleared explicitly");
+
+        // Restore for any test that runs after this one.
+        super::MOUSE_CAPTURE_ACTIVE.store(prior, std::sync::atomic::Ordering::SeqCst);
     }
 }
