@@ -77,13 +77,59 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
-## What's new in v2.2.18 &mdash; Web Viewer Parity, Mouse Capture Default-OFF, Autocompact Hardening
+## What's new in v2.2.18 &mdash; The Web Viewer Lands, Autocompact Gets Honest, Mouse Capture Off by Default
 
-Three quiet correctness bugs resolved in one focused cycle. The autocompact threshold was measuring against the output cap (8K&ndash;16K) rather than the context window (64K&ndash;200K+), causing sessions on long-context models to compact after just a handful of turns &mdash; that&rsquo;s fixed. Mouse capture now defaults OFF on all platforms, restoring terminal copy-paste for users who hadn&rsquo;t opted in. The web viewer gets the same stable tab-routing layer the TUI has had since v2.2.16, including `/tab new/rename/switch`, Ctrl+T, and per-tab relay routing for concurrent sessions.
+**v2.2.18 makes the web viewer real.** The `passage` relay and AnvilHub viewer get a tab-routing rewrite that matches the TUI&rsquo;s per-tab architecture exactly &mdash; `/tab new`, `/tab rename`, `/tab switch`, `Ctrl+T`, per-tab `user_message` and `slash_result` routing, and a default layout of `vertical_split + tabs` so the viewer opens with the same shape as a fresh TUI. Sitting alongside the viewer rewrite are two quiet correctness fixes that have been silently burning users for weeks: the autocompact threshold was measuring against the output cap (8K&ndash;16K) instead of the context window (64K&ndash;200K+), and mouse capture defaulted on when it should have defaulted off. Both fixed. Plus a release-pipeline hardening pass so Phase&nbsp;6 can no longer exit silently mid-deploy.
 
-Also in this release: bracketed paste in textarea modals, a PermissionPrompt round-trip regression test, `restore_alt_screen` raw-mode fix (the &ldquo;keyboard dies after `/mcp builder` cancel&rdquo; bug), and Phase 6 release-pipeline hardening against `set -e` silent-exit.
+### The Web Viewer &mdash; full TUI parity
 
-See [RELEASE-NOTES-v2.2.18.md](RELEASE-NOTES-v2.2.18.md) for the full narrative.
+`/tab new`, `/tab rename <name>`, and `/tab switch <n>` are now first-class slash commands and the relay routes each tab&rsquo;s `user_message` and `slash_result` events to the originating tab&rsquo;s stream, not a broadcast. `Ctrl+T` opens a new tab from anywhere. Tab IDs are stable from creation forward, which kills the bug where a `/tab` command would appear to succeed in the TUI but have no effect in the viewer. The `paired_count` gate that incorrectly blocked routing after the first paired connection is gone &mdash; legitimate single-viewer reconnects work again.
+
+Fresh sessions open with the rail on the left and the main deck on the right, matching the TUI default introduced in v2.2.16. Cost labels in the viewer&rsquo;s status footer show the real `cost_type` chip (OAuth&nbsp;/&nbsp;local&nbsp;/&nbsp;cloud) instead of a fabricated dollar figure. `MemorySnapshot` events are cached and broadcast so the memory rail populates correctly on every reconnect. `SessionMeta` carries `context_max` and `build_sha` so the viewer can draw an accurate context-window progress bar.
+
+Default-allow forwarding means viewer messages that don&rsquo;t match a specific handler now reach the TUI&rsquo;s active tab instead of being silently dropped. Slash completion responses flow back to the originating viewer connection. Collapsible tool cards reduce visual noise on long agentic runs. The viewer&rsquo;s slash-command bar is now always visible in the header (was: hidden until you typed `/`), and `Cmd+K` opens the command palette from any state.
+
+### Autocompact threshold &mdash; the silent-burner is fixed (#697)
+
+`maybe_auto_compact` was computing its trigger against `max_output_tokens` (typically 8K&ndash;16K) instead of `context_window` (64K&ndash;200K+ depending on model). On `claude-sonnet-4-5` with a 200K window, that meant autocompact fired around 6K input tokens &mdash; sessions that should hold 100K of context were getting compacted after a handful of turns. The fix reads `session.context_window` (populated from the provider&rsquo;s `/models` response or your config override) and ignores `max_output_tokens` entirely. The 80% default trigger is unchanged; only what it measures against. Long-context users will see sessions running dramatically longer before compaction.
+
+`/compact why` now prints the full threshold calculation so you can verify it&rsquo;s using the right window size. A new OTel span `anvil.autocompact.threshold` emits `context_window`, `used_tokens`, `threshold_pct`, and `triggered` for auditability.
+
+### Mouse capture &mdash; off by default, everywhere (#696)
+
+Mouse capture is now disabled by default on all platforms, matching `feedback-cross-platform-ux-defaults.md`. The previous default-on behavior broke terminal copy-paste (Cmd+C, Ctrl+Shift+C, or Ctrl+C depending on terminal and OS) for users who hadn&rsquo;t opted in. A one-time toast on first run shows you how to enable it: `/config mouse_capture true` or `--mouse`. The `mouse_capture_default_off_regression` test asserts the default at the type level so a future drift can&rsquo;t silently regress.
+
+### Wizard polish &mdash; bracketed paste in textareas (#685)
+
+Multi-line paste inside a textarea modal (the input used by `/mcp builder` and other wizard steps) now works correctly. Previously, pasting a multi-line block would collapse to a single line or corrupt the cursor depending on the terminal. The fix wires `tui::paste::handle_paste` into the textarea event loop &mdash; the same bracketed-paste detection and `\r\n` &rarr; `\n` normalization that has been protecting the main input box now applies to every textarea field.
+
+### TUI fixes &mdash; the long tail
+
+- **MemorySnapshot rail parity (#695).** The vertical-split rail uses `layouts::common` helpers instead of a hand-rolled draw path so the snapshot renders at the same fidelity as the classic inline view.
+- **Per-tab relay routing (#696).** `relay::user_message` and `relay::slash_result` route to the active `Tab.id` instead of broadcasting. No more cross-tab leakage when two tabs have concurrent inference in flight.
+- **OAuth&nbsp;/&nbsp;local&nbsp;/&nbsp;cloud cost label (#696 P1).** The TUI status footer shows a semantic chip instead of a fabricated dollar figure for providers where per-token cost is not knowable.
+- **Alt-screen raw mode restore (#688).** `restore_alt_screen` re-enables raw mode on return from inline operations &mdash; this was the root cause of &ldquo;keyboard stops working after `/mcp builder` cancel&rdquo; in v2.2.17.
+- **`FORCE_FULL_REDRAW` consumption (#688).** Consumed inside `handle_repl_command_tui` so the blank-screen-after-cancel regression cannot recur.
+- **Mouse capture + alt-screen pairing (#688).** Mouse capture state is paired with alt-screen state, so enabling mouse capture outside the alt-screen no longer leaves the terminal inconsistent after exit.
+- **Force full redraw after inline-op restore (#687).** Any inline operation that restores the alt-screen now forces a full redraw, eliminating partial-frame artifacts.
+- **Textarea keybinds (#686).** `Enter` submits, `Ctrl+N` inserts a newline. The previous inversion made single-line submission require `Ctrl+N`.
+- **`/mcp builder` long-description textarea (#684).** The long-description field is a multi-line textarea modal instead of a single-line input.
+
+### PermissionPrompt regression test (#677)
+
+End-to-end round-trip test for `PermissionPrompt`: fire a tool call that requires a permission prompt, verify the prompt renders, send the approval, assert the turn completes. Guards the class of bug where permission-prompt state can desync from the turn loop.
+
+### Release-pipeline hardening (#654)
+
+Phase&nbsp;6 of `scripts/release.sh` now guards every SSH hop against `set -e` silent-exit. A failed remote call in Phase&nbsp;6 used to terminate the script with exit&nbsp;0, leaving subsequent surface updates unrun while reporting success. Every SSH call is now wrapped in an explicit `|| { echo "Phase 6 SSH failed: ..."; exit 1; }` guard so failures surface immediately.
+
+### Compatibility
+
+v2.2.18 is binary-compatible with v2.2.17 sessions. `anvil --continue` and `anvil --resume <id>` work across the upgrade. The two new config keys (`mouse_capture`, `mouse_capture_toast_seen`) are optional &mdash; existing `~/.anvil/settings.json` files continue to parse. The autocompact fix is transparent: no config change required, and sessions that were over-compacting on long-context models will automatically use the correct threshold after upgrade.
+
+### Install
+
+Seven platforms, SHA256-verified, single binary, no runtime required.
 
 ---
 
@@ -287,21 +333,26 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 
 
-
-
 ### v2.2.18 &mdash; May 20, 2026
 
-**Web Viewer Parity, Mouse Capture Default-OFF, Autocompact Hardening.**
+**The Web Viewer Lands. Autocompact Gets Honest. Mouse Capture Off by Default.**
 
-- &#10003; **Autocompact threshold fix (CRITICAL #697)** &mdash; `maybe_auto_compact` was comparing usage against `max_output_tokens` (8K&ndash;16K) instead of `context_window` (64K&ndash;200K+). Sessions on long-context models were compacting after ~6K input tokens. Fixed: threshold now reads `session.context_window`. `/compact why` prints the threshold calculation. New OTel span `anvil.autocompact.threshold` with `context_window`, `used_tokens`, `threshold_pct`, `triggered`.
-- &#10003; **Mouse capture default-OFF (#696 P4)** &mdash; mouse capture is now disabled by default on all platforms, restoring native terminal copy-paste. One-time toast on first run explains how to opt back in. `mouse_capture_default_off_regression` test guards against future regression.
-- &#10003; **Web viewer tab routing (#696)** &mdash; `/tab new/rename/switch` are first-class slash commands; Ctrl+T broadcasts new-tab to relay; tab IDs are stable and route `user_message`/`slash_result` to the correct tab. Removed the bad `paired_count` gate that blocked routing after reconnects.
-- &#10003; **Viewer default layout** &mdash; viewer opens with `vertical_split + tabs`, matching TUI default from v2.2.16. `MemorySnapshot` events cached + broadcast for rail-on-reconnect. `SessionMeta` carries `context_max` + `build_sha` for accurate context-window progress bar. Slash bar always visible in header; Cmd+K command palette.
-- &#10003; **`restore_alt_screen` raw-mode fix (#688)** &mdash; re-enables raw mode after inline operations; fixes &ldquo;keyboard stops working after `/mcp builder` cancel.&rdquo;
-- &#10003; **Bracketed paste in textarea modals (#685)** &mdash; pasting multi-line blocks into wizard textareas no longer collapses to one line or corrupts cursor position.
-- &#10003; **Textarea keybind fix (#686)** &mdash; Enter submits, Ctrl+N inserts newline. Previously inverted.
-- &#10003; **PermissionPrompt regression test (#677)** &mdash; end-to-end round-trip test guards against permission-prompt state desync.
-- &#10003; **Phase 6 release-pipeline hardening (#654)** &mdash; SSH calls in `release.sh` Phase 6 now guard against `set -e` silent-exit; failed hops surface immediately.
+- &#10003; **Web viewer &mdash; full TUI parity (#680, #681, #683, #692, #695, #696)** &mdash; `passage` relay and AnvilHub viewer get a tab-routing rewrite matching the TUI&rsquo;s per-tab architecture. `/tab new`, `/tab rename`, `/tab switch`, `Ctrl+T`. Per-tab `user_message` and `slash_result` routing (no more cross-tab leakage). Default layout `vertical_split + tabs`. Cost-type chip (OAuth / local / cloud) instead of fabricated dollar figures. Cached + broadcast `MemorySnapshot` so the memory rail populates on reconnect. `SessionMeta` carries `context_max` and `build_sha`. Default-allow forwarding for unhandled viewer messages. Collapsible tool cards. Always-visible slash bar with `Cmd+K` palette.
+- &#10003; **Autocompact threshold fix (#697 CRITICAL)** &mdash; `maybe_auto_compact` was measuring against `max_output_tokens` (8K&ndash;16K) instead of `context_window` (64K&ndash;200K+). Sessions on long-context models were compacting at roughly 6K input tokens. Now reads `session.context_window` and ignores `max_output_tokens` entirely. New OTel span `anvil.autocompact.threshold` emits `context_window`, `used_tokens`, `threshold_pct`, `triggered`. `/compact why` prints the full threshold calculation.
+- &#10003; **Mouse capture default OFF (#696 P4)** &mdash; mouse capture disabled by default on all platforms, restoring terminal copy-paste (Cmd+C / Ctrl+Shift+C / Ctrl+C) for users who hadn&rsquo;t opted in. One-time first-run toast shows `/config mouse_capture true` and `--mouse`. `mouse_capture_default_off_regression` test asserts the default at the type level.
+- &#10003; **Bracketed paste in textarea modals (#685)** &mdash; multi-line paste now works inside `/mcp builder` and other wizard textareas. Wires `tui::paste::handle_paste` into the textarea event loop with `\r\n` &rarr; `\n` normalization.
+- &#10003; **Per-tab relay routing (#696)** &mdash; `relay::user_message` and `relay::slash_result` route to active `Tab.id` rather than broadcasting. Concurrent inference in two tabs no longer leaks between them.
+- &#10003; **OAuth / local / cloud cost label (#696 P1)** &mdash; TUI status footer shows a semantic cost-type chip instead of a fabricated dollar amount for providers where per-token cost is not knowable.
+- &#10003; **`MemorySnapshot` rail parity (#695)** &mdash; vertical-split rail uses `layouts::common` helpers instead of a hand-rolled draw path. Same fidelity as the classic inline view.
+- &#10003; **Alt-screen raw mode restore (#688)** &mdash; `restore_alt_screen` re-enables raw mode on return from inline operations. Was the root cause of &ldquo;keyboard stops working after `/mcp builder` cancel&rdquo; in v2.2.17.
+- &#10003; **`FORCE_FULL_REDRAW` consumption (#688)** &mdash; consumed inside `handle_repl_command_tui` so the blank-screen-after-cancel regression cannot recur.
+- &#10003; **Mouse capture + alt-screen pairing (#688)** &mdash; mouse capture state is paired with alt-screen state. Enabling mouse capture outside the alt-screen no longer leaves the terminal inconsistent after exit.
+- &#10003; **Force full redraw after inline-op restore (#687)** &mdash; any inline operation that restores the alt-screen forces a full redraw. Eliminates partial-frame artifacts.
+- &#10003; **Textarea keybinds corrected (#686)** &mdash; `Enter` submits, `Ctrl+N` inserts a newline. Previously inverted.
+- &#10003; **`/mcp builder` long-description textarea (#684)** &mdash; long-description field is now a multi-line textarea modal instead of a single-line input.
+- &#10003; **PermissionPrompt round-trip regression test (#677)** &mdash; end-to-end test fires a tool call that requires a permission prompt, verifies the prompt renders, sends the approval, asserts the turn completes. Guards permission-prompt state from desyncing with the turn loop.
+- &#10003; **Release-pipeline Phase 6 silent-exit guard (#654)** &mdash; `scripts/release.sh` Phase 6 wraps every SSH hop in an explicit `|| { echo "Phase 6 SSH failed"; exit 1; }` guard. Previously a failed remote call could terminate the script with exit 0, leaving subsequent surface updates unrun.
+- &#10003; **anvil-release MCP host targeting fix (#698 CRITICAL)** &mdash; `anvilhub_pm2_host` reverted to `dev0001` after `#655` incorrectly routed pm2 ops to CT 113 (which is dead). Apache vhost has always proxied `anvilhub.culpur.net` to `dev0001:3100`.
 - &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.17 &mdash; May 18, 2026
