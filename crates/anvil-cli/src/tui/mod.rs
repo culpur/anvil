@@ -67,6 +67,7 @@ use runtime::theme::StatusLineConfig;
 
 use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
+use rust_i18n::t;
 use vt100::Color as Vt100Color;
 use ratatui::backend::CrosstermBackend;
 use ratatui::style::{Color, Modifier, Style};
@@ -1985,8 +1986,9 @@ impl AnvilTui {
                     ratatui::text::Line::from(""),
                 ];
 
+                let perm_title = t!("tui.modal.permission_required").to_string();
                 let block = Block::default()
-                    .title(" Permission Required ")
+                    .title(perm_title)
                     .borders(Borders::ALL)
                     .border_style(
                         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -2189,9 +2191,11 @@ impl AnvilTui {
                 let net_added = self.lines_added.saturating_sub(prev_added);
                 let net_removed = self.lines_removed.saturating_sub(prev_removed);
                 if net_added > 0 || net_removed > 0 {
-                    let summary = format!(
-                        "Files changed this turn: +{net_added} −{net_removed} (run /diff for full unified diff)"
-                    );
+                    let summary = t!(
+                        "tui.modal.files_changed",
+                        added = net_added.to_string(),
+                        removed = net_removed.to_string()
+                    ).to_string();
                     self.tabs[idx].log.push(LogEntry::System(summary));
                 }
             }
@@ -4931,7 +4935,7 @@ pub(super) fn render_configure_menu(
             match sub {
                 StatusLineEditorSub::Overview => {
                     lines.push(make_row("Apply Preset", &format!("[{}]", draft.preset), sel == 0));
-                    lines.push(make_row("Edit Lines", &format!("[{} lines]", draft.line_count()), sel == 1));
+                    lines.push(make_row(&t!("tui.modal.edit_lines"), &format!("[{} lines]", draft.line_count()), sel == 1));
                     lines.push(make_row("Separator Character", &format!("[{}]", draft.separator_char.trim()), sel == 2));
                     lines.push(make_row("Compact Mode", if draft.compact { "[on]" } else { "[off]" }, sel == 3));
                     lines.push(Line::from(""));
@@ -5043,7 +5047,7 @@ pub(super) fn render_configure_menu(
         }
 
         ConfigureState::EditingValue { key, value, cursor, .. } => {
-            let prompt = format!("Edit {key}:");
+            let prompt = t!("tui.modal.edit_key_prompt", key = key.to_string()).to_string();
             lines.push(Line::from(Span::styled(
                 format!("    {prompt}"),
                 Style::default().fg(Color::Yellow),

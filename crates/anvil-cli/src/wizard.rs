@@ -19,6 +19,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
+use rust_i18n::t;
 use serde_json::json;
 
 use crate::DEFAULT_MODEL;
@@ -62,7 +63,13 @@ fn wizard_box_bot() {
 
 fn wizard_step_header(step: u8, total: u8, title: &str) {
     println!();
-    println!("\x1b[1;33mStep {step} of {total}: {title}\x1b[0m");
+    let line = t!(
+        "wizard.step_header",
+        step = step.to_string(),
+        total = total.to_string(),
+        title = title
+    );
+    println!("\x1b[1;33m{line}\x1b[0m");
     println!("\x1b[33m{}\x1b[0m", "\u{2501}".repeat(40));
 }
 
@@ -977,18 +984,17 @@ where
     K: crate::wizard_runner::KeySource,
 {
     use crossterm::event::KeyCode;
-    let title = format!("Welcome to Anvil v{}", env!("CARGO_PKG_VERSION"));
-    let tagline =
-        "Your AI coding partner that runs anywhere — Anthropic, OpenAI, Ollama, and 32 more providers.";
-    let kicker = "Let's get you setup.";
-    let hint = "Press Enter to continue · Esc to skip setup";
+    let title = t!("wizard.welcome.title", version = env!("CARGO_PKG_VERSION")).to_string();
+    let tagline = t!("wizard.welcome.tagline").to_string();
+    let kicker = t!("wizard.welcome.kicker").to_string();
+    let hint = t!("wizard.welcome.hint").to_string();
     let accent = ratatui::style::Color::Cyan;
 
     let key_poll = std::time::Duration::from_millis(100);
     loop {
         runner
             .session
-            .render_welcome_card(&title, tagline, kicker, hint, accent)?;
+            .render_welcome_card(&title, &tagline, &kicker, &hint, accent)?;
         if let Some(k) = runner.keys.try_next_key(key_poll) {
             match k.code {
                 KeyCode::Enter | KeyCode::Char(' ') => return Ok(WelcomeOutcome::Continue),
@@ -1944,30 +1950,30 @@ fn push_default_model_candidates(p: api::ProviderKind, out: &mut Vec<(String, St
 fn run_tui_config_via_stdin() -> WizardTuiAnswers {
     let mut answers = WizardTuiAnswers::defaults();
 
-    wizard_step_header(7, 8, "TUI Layout");
+    wizard_step_header(7, 8, &t!("wizard.step.tui_layout_title"));
     println!();
-    println!("    [1] Vertical Split  (default)");
-    println!("    [2] Classic");
-    println!("    [3] Three-Pane");
-    println!("    [4] Journal");
+    println!("    {}", t!("wizard.layout.opt_vertical"));
+    println!("    {}", t!("wizard.layout.opt_classic"));
+    println!("    {}", t!("wizard.layout.opt_threepane"));
+    println!("    {}", t!("wizard.layout.opt_journal"));
     println!();
-    let layout_arch_choice = wizard_read_line("  Choice [1]: ");
+    let layout_arch_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     answers.layout_kind = wizard_parse_layout_kind_choice(&layout_arch_choice).to_string();
 
     println!();
-    println!("  Show workspace tabs? [1] Yes (default)  [2] No");
-    let layout_tabs_choice = wizard_read_line("  Choice [1]: ");
+    println!("  {}", t!("wizard.layout.show_tabs_prompt"));
+    let layout_tabs_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     answers.layout_tabs = wizard_parse_layout_tabs_choice(&layout_tabs_choice);
 
-    wizard_step_header(8, 8, "TUI Preferences");
+    wizard_step_header(8, 8, &t!("wizard.step.tui_prefs_title"));
     println!();
-    println!("  Enable mouse capture? [1] Off (default, recommended)  [2] On");
-    let mouse_choice = wizard_read_line("  Choice [1]: ");
+    println!("  {}", t!("wizard.prefs.mouse_prompt"));
+    let mouse_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     answers.mouse_capture = wizard_parse_mouse_capture_choice(mouse_choice.trim());
 
     println!();
-    println!("  Theme? [1] Dark (default)  [2] Light  [3] Auto");
-    let theme_choice = wizard_read_line("  Choice [1]: ");
+    println!("  {}", t!("wizard.prefs.theme_prompt"));
+    let theme_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     answers.theme = match theme_choice.trim() {
         "2" => "light".to_string(),
         "3" => "auto".to_string(),
@@ -1975,8 +1981,8 @@ fn run_tui_config_via_stdin() -> WizardTuiAnswers {
     };
 
     println!();
-    println!("  Default permission mode? [1] ask (default)  [2] workspace-write  [3] danger-full-access");
-    let perm_choice = wizard_read_line("  Choice [1]: ");
+    println!("  {}", t!("wizard.prefs.permission_prompt"));
+    let perm_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     answers.permission_mode = match perm_choice.trim() {
         "2" => "workspace-write".to_string(),
         "3" => "danger-full-access".to_string(),
@@ -2110,8 +2116,8 @@ fn run_first_run_wizard_modal() -> WizardResult {
         Err(e) => {
             // The alt-screen session failed to enter — fall back to the
             // stdin path so the user still gets through setup.
-            eprintln!("\n  Note: alt-screen wizard unavailable ({e}).");
-            eprintln!("  Falling back to inline / stdin prompts.");
+            eprintln!("\n  {}", t!("wizard.warn.altscreen_unavailable", reason = e.to_string()));
+            eprintln!("  {}", t!("wizard.warn.fallback_inline"));
             run_first_run_wizard_via_stdin();
             return WizardResult::default();
         }
@@ -2221,7 +2227,7 @@ fn run_first_run_wizard_modal() -> WizardResult {
     let config_path = match wizard_save_config(&config) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("\n  Warning: could not save config: {e}");
+            eprintln!("\n  {}", t!("wizard.warn.could_not_save_config", reason = e.to_string()));
             PathBuf::from("~/.anvil/config.json")
         }
     };
@@ -2238,17 +2244,17 @@ fn run_first_run_wizard_modal() -> WizardResult {
     println!();
     wizard_box_top();
     wizard_box_line("");
-    wizard_box_line("  Setup complete!");
+    wizard_box_line(&format!("  {}", t!("wizard.summary.complete")));
     wizard_box_line("");
-    wizard_box_line(&format!("    Default model:  {}", result.chosen_model));
-    wizard_box_line(&format!("    Providers:      {provider_chain}"));
-    wizard_box_line(&format!("    Config saved:   {}", config_path.display()));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.default_model", model = result.chosen_model.clone())));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.providers", providers = provider_chain)));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.config_saved", path = config_path.display().to_string())));
     if let Some(ref summary) = result.migration_summary {
-        wizard_box_line(&format!("    Migration:      {summary}"));
+        wizard_box_line(&format!("    {}", t!("wizard.summary.migration", summary = summary.clone())));
     }
     wizard_box_line("");
-    wizard_box_line("  Run `anvil` to start coding.");
-    wizard_box_line("  Type `/help` for all commands.");
+    wizard_box_line(&format!("  {}", t!("wizard.summary.run_anvil")));
+    wizard_box_line(&format!("  {}", t!("wizard.summary.type_help")));
     wizard_box_line("");
     // Task #663 Gap 4: surface the health-check command so the user
     // always knows how to diagnose later.  A5's `anvil --check` wires
@@ -2278,10 +2284,10 @@ fn run_first_run_wizard_via_stdin() {
     println!();
     wizard_box_top();
     wizard_box_line("");
-    wizard_box_line(&format!("\u{2692}  Welcome to Anvil v{}", env!("CARGO_PKG_VERSION")));
-    wizard_box_line("   AI-Powered Coding Assistant by Culpur Defense");
+    wizard_box_line(&t!("wizard.banner.welcome", version = env!("CARGO_PKG_VERSION")));
+    wizard_box_line(&t!("wizard.banner.subtitle"));
     wizard_box_line("");
-    wizard_box_line("   Let's get you set up.");
+    wizard_box_line(&t!("wizard.banner.lets_setup"));
     wizard_box_line("");
     wizard_box_bot();
 
@@ -2289,64 +2295,67 @@ fn run_first_run_wizard_via_stdin() {
     let mut model_candidates: Vec<(String, String)> = Vec::new(); // (model_id, provider_label)
 
     // ── Step 1: Vault setup ───────────────────────────────────────────────────
-    wizard_step_header(1, 7, "Vault Setup (Credential Encryption)");
+    wizard_step_header(1, 7, &t!("wizard.step.vault_title"));
     println!();
-    println!("  Anvil stores your API keys in an AES-256-GCM encrypted vault.");
-    println!("  You set a master password now — it is never stored anywhere.");
-    println!("  You will need to enter it once each time you start Anvil.");
+    println!("  {}", t!("wizard.vault.body_l1"));
+    println!("  {}", t!("wizard.vault.body_l2"));
+    println!("  {}", t!("wizard.vault.body_l3"));
     println!();
-    println!("  [1] Set up encrypted vault (recommended)");
-    println!("  [s] Skip — API keys will be stored in plaintext credentials.json");
+    println!("  {}", t!("wizard.vault.opt_setup"));
+    println!("  {}", t!("wizard.vault.opt_skip"));
     println!();
 
-    let vault_choice = wizard_read_line("  Choice [1]: ");
+    let vault_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice_default1")));
     let vault_setup_done = match vault_choice.to_ascii_lowercase().trim() {
         "s" | "skip" => {
-            println!("  Skipping vault setup.");
-            println!("  \x1b[33m  Warning: API keys will be stored in plaintext.\x1b[0m");
-            println!("  Run /vault setup later to encrypt your credentials.");
+            println!("  {}", t!("wizard.vault.skipping"));
+            println!("  \x1b[33m  {}\x1b[0m", t!("wizard.vault.warn_plaintext"));
+            println!("  {}", t!("wizard.vault.tip_retry_setup"));
             false
         }
         _ => {
             // Default is to set up the vault.
             if runtime::vault_is_initialized() {
-                println!("  Vault already initialized at ~/.anvil/vault/");
-                println!("  Unlocking for this session...");
-                let pw = match rpassword::prompt_password("  Master password: ") {
+                println!("  {}", t!("wizard.vault.already_initialized"));
+                println!("  {}", t!("wizard.vault.unlocking"));
+                let pw_prompt = format!("  {}", t!("wizard.vault.prompt_master_password"));
+                let pw = match rpassword::prompt_password(&pw_prompt) {
                     Ok(p) => p,
-                    Err(_) => wizard_read_line("  Master password: "),
+                    Err(_) => wizard_read_line(&pw_prompt),
                 };
                 match runtime::init_session_vault(&pw) {
                     Ok(true) => {
-                        println!("  \x1b[32m  Vault unlocked.\x1b[0m");
+                        println!("  \x1b[32m  {}\x1b[0m", t!("wizard.vault.unlocked"));
                         true
                     }
                     Ok(false) => {
-                        println!("  \x1b[33m  Vault not yet initialized — that is unexpected.\x1b[0m");
+                        println!("  \x1b[33m  {}\x1b[0m", t!("wizard.vault.not_yet_initialized"));
                         false
                     }
                     Err(e) => {
-                        println!("  \x1b[31m  Unlock failed: {e}\x1b[0m");
-                        println!("  Continuing without vault — keys will be stored in plaintext.");
+                        println!("  \x1b[31m  {}\x1b[0m", t!("wizard.vault.unlock_failed", reason = e.to_string()));
+                        println!("  {}", t!("wizard.vault.continue_no_vault"));
                         false
                     }
                 }
             } else {
                 let pw = loop {
-                    let p1 = match rpassword::prompt_password("  Set master password: ") {
+                    let set_prompt = format!("  {}", t!("wizard.vault.prompt_set_password"));
+                    let p1 = match rpassword::prompt_password(&set_prompt) {
                         Ok(p) => p,
-                        Err(_) => wizard_read_line("  Set master password: "),
+                        Err(_) => wizard_read_line(&set_prompt),
                     };
                     if p1.is_empty() {
-                        println!("  Password must not be empty. Try again.");
+                        println!("  {}", t!("wizard.vault.empty_password"));
                         continue;
                     }
-                    let p2 = match rpassword::prompt_password("  Confirm master password: ") {
+                    let confirm_prompt = format!("  {}", t!("wizard.vault.prompt_confirm_password"));
+                    let p2 = match rpassword::prompt_password(&confirm_prompt) {
                         Ok(p) => p,
-                        Err(_) => wizard_read_line("  Confirm master password: "),
+                        Err(_) => wizard_read_line(&confirm_prompt),
                     };
                     if p1 != p2 {
-                        println!("  Passwords do not match. Try again.");
+                        println!("  {}", t!("wizard.vault.password_mismatch"));
                         continue;
                     }
                     break p1;
@@ -2359,22 +2368,22 @@ fn run_first_run_wizard_via_stdin() {
                         // Register it in the session cache.
                         match runtime::init_session_vault(&pw) {
                             Ok(true) => {
-                                println!("  \x1b[32m  Vault created and unlocked.\x1b[0m");
-                                println!("  API keys entered in this wizard will be stored encrypted.");
+                                println!("  \x1b[32m  {}\x1b[0m", t!("wizard.vault.created_and_unlocked"));
+                                println!("  {}", t!("wizard.vault.keys_encrypted_note"));
                                 true
                             }
                             _ => {
                                 // init_session_vault failed but vault is initialized;
                                 // this is non-fatal — keys go to plaintext fallback.
-                                println!("  \x1b[33m  Vault created but session lock failed.\x1b[0m");
-                                println!("  Keys will be stored in plaintext this run.");
+                                println!("  \x1b[33m  {}\x1b[0m", t!("wizard.vault.created_session_lock_failed"));
+                                println!("  {}", t!("wizard.vault.keys_plaintext_this_run"));
                                 false
                             }
                         }
                     }
                     Err(e) => {
-                        println!("  \x1b[31m  Vault setup failed: {e}\x1b[0m");
-                        println!("  Continuing without vault — keys stored in plaintext.");
+                        println!("  \x1b[31m  {}\x1b[0m", t!("wizard.vault.setup_failed", reason = e.to_string()));
+                        println!("  {}", t!("wizard.vault.continue_keys_plaintext"));
                         false
                     }
                 }
@@ -2384,33 +2393,33 @@ fn run_first_run_wizard_via_stdin() {
     let _ = vault_setup_done; // informational; wizard_save_credential checks session state
 
     // ── Step 2: Ollama ────────────────────────────────────────────────────────
-    wizard_step_header(2, 7, "Ollama (Local AI)");
+    wizard_step_header(2, 7, &t!("wizard.step.ollama_title"));
     println!();
-    println!("  Ollama runs AI models locally on your machine.");
-    println!("  No API key required for basic use.");
+    println!("  {}", t!("wizard.ollama.body_l1"));
+    println!("  {}", t!("wizard.ollama.body_l2"));
     println!();
-    println!("  [1] Connect to Ollama (default: http://localhost:11434)");
-    println!("  [2] Connect with custom URL");
-    println!("  [3] Connect with API key");
-    println!("  [s] Skip");
+    println!("  {}", t!("wizard.ollama.opt_default"));
+    println!("  {}", t!("wizard.ollama.opt_custom"));
+    println!("  {}", t!("wizard.ollama.opt_apikey"));
+    println!("  {}", t!("wizard.ollama.opt_skip"));
     println!();
 
-    let ollama_choice = wizard_read_line("  Choice: ");
+    let ollama_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
     let mut ollama_url: Option<String> = None;
 
     match ollama_choice.to_ascii_lowercase().as_str() {
         "1" | "" => {
             let url = "http://localhost:11434".to_string();
-            print!("\n  Testing connection to {url}... ");
+            print!("\n  {}", t!("wizard.ollama.testing_connection", url = url.clone()));
             let _ = io::stdout().flush();
             match wizard_test_ollama(&url) {
                 Ok(models) => {
-                    println!("\x1b[32m connected\x1b[0m");
+                    println!("\x1b[32m {}\x1b[0m", t!("wizard.ollama.connected"));
                     ollama_url = Some(url.clone());
                     configured_providers.push("ollama".to_string());
                     if !models.is_empty() {
                         println!();
-                        println!("  Available models:");
+                        println!("  {}", t!("wizard.ollama.available_models"));
                         for (name, size) in &models {
                             println!("    {name}  ({size})");
                             model_candidates.push((name.clone(), format!("Ollama, {size}")));
@@ -2419,28 +2428,28 @@ fn run_first_run_wizard_via_stdin() {
                     let _ = wizard_save_credential("ollama_host", &url);
                 }
                 Err(e) => {
-                    println!("\x1b[31m failed ({e})\x1b[0m");
-                    println!("  Skipping Ollama — make sure Ollama is running: ollama serve");
+                    println!("\x1b[31m {}\x1b[0m", t!("wizard.ollama.failed", reason = e.to_string()));
+                    println!("  {}", t!("wizard.ollama.start_hint"));
                 }
             }
         }
         "2" => {
-            let url = wizard_read_line("\n  Ollama URL [http://localhost:11434]: ");
+            let url = wizard_read_line(&format!("\n  {}", t!("wizard.ollama.prompt_url")));
             let url = if url.is_empty() {
                 "http://localhost:11434".to_string()
             } else {
                 url
             };
-            print!("  Testing connection to {url}... ");
+            print!("  {}", t!("wizard.ollama.testing_connection", url = url.clone()));
             let _ = io::stdout().flush();
             match wizard_test_ollama(&url) {
                 Ok(models) => {
-                    println!("\x1b[32m connected\x1b[0m");
+                    println!("\x1b[32m {}\x1b[0m", t!("wizard.ollama.connected"));
                     ollama_url = Some(url.clone());
                     configured_providers.push("ollama".to_string());
                     if !models.is_empty() {
                         println!();
-                        println!("  Available models:");
+                        println!("  {}", t!("wizard.ollama.available_models"));
                         for (name, size) in &models {
                             println!("    {name}  ({size})");
                             model_candidates.push((name.clone(), format!("Ollama, {size}")));
@@ -2449,10 +2458,8 @@ fn run_first_run_wizard_via_stdin() {
                     let _ = wizard_save_credential("ollama_host", &url);
                 }
                 Err(e) => {
-                    println!("\x1b[31m failed ({e})\x1b[0m");
-                    println!(
-                        "  Connection failed. Configuration saved; you can retry with `anvil login ollama`."
-                    );
+                    println!("\x1b[31m {}\x1b[0m", t!("wizard.ollama.failed", reason = e.to_string()));
+                    println!("  {}", t!("wizard.ollama.config_saved_retry"));
                     let _ = wizard_save_credential("ollama_host", &url);
                     ollama_url = Some(url.clone());
                     configured_providers.push("ollama".to_string());
@@ -2460,25 +2467,26 @@ fn run_first_run_wizard_via_stdin() {
             }
         }
         "3" => {
-            let url = wizard_read_line("\n  Ollama URL [http://localhost:11434]: ");
+            let url = wizard_read_line(&format!("\n  {}", t!("wizard.ollama.prompt_url")));
             let url = if url.is_empty() {
                 "http://localhost:11434".to_string()
             } else {
                 url
             };
-            let api_key = match rpassword::prompt_password("  API key: ") {
+            let api_key_prompt = format!("  {}", t!("wizard.ollama.prompt_api_key"));
+            let api_key = match rpassword::prompt_password(&api_key_prompt) {
                 Ok(k) => k,
-                Err(_) => wizard_read_line("  API key: "),
+                Err(_) => wizard_read_line(&api_key_prompt),
             };
-            print!("  Testing connection to {url}... ");
+            print!("  {}", t!("wizard.ollama.testing_connection", url = url.clone()));
             let _ = io::stdout().flush();
             match wizard_test_ollama(&url) {
                 Ok(models) => {
-                    println!("\x1b[32m connected\x1b[0m");
+                    println!("\x1b[32m {}\x1b[0m", t!("wizard.ollama.connected"));
                     configured_providers.push("ollama".to_string());
                     if !models.is_empty() {
                         println!();
-                        println!("  Available models:");
+                        println!("  {}", t!("wizard.ollama.available_models"));
                         for (name, size) in &models {
                             println!("    {name}  ({size})");
                             model_candidates.push((name.clone(), format!("Ollama, {size}")));
@@ -2486,7 +2494,7 @@ fn run_first_run_wizard_via_stdin() {
                     }
                 }
                 Err(e) => {
-                    println!("\x1b[33m could not verify ({e}) — saving anyway\x1b[0m");
+                    println!("\x1b[33m {}\x1b[0m", t!("wizard.ollama.could_not_verify_saving", reason = e.to_string()));
                     configured_providers.push("ollama".to_string());
                 }
             }
@@ -2497,30 +2505,30 @@ fn run_first_run_wizard_via_stdin() {
             ollama_url = Some(url);
         }
         "s" | "skip" => {
-            println!("  Skipping Ollama.");
+            println!("  {}", t!("wizard.ollama.skipping"));
         }
         other => {
-            println!("  Unknown choice '{other}', skipping Ollama.");
+            println!("  {}", t!("wizard.unknown_choice_skipping", choice = other, provider = "Ollama"));
         }
     }
 
     // ── Step 3: Anthropic ─────────────────────────────────────────────────────
-    wizard_step_header(3, 7, "Anthropic (Claude)");
+    wizard_step_header(3, 7, &t!("wizard.step.anthropic_title"));
     println!();
-    println!("  Anthropic provides Claude — the most capable AI assistant.");
+    println!("  {}", t!("wizard.anthropic.body"));
     println!();
-    println!("  [1] Login with OAuth (recommended — opens browser)");
-    println!("  [2] Enter API key manually");
-    println!("  [s] Skip");
+    println!("  {}", t!("wizard.anthropic.opt_oauth"));
+    println!("  {}", t!("wizard.anthropic.opt_apikey"));
+    println!("  {}", t!("wizard.anthropic.opt_skip"));
     println!();
 
-    let anthropic_choice = wizard_read_line("  Choice: ");
+    let anthropic_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
     match anthropic_choice.to_ascii_lowercase().as_str() {
         "1" | "" => {
             println!();
             match run_anthropic_login() {
                 Ok(()) => {
-                    println!("\x1b[32m  Anthropic OAuth complete.\x1b[0m");
+                    println!("\x1b[32m  {}\x1b[0m", t!("wizard.anthropic.oauth_complete"));
                     configured_providers.push("anthropic".to_string());
                     model_candidates
                         .push(("claude-opus-4-6".to_string(), "Anthropic".to_string()));
@@ -2532,22 +2540,23 @@ fn run_first_run_wizard_via_stdin() {
                     ));
                 }
                 Err(e) => {
-                    eprintln!("  OAuth failed: {e}");
-                    println!("  You can retry later with: anvil login anthropic");
+                    eprintln!("  {}", t!("wizard.anthropic.oauth_failed", reason = e.to_string()));
+                    println!("  {}", t!("wizard.anthropic.retry_hint"));
                 }
             }
         }
         "2" => {
             println!();
-            println!("  Get your key at: https://console.anthropic.com/settings/keys");
-            let api_key = match rpassword::prompt_password("  API key (sk-ant-...): ") {
+            println!("  {}", t!("wizard.anthropic.console_url"));
+            let key_prompt = format!("  {}", t!("wizard.anthropic.prompt_api_key"));
+            let api_key = match rpassword::prompt_password(&key_prompt) {
                 Ok(k) => k,
-                Err(_) => wizard_read_line("  API key (sk-ant-...): "),
+                Err(_) => wizard_read_line(&key_prompt),
             };
             if api_key.is_empty() {
-                println!("  No key entered, skipping Anthropic.");
+                println!("  {}", t!("wizard.anthropic.no_key_skipping"));
             } else {
-                print!("  Validating key... ");
+                print!("  {}", t!("wizard.anthropic.validating_key"));
                 let _ = io::stdout().flush();
                 let out = std::process::Command::new("curl")
                     .args([
@@ -2567,9 +2576,9 @@ fn run_first_run_wizard_via_stdin() {
                         && !o.stdout.starts_with(b"{\"error\"")
                 });
                 if valid {
-                    println!("\x1b[32m valid\x1b[0m");
+                    println!("\x1b[32m {}\x1b[0m", t!("wizard.anthropic.valid"));
                 } else {
-                    println!("\x1b[33m could not verify — saving anyway\x1b[0m");
+                    println!("\x1b[33m {}\x1b[0m", t!("wizard.anthropic.could_not_verify"));
                 }
                 let _ = wizard_save_credential("anthropic_api_key", &api_key);
                 configured_providers.push("anthropic".to_string());
@@ -2584,35 +2593,36 @@ fn run_first_run_wizard_via_stdin() {
             }
         }
         "s" | "skip" => {
-            println!("  Skipping Anthropic.");
+            println!("  {}", t!("wizard.anthropic.skipping"));
         }
         other => {
-            println!("  Unknown choice '{other}', skipping Anthropic.");
+            println!("  {}", t!("wizard.unknown_choice_skipping", choice = other, provider = "Anthropic"));
         }
     }
 
     // ── Step 4: OpenAI ────────────────────────────────────────────────────────
-    wizard_step_header(4, 7, "OpenAI (ChatGPT)");
+    wizard_step_header(4, 7, &t!("wizard.step.openai_title"));
     println!();
-    println!("  OpenAI provides GPT models for coding and reasoning.");
+    println!("  {}", t!("wizard.openai.body"));
     println!();
-    println!("  [1] Enter API key");
-    println!("  [s] Skip");
+    println!("  {}", t!("wizard.openai.opt_apikey"));
+    println!("  {}", t!("wizard.openai.opt_skip"));
     println!();
 
-    let openai_choice = wizard_read_line("  Choice: ");
+    let openai_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
     match openai_choice.to_ascii_lowercase().as_str() {
         "1" => {
             println!();
-            println!("  Get your key at: https://platform.openai.com/api-keys");
-            let api_key = match rpassword::prompt_password("  API key (sk-...): ") {
+            println!("  {}", t!("wizard.openai.console_url"));
+            let key_prompt = format!("  {}", t!("wizard.openai.prompt_api_key"));
+            let api_key = match rpassword::prompt_password(&key_prompt) {
                 Ok(k) => k,
-                Err(_) => wizard_read_line("  API key (sk-...): "),
+                Err(_) => wizard_read_line(&key_prompt),
             };
             if api_key.is_empty() {
-                println!("  No key entered, skipping OpenAI.");
+                println!("  {}", t!("wizard.openai.no_key_skipping"));
             } else {
-                print!("  Validating key... ");
+                print!("  {}", t!("wizard.openai.validating_key"));
                 let _ = io::stdout().flush();
                 let out = std::process::Command::new("curl")
                     .args([
@@ -2628,9 +2638,9 @@ fn run_first_run_wizard_via_stdin() {
                     o.status.success() && !o.stdout.starts_with(b"{\"error\"")
                 });
                 if valid {
-                    println!("\x1b[32m valid\x1b[0m");
+                    println!("\x1b[32m {}\x1b[0m", t!("wizard.openai.valid"));
                 } else {
-                    println!("\x1b[33m could not verify — saving anyway\x1b[0m");
+                    println!("\x1b[33m {}\x1b[0m", t!("wizard.openai.could_not_verify"));
                 }
                 let _ = wizard_save_credential("openai_api_key", &api_key);
                 configured_providers.push("openai".to_string());
@@ -2639,59 +2649,60 @@ fn run_first_run_wizard_via_stdin() {
             }
         }
         "s" | "skip" | "" => {
-            println!("  Skipping OpenAI.");
+            println!("  {}", t!("wizard.openai.skipping"));
         }
         other => {
-            println!("  Unknown choice '{other}', skipping OpenAI.");
+            println!("  {}", t!("wizard.unknown_choice_skipping", choice = other, provider = "OpenAI"));
         }
     }
 
     // ── Step 5: xAI (Grok) ───────────────────────────────────────────────────
-    wizard_step_header(5, 7, "xAI (Grok)");
+    wizard_step_header(5, 7, &t!("wizard.step.xai_title"));
     println!();
-    println!("  xAI provides Grok models.");
+    println!("  {}", t!("wizard.xai.body"));
     println!();
-    println!("  [1] Enter API key");
-    println!("  [s] Skip");
+    println!("  {}", t!("wizard.xai.opt_apikey"));
+    println!("  {}", t!("wizard.xai.opt_skip"));
     println!();
 
-    let xai_choice = wizard_read_line("  Choice: ");
+    let xai_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
     match xai_choice.to_ascii_lowercase().as_str() {
         "1" => {
             println!();
-            println!("  Get your key at: https://console.x.ai");
-            let api_key = match rpassword::prompt_password("  API key (xai-...): ") {
+            println!("  {}", t!("wizard.xai.console_url"));
+            let key_prompt = format!("  {}", t!("wizard.xai.prompt_api_key"));
+            let api_key = match rpassword::prompt_password(&key_prompt) {
                 Ok(k) => k,
-                Err(_) => wizard_read_line("  API key (xai-...): "),
+                Err(_) => wizard_read_line(&key_prompt),
             };
             if api_key.is_empty() {
-                println!("  No key entered, skipping xAI.");
+                println!("  {}", t!("wizard.xai.no_key_skipping"));
             } else {
                 let _ = wizard_save_credential("xai_api_key", &api_key);
                 configured_providers.push("xai".to_string());
                 model_candidates.push(("grok-3".to_string(), "xAI".to_string()));
                 model_candidates.push(("grok-3-mini".to_string(), "xAI".to_string()));
-                println!("  \x1b[32mxAI API key saved.\x1b[0m");
+                println!("  \x1b[32m{}\x1b[0m", t!("wizard.xai.saved"));
             }
         }
         "s" | "skip" | "" => {
-            println!("  Skipping xAI.");
+            println!("  {}", t!("wizard.xai.skipping"));
         }
         other => {
-            println!("  Unknown choice '{other}', skipping xAI.");
+            println!("  {}", t!("wizard.unknown_choice_skipping", choice = other, provider = "xAI"));
         }
     }
 
     // ── Step 6: Provider priority & default model ─────────────────────────────
-    wizard_step_header(6, 7, "Provider Priority & Default Model");
+    wizard_step_header(6, 7, &t!("wizard.step.priority_title"));
     println!();
 
     let mut seen = std::collections::HashSet::new();
     configured_providers.retain(|p| seen.insert(p.clone()));
 
     let provider_priority: Vec<String> = if configured_providers.is_empty() {
-        println!("  No providers configured.");
-        println!("  You can configure providers later with: anvil login");
+        println!("  {}", t!("wizard.priority.none_configured"));
+        println!("  {}", t!("wizard.priority.configure_later"));
         vec!["anthropic".to_string()]
     } else {
         fn provider_label(p: &str) -> &str {
@@ -2708,11 +2719,11 @@ fn run_first_run_wizard_via_stdin() {
             .map(|p| provider_label(p))
             .collect::<Vec<_>>()
             .join(", ");
-        println!("  You configured: {configured_display}");
+        println!("  {}", t!("wizard.priority.you_configured", providers = configured_display));
         println!();
-        println!("  Set your provider priority (first = primary, others = failover):");
+        println!("  {}", t!("wizard.priority.set_order"));
         println!();
-        println!("  Current order:");
+        println!("  {}", t!("wizard.priority.current_order"));
         for (i, p) in configured_providers.iter().enumerate() {
             let first_model = model_candidates
                 .iter()
@@ -2725,14 +2736,14 @@ fn run_first_run_wizard_via_stdin() {
             println!("    {}. {} ({})", i + 1, provider_label(p), first_model);
         }
         println!();
-        println!("  [1] Keep this order");
-        println!("  [2] Reorder (enter numbers: e.g., \"2,1\")");
+        println!("  {}", t!("wizard.priority.opt_keep"));
+        println!("  {}", t!("wizard.priority.opt_reorder"));
         println!();
-        let order_choice = wizard_read_line("  Choice: ");
+        let order_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
         match order_choice.as_str() {
             "1" | "" => configured_providers.clone(),
             "2" => {
-                let new_order = wizard_read_line("  New order: ");
+                let new_order = wizard_read_line(&format!("  {}", t!("wizard.priority.prompt_new_order")));
                 let indices: Vec<usize> = new_order
                     .split(',')
                     .filter_map(|s| s.trim().parse::<usize>().ok())
@@ -2742,14 +2753,14 @@ fn run_first_run_wizard_via_stdin() {
                     .filter_map(|&i| configured_providers.get(i.saturating_sub(1)).cloned())
                     .collect();
                 if reordered.is_empty() {
-                    println!("  Could not parse order, keeping original.");
+                    println!("  {}", t!("wizard.priority.could_not_parse"));
                     configured_providers.clone()
                 } else {
                     reordered
                 }
             }
             _ => {
-                println!("  Unknown choice, keeping original order.");
+                println!("  {}", t!("wizard.priority.unknown_keep"));
                 configured_providers.clone()
             }
         }
@@ -2759,20 +2770,20 @@ fn run_first_run_wizard_via_stdin() {
     // need to bring up alt-screen just for this; the alt-screen comes
     // up below for steps 4..8).
     println!();
-    println!("  \x1b[1;33mEnable Thinking Mode?\x1b[0m");
-    println!("  Some models (Qwen3, Claude, o3) support extended thinking/reasoning.");
-    println!("  When enabled, the model shows its reasoning process before answering.");
+    println!("  \x1b[1;33m{}\x1b[0m", t!("wizard.thinking.title"));
+    println!("  {}", t!("wizard.thinking.body_l1"));
+    println!("  {}", t!("wizard.thinking.body_l2"));
     println!();
-    println!("    [1] Yes — enable thinking mode (recommended for coding)");
-    println!("    [2] No  — standard responses only");
+    println!("    {}", t!("wizard.thinking.opt_yes"));
+    println!("    {}", t!("wizard.thinking.opt_no"));
     println!();
-    let think_choice = wizard_read_line("  Choice: ");
+    let think_choice = wizard_read_line(&format!("  {}", t!("wizard.prompt.choice")));
     let thinking_enabled =
         think_choice.trim() == "1" || think_choice.trim().to_lowercase() == "yes";
     if thinking_enabled {
-        println!("  \x1b[32m\u{2713}\x1b[0m Thinking mode enabled. Toggle anytime with /think");
+        println!("  \x1b[32m\u{2713}\x1b[0m {}", t!("wizard.thinking.enabled"));
     } else {
-        println!("  Thinking mode off. Toggle anytime with /think");
+        println!("  {}", t!("wizard.thinking.disabled"));
     }
 
     let default_provider = provider_priority
@@ -2812,7 +2823,7 @@ fn run_first_run_wizard_via_stdin() {
             match run_post_auth_modals_in_alt_screen(&unique_models) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("  Note: alt-screen unavailable ({e}); falling back to stdin prompts.");
+                    eprintln!("  {}", t!("wizard.warn.altscreen_modal", reason = e.to_string()));
                     let m = if unique_models.is_empty() {
                         DEFAULT_MODEL.to_string()
                     } else {
@@ -2980,7 +2991,7 @@ fn run_first_run_wizard_via_stdin() {
     let config_path = match wizard_save_config(&config) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("\n  Warning: could not save config: {e}");
+            eprintln!("\n  {}", t!("wizard.warn.could_not_save_config", reason = e.to_string()));
             PathBuf::from("~/.anvil/config.json")
         }
     };
@@ -2993,14 +3004,14 @@ fn run_first_run_wizard_via_stdin() {
     println!();
     wizard_box_top();
     wizard_box_line("");
-    wizard_box_line("  Setup complete!");
+    wizard_box_line(&format!("  {}", t!("wizard.summary.complete")));
     wizard_box_line("");
-    wizard_box_line(&format!("    Default model:  {chosen_model}"));
-    wizard_box_line(&format!("    Providers:      {provider_chain}"));
-    wizard_box_line(&format!("    Config saved:   {}", config_path.display()));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.default_model", model = chosen_model.to_string())));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.providers", providers = provider_chain.clone())));
+    wizard_box_line(&format!("    {}", t!("wizard.summary.config_saved", path = config_path.display().to_string())));
     wizard_box_line("");
-    wizard_box_line("  Run `anvil` to start coding.");
-    wizard_box_line("  Type `/help` for all commands.");
+    wizard_box_line(&format!("  {}", t!("wizard.summary.run_anvil")));
+    wizard_box_line(&format!("  {}", t!("wizard.summary.type_help")));
     wizard_box_line("");
     // Task #663 Gap 4: post-wizard health-check pointer on the stdin
     // path as well, so CI / piped-input users see the same hint.

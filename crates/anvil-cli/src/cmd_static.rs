@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rust_i18n::t;
 use serde_json::json;
 use tools::execute_tool as execute_builtin_tool;
 
@@ -38,14 +39,7 @@ pub(crate) fn run_docker_command(args: Option<&str>) -> String {
     let args = args.unwrap_or("").trim();
 
     match args {
-        "" | "help" => [
-            "Usage:",
-            "  /docker ps                   List running containers",
-            "  /docker logs <container>     Show last 50 lines of container logs",
-            "  /docker compose              Show docker-compose services (if present)",
-            "  /docker build                Build image from Dockerfile in current directory",
-        ]
-        .join("\n"),
+        "" | "help" => t!("cmd.docker.usage").to_string(),
 
         "ps" => run_docker_ps(),
         "compose" => run_docker_compose_services(),
@@ -53,86 +47,42 @@ pub(crate) fn run_docker_command(args: Option<&str>) -> String {
         s if s.starts_with("logs ") => {
             let container = s["logs ".len()..].trim();
             if container.is_empty() {
-                "Usage: /docker logs <container>".to_string()
+                t!("cmd.docker.logs_usage").to_string()
             } else {
                 run_docker_logs(container)
             }
         }
-        other => format!(
-            "Unknown docker sub-command: {other}\nRun `/docker help` for usage."
-        ),
+        other => t!("cmd.docker.unknown_sub", sub = other).to_string(),
     }
 }
 
 pub(crate) fn run_voice_command(args: Option<&str>) -> String {
     let sub = args.unwrap_or("").trim();
     match sub {
-        "start" => concat!(
-            "Voice input — coming soon\n\n",
-            "Voice capture requires microphone access and a speech-to-text backend.\n",
-            "Planned: /voice start  ->  capture mic input and inject as a prompt.",
-        )
-        .to_string(),
-        "stop" => "Voice input — coming soon\n\nNo active voice session to stop.".to_string(),
-        "" | "help" => [
-            "Voice input (coming soon)",
-            "",
-            "Commands:",
-            "  /voice start   Begin capturing microphone input",
-            "  /voice stop    Stop capturing and submit",
-            "",
-            "Requires a local speech-to-text engine (e.g. whisper.cpp).",
-        ]
-        .join("\n"),
-        other => format!("Unknown /voice sub-command: {other}\n  /voice start | /voice stop"),
+        "start" => t!("cmd.voice.start").to_string(),
+        "stop" => t!("cmd.voice.stop").to_string(),
+        "" | "help" => t!("cmd.voice.help").to_string(),
+        other => t!("cmd.voice.unknown_sub", sub = other).to_string(),
     }
 }
 
 pub(crate) fn run_collab_command(args: Option<&str>) -> String {
     let sub = args.unwrap_or("").trim();
     match sub {
-        "share" => concat!(
-            "Collaboration — coming soon\n\n",
-            "Planned: /collab share  ->  generate a shareable session ID.\n",
-            "This feature is reserved for a future release.",
-        )
-        .to_string(),
-        "join" => concat!(
-            "Collaboration — coming soon\n\n",
-            "Usage: /collab join <session-id>\n",
-            "This feature is reserved for a future release.",
-        )
-        .to_string(),
-        "" | "help" => [
-            "Collaboration (coming soon)",
-            "",
-            "Commands:",
-            "  /collab share          Share this session (generates an invite ID)",
-            "  /collab join <id>      Join another user's shared session",
-            "",
-            "Requires an AnvilHub account. Watch the changelog for availability.",
-        ]
-        .join("\n"),
-        other => {
-            format!("Unknown /collab sub-command: {other}\n  /collab share | /collab join <id>")
-        }
+        "share" => t!("cmd.collab.share").to_string(),
+        "join" => t!("cmd.collab.join").to_string(),
+        "" | "help" => t!("cmd.collab.help").to_string(),
+        other => t!("cmd.collab.unknown_sub", sub = other).to_string(),
     }
 }
 
 pub(crate) fn run_k8s_command(args: Option<&str>) -> String {
     let args = args.unwrap_or("").trim();
     if args.is_empty() || args == "help" {
-        return [
-            "Usage:",
-            "  /k8s pods                   List pods in current namespace",
-            "  /k8s logs <pod>             Tail last 50 lines of pod logs",
-            "  /k8s apply <file>           Apply a manifest with kubectl",
-            "  /k8s describe <resource>    Describe a resource",
-        ].join("\n");
+        return t!("cmd.k8s.usage").to_string();
     }
     if !command_exists("kubectl") {
-        return "kubectl not found in PATH. Install it from \
-                https://kubernetes.io/docs/tasks/tools/".to_string();
+        return t!("cmd.k8s.kubectl_missing").to_string();
     }
     if args == "pods" {
         let out = Command::new("kubectl").args(["get", "pods"]).output();
@@ -140,24 +90,24 @@ pub(crate) fn run_k8s_command(args: Option<&str>) -> String {
     }
     if let Some(pod) = args.strip_prefix("logs ") {
         let pod = pod.trim();
-        if pod.is_empty() { return "Usage: /k8s logs <pod>".to_string(); }
+        if pod.is_empty() { return t!("cmd.k8s.logs_usage").to_string(); }
         let out = Command::new("kubectl").args(["logs", "--tail=50", pod]).output();
         return shell_output_or_err(out, &format!("kubectl logs {pod}"));
     }
     if let Some(file) = args.strip_prefix("apply ") {
         let file = file.trim();
-        if file.is_empty() { return "Usage: /k8s apply <file>".to_string(); }
+        if file.is_empty() { return t!("cmd.k8s.apply_usage").to_string(); }
         let out = Command::new("kubectl").args(["apply", "-f", file]).output();
         return shell_output_or_err(out, &format!("kubectl apply -f {file}"));
     }
     if let Some(resource) = args.strip_prefix("describe ") {
         let resource = resource.trim();
-        if resource.is_empty() { return "Usage: /k8s describe <resource>".to_string(); }
+        if resource.is_empty() { return t!("cmd.k8s.describe_usage").to_string(); }
         let parts: Vec<&str> = resource.splitn(2, ' ').collect();
         let out = Command::new("kubectl").arg("describe").args(&parts).output();
         return shell_output_or_err(out, &format!("kubectl describe {resource}"));
     }
-    format!("Unknown /k8s sub-command: {args}\nRun `/k8s help` for usage.")
+    t!("cmd.k8s.unknown_sub", args = args).to_string()
 }
 
 pub(crate) fn run_iac_command(args: Option<&str>) -> String {
@@ -179,13 +129,7 @@ pub(crate) fn run_iac_command(args: Option<&str>) -> String {
 pub(crate) fn run_iac_command_confirmed(args: Option<&str>, confirmed: bool) -> String {
     let args = args.unwrap_or("").trim();
     if args.is_empty() || args == "help" {
-        return [
-            "Usage:",
-            "  /iac plan       Run terraform/tofu plan",
-            "  /iac apply      Run terraform/tofu apply",
-            "  /iac validate   Validate configuration files",
-            "  /iac drift      Detect infrastructure drift (plan -refresh-only)",
-        ].join("\n");
+        return t!("cmd.iac.usage").to_string();
     }
     // Task #627 — TUI safety gate must fire *before* we shell out for
     // `tf_bin`, because reaching the apply path without a resolved
@@ -193,31 +137,27 @@ pub(crate) fn run_iac_command_confirmed(args: Option<&str>, confirmed: bool) -> 
     // below.  Refuse early; binary-detection runs only when we know
     // we're allowed to proceed.
     if args == "apply" && !confirmed && crate::tui::tui_session_active() {
-        return "/iac apply: in-TUI confirmation modal did not resolve. \
-                Please retry — or run `anvil --print /iac apply` \
-                from a regular shell to use the CLI confirmation \
-                prompt instead.".to_string();
+        return t!("cmd.iac.tui_modal_required").to_string();
     }
     let tf_bin = if command_exists("tofu") {
         "tofu"
     } else if command_exists("terraform") {
         "terraform"
     } else {
-        return "Neither 'tofu' nor 'terraform' found in PATH.\n\
-                Install OpenTofu: https://opentofu.org/docs/intro/install/".to_string();
+        return t!("cmd.iac.no_terraform").to_string();
     };
     if args == "apply" && !confirmed {
         // Headless path: require explicit confirmation before modifying
         // infrastructure.  The TUI path is gated above.
         #[allow(clippy::print_stderr, reason = "headless confirm prompt; TUI path is gated above")]
         {
-            eprint!("This will apply changes to your infrastructure. Continue? (y/N) ");
+            eprint!("{}", t!("cmd.iac.confirm_prompt"));
         }
         let mut answer = String::new();
         if std::io::stdin().read_line(&mut answer).is_err()
             || answer.trim().to_lowercase() != "y"
         {
-            return "Apply cancelled.".to_string();
+            return t!("cmd.iac.cancelled").to_string();
         }
     }
     let tf_args: &[&str] = match args {
@@ -225,7 +165,7 @@ pub(crate) fn run_iac_command_confirmed(args: Option<&str>, confirmed: bool) -> 
         "apply"    => &["apply", "-no-color", "-auto-approve"],
         "validate" => &["validate", "-no-color"],
         "drift"    => &["plan", "-refresh-only", "-no-color"],
-        other => return format!("Unknown /iac sub-command: {other}\nRun `/iac help` for usage."),
+        other => return t!("cmd.iac.unknown_sub", sub = other).to_string(),
     };
     let out = Command::new(tf_bin).args(tf_args).output();
     shell_output_or_err(out, &format!("{tf_bin} {args}"))
@@ -244,8 +184,7 @@ pub(crate) fn iac_apply_confirm_body() -> String {
     } else if command_exists("terraform") {
         "terraform"
     } else {
-        return "No terraform/tofu binary found in PATH. \
-                Install OpenTofu before applying.".to_string();
+        return t!("cmd.iac.no_binary_for_apply").to_string();
     };
     let out = Command::new(tf_bin)
         .args(["plan", "-no-color", "-input=false"])
@@ -260,23 +199,15 @@ pub(crate) fn iac_apply_confirm_body() -> String {
             .map(ToString::to_string)
     });
     match plan_line {
-        Some(line) => format!(
-            "This will apply changes to your infrastructure.\n\n{line}\n\nReview the plan carefully before confirming.",
-        ),
-        None => "This will apply changes to your infrastructure.\n\nReview the plan carefully before confirming.".to_string(),
+        Some(line) => t!("cmd.iac.confirm_body_with_plan", plan = line).to_string(),
+        None => t!("cmd.iac.confirm_body_generic").to_string(),
     }
 }
 
 pub(crate) fn run_deps_command(args: Option<&str>) -> String {
     let args = args.unwrap_or("").trim();
     if args.is_empty() || args == "help" {
-        return [
-            "Usage:",
-            "  /deps tree           Show dependency tree",
-            "  /deps outdated       Show outdated dependencies",
-            "  /deps audit          Security audit of dependencies",
-            "  /deps why <pkg>      Explain why a dependency is included",
-        ].join("\n");
+        return t!("cmd.deps.usage").to_string();
     }
     let pm = detect_package_manager();
     match args {
@@ -287,7 +218,7 @@ pub(crate) fn run_deps_command(args: Option<&str>) -> String {
                 PackageManager::Pnpm    => Command::new("pnpm").args(["list", "--depth=2"]).output(),
                 PackageManager::Yarn    => Command::new("yarn").args(["list", "--depth=2"]).output(),
                 PackageManager::Pip     => Command::new("pip").args(["show", "--verbose"]).output(),
-                PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                PackageManager::Unknown => return t!("cmd.deps.no_package_manager").to_string(),
             };
             shell_output_or_err(out, "deps tree")
         }
@@ -298,7 +229,7 @@ pub(crate) fn run_deps_command(args: Option<&str>) -> String {
                 PackageManager::Pnpm    => Command::new("pnpm").args(["outdated"]).output(),
                 PackageManager::Yarn    => Command::new("yarn").args(["outdated"]).output(),
                 PackageManager::Pip     => Command::new("pip").args(["list", "--outdated"]).output(),
-                PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                PackageManager::Unknown => return t!("cmd.deps.no_package_manager").to_string(),
             };
             shell_output_or_err(out, "deps outdated")
         }
@@ -309,7 +240,7 @@ pub(crate) fn run_deps_command(args: Option<&str>) -> String {
                 PackageManager::Pnpm    => Command::new("pnpm").args(["audit"]).output(),
                 PackageManager::Yarn    => Command::new("yarn").args(["audit"]).output(),
                 PackageManager::Pip     => Command::new("pip-audit").output(),
-                PackageManager::Unknown => return "No recognised package manager found.".to_string(),
+                PackageManager::Unknown => return t!("cmd.deps.no_package_manager").to_string(),
             };
             shell_output_or_err(out, "deps audit")
         }

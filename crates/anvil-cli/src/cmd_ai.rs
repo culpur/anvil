@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use rust_i18n::t;
 use crate::providers::InternalPromptProgressRun;
 use crate::{
     command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output,
@@ -41,7 +42,7 @@ impl LiveCli {
             .unwrap_or_default();
 
         if diff.trim().is_empty() {
-            return "No PR diff found. Make sure gh is installed, authenticated, and a PR is open for the current branch.".to_string();
+            return t!("cli.no_pr_diff").to_string();
         }
 
         let meta = Command::new("gh")

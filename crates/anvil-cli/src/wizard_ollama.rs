@@ -43,6 +43,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ratatui::style::Color;
+use rust_i18n::t;
 
 use crate::tui::modals::confirm::ConfirmModal;
 use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
@@ -160,12 +161,12 @@ impl Fit {
             Fit::TooBig => "✗",
         }
     }
-    fn note(self) -> &'static str {
+    fn note(self) -> String {
         match self {
-            Fit::Recommended => "Recommended",
-            Fit::Fits => "Fits",
-            Fit::Tight => "Tight",
-            Fit::TooBig => "Too big — will OOM",
+            Fit::Recommended => t!("wizard.ollama_fit.recommended").to_string(),
+            Fit::Fits => t!("wizard.ollama_fit.fits").to_string(),
+            Fit::Tight => t!("wizard.ollama_fit.tight").to_string(),
+            Fit::TooBig => t!("wizard.ollama_fit.too_big").to_string(),
         }
     }
 }
@@ -261,25 +262,29 @@ where
     let accent = Color::Cyan;
     let state = OllamaState::from_disk(home);
 
+    let step_header = t!(
+        "wizard.ollama_modal.step_header",
+        step = "5",
+        total = "8"
+    ).to_string();
+    let intro = t!("wizard.ollama_modal.intro").to_string();
     runner.session.render_banner_with_description(
-        "Step 5 of 8 — Local AI (Ollama)",
-        "Anvil can install + run Ollama directly so you have a local model that works \
-         offline. Anvil downloads it, doesn't shell out to a system installer, \
-         and keeps everything under ~/.anvil/.",
+        &step_header,
+        &intro,
         &[],
         accent,
     )?;
 
     // Already fully set up? Render ✓ + offer to use it.
     if state.daemon_reachable && !state.installed_models.is_empty() {
-        let body = format!(
-            "Ollama is already running at {} with {} model(s):\n  {}\n\n\
-             Anvil will reuse the existing setup. Press Enter to continue.",
-            state.url,
-            state.installed_models.len(),
-            state.installed_models.join(", "),
-        );
-        let modal = ConfirmModal::new("Ollama already set up ✓", body);
+        let body = t!(
+            "wizard.ollama_modal.already_running",
+            url = state.url.clone(),
+            count = state.installed_models.len().to_string(),
+            models = state.installed_models.join(", ")
+        ).to_string();
+        let title = t!("wizard.ollama_modal.already_setup_title").to_string();
+        let modal = ConfirmModal::new(title, body);
         let _ = runner.run_confirm("step5-ollama-ready", modal)?;
         return Ok(OllamaOutcome {
             choice: Some("UseExisting".to_string()),
@@ -293,20 +298,21 @@ where
 
     // Build the choice list. Top option depends on what's already on disk.
     let top_label = if state.binary_at_anvil_path {
-        "Resume — re-use the Ollama Anvil installed previously".to_string()
+        t!("wizard.ollama_modal.resume_label").to_string()
     } else if state.system_binary.is_some() {
-        "Use the system Ollama Anvil detected".to_string()
+        t!("wizard.ollama_modal.use_existing_label").to_string()
     } else {
-        "Install Ollama now (Anvil downloads + manages it) — recommended".to_string()
+        t!("wizard.ollama_modal.install_label").to_string()
     };
 
+    let title = t!("wizard.ollama_modal.title_local_ai").to_string();
     let modal = WizardChoiceModal::new(
-        "Local AI (Ollama)",
+        title,
         vec![
             top_label,
-            "I'll handle Ollama myself".to_string(),
-            "Skip — no local AI".to_string(),
-            "Maybe later".to_string(),
+            t!("wizard.ollama_modal.choice_self_manage").to_string(),
+            t!("wizard.ollama_modal.choice_skip").to_string(),
+            t!("wizard.ollama_modal.choice_later").to_string(),
         ],
     );
     let answer = runner.run_choice("step5-ollama", modal)?;
@@ -337,17 +343,18 @@ where
     H: TerminalHooks,
     K: KeySource,
 {
-    let body = format!(
-        "Default Ollama URL: {}\nDaemon: {}\n\nUse /ollama setup later if you need a \
-         different URL. Press Enter to continue.",
-        state.url,
-        if state.daemon_reachable {
-            "reachable ✓"
-        } else {
-            "NOT reachable — start it before sending a message"
-        },
-    );
-    let modal = ConfirmModal::new("Use existing Ollama", body);
+    let status = if state.daemon_reachable {
+        format!("{} \u{2713}", t!("wizard.ollama_modal.status_reachable"))
+    } else {
+        t!("wizard.ollama_modal.status_not_reachable").to_string()
+    };
+    let body = t!(
+        "wizard.ollama_modal.use_existing_body",
+        url = state.url.clone(),
+        status = status
+    ).to_string();
+    let title = t!("wizard.ollama_modal.use_existing_title").to_string();
+    let modal = ConfirmModal::new(title, body);
     let _ = runner.run_confirm("step5-ollama-existing", modal)?;
     Ok(OllamaOutcome {
         choice: Some("UseExisting".to_string()),
@@ -383,11 +390,9 @@ where
         match download_ollama_with_banner(runner, home, &target_path)? {
             DownloadResult::Ok => {}
             DownloadResult::Failed(reason) => {
-                let body = format!(
-                    "Could not install Ollama:\n  {reason}\n\nRetry from /ollama \
-                     setup later. Press Enter to continue without local AI."
-                );
-                let modal = ConfirmModal::new("Install failed", body);
+                let body = t!("wizard.ollama_modal.install_failed_body", reason = reason.clone()).to_string();
+                let title = t!("wizard.ollama_modal.install_failed_title").to_string();
+                let modal = ConfirmModal::new(title, body);
                 let _ = runner.run_confirm("step5-ollama-fail", modal)?;
                 return Ok(OllamaOutcome {
                     choice: Some("Skip".to_string()),
@@ -396,10 +401,12 @@ where
             }
         }
     } else {
+        let title = t!("wizard.ollama_modal.already_installed_title").to_string();
+        let line = t!("wizard.ollama_modal.already_installed_body", path = target_path.display().to_string()).to_string();
         runner.session.render_banner(
-            "Ollama binary already installed ✓",
+            &title,
             &[
-                &format!("Found {} from a prior install.", target_path.display()),
+                &line,
                 "Press Enter to continue.",
             ],
             accent,
