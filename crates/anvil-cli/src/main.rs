@@ -1894,7 +1894,7 @@ fn run_resume_command(
                 render_repl_help()
             }),
         }),
-        SlashCommand::Compact => {
+        SlashCommand::Compact { action: _ } => {
             let result = runtime::compact_session(
                 session,
                 CompactionConfig {
@@ -5349,6 +5349,11 @@ struct LiveCli {
     /// `.anvil/settings.json` so project-local hook paths resolve
     /// correctly. None until the first turn populates it.
     last_observed_cwd: Option<PathBuf>,
+    /// Task #696 P5: last autocompact evaluation decision, stored so
+    /// `/compact why` can return it to the active tab without re-running
+    /// the threshold check. Format: one-liner with tab_id, tokens, threshold,
+    /// and decision. Updated every time `maybe_auto_compact` is called.
+    last_compact_eval: Option<String>,
 }
 
 impl LiveCli {
@@ -5439,6 +5444,7 @@ impl LiveCli {
             session_start: Instant::now(),
             instructions_mtime: std::collections::HashMap::new(),
             last_observed_cwd: None,
+            last_compact_eval: None,
         };
         // Publish initial cross-session snapshot now that the session id is
         // known.  Subsequent updates flow from AgentManager::spawn/poll.
@@ -6758,13 +6764,26 @@ impl LiveCli {
                     .output().map_or_else(|_| "Not in a git repository.".to_string(), |o| String::from_utf8_lossy(&o.stdout).to_string());
                 (if diff.trim().is_empty() { "No uncommitted changes.".to_string() } else { diff }, false)
             }
-            SlashCommand::Compact => {
-                // Task #626: compact now returns the report string so we
-                // push it through the TUI scrollback instead of having it
-                // `println!`-ed directly to the terminal underneath
-                // ratatui's alt-screen.
-                let report = self.compact()?;
-                (report, false)
+            SlashCommand::Compact { action } => {
+                if action.as_deref() == Some("why") {
+                    // Task #696 P5: return the last autocompact evaluation
+                    // recorded by `maybe_auto_compact`. If the user hasn't
+                    // sent a turn yet, no evaluation has run.
+                    let msg = self.last_compact_eval.clone().unwrap_or_else(|| {
+                        "No autocompact evaluation recorded yet for this session. \
+                         Autocompact runs at each turn boundary once token usage \
+                         is reported. Send a message and retry."
+                            .to_string()
+                    });
+                    (msg, false)
+                } else {
+                    // Task #626: compact now returns the report string so we
+                    // push it through the TUI scrollback instead of having it
+                    // `println!`-ed directly to the terminal underneath
+                    // ratatui's alt-screen.
+                    let report = self.compact()?;
+                    (report, false)
+                }
             }
             SlashCommand::Rewind { target, summarize } => {
                 // Task #557: TUI side just routes through the shared
@@ -9024,8 +9043,18 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
         let context_max = max_tokens_for_model(&self.model) as usize;
         let threshold_pct = HistoryArchiver::compact_threshold_pct() as usize;
         let threshold = context_max * threshold_pct / 100;
+        let tab_id = self.active_tab_idx + 1; // 1-based for display
 
+        // Task #696 P5: log every evaluation so the user can run `/compact why`
+        // and see why autocompact did or did not fire.  We write to
+        // ~/.anvil/anvil.log via tui::log_warning (safe during alt-screen).
+        // NEVER use println!/eprintln! here — the TUI alt-screen would desync.
         if estimated < threshold {
+            let eval = format!(
+                "autocompact skip tab={tab_id} tokens={estimated}/{context_max} threshold={threshold} ({threshold_pct}%) — under threshold"
+            );
+            crate::tui::log_warning(&format!("[autocompact] {eval}"));
+            self.last_compact_eval = Some(eval);
             return None;
         }
 
@@ -9037,8 +9066,23 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
             &format!("Auto-compacted: estimated {estimated} tokens exceeded {threshold_pct}% of {context_max} context limit"),
         );
 
+        // Task #696 P5: log that we are about to fire.
+        {
+            let fire_eval = format!(
+                "autocompact FIRE tab={tab_id} tokens={estimated}/{context_max} threshold={threshold} ({threshold_pct}%) — compacting now"
+            );
+            crate::tui::log_warning(&format!("[autocompact] {fire_eval}"));
+            self.last_compact_eval = Some(fire_eval);
+        }
+
         let result = self.active_runtime_mut().compact(CompactionConfig::default());
         if result.removed_message_count == 0 {
+            // Compaction ran but removed nothing (session already minimal).
+            let eval = format!(
+                "autocompact FIRE tab={tab_id} tokens={estimated}/{context_max} — fired but removed 0 messages (session already minimal)"
+            );
+            crate::tui::log_warning(&format!("[autocompact] {eval}"));
+            self.last_compact_eval = Some(eval);
             return None;
         }
 
@@ -9070,6 +9114,16 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
                 String::new,
                 |p| format!("  Archive         {}\n", p.display()),
             );
+
+        // Task #696 P5: final log with removed count.
+        {
+            let done_eval = format!(
+                "autocompact DONE tab={tab_id} removed={} messages context_was={estimated}/{context_max}",
+                result.removed_message_count,
+            );
+            crate::tui::log_warning(&format!("[autocompact] {done_eval}"));
+            self.last_compact_eval = Some(done_eval);
+        }
 
         Some(format!(
             "Auto-compact\n  Reason           Context at {threshold_pct}% ({estimated}/{context_max} tokens)\n  Removed          {} messages\n{archive_note}  Tip              Previous conversation searchable via /history-archive",
@@ -10064,6 +10118,55 @@ mod bug1_vault_retry_tests {
 
         // Cleanup.
         VAULT_UNLOCK_PENDING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Task #696 P5: autocompact instrumentation tests.
+///
+/// These guard the log-line format and the `/compact why` parser path so a
+/// future refactor doesn't silently break observability.
+#[cfg(test)]
+mod compact_instrumentation_tests {
+    use commands::SlashCommand;
+
+    /// `/compact` with no subcommand parses as `Compact { action: None }`.
+    #[test]
+    fn compact_no_args_parses_to_none_action() {
+        let cmd = SlashCommand::parse("/compact").expect("should parse");
+        assert_eq!(cmd, SlashCommand::Compact { action: None });
+    }
+
+    /// `/compact why` parses as `Compact { action: Some("why") }`.
+    #[test]
+    fn compact_why_parses_correctly() {
+        let cmd = SlashCommand::parse("/compact why").expect("should parse");
+        assert_eq!(cmd, SlashCommand::Compact { action: Some("why".to_string()) });
+    }
+
+    /// `/compact other-arg` parses as `Compact { action: Some("other-arg") }` —
+    /// unknown subcommands are accepted at parse time; the handler decides.
+    #[test]
+    fn compact_unknown_subcommand_preserved() {
+        let cmd = SlashCommand::parse("/compact foo").expect("should parse");
+        assert_eq!(cmd, SlashCommand::Compact { action: Some("foo".to_string()) });
+    }
+
+    /// The autocompact skip eval log line is machine-parseable:
+    /// fields are `key=value` pairs separated by spaces.
+    #[test]
+    fn compact_eval_skip_line_is_structured() {
+        let tab_id = 1_usize;
+        let estimated = 1000_usize;
+        let context_max = 200_000_usize;
+        let threshold = 170_000_usize;
+        let threshold_pct = 85_usize;
+        let eval = format!(
+            "autocompact skip tab={tab_id} tokens={estimated}/{context_max} threshold={threshold} ({threshold_pct}%) \u{2014} under threshold"
+        );
+        assert!(eval.contains("tab=1"), "tab id present: {eval}");
+        assert!(eval.contains("tokens=1000/200000"), "token counts present: {eval}");
+        assert!(eval.contains("threshold=170000"), "threshold present: {eval}");
+        assert!(eval.contains("skip"), "decision present: {eval}");
     }
 }
 

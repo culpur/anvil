@@ -86,7 +86,12 @@ pub fn handle_slash_command(
     compaction: CompactionConfig,
 ) -> Option<SlashCommandResult> {
     match SlashCommand::parse(input)? {
-        SlashCommand::Compact => {
+        // Task #696 P5: `/compact why` is handled by the TUI host (it
+        // reads `LiveCli::last_compact_eval`). Route it through
+        // RequiresLiveCli by returning None here so dispatch.rs
+        // falls back to the live-cli handler in main.rs.
+        SlashCommand::Compact { action } if action.as_deref() == Some("why") => None,
+        SlashCommand::Compact { .. } => {
             let result = compact_session(session, compaction);
             let message = if result.removed_message_count == 0 {
                 "Compaction skipped: session is below the compaction threshold.".to_string()

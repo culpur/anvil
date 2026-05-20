@@ -85,7 +85,12 @@ pub enum SlashCommand {
         command: Option<String>,
     },
     Status,
-    Compact,
+    /// `/compact` — manually trigger session compaction.
+    /// `/compact why` — return the last autocompact evaluation decision.
+    Compact {
+        /// `None` = compact now; `Some("why")` = show last evaluation.
+        action: Option<String>,
+    },
     Branch {
         action: Option<String>,
         target: Option<String>,
@@ -689,7 +694,9 @@ impl SlashCommand {
                 command: parts.next().map(ToOwned::to_owned),
             },
             "status" => Self::Status,
-            "compact" => Self::Compact,
+            "compact" => Self::Compact {
+                action: parts.next().map(ToOwned::to_owned),
+            },
             "rewind" => {
                 // /rewind                 → open picker (target=None)
                 // /rewind 3               → direct truncate to 3rd-to-last user msg
@@ -2999,7 +3006,7 @@ mod tests {
             match cmd {
                 SlashCommand::Help { .. } => Some("help"),
                 SlashCommand::Status => Some("status"),
-                SlashCommand::Compact => Some("compact"),
+                SlashCommand::Compact { .. } => Some("compact"),
                 SlashCommand::Branch { .. } => Some("branch"),
                 SlashCommand::Bughunter { .. } => Some("bughunter"),
                 SlashCommand::Worktree { .. } => Some("worktree"),
@@ -3131,7 +3138,7 @@ mod tests {
         let exemplars: Vec<SlashCommand> = vec![
             SlashCommand::Help { command: None },
             SlashCommand::Status,
-            SlashCommand::Compact,
+            SlashCommand::Compact { action: None },
             SlashCommand::Branch { action: None, target: None },
             SlashCommand::Bughunter { scope: None },
             SlashCommand::Worktree { action: None, path: None, branch: None },

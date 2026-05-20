@@ -1547,3 +1547,290 @@ fn main_rs_no_longer_imports_run_setup_wizard() {
          is the wiring for the legacy ASCII-box wizard (task #661)."
     );
 }
+
+// ─── Task #677 — PermissionPrompt relay round-trip regression ────────────────
+//
+// These four tests exercise the full wiring added in task #671:
+// CliPermissionPrompter::decide -> RelayMessage::PermissionPrompt broadcast ->
+// PromptRegistry::resolve -> PermissionPromptDecision.
+//
+// Each test spins up a CliPermissionPrompter with a fake TuiSender (so the TUI
+// path is active, which is required to trigger the relay fan-out) and a real
+// broadcast/registry pair.  The worker thread blocks on `decide`; the test
+// thread reads the PermissionPrompt from the broadcast, extracts the prompt_id,
+// and resolves the registry.  The race is won by the registry side in tests
+// 1–3; the TUI side wins in test 4 (cancel branch).
+//
+// Constraints:
+//   - No println!/eprintln! here (TUI types are in scope — audit #626 rule).
+//   - `decide` is synchronous: use std::thread, not tokio::spawn.
+//   - broadcast::Receiver::blocking_recv() is safe from a non-async thread.
+//
+// Helper: build the PermissionRequest used by all four tests.
+fn make_perm_request() -> runtime::PermissionRequest {
+    runtime::PermissionRequest {
+        tool_name: "bash".to_string(),
+        input: "echo hello".to_string(),
+        current_mode: runtime::PermissionMode::Prompt,
+        required_mode: runtime::PermissionMode::WorkspaceWrite,
+    }
+}
+
+// Helper: build a fake TuiSender backed by a sync channel.  Returns the sender
+// and the receiver so the test thread can drain events (and optionally reply).
+fn fake_tui_channel() -> (
+    crate::tui::TuiSender,
+    std::sync::mpsc::Receiver<crate::tui::TaggedTuiEvent>,
+) {
+    let (tx, rx) = std::sync::mpsc::sync_channel::<crate::tui::TaggedTuiEvent>(8);
+    (crate::tui::TuiSender::new(tx, 1), rx)
+}
+
+#[test]
+fn permission_prompt_relay_approve() {
+    // Registry resolve wins with "allow" -> decide returns Allow.
+    use runtime::relay::{PromptRegistry, RelayMessage};
+    use runtime::PermissionPrompter;
+
+    let registry = PromptRegistry::new_handle();
+    let (event_tx, mut event_rx) =
+        tokio::sync::broadcast::channel::<RelayMessage>(16);
+
+    // Subscribe BEFORE constructing the prompter so receiver_count() > 0
+    // when decide() checks, ensuring the relay fan-out fires.
+    let _ = event_tx.subscribe(); // count is now 1 via event_rx (see below)
+    // Note: we already have event_rx from channel(); no need for a second sub.
+
+    let (tui_sender, tui_rx) = fake_tui_channel();
+    let mut prompter =
+        super::providers::CliPermissionPrompter::new(runtime::PermissionMode::Prompt)
+            .with_tui_sender(tui_sender)
+            .with_relay(event_tx, registry.clone(), 1);
+
+    let request = make_perm_request();
+
+    // Spawn the worker that blocks on decide().
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let decision = prompter.decide(&request);
+        let _ = result_tx.send(decision);
+    });
+
+    // Read the PermissionPrompt from the broadcast.  blocking_recv() is safe
+    // here because this is a plain #[test] thread (no tokio executor).
+    let prompt_id = loop {
+        match event_rx.blocking_recv() {
+            Ok(RelayMessage::PermissionPrompt { prompt_id, .. }) => break prompt_id,
+            Ok(_) => {}
+            Err(e) => panic!("broadcast recv error: {e:?}"),
+        }
+    };
+
+    // Resolve the registry slot — this unblocks the remote bridge thread
+    // inside decide(), which sends "allow" into the combined channel first.
+    assert!(
+        registry.lock().unwrap().resolve(&prompt_id, "allow"),
+        "resolve must return true for a registered prompt_id"
+    );
+
+    // The TUI side never replies, so when decide() wins on the remote side,
+    // it drops the TUI reply_rx; the TUI bridge thread returns Err -> "".
+    // Drop the tui_rx so that channel closes cleanly.
+    drop(tui_rx);
+
+    let decision = result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("decide must return within 5 s");
+
+    worker.join().expect("worker thread panicked");
+
+    assert!(
+        matches!(decision, runtime::PermissionPromptDecision::Allow),
+        "expected Allow, got {decision:?}"
+    );
+    // After resolve+cancel the registry must be empty.
+    assert!(
+        registry.lock().unwrap().is_empty(),
+        "registry must be empty after decide returns"
+    );
+}
+
+#[test]
+fn permission_prompt_relay_deny() {
+    // Registry resolve wins with "deny" -> decide returns Deny.
+    use runtime::relay::{PromptRegistry, RelayMessage};
+    use runtime::PermissionPrompter;
+
+    let registry = PromptRegistry::new_handle();
+    let (event_tx, mut event_rx) =
+        tokio::sync::broadcast::channel::<RelayMessage>(16);
+
+    let (tui_sender, tui_rx) = fake_tui_channel();
+    let mut prompter =
+        super::providers::CliPermissionPrompter::new(runtime::PermissionMode::Prompt)
+            .with_tui_sender(tui_sender)
+            .with_relay(event_tx, registry.clone(), 1);
+
+    let request = make_perm_request();
+
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let decision = prompter.decide(&request);
+        let _ = result_tx.send(decision);
+    });
+
+    let prompt_id = loop {
+        match event_rx.blocking_recv() {
+            Ok(RelayMessage::PermissionPrompt { prompt_id, .. }) => break prompt_id,
+            Ok(_) => {}
+            Err(e) => panic!("broadcast recv error: {e:?}"),
+        }
+    };
+
+    assert!(registry.lock().unwrap().resolve(&prompt_id, "deny"));
+    drop(tui_rx);
+
+    let decision = result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("decide must return within 5 s");
+
+    worker.join().expect("worker thread panicked");
+
+    assert!(
+        matches!(decision, runtime::PermissionPromptDecision::Deny { .. }),
+        "expected Deny, got {decision:?}"
+    );
+    assert!(
+        registry.lock().unwrap().is_empty(),
+        "registry must be empty after decide returns"
+    );
+}
+
+#[test]
+fn permission_prompt_relay_allow_always() {
+    // Registry resolve wins with "allow_always" -> decide returns AllowAlways.
+    use runtime::relay::{PromptRegistry, RelayMessage};
+    use runtime::PermissionPrompter;
+
+    let registry = PromptRegistry::new_handle();
+    let (event_tx, mut event_rx) =
+        tokio::sync::broadcast::channel::<RelayMessage>(16);
+
+    let (tui_sender, tui_rx) = fake_tui_channel();
+    let mut prompter =
+        super::providers::CliPermissionPrompter::new(runtime::PermissionMode::Prompt)
+            .with_tui_sender(tui_sender)
+            .with_relay(event_tx, registry.clone(), 1);
+
+    let request = make_perm_request();
+
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let decision = prompter.decide(&request);
+        let _ = result_tx.send(decision);
+    });
+
+    let prompt_id = loop {
+        match event_rx.blocking_recv() {
+            Ok(RelayMessage::PermissionPrompt { prompt_id, .. }) => break prompt_id,
+            Ok(_) => {}
+            Err(e) => panic!("broadcast recv error: {e:?}"),
+        }
+    };
+
+    assert!(registry.lock().unwrap().resolve(&prompt_id, "allow_always"));
+    drop(tui_rx);
+
+    let decision = result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("decide must return within 5 s");
+
+    worker.join().expect("worker thread panicked");
+
+    assert!(
+        matches!(decision, runtime::PermissionPromptDecision::AllowAlways),
+        "expected AllowAlways, got {decision:?}"
+    );
+    assert!(
+        registry.lock().unwrap().is_empty(),
+        "registry must be empty after decide returns"
+    );
+}
+
+#[test]
+fn permission_prompt_late_resolve_after_tui_wins() {
+    // TUI side wins first: the test thread receives the PermissionRequired
+    // event, replies Allow through response_tx, and decide() returns Allow.
+    // The registry must be empty afterward because decide() calls cancel()
+    // on the slot after the TUI reply wins the race.
+    //
+    // A "late" remote PermissionDecision arriving after cancel is a no-op:
+    // registry.resolve() returns false on the already-cancelled slot.
+    use runtime::relay::{PromptRegistry, RelayMessage};
+    use runtime::PermissionPrompter;
+    use crate::tui::TuiEvent;
+
+    let registry = PromptRegistry::new_handle();
+    let (event_tx, mut event_rx) =
+        tokio::sync::broadcast::channel::<RelayMessage>(16);
+
+    let (tui_sender, tui_rx) = fake_tui_channel();
+    let mut prompter =
+        super::providers::CliPermissionPrompter::new(runtime::PermissionMode::Prompt)
+            .with_tui_sender(tui_sender)
+            .with_relay(event_tx, registry.clone(), 1);
+
+    let request = make_perm_request();
+
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        let decision = prompter.decide(&request);
+        let _ = result_tx.send(decision);
+    });
+
+    // Drain the TUI channel: pull the PermissionRequired event and reply Allow
+    // through response_tx.  This makes the TUI side win the race.
+    let tui_event = tui_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("PermissionRequired event must arrive on TUI channel");
+    match tui_event.event {
+        TuiEvent::PermissionRequired { response_tx, .. } => {
+            response_tx
+                .send(crate::tui::PermissionReply::Allow)
+                .expect("TUI reply send must succeed");
+        }
+        other => panic!("expected PermissionRequired, got {other:?}"),
+    }
+
+    let decision = result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("decide must return within 5 s");
+
+    worker.join().expect("worker thread panicked");
+
+    assert!(
+        matches!(decision, runtime::PermissionPromptDecision::Allow),
+        "expected Allow (TUI path), got {decision:?}"
+    );
+
+    // decide() must have called cancel() after the TUI reply won,
+    // leaving the registry empty.
+    assert!(
+        registry.lock().unwrap().is_empty(),
+        "registry must be empty after TUI reply wins (cancel branch)"
+    );
+
+    // Simulate a late remote PermissionDecision arriving after cancel.
+    // We need the prompt_id — drain the broadcast for it.
+    // The PermissionPrompt may or may not have been emitted (depends on
+    // whether the broadcast was sent before the TUI side won); if it was
+    // emitted we verify resolve() returns false (slot already cancelled).
+    // Use try_recv to avoid blocking if the event was never sent.
+    if let Ok(RelayMessage::PermissionPrompt { prompt_id, .. }) = event_rx.try_recv() {
+        let late_resolve = registry.lock().unwrap().resolve(&prompt_id, "allow");
+        assert!(
+            !late_resolve,
+            "late remote resolve after cancel must return false (no-op)"
+        );
+    }
+}

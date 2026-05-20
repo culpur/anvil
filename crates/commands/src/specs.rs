@@ -92,13 +92,18 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "compact",
         aliases: &[],
-        summary: "Compact local session history",
-        argument_hint: None,
+        summary: "Compact local session history; /compact why shows last autocompact decision",
+        argument_hint: Some("[why]"),
         resume_supported: true,
         category: SlashCommandCategory::Core,
-        detailed_help: "",
+        detailed_help: "Run /compact to immediately compact the session. Run /compact why to see the last autocompact evaluation: tab id, token count, threshold, and decision (fire/skip/reason).",
 
-        subcommands: &[],
+        subcommands: &[crate::subcommands::SubcommandSpec {
+            name: "why",
+            summary: "Show the last autocompact evaluation decision",
+            args: &[],
+            subcommands: &[],
+        }],
         tui_available: true,
         web_available: true,
         requires_vault: false,
