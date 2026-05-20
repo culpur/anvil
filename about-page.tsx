@@ -172,6 +172,27 @@ export default function AboutPage() {
       <section className="mb-20">
         <h2 className="text-3xl font-bold mb-10">Changelog</h2>
 
+        {/* v2.2.18 */}
+        <div className="mb-10">
+          <div className="flex items-center gap-3 mb-4">
+            <span className="text-lg font-bold text-white">v2.2.18</span>
+            <span className="text-xs text-text-muted bg-bg-card border border-border rounded-full px-3 py-1">May 20, 2026</span>
+          </div>
+          <p className="text-text-secondary text-sm mb-3 font-medium">Web Viewer Parity + Mouse Capture Default-OFF + Autocompact Hardening:</p>
+          <ul className="space-y-1.5 text-sm text-text-secondary list-none">
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Autocompact threshold now uses the context window (64K–200K+), not the output cap — sessions on long-context models run far longer before compaction (#697)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Mouse capture default-OFF on all platforms — restores terminal copy-paste for users who hadn't opted in (#696 P4)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span><code className="text-accent-cyan">/tab new/rename/switch</code> + <code className="text-accent-cyan">Ctrl+T</code> in TUI + relay; per-tab routing for concurrent sessions (#696)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Web viewer default layout = vertical_split + tabs, matching TUI default</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Relay: default-allow forwarding, slash completion, cost_type chip, collapsible tool cards, MemorySnapshot broadcast</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Bracketed paste in textarea modals — multi-line paste works in <code className="text-accent-cyan">/mcp builder</code> and wizard fields (#685)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Alt-screen raw-mode restore fix — keyboard no longer stops working after inline-op cancel (#688)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>MemorySnapshot uses layouts::common helpers for rail parity (#695)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>PermissionPrompt end-to-end round-trip regression test (#677)</li>
+            <li><span className="text-accent-cyan mr-2">&#10003;</span>Release pipeline Phase 6 hardened against <code className="text-accent-cyan">set -e</code> silent-exit (#654)</li>
+          </ul>
+        </div>
+
         {/* v2.1.0.1 */}
         <div className="mb-10">
           <div className="flex items-center gap-3 mb-4">
