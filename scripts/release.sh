@@ -651,8 +651,194 @@ if [ -n "$README_SHA" ]; then
     fi
 fi
 
+
+# ─── Phase 7: X/Twitter announcement ────────────────────────────────────────
+#
+# Posts the release announcement thread to X/Twitter.
+#
+# Gate: RELEASE_AUTO_POST=1 is REQUIRED to actually post. Without it, the
+# planned thread is printed for review only (same caution pattern as the
+# release-surfaces verification gate).
+#
+# Skip path: if X credentials are not configured, print a warning and continue.
+# This is NOT a release-blocking failure — it's a manual-step reminder.
+#
+# Parsing: extracts hero paragraph + feature bullets from RELEASE-NOTES-<TAG>.md.
+# Caps each tweet at 270 chars (leaving 10-char headroom for X's URL counter).
+#
 echo
-echo "▸ Phase 7: Generate release notes draft..."
+echo "▸ Phase 7: X/Twitter announcement..."
+
+X_CREDS_OK=false
+X_CREDS_CHECK=$(node --input-type=module -e "
+import { loadXCredentials } from '$(dirname "$0")/../node_modules/.bin/../../../mcp-servers/anvil-release/lib/helpers.js';
+" 2>/dev/null) || true
+
+# Use the anvil-release MCP directly to check creds
+ANVIL_RELEASE_MCP_DIR="$HOME/projects/mcp-servers/anvil-release"
+if node --input-type=module -e "
+import { loadXCredentials } from '${ANVIL_RELEASE_MCP_DIR}/lib/helpers.js';
+const r = loadXCredentials();
+process.exit(r.ok ? 0 : 1);
+" 2>/dev/null; then
+    X_CREDS_OK=true
+else
+    echo "  ⚠ X announcement skipped (credentials not configured)"
+    echo "    Run: node ${ANVIL_RELEASE_MCP_DIR}/scripts/enroll-x-pkce.js"
+    echo "    Then add 8 X_* env vars to the vault."
+fi
+
+if [ "$X_CREDS_OK" = true ]; then
+    # Build the announcement thread from the release notes file
+    # Parser: first non-empty paragraph after the heading = hero paragraph (tweet 1)
+    #         feature bullets (lines starting with -) = tweets 2..N (capped at 270 chars each)
+    #         final tweet = install line
+    THREAD_JSON=$(node --input-type=module -e "
+import { readFileSync } from 'fs';
+
+const notesPath = '${RELEASE_NOTES_FILE}';
+const version = '${VERSION}';
+const tag = '${TAG}';
+const maxChars = 270;
+
+let content;
+try {
+  content = readFileSync(notesPath, 'utf8');
+} catch {
+  process.stderr.write('Could not read ' + notesPath + '\n');
+  process.exit(1);
+}
+
+const lines = content.split('\n');
+const tweets = [];
+
+// Find hero paragraph: first non-empty, non-heading block after the title
+let heroPara = '';
+let inHero = false;
+for (const line of lines) {
+  if (line.startsWith('#')) {
+    if (heroPara.trim()) break; // we already have the hero
+    continue;
+  }
+  if (!inHero && line.trim()) {
+    inHero = true;
+    heroPara += line + ' ';
+  } else if (inHero && line.trim()) {
+    heroPara += line + ' ';
+  } else if (inHero && !line.trim()) {
+    break; // end of paragraph
+  }
+}
+heroPara = heroPara.trim();
+if (heroPara.length > maxChars) heroPara = heroPara.slice(0, maxChars - 3) + '...';
+
+// Prepend version to hero
+const heroTweet = 'Anvil v' + version + ': ' + heroPara;
+tweets.push({ text: heroTweet.length <= maxChars ? heroTweet : heroTweet.slice(0, maxChars - 3) + '...' });
+
+// Feature bullets
+for (const line of lines) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('- ') && !trimmed.startsWith('* ')) continue;
+  const bullet = trimmed.replace(/^[-*]\s+/, '');
+  if (!bullet || bullet.startsWith('[')) continue; // skip links
+  const tweetText = bullet.length <= maxChars ? bullet : bullet.slice(0, maxChars - 3) + '...';
+  tweets.push({ text: tweetText });
+  if (tweets.length >= 5) break; // cap at 5 tweets (hero + 3 features + install = 5)
+}
+
+// Install tweet (always last)
+const installTweet = 'Install: brew install culpur/anvil/anvil — full notes https://github.com/culpur/anvil/releases/tag/' + tag;
+tweets.push({ text: installTweet });
+
+process.stdout.write(JSON.stringify({ tweets }, null, 2));
+" 2>/tmp/anvil-x-thread-build.err) || {
+        echo "  ⚠ Could not build X thread: $(cat /tmp/anvil-x-thread-build.err)"
+        echo "    X announcement skipped; post manually from ${RELEASE_NOTES_FILE}"
+        THREAD_JSON=""
+    }
+
+    if [ -n "$THREAD_JSON" ]; then
+        TWEET_COUNT=$(echo "$THREAD_JSON" | node --input-type=module -e "
+import { createInterface } from 'readline';
+let json = '';
+const rl = createInterface({ input: process.stdin });
+rl.on('line', l => { json += l; });
+rl.on('close', () => {
+  const d = JSON.parse(json);
+  process.stdout.write(String(d.tweets.length));
+});
+" 2>/dev/null || echo "0")
+
+        echo "  Planned thread ($TWEET_COUNT tweets):"
+        echo "$THREAD_JSON" | node --input-type=module -e "
+import { createInterface } from 'readline';
+let json = '';
+const rl = createInterface({ input: process.stdin });
+rl.on('line', l => { json += l; });
+rl.on('close', () => {
+  const d = JSON.parse(json);
+  d.tweets.forEach((t, i) => {
+    process.stdout.write('  [' + (i+1) + '] ' + t.text + '\n');
+  });
+});
+" 2>/dev/null || echo "  (Could not parse thread JSON)"
+
+        if [ "${RELEASE_AUTO_POST:-}" = "1" ]; then
+            echo
+            echo "  RELEASE_AUTO_POST=1 — posting thread to X..."
+            X_POST_RESULT=$(node --input-type=module -e "
+import { anvilXThread } from '${ANVIL_RELEASE_MCP_DIR}/lib/tools/x-thread.js';
+const args = JSON.parse(process.env.THREAD_JSON || '{}');
+const result = await anvilXThread(args);
+process.stdout.write(JSON.stringify(result, null, 2));
+" THREAD_JSON="$THREAD_JSON" 2>/tmp/anvil-x-post.err) || {
+                rc=$?
+                echo "  ✘ Phase 7 X post failed (rc=$rc): $(cat /tmp/anvil-x-post.err)" >&2
+                echo "    Release continues — post announcement manually." >&2
+                X_POST_RESULT=""
+            }
+
+            if [ -n "$X_POST_RESULT" ]; then
+                X_POST_OK=$(echo "$X_POST_RESULT" | node --input-type=module -e "
+import { createInterface } from 'readline';
+let json = '';
+const rl = createInterface({ input: process.stdin });
+rl.on('line', l => { json += l; });
+rl.on('close', () => { const d = JSON.parse(json); process.stdout.write(d.ok ? 'true' : 'false'); });
+" 2>/dev/null || echo "false")
+
+                if [ "$X_POST_OK" = "true" ]; then
+                    ROOT_URL=$(echo "$X_POST_RESULT" | node --input-type=module -e "
+import { createInterface } from 'readline';
+let json = '';
+const rl = createInterface({ input: process.stdin });
+rl.on('line', l => { json += l; });
+rl.on('close', () => { const d = JSON.parse(json); process.stdout.write(d.data?.root_url || ''); });
+" 2>/dev/null || echo "")
+                    echo "  ✓ Thread posted: ${ROOT_URL:-[url not returned]}"
+                else
+                    X_ERR=$(echo "$X_POST_RESULT" | node --input-type=module -e "
+import { createInterface } from 'readline';
+let json = '';
+const rl = createInterface({ input: process.stdin });
+rl.on('line', l => { json += l; });
+rl.on('close', () => { const d = JSON.parse(json); process.stdout.write(d.error?.message || JSON.stringify(d.error)); });
+" 2>/dev/null || echo "unknown error")
+                    echo "  ✘ X post failed: ${X_ERR}" >&2
+                    echo "    Post announcement manually." >&2
+                fi
+            fi
+        else
+            echo
+            echo "  ℹ Thread printed above — NOT posted (RELEASE_AUTO_POST not set)"
+            echo "    To auto-post: RELEASE_AUTO_POST=1 bash scripts/release.sh --skip-build"
+        fi
+    fi
+fi
+
+echo
+echo "▸ Phase 8: Generate release notes draft..."
 PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
 if [ -n "$PREV_TAG" ]; then
     echo "  Changes since $PREV_TAG:"
@@ -664,45 +850,45 @@ if [ -n "$PREV_TAG" ]; then
     echo
 fi
 
-# ─── Phase 8: Post-publish verification gate ────────────────────────────────
+# ─── Phase 9: Post-publish verification gate ────────────────────────────────
 #
 # Two-stage verification (added task #614):
 #
-#   Stage 8a — release-surfaces.yaml comprehensive check
+#   Stage 9a — release-surfaces.yaml comprehensive check
 #     The manifest at the repo root catalogues every user-facing surface
 #     (anvilhub homepage, /about, /install, culpur.net/anvil, /products,
 #     public README "What's new", Homebrew, release notes file, etc.) and
 #     scripts/verify-release-surfaces.sh probes them all. This is the strict
 #     superset gate — if it passes, every surface is current.
 #
-#   Stage 8b — /api/version binary-URL probe (added task #611)
+#   Stage 9b — /api/version binary-URL probe (added task #611)
 #     The legacy verifier focuses on the failure mode that caused v2.2.16's
 #     Windows 404 (advertised filenames diverged from uploaded filenames).
 #     It HEADs every URL in /api/version's .binaries{} and asserts
 #     .latest_version matches.
 #
-# Both must pass. Stage 8a runs first because surface drift is more common
+# Both must pass. Stage 9a runs first because surface drift is more common
 # than filename mismatch; failing fast on a stale homepage is more useful
 # than waiting for the binary probe.
 if [ "$SKIP_VERIFY" = "true" ]; then
     echo
-    echo "▸ Phase 8: Post-publish verification SKIPPED (--skip-verify)"
+    echo "▸ Phase 9: Post-publish verification SKIPPED (--skip-verify)"
 elif [ "$DRY_RUN_VERIFY" = "true" ]; then
     echo
-    echo "▸ Phase 8a: Surface manifest verification (dry-run)..."
+    echo "▸ Phase 9a: Surface manifest verification (dry-run)..."
     if ! bash "$SCRIPT_DIR/verify-release-surfaces.sh" "$VERSION" --dry-run; then
         echo "✘ Manifest dry-run reported a problem (rc=$?)." >&2
         exit 3
     fi
     echo
-    echo "▸ Phase 8b: Binary-URL probe (dry-run)..."
+    echo "▸ Phase 9b: Binary-URL probe (dry-run)..."
     verify_release "$VERSION" --dry-run || {
         echo "✘ Verification dry-run reported a problem (rc=$?)." >&2
         exit 3
     }
 else
     echo
-    echo "▸ Phase 8a: Surface manifest verification..."
+    echo "▸ Phase 9a: Surface manifest verification..."
     if ! bash "$SCRIPT_DIR/verify-release-surfaces.sh" "$VERSION"; then
         rc=$?
         echo >&2
@@ -711,11 +897,11 @@ else
         echo "  See the FAILED SURFACES list above; each entry names the" >&2
         echo "  deploy_path so you can fix the source and re-run:" >&2
         echo "      bash scripts/verify-release-surfaces.sh $VERSION" >&2
-        echo "  Then re-run the release with --skip-build to repeat Phase 8." >&2
+        echo "  Then re-run the release with --skip-build to repeat Phase 9." >&2
         exit "$rc"
     fi
     echo
-    echo "▸ Phase 8b: Binary-URL probe..."
+    echo "▸ Phase 9b: Binary-URL probe..."
     if ! verify_release "$VERSION"; then
         rc=$?
         echo >&2
@@ -747,10 +933,10 @@ echo "╚═══════════════════════�
 # The explicit message lets pipeline observers distinguish "script completed all
 # phases" from "script exited 0 mid-way" — the silent-exit mode that caused
 # the v2.2.17 incident where Phases 7+ were skipped without any error output.
-PHASES_RUN="0→1.5→2→2.5→2.6→3→4→4.5→5→6→7→8"
+PHASES_RUN="0→1.5→2→2.5→2.6→3→4→4.5→5→6→7→8→9"
 [ "$SKIP_BUILD" = true ]   && PHASES_RUN="(skipped 1) $PHASES_RUN"
 [ "$BUILD_ONLY" = true ]   && PHASES_RUN="1→1.5→2→2.5→2.6 (build-only)"
-[ "$SKIP_VERIFY" = true ]  && PHASES_RUN="$PHASES_RUN (skipped 8)"
-[ "$DRY_RUN_VERIFY" = true ] && PHASES_RUN="$PHASES_RUN (dry-run 8)"
+[ "$SKIP_VERIFY" = true ]  && PHASES_RUN="$PHASES_RUN (skipped 9)"
+[ "$DRY_RUN_VERIFY" = true ] && PHASES_RUN="$PHASES_RUN (dry-run 9)"
 echo
 echo "[release.sh complete: phases run = $PHASES_RUN | version = $TAG | exit 0]"
