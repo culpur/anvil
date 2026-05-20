@@ -412,7 +412,18 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     } else {
         format!("{} perms", snap.pending_permission_count)
     };
-    let cost_val = format!("${:.2}", snap.total_session_cost_usd);
+    // #696 P1: OAuth Max / local / cloud users don't pay per-token — the
+    // model is covered by their subscription. Synthesizing a per-token
+    // dollar figure for them is wrong (it inflates a number that bears
+    // no relation to what they're actually billed). Use the provider
+    // label as a stand-in; the dollar amount is only shown for `api` and
+    // `metered` paths where per-token pricing IS what gets billed.
+    let cost_val = match snap.cost_provider_label.as_str() {
+        "OAuth"  => "included".to_string(),
+        "local"  => "$0.00".to_string(),
+        "cloud"  => "subscription".to_string(),
+        _        => format!("${:.2}", snap.total_session_cost_usd),
+    };
 
     lines.push(right_aligned_row("running", &running_val, w, dim));
     lines.push(right_aligned_row("pending", &pending_val, w, dim));
