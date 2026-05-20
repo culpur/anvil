@@ -4265,6 +4265,16 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     tab_idx + 1,
                     new_session.id,
                 ));
+                // Mirror to relay so the web viewer sees the new tab (Ctrl+T path).
+                if let Some(tx) = &cli.relay_event_tx {
+                    let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
+                        tab_id: tab_idx,
+                        name: "new".to_string(),
+                        model: cli.model.clone(),
+                        session_id: new_session.id.clone(),
+                    });
+                    let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id: tab_idx });
+                }
             }
             // Task #627: confirm modal (/restart, /iac apply) resolved.
             ReadResult::ConfirmResolved { action, choice } => {
@@ -4409,6 +4419,16 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 tab_idx + 1,
                                 new_session.id,
                             ));
+                            // Broadcast to relay so the web viewer mirrors the new tab.
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
+                                    tab_id: tab_idx,
+                                    name: name.to_string(),
+                                    model: cli.model.clone(),
+                                    session_id: new_session.id.clone(),
+                                });
+                                let _ = tx.send(runtime::relay::RelayMessage::TabSwitched { tab_id: tab_idx });
+                            }
                         }
                         "close" => {
                             let closed_idx = tui.active_tab_index();
@@ -4436,8 +4456,15 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                             if arg.is_empty() {
                                 tui.push_system("Usage: /tab rename <name>".to_string());
                             } else {
+                                let renamed_idx = tui.active_tab_index();
                                 tui.rename_active_tab(arg);
                                 tui.push_system(format!("Tab renamed to: {arg}"));
+                                if let Some(tx) = &cli.relay_event_tx {
+                                    let _ = tx.send(runtime::relay::RelayMessage::TabRenamed {
+                                        tab_id: renamed_idx,
+                                        name: arg.to_string(),
+                                    });
+                                }
                             }
                         }
                         "" => {
@@ -4450,6 +4477,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                                 let tab_idx = num.saturating_sub(1);
                                 tui.switch_tab(tab_idx);
                                 cli.active_tab_idx = tui.active_tab_index();
+                                if let Some(tx) = &cli.relay_event_tx {
+                                    let _ = tx.send(runtime::relay::RelayMessage::TabSwitched {
+                                        tab_id: cli.active_tab_idx,
+                                    });
+                                }
                             } else {
                                 tui.push_system(format!("Unknown /tab action: {n}. Try /tab for help."));
                             }
@@ -6370,7 +6402,7 @@ impl LiveCli {
                         cost_type: Some(cost_type_label),
                         layout: Some(layout_alias),
                         context_max: Some(crate::tui::context_max_for_model_pub(&self.model) as u64),
-                        build_sha: option_env!("ANVIL_BUILD_SHA").map(|s| s.to_string()),
+                        build_sha: Some(env!("GIT_SHA").chars().take(7).collect::<String>()),
                     });
                     // #696: emit an initial MemorySnapshot so the rail
                     // populates immediately instead of waiting for the
