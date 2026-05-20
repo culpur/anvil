@@ -570,6 +570,14 @@ pub fn leave_alt_screen_for_inline_op() {
 /// actually shows, and its frame-diff algorithm skips cells it believes are
 /// already correct — leaving garbage on screen until the user resizes.
 pub fn restore_alt_screen() {
+    // Task #689: re-enable raw mode FIRST. The mcp_builder wizard runs its
+    // own `WizardSession` which calls `disable_raw_mode` on Drop. If we
+    // re-enable alt-screen + mouse capture without re-arming raw mode, the
+    // terminal cooks every byte from stdin including SGR mouse-tracking
+    // responses (^[[<35;...M) — those go to the input line as literal text
+    // instead of being parsed as Event::Mouse. User saw the codes piling
+    // up in the bottom input box after /mcp builder cancel.
+    let _ = terminal::enable_raw_mode();
     if alternate_screen_enabled() {
         let _ = crossterm::execute!(
             io::stdout(),
