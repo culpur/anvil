@@ -408,6 +408,22 @@ pub(super) struct TabHit {
 pub(crate) static TUI_SESSION_ACTIVE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Task #687: signal raised by `restore_alt_screen()` and any other inline
+/// op that re-enters the alt-screen. The next iteration of the main render
+/// loop checks + clears this flag and calls `redraw.request_full()` to force
+/// a complete repaint — without this, ratatui's back-buffer is stale relative
+/// to the freshly-cleared terminal and the frame-diff renderer skips cells it
+/// believes are already correct, leaving the parent TUI blank/stale until the
+/// user types something.
+pub(crate) static FORCE_FULL_REDRAW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns and clears the FORCE_FULL_REDRAW flag. Main render loop calls this
+/// once per iteration; on `true` it calls `redraw.request_full()`.
+pub fn take_force_full_redraw() -> bool {
+    FORCE_FULL_REDRAW.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Returns `true` if a TUI session is currently active (alt-screen up).
 ///
 /// Background tasks that emit warnings on error paths should consult this
@@ -518,6 +534,13 @@ pub fn restore_alt_screen() {
             terminal::Clear(terminal::ClearType::All)
         );
     }
+    // Task #687: raise the force-full-redraw flag so the next main-loop
+    // iteration calls redraw.request_full(). The Clear above wipes the
+    // terminal cells, but ratatui's back-buffer still holds whatever was
+    // there before — without this, the frame-diff renderer believes the
+    // screen is already correct and skips painting, leaving the user
+    // staring at a blank terminal until they type something.
+    FORCE_FULL_REDRAW.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 impl AnvilTui {
@@ -1080,6 +1103,17 @@ impl AnvilTui {
     /// the typed char doesn't, the bug is below ratatui (likely
     /// stdout/alternate-screen state corruption).
     pub fn commit_pending_redraw(&mut self) -> io::Result<bool> {
+        // Task #687: an inline op that re-entered the alt-screen (e.g.
+        // /mcp builder, /provider login) raised FORCE_FULL_REDRAW from a
+        // context that doesn't hold &mut AnvilTui. Consume the flag here
+        // and promote this redraw into a full structural repaint so the
+        // freshly-cleared terminal gets repainted — without this, ratatui's
+        // back-buffer believes the screen is already correct and skips
+        // painting, leaving the user with a blank/stale view.
+        if take_force_full_redraw() {
+            self.redraw.request_full();
+            self.request_redraw_reason(RedrawReason::InlineOpReturn);
+        }
         if !self.redraw_pending {
             return Ok(false);
         }
@@ -5145,5 +5179,21 @@ mod bug2_bug3_redraw_tests {
         // We don't add a request() here, so dirty is empty.
         let spurious = sched.commit_pending();
         assert!(!spurious, "scheduler must not trigger spurious repaints after clean commit");
+    }
+
+    /// Task #687: the FORCE_FULL_REDRAW atomic is the cross-thread escape
+    /// hatch for inline ops (e.g. /mcp builder) that can't reach &mut AnvilTui.
+    /// Verify the swap-and-clear semantics: first read returns true, second
+    /// returns false. `restore_alt_screen()` sets the flag; the main render
+    /// loop consumes it once via `take_force_full_redraw()` and promotes the
+    /// next paint to a full repaint.
+    #[test]
+    fn force_full_redraw_flag_is_one_shot() {
+        // serial: the atomic is process-wide static; isolate.
+        super::FORCE_FULL_REDRAW.store(true, std::sync::atomic::Ordering::SeqCst);
+        let first = super::take_force_full_redraw();
+        let second = super::take_force_full_redraw();
+        assert!(first, "first read must observe the set flag");
+        assert!(!second, "flag must clear after being read once");
     }
 }
