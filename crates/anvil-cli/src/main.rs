@@ -127,8 +127,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
-    detect_provider_kind, max_tokens_for_model, provider_display_name, slug_to_provider_kind,
-    ToolDefinition,
+    detect_provider_kind, provider_display_name, slug_to_provider_kind, ToolDefinition,
 };
 
 use commands::{
@@ -9040,7 +9039,7 @@ Requires TUI mode. Use /layout <variant> inside the TUI.";
     /// caller can surface a message to the user; `None` when not needed.
     fn maybe_auto_compact(&mut self) -> Option<String> {
         let estimated = self.active_runtime().estimated_tokens();
-        let context_max = max_tokens_for_model(&self.model) as usize;
+        let context_max = crate::tui::context_max_for_model_pub(&self.model) as usize;
         let threshold_pct = HistoryArchiver::compact_threshold_pct() as usize;
         let threshold = context_max * threshold_pct / 100;
         let tab_id = self.active_tab_idx + 1; // 1-based for display
@@ -10167,6 +10166,49 @@ mod compact_instrumentation_tests {
         assert!(eval.contains("tokens=1000/200000"), "token counts present: {eval}");
         assert!(eval.contains("threshold=170000"), "threshold present: {eval}");
         assert!(eval.contains("skip"), "decision present: {eval}");
+    }
+}
+
+#[cfg(test)]
+/// Regression tests for #697: autocompact threshold must use the context-window
+/// size, not the output-token cap.
+mod maybe_auto_compact_tests {
+    use serial_test::serial;
+
+    /// Verify that Sonnet reports the 1 M context window, not the 64 k output cap.
+    #[test]
+    fn sonnet_context_window_not_output_cap() {
+        let w = crate::tui::context_max_for_model_pub("claude-sonnet-4-6");
+        assert_eq!(w, 1_000_000,
+            "Sonnet context window must be 1 000 000, not the 64 k output cap (got {w})");
+    }
+
+    /// Verify that Opus reports the 1 M context window, not the 32 k output cap.
+    #[test]
+    fn opus_context_window_not_output_cap() {
+        let w = crate::tui::context_max_for_model_pub("claude-opus-4-5");
+        assert_eq!(w, 1_000_000,
+            "Opus context window must be 1 000 000, not the 32 k output cap (got {w})");
+    }
+
+    /// Verify that gpt-4o reports 128 k, not 16 k output cap.
+    #[test]
+    fn gpt4o_context_window_not_output_cap() {
+        let w = crate::tui::context_max_for_model_pub("gpt-4o");
+        assert_eq!(w, 128_000,
+            "gpt-4o context window must be 128 000, not the 16 384 output cap (got {w})");
+    }
+
+    /// Verify that ANVIL_CONTEXT_SIZE env override wins over the model default.
+    #[test]
+    #[serial(anvil_context_size)]
+    fn env_override_wins() {
+        // SAFETY: test is serialised by `serial(anvil_context_size)`.
+        unsafe { std::env::set_var("ANVIL_CONTEXT_SIZE", "512k"); }
+        let w = crate::tui::context_max_for_model_pub("claude-sonnet-4-6");
+        unsafe { std::env::remove_var("ANVIL_CONTEXT_SIZE"); }
+        assert_eq!(w, 512_000,
+            "ANVIL_CONTEXT_SIZE=512k must yield 512 000, got {w}");
     }
 }
 
