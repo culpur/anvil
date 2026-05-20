@@ -214,6 +214,44 @@ pub enum RelayMessage {
         /// Active layout: "classic" | "vertical_split" | "three_pane" | "journal"
         #[serde(skip_serializing_if = "Option::is_none")]
         layout: Option<String>,
+        /// Per-model context window in tokens (e.g. 1_000_000 for opus-4-6,
+        /// 200_000 for sonnet-4-6). Lets the viewer render an accurate
+        /// `Nk/Mk (P%)` context bar instead of guessing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_max: Option<u64>,
+        /// Resolved short SHA of the binary, e.g. "5bcf65f". Mirrors the
+        /// BUILD line at the bottom of the TUI rail.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        build_sha: Option<String>,
+    },
+
+    /// #696 — Memory + rail-state snapshot.  Emitted on memory-state change
+    /// (per-turn at minimum, more often if a Layer mutates).  The viewer's
+    /// MEMORY rail block is populated entirely from this event; without it
+    /// the block stays "—" for fields the TUI computes per-tick.
+    MemorySnapshot {
+        /// L1 Working — current tabs + tokens, "Nt / Mtok"
+        working: String,
+        /// L2 Episodic — "N sessions"
+        episodic: String,
+        /// L3 Semantic — concepts/agents inventory, "Nc · Ma"
+        semantic: String,
+        /// L4 Procedural — skills/plugins, "Ns · Mp"
+        procedural: String,
+        /// L5 Reflective — daily reflections count, "N daily"
+        reflective: String,
+        /// L6 Long-term — fixed marker for routing tier, "L7/QMD"
+        long_term: String,
+        /// L6.5 Permission — prior decisions count, "N prior"
+        permission: String,
+        /// QMD status — "active · N archives" or "off"
+        qmd: String,
+        /// QMD-latest — most recent indexed session label
+        qmd_latest: String,
+        /// All-tabs aggregates (matches Status rail block).
+        running_tabs: u32,
+        pending_perms: u32,
+        cost_usd: f64,
     },
 
     // ── Client requests ──
@@ -454,6 +492,7 @@ impl RelayMessage {
             Self::TabRenamed { .. } => "tab_renamed",
             Self::TabSwitched { .. } => "tab_switched",
             Self::SessionMeta { .. } => "session_meta",
+            Self::MemorySnapshot { .. } => "memory_snapshot",
             Self::RequestNewTab { .. } => "request_new_tab",
             Self::RequestCloseTab { .. } => "request_close_tab",
             Self::RequestRenameTab { .. } => "request_rename_tab",
@@ -535,6 +574,7 @@ pub const KNOWN_RELAY_TAGS: &[(&str, RelayDirection)] = &[
     ("tab_renamed", RelayDirection::HostToWeb),
     ("tab_switched", RelayDirection::HostToWeb),
     ("session_meta", RelayDirection::HostToWeb),
+    ("memory_snapshot", RelayDirection::HostToWeb),
     // Tab requests
     ("request_new_tab", RelayDirection::WebToHost),
     ("request_close_tab", RelayDirection::WebToHost),
@@ -2134,6 +2174,24 @@ mod tests {
                 qmd_status: None,
                 block_time: None,
                 status_line_preset: None,
+                cost_type: None,
+                layout: None,
+                context_max: None,
+                build_sha: None,
+            },
+            RelayMessage::MemorySnapshot {
+                working: String::new(),
+                episodic: String::new(),
+                semantic: String::new(),
+                procedural: String::new(),
+                reflective: String::new(),
+                long_term: String::new(),
+                permission: String::new(),
+                qmd: String::new(),
+                qmd_latest: String::new(),
+                running_tabs: 0,
+                pending_perms: 0,
+                cost_usd: 0.0,
             },
             RelayMessage::RequestNewTab { name: None },
             RelayMessage::RequestCloseTab { tab_id: 0 },

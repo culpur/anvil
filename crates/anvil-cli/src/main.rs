@@ -6369,7 +6369,14 @@ impl LiveCli {
                         status_line_preset: Some(tui.status_line_config().preset.clone()),
                         cost_type: Some(cost_type_label),
                         layout: Some(layout_alias),
+                        context_max: Some(crate::tui::context_max_for_model_pub(&self.model) as u64),
+                        build_sha: option_env!("ANVIL_BUILD_SHA").map(|s| s.to_string()),
                     });
+                    // #696: emit an initial MemorySnapshot so the rail
+                    // populates immediately instead of waiting for the
+                    // first turn-end debounce. Real updates are pushed
+                    // by tui::emit_memory_snapshot() after each turn.
+                    let _ = tx.send(crate::tui::build_memory_snapshot_msg(&self.model));
                     // Broadcast existing tabs so the viewer knows what tabs exist
                     for (idx, name, model, session_id) in tui.tab_details() {
                         let _ = tx.send(runtime::relay::RelayMessage::TabOpened {

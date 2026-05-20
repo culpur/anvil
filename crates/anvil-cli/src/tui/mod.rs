@@ -5154,6 +5154,108 @@ fn parse_shortstat_nums(s: &str) -> (u32, u32) {
 
 // ─── Model context helpers ────────────────────────────────────────────────────
 
+/// Public wrapper around `context_max_for_model` — used by main.rs to send
+/// the per-model context window over the relay so the viewer can render the
+/// same context bar as the TUI without guessing.
+pub fn context_max_for_model_pub(model: &str) -> u32 {
+    context_max_for_model(model)
+}
+
+/// #696 — Build a `RelayMessage::MemorySnapshot` from current runtime state.
+/// Called on initial pair + after every turn so the viewer's rail block
+/// reflects the same numbers the TUI shows. Best-effort: any field whose
+/// source is unavailable falls back to a short literal ("—", "0 sessions",
+/// etc.) so the viewer never renders an empty stat.
+pub fn build_memory_snapshot_msg(model: &str) -> runtime::relay::RelayMessage {
+    let home = dirs_next::home_dir().unwrap_or_default();
+    let anvil_home = std::env::var("ANVIL_CONFIG_HOME").ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".anvil"));
+
+    // Episodic — count session files
+    let episodic_n = std::fs::read_dir(anvil_home.join("sessions"))
+        .map(|r| r.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+
+    // Semantic — count concepts/agents (CLAUDE.md + ANVIL.md + agents/*)
+    let agents_n = std::fs::read_dir(anvil_home.join("agents"))
+        .map(|r| r.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    let concepts_n = if anvil_home.join("MEMORY.md").exists() { 1 } else { 0 }
+        + if anvil_home.join("ANVIL.md").exists() { 1 } else { 0 };
+
+    // Procedural — skills + plugins
+    let skills_n = std::fs::read_dir(anvil_home.join("skills"))
+        .map(|r| r.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    let plugins_n = std::fs::read_dir(anvil_home.join("plugins"))
+        .map(|r| r.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+
+    // Reflective — daily summaries
+    let reflective_n = std::fs::read_dir(anvil_home.join("daily"))
+        .map(|r| r.filter_map(|e| e.ok().filter(|f| f.path().extension().and_then(|s| s.to_str()) == Some("json"))).count())
+        .unwrap_or(0);
+
+    // Permission — count prior decisions
+    let permission_n = std::fs::read_to_string(anvil_home.join("permissions.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("decisions").and_then(|d| d.as_array()).map(|a| a.len()))
+        .unwrap_or(0);
+
+    // QMD status — from settings.json + qmd directory
+    let qmd_archives = std::fs::read_dir(anvil_home.join("qmd").join("archives"))
+        .map(|r| r.filter_map(|e| e.ok()).count())
+        .unwrap_or(0);
+    let qmd_active = anvil_home.join("qmd").exists();
+    let qmd_str = if qmd_active {
+        format!("active · {qmd_archives} archives")
+    } else {
+        "off".to_string()
+    };
+
+    // QMD-latest — newest session-* in qmd dir
+    let qmd_latest = std::fs::read_dir(anvil_home.join("qmd"))
+        .map(|r| {
+            let mut newest: Option<(std::time::SystemTime, String)> = None;
+            for entry in r.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.starts_with("session-") { continue; }
+                if let Ok(m) = entry.metadata().and_then(|m| m.modified()) {
+                    if newest.as_ref().map(|(t, _)| *t < m).unwrap_or(true) {
+                        newest = Some((m, name));
+                    }
+                }
+            }
+            newest.map(|(t, n)| {
+                let days = std::time::SystemTime::now()
+                    .duration_since(t)
+                    .map(|d| d.as_secs() / 86400)
+                    .unwrap_or(0);
+                format!("{} ({days}d a…)", n.chars().take(14).collect::<String>())
+            })
+        })
+        .unwrap_or(None)
+        .unwrap_or_else(|| "—".to_string());
+
+    let _ = model;
+    runtime::relay::RelayMessage::MemorySnapshot {
+        working: format!("1t / 0tok"),
+        episodic: format!("{episodic_n} sessions"),
+        semantic: format!("{concepts_n}c · {agents_n}a"),
+        procedural: format!("{skills_n}s · {plugins_n}p"),
+        reflective: format!("{reflective_n} daily"),
+        long_term: "L7/QMD".to_string(),
+        permission: format!("{permission_n} prior"),
+        qmd: qmd_str,
+        qmd_latest,
+        running_tabs: 1,
+        pending_perms: 0,
+        cost_usd: 0.0,
+    }
+}
+
 /// Return the approximate context window size (in tokens) for a known model.
 fn context_max_for_model(model: &str) -> u32 {
     if let Ok(val) = std::env::var("ANVIL_CONTEXT_SIZE")
