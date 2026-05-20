@@ -5399,4 +5399,70 @@ mod bug2_bug3_redraw_tests {
         // Restore for any test that runs after this one.
         super::MOUSE_CAPTURE_ACTIVE.store(prior, std::sync::atomic::Ordering::SeqCst);
     }
+
+    /// Task #696 P4: default mouse capture is OFF — confirmed by
+    /// `resolve_mouse_capture_default(None, None)` returning false. This guards
+    /// against a future edit that flips the env/config resolution in paste.rs.
+    ///
+    /// Cross-platform regression: the default must be OFF regardless of OS
+    /// (feedback-cross-platform-ux-defaults.md). Terminal-native selection works
+    /// out of the box when capture is off; enabling it is opt-in.
+    #[test]
+    fn mouse_capture_default_is_off() {
+        // No env var, no config value → default OFF.
+        assert!(
+            !super::paste::resolve_mouse_capture_default(None, None),
+            "mouse capture default must be OFF (no env, no config)"
+        );
+        // Explicit config false also OFF.
+        assert!(
+            !super::paste::resolve_mouse_capture_default(None, Some(false)),
+            "mouse capture explicit false must be OFF"
+        );
+        // Explicit config true → ON (opt-in path).
+        assert!(
+            super::paste::resolve_mouse_capture_default(None, Some(true)),
+            "mouse capture explicit config true must be ON"
+        );
+        // ANVIL_TUI_MOUSE=0 overrides config true → OFF.
+        assert!(
+            !super::paste::resolve_mouse_capture_default(Some("0"), Some(true)),
+            "ANVIL_TUI_MOUSE=0 must override config true to OFF"
+        );
+    }
+
+    /// Task #696 P4: when mouse capture is ON, `mouse_selection_hint` must
+    /// produce a non-empty modifier hint so the user knows how to select text.
+    /// This guards the toast text added by the `/config tui_mouse_capture on`
+    /// response — if the hint disappears, native text selection becomes silently
+    /// broken for opt-in users.
+    #[test]
+    fn mouse_capture_on_hint_contains_modifier() {
+        use super::paste::{OsKind, mouse_selection_hint};
+
+        let mac_hint = mouse_selection_hint(true, OsKind::Macos, false);
+        assert!(
+            mac_hint.to_lowercase().contains("option"),
+            "macOS mouse-on hint must mention Option modifier, got: {mac_hint}"
+        );
+
+        let linux_hint = mouse_selection_hint(true, OsKind::Linux, false);
+        assert!(
+            linux_hint.to_lowercase().contains("shift"),
+            "Linux mouse-on hint must mention Shift modifier, got: {linux_hint}"
+        );
+
+        let win_hint = mouse_selection_hint(true, OsKind::Windows, false);
+        assert!(
+            win_hint.to_lowercase().contains("shift"),
+            "Windows mouse-on hint must mention Shift modifier, got: {win_hint}"
+        );
+
+        // Default OFF must NOT mention a modifier — plain drag-to-select works.
+        let off_hint = mouse_selection_hint(false, OsKind::Macos, false);
+        assert!(
+            !off_hint.to_lowercase().contains("option"),
+            "mouse-off hint must NOT mention Option (native select, no modifier needed), got: {off_hint}"
+        );
+    }
 }

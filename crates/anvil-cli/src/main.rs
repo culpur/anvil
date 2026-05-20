@@ -6674,10 +6674,30 @@ impl LiveCli {
                 match (section.as_deref(), value.as_deref()) {
                     (Some("tui_mouse_capture"), Some(v)) => {
                         let msg = match set_config_bool_value("tui_mouse_capture", v) {
-                            Ok(new_value) => format!(
-                                "\u{2713} tui_mouse_capture = {new_value}. \
-                                 Restart Anvil for the change to take effect."
-                            ),
+                            Ok(new_value) => {
+                                // Task #696 P4: when the user opts IN, append a
+                                // one-line toast reminding them how to select text
+                                // now that mouse capture intercepts drag events.
+                                // Default is OFF so this only fires when they
+                                // explicitly enable it.
+                                let selection_hint = if new_value {
+                                    let os = crate::tui::paste::OsKind::host();
+                                    let modifier = match os {
+                                        crate::tui::paste::OsKind::Macos => "Option",
+                                        crate::tui::paste::OsKind::Linux => "Shift",
+                                        crate::tui::paste::OsKind::Windows => "Shift",
+                                    };
+                                    format!(
+                                        " Mouse capture ON — hold {modifier} and drag to select text.",
+                                    )
+                                } else {
+                                    String::new()
+                                };
+                                format!(
+                                    "\u{2713} tui_mouse_capture = {new_value}. \
+                                     Restart Anvil for the change to take effect.{selection_hint}"
+                                )
+                            },
                             Err(e) => format!("\u{2717} /config tui_mouse_capture: {e}"),
                         };
                         (msg, false)
