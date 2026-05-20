@@ -445,6 +445,113 @@ pub enum RelayMessage {
     Error {
         message: String,
     },
+
+    // === SSH variants (Phase 1, task #706) ===
+    //
+    // Eleven new variants (5 host→web, 6 web→host) for the v2.2.19 webui
+    // `/ssh` feature.  Wire-tag table additions live in `KNOWN_RELAY_TAGS`
+    // (drift gate enforces parity).  See `docs/ssh-webui-design-spec.md`
+    // section 2 for the contract.  Secrets ride only on `SshConnect.secret`
+    // and are zeroized host-side after russh consumes them; no SSH secret
+    // material crosses the wire in `SshAliasList`.
+
+    // Host → Web: viewer should open the SSH form modal.
+    SshFormRequest {
+        tab_id: usize,
+    },
+    // Host → Web: terminal bytes ready (base64 of raw bytes the russh
+    // driver delivered for the active SSH tab on the host).
+    SshTerminalData {
+        tab_id: usize,
+        /// base64 (standard, no padding) of the byte chunk.
+        data_b64: String,
+        /// Monotonic per-tab sequence number for flow-control + dedup.
+        seq: u64,
+    },
+    // Host → Web: connection lifecycle transition.
+    SshConnectionStatus {
+        tab_id: usize,
+        /// One of "connecting" | "auth" | "connected" | "auth_failed"
+        ///         | "disconnected" | "rate_limited" | "vault_locked" | "error"
+        status: String,
+        /// Free-form detail: auth method during "auth", reason during
+        /// "auth_failed" / "disconnected" / "error", empty otherwise.
+        detail: String,
+    },
+    // Host → Web: list of vault-stored SSH aliases.  Reply to ssh_list_aliases.
+    SshAliasList {
+        aliases: Vec<SshAliasEntry>,
+    },
+    // Host → Web: list of usable private-key files in ~/.ssh.  Reply to ssh_list_keys.
+    SshKeyList {
+        /// Bare filenames suitable for the picker (collapse_key_path applied).
+        names: Vec<String>,
+    },
+
+    // Web → Host: viewer wants the saved-alias list (will reply with SshAliasList).
+    SshListAliases,
+    // Web → Host: viewer wants the ~/.ssh key enumeration (reply: SshKeyList).
+    SshListKeys,
+    // Web → Host: connect to a host.  EITHER `use_alias` OR all of
+    // (host, port, user, auth) are provided; mixing returns an error.
+    SshConnect {
+        /// Vault alias label, if connecting by saved name.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        use_alias: Option<String>,
+        /// Ad-hoc form fields.  Only honoured when `use_alias` is None.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        /// "agent" | "key" | "password"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        auth: Option<String>,
+        /// For "key" auth: filename under ~/.ssh OR an absolute path.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_path: Option<String>,
+        /// For "password" or "key" auth (passphrase): the one-time secret.
+        /// Host zeroizes this string after handing it to russh.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        secret: Option<String>,
+        /// Initial PTY dimensions from the browser.
+        cols: u32,
+        rows: u32,
+        /// Optional vault alias to save the credential under after a
+        /// successful connect (only honoured for non-agent auth).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        save_alias: Option<String>,
+    },
+    // Web → Host: typed bytes from the viewer's xterm.js (base64).
+    SshTerminalInput {
+        tab_id: usize,
+        /// base64 (standard, no padding).
+        data_b64: String,
+    },
+    // Web → Host: viewer pane resized; propagate to PTY window-change.
+    SshTerminalResize {
+        tab_id: usize,
+        cols: u32,
+        rows: u32,
+    },
+    // Web → Host: tear down the SSH tab (graceful close).
+    SshDisconnect {
+        tab_id: usize,
+    },
+}
+
+/// Mirrors what the TUI's host picker would show.  Carries NO secret material —
+/// `ssh_auth` is a label string, never the password or passphrase.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshAliasEntry {
+    /// User-picked alias name (the vault `label`).
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    /// "agent" | "key" | "password" | "interactive"
+    pub ssh_auth: String,
 }
 
 /// Summary of a routine proposal pending operator approval.
@@ -527,6 +634,18 @@ impl RelayMessage {
             Self::PeerConnected => "peer_connected",
             Self::PeerDisconnected { .. } => "peer_disconnected",
             Self::Error { .. } => "error",
+            // === SSH variants (Phase 1, #706) ===
+            Self::SshFormRequest { .. } => "ssh_form_request",
+            Self::SshTerminalData { .. } => "ssh_terminal_data",
+            Self::SshConnectionStatus { .. } => "ssh_connection_status",
+            Self::SshAliasList { .. } => "ssh_alias_list",
+            Self::SshKeyList { .. } => "ssh_key_list",
+            Self::SshListAliases => "ssh_list_aliases",
+            Self::SshListKeys => "ssh_list_keys",
+            Self::SshConnect { .. } => "ssh_connect",
+            Self::SshTerminalInput { .. } => "ssh_terminal_input",
+            Self::SshTerminalResize { .. } => "ssh_terminal_resize",
+            Self::SshDisconnect { .. } => "ssh_disconnect",
         }
     }
 }
@@ -616,6 +735,19 @@ pub const KNOWN_RELAY_TAGS: &[(&str, RelayDirection)] = &[
     ("peer_connected", RelayDirection::HostToWeb),
     ("peer_disconnected", RelayDirection::HostToWeb),
     ("error", RelayDirection::HostToWeb),
+    // === SSH variants (Phase 1, #706) — host→web ===
+    ("ssh_form_request", RelayDirection::HostToWeb),
+    ("ssh_terminal_data", RelayDirection::HostToWeb),
+    ("ssh_connection_status", RelayDirection::HostToWeb),
+    ("ssh_alias_list", RelayDirection::HostToWeb),
+    ("ssh_key_list", RelayDirection::HostToWeb),
+    // === SSH variants (Phase 1, #706) — web→host ===
+    ("ssh_list_aliases", RelayDirection::WebToHost),
+    ("ssh_list_keys", RelayDirection::WebToHost),
+    ("ssh_connect", RelayDirection::WebToHost),
+    ("ssh_terminal_input", RelayDirection::WebToHost),
+    ("ssh_terminal_resize", RelayDirection::WebToHost),
+    ("ssh_disconnect", RelayDirection::WebToHost),
 ];
 
 // ─── Tab Snapshot (serializable session state) ──────────────────────────────
@@ -1144,6 +1276,53 @@ impl RelayHost {
                                         if let Some(ref sync_tx) = user_input_tx { let _ = &state;
                                                 let _ = sync_tx.send((tab_id, format!("__permission_decision:{prompt_id}:{choice}")));
                                             }
+                                    }
+                                    // ── SSH webui variants (Phase 1, #706) ──────────
+                                    // ssh_list_aliases / ssh_list_keys are zero-payload
+                                    // requests; route through the sync channel as a
+                                    // fixed sentinel.  ssh_connect / ssh_terminal_input
+                                    // / ssh_terminal_resize / ssh_disconnect carry
+                                    // structured payloads so we re-serialize the
+                                    // RelayMessage back into JSON and ship the JSON
+                                    // string in the sentinel (mirrors the
+                                    // `__config_set_json:` convention).  IMPORTANT:
+                                    // ssh_connect.secret is NEVER logged at this layer
+                                    // — `tracing` payload filtering happens in the
+                                    // host's sentinel consumer.
+                                    RelayMessage::SshListAliases => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            let _ = sync_tx.send((0, "__ssh_list_aliases".to_string()));
+                                        }
+                                    }
+                                    RelayMessage::SshListKeys => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            let _ = sync_tx.send((0, "__ssh_list_keys".to_string()));
+                                        }
+                                    }
+                                    RelayMessage::SshConnect { .. } => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            // Re-serialize so the consumer can deserialize
+                                            // back into the typed variant.  We avoid logging
+                                            // the JSON anywhere — secret rides here.
+                                            if let Ok(json) = serde_json::to_string(&msg) {
+                                                let _ = sync_tx.send((0, format!("__ssh_connect:{json}")));
+                                            }
+                                        }
+                                    }
+                                    RelayMessage::SshTerminalInput { tab_id, ref data_b64 } => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            let _ = sync_tx.send((tab_id, format!("__ssh_terminal_input:{tab_id}:{data_b64}")));
+                                        }
+                                    }
+                                    RelayMessage::SshTerminalResize { tab_id, cols, rows } => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            let _ = sync_tx.send((tab_id, format!("__ssh_terminal_resize:{tab_id}:{cols}:{rows}")));
+                                        }
+                                    }
+                                    RelayMessage::SshDisconnect { tab_id } => {
+                                        if let Some(ref sync_tx) = user_input_tx { let _ = &state;
+                                            let _ = sync_tx.send((tab_id, format!("__ssh_disconnect:{tab_id}")));
+                                        }
                                     }
                                     RelayMessage::PeerDisconnected { client_id } => {
                                         // A web client disconnected — remove from state + notify TUI
@@ -2273,6 +2452,44 @@ mod tests {
             RelayMessage::PeerConnected,
             RelayMessage::PeerDisconnected { client_id: None },
             RelayMessage::Error { message: String::new() },
+            // === SSH variants (Phase 1, #706) ===
+            RelayMessage::SshFormRequest { tab_id: 0 },
+            RelayMessage::SshTerminalData {
+                tab_id: 0,
+                data_b64: String::new(),
+                seq: 0,
+            },
+            RelayMessage::SshConnectionStatus {
+                tab_id: 0,
+                status: "connecting".into(),
+                detail: String::new(),
+            },
+            RelayMessage::SshAliasList { aliases: vec![] },
+            RelayMessage::SshKeyList { names: vec![] },
+            RelayMessage::SshListAliases,
+            RelayMessage::SshListKeys,
+            RelayMessage::SshConnect {
+                use_alias: None,
+                host: None,
+                port: None,
+                user: None,
+                auth: None,
+                key_path: None,
+                secret: None,
+                cols: 80,
+                rows: 24,
+                save_alias: None,
+            },
+            RelayMessage::SshTerminalInput {
+                tab_id: 0,
+                data_b64: String::new(),
+            },
+            RelayMessage::SshTerminalResize {
+                tab_id: 0,
+                cols: 80,
+                rows: 24,
+            },
+            RelayMessage::SshDisconnect { tab_id: 0 },
         ]
     }
 
@@ -2347,5 +2564,251 @@ mod tests {
         let platform = current_platform();
         let known = &["darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-arm64", "windows-x86_64"];
         assert!(known.contains(&platform), "unknown platform tag: {platform}");
+    }
+
+    // ─── SSH webui tests (Phase 1, #706) ────────────────────────────────────
+    //
+    // These tests cover the wire-format invariants of the 11 new SSH variants
+    // and the `SshAliasEntry` shape.  Handler-side coverage (rate limit,
+    // vault-locked surfacing) lives in `anvil-cli` since the handlers depend
+    // on `LiveCli` state.
+
+    #[test]
+    fn ssh_alias_entry_round_trips_and_carries_no_secret_field() {
+        let entry = SshAliasEntry {
+            label: "guard".into(),
+            host: "guard.example.net".into(),
+            port: 30022,
+            user: "soulofall".into(),
+            ssh_auth: "password".into(),
+        };
+        let json = serde_json::to_string(&entry).expect("serialize SshAliasEntry");
+        // Sanity: every documented field is present.
+        assert!(json.contains("\"label\":\"guard\""));
+        assert!(json.contains("\"host\":\"guard.example.net\""));
+        assert!(json.contains("\"port\":30022"));
+        assert!(json.contains("\"user\":\"soulofall\""));
+        assert!(json.contains("\"ssh_auth\":\"password\""));
+
+        // CRITICAL: no secret-like field name appears in the wire JSON.
+        // (`SshAliasEntry` must never carry password / passphrase / key bytes.)
+        for needle in ["secret", "passphrase", "password\":", "key_data", "private_key"] {
+            assert!(
+                !json.contains(needle),
+                "SshAliasEntry JSON unexpectedly contains '{needle}': {json}"
+            );
+        }
+
+        // Round-trip equality.
+        let back: SshAliasEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, entry);
+    }
+
+    #[test]
+    fn ssh_alias_list_round_trips_without_secrets() {
+        let msg = RelayMessage::SshAliasList {
+            aliases: vec![
+                SshAliasEntry {
+                    label: "guard".into(),
+                    host: "guard.example.net".into(),
+                    port: 30022,
+                    user: "soulofall".into(),
+                    ssh_auth: "agent".into(),
+                },
+                SshAliasEntry {
+                    label: "dev0001".into(),
+                    host: "10.0.70.80".into(),
+                    port: 22,
+                    user: "maverick".into(),
+                    ssh_auth: "key".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&msg).expect("serialize SshAliasList");
+        assert!(json.contains("\"type\":\"ssh_alias_list\""));
+        // No secret material can sneak through.
+        for needle in ["secret", "passphrase", "private_key"] {
+            assert!(!json.contains(needle), "{needle} leaked: {json}");
+        }
+        // Round-trip.
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        let RelayMessage::SshAliasList { aliases } = parsed else {
+            panic!("expected SshAliasList variant after round-trip");
+        };
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0].label, "guard");
+        assert_eq!(aliases[1].ssh_auth, "key");
+    }
+
+    #[test]
+    fn ssh_connect_skips_serializing_none_options_including_secret() {
+        // No secret provided: the field must NOT appear in JSON output at all.
+        let msg = RelayMessage::SshConnect {
+            use_alias: Some("guard".into()),
+            host: None,
+            port: None,
+            user: None,
+            auth: None,
+            key_path: None,
+            secret: None,
+            cols: 220,
+            rows: 50,
+            save_alias: None,
+        };
+        let json = serde_json::to_string(&msg).expect("serialize SshConnect");
+        assert!(json.contains("\"type\":\"ssh_connect\""));
+        assert!(json.contains("\"use_alias\":\"guard\""));
+        // Every Option::None field skips serialization.
+        for skipped in ["\"host\"", "\"port\"", "\"user\"", "\"auth\"",
+                        "\"key_path\"", "\"secret\"", "\"save_alias\""] {
+            assert!(
+                !json.contains(skipped),
+                "SshConnect with all-None options unexpectedly serialized {skipped}: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_connect_carries_secret_when_present_and_round_trips() {
+        let msg = RelayMessage::SshConnect {
+            use_alias: None,
+            host: Some("h".into()),
+            port: Some(22),
+            user: Some("u".into()),
+            auth: Some("password".into()),
+            key_path: None,
+            secret: Some("hunter2".into()),
+            cols: 80,
+            rows: 24,
+            save_alias: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"secret\":\"hunter2\""));
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        let RelayMessage::SshConnect { secret, host, port, user, auth, .. } = parsed else {
+            panic!("expected SshConnect round-trip");
+        };
+        assert_eq!(secret.as_deref(), Some("hunter2"));
+        assert_eq!(host.as_deref(), Some("h"));
+        assert_eq!(port, Some(22));
+        assert_eq!(user.as_deref(), Some("u"));
+        assert_eq!(auth.as_deref(), Some("password"));
+    }
+
+    #[test]
+    fn ssh_terminal_data_base64_round_trip_byte_identical() {
+        // 1 KiB of pseudo-random bytes to exercise binary-safe transport.
+        let mut bytes: Vec<u8> = Vec::with_capacity(1024);
+        let mut x: u32 = 0x1234_5678;
+        for _ in 0..1024 {
+            // xorshift32, deterministic so the test is reproducible.
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            bytes.push((x & 0xff) as u8);
+        }
+        let data_b64 = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&bytes);
+        let msg = RelayMessage::SshTerminalData {
+            tab_id: 1_000_042,
+            data_b64: data_b64.clone(),
+            seq: 7,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+        let RelayMessage::SshTerminalData {
+            tab_id, data_b64: parsed_b64, seq,
+        } = parsed else {
+            panic!("expected SshTerminalData after round-trip");
+        };
+        assert_eq!(tab_id, 1_000_042);
+        assert_eq!(seq, 7);
+        assert_eq!(parsed_b64, data_b64);
+        // Decode back and assert byte-identical.
+        let decoded = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(&parsed_b64)
+            .expect("decode round-trip base64");
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn ssh_connection_status_round_trips_all_documented_statuses() {
+        for status in ["rate_limited", "vault_locked", "connecting", "auth",
+                       "connected", "auth_failed", "disconnected", "error"] {
+            let msg = RelayMessage::SshConnectionStatus {
+                tab_id: 42,
+                status: status.into(),
+                detail: format!("detail for {status}"),
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("\"type\":\"ssh_connection_status\""));
+            assert!(json.contains(&format!("\"status\":\"{status}\"")));
+            let parsed: RelayMessage = serde_json::from_str(&json).unwrap();
+            let RelayMessage::SshConnectionStatus { status: s, .. } = parsed else {
+                panic!("expected SshConnectionStatus");
+            };
+            assert_eq!(s, status);
+        }
+    }
+
+    #[test]
+    fn known_relay_tags_includes_all_11_ssh_variants() {
+        // Drift gate: every Phase 1 SSH variant has a row in KNOWN_RELAY_TAGS.
+        let known: std::collections::HashSet<&str> =
+            KNOWN_RELAY_TAGS.iter().map(|(t, _)| *t).collect();
+        for tag in [
+            // host → web (5)
+            "ssh_form_request",
+            "ssh_terminal_data",
+            "ssh_connection_status",
+            "ssh_alias_list",
+            "ssh_key_list",
+            // web → host (6)
+            "ssh_list_aliases",
+            "ssh_list_keys",
+            "ssh_connect",
+            "ssh_terminal_input",
+            "ssh_terminal_resize",
+            "ssh_disconnect",
+        ] {
+            assert!(
+                known.contains(tag),
+                "Phase 1 (#706) SSH tag missing from KNOWN_RELAY_TAGS: {tag}"
+            );
+        }
+    }
+
+    #[test]
+    fn ssh_variant_directions_are_correct() {
+        let dirs: std::collections::HashMap<&str, RelayDirection> =
+            KNOWN_RELAY_TAGS.iter().copied().collect();
+        // Host → Web
+        for tag in [
+            "ssh_form_request",
+            "ssh_terminal_data",
+            "ssh_connection_status",
+            "ssh_alias_list",
+            "ssh_key_list",
+        ] {
+            assert_eq!(
+                dirs.get(tag).copied(),
+                Some(RelayDirection::HostToWeb),
+                "{tag} should be HostToWeb"
+            );
+        }
+        // Web → Host
+        for tag in [
+            "ssh_list_aliases",
+            "ssh_list_keys",
+            "ssh_connect",
+            "ssh_terminal_input",
+            "ssh_terminal_resize",
+            "ssh_disconnect",
+        ] {
+            assert_eq!(
+                dirs.get(tag).copied(),
+                Some(RelayDirection::WebToHost),
+                "{tag} should be WebToHost"
+            );
+        }
     }
 }

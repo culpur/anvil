@@ -3937,6 +3937,110 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                // ── SSH webui sentinel handlers (Phase 1, #706) ────────────
+                // Six web→host arms.  Each routes through `cli.handle_remote_ssh_*`
+                // so the logic stays unit-testable and main.rs stays modular
+                // (feedback-anvil-main-rs-modularity).
+                if message == "__ssh_list_aliases" {
+                    cli.handle_remote_ssh_list_aliases();
+                    continue;
+                }
+                if message == "__ssh_list_keys" {
+                    cli.handle_remote_ssh_list_keys();
+                    continue;
+                }
+                if let Some(json) = message.strip_prefix("__ssh_connect:") {
+                    // Parse JSON back into RelayMessage::SshConnect.  On parse
+                    // failure, surface a structured error via the relay so the
+                    // viewer can re-render its modal with the message.  NEVER
+                    // log the JSON itself — `secret` rides here.
+                    match serde_json::from_str::<runtime::relay::RelayMessage>(json) {
+                        Ok(runtime::relay::RelayMessage::SshConnect {
+                            use_alias,
+                            host,
+                            port,
+                            user,
+                            auth,
+                            key_path,
+                            mut secret,
+                            cols,
+                            rows,
+                            save_alias,
+                        }) => {
+                            // Move all parts into the handler; `secret` is
+                            // shadowed inside the handler after it's consumed.
+                            cli.handle_remote_ssh_connect(
+                                use_alias,
+                                host,
+                                port,
+                                user,
+                                auth,
+                                key_path,
+                                secret.take(),
+                                cols,
+                                rows,
+                                save_alias,
+                            );
+                            // Defense-in-depth: if the handler didn't take()
+                            // the secret (e.g. early bailout), overwrite the
+                            // bytes here so no stale copy lingers.
+                            if let Some(ref mut s) = secret {
+                                let bytes = unsafe { s.as_bytes_mut() };
+                                bytes.fill(0);
+                                s.clear();
+                            }
+                            drop(secret);
+                        }
+                        Ok(_) => {
+                            crate::tui::log_warning(
+                                "remote SSH connect: parsed RelayMessage but not SshConnect variant",
+                            );
+                        }
+                        Err(_) => {
+                            // Don't include the source string in the log
+                            // (it may contain the secret).
+                            crate::tui::log_warning(
+                                "remote SSH connect: failed to deserialize ssh_connect payload",
+                            );
+                            if let Some(tx) = &cli.relay_event_tx {
+                                let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                                    tab_id: 0,
+                                    status: "error".into(),
+                                    detail: "malformed ssh_connect payload".into(),
+                                });
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if let Some(rest) = message.strip_prefix("__ssh_terminal_input:") {
+                    // Format: "<tab_id>:<base64>"
+                    if let Some((tab_id_str, data_b64)) = rest.split_once(':') {
+                        if let Ok(tab_id) = tab_id_str.parse::<usize>() {
+                            cli.handle_remote_ssh_terminal_input(tab_id, data_b64);
+                        }
+                    }
+                    continue;
+                }
+                if let Some(rest) = message.strip_prefix("__ssh_terminal_resize:") {
+                    // Format: "<tab_id>:<cols>:<rows>"
+                    let mut parts = rest.splitn(3, ':');
+                    if let (Some(t), Some(c), Some(r)) = (parts.next(), parts.next(), parts.next()) {
+                        if let (Ok(tab_id), Ok(cols), Ok(rows)) =
+                            (t.parse::<usize>(), c.parse::<u32>(), r.parse::<u32>())
+                        {
+                            cli.handle_remote_ssh_terminal_resize(tab_id, cols, rows);
+                        }
+                    }
+                    continue;
+                }
+                if let Some(tab_id_str) = message.strip_prefix("__ssh_disconnect:") {
+                    if let Ok(tab_id) = tab_id_str.parse::<usize>() {
+                        cli.handle_remote_ssh_disconnect(tab_id);
+                    }
+                    continue;
+                }
+
                 if let Some(tab_name) = message.strip_prefix("__new_tab:") {
                     let new_session = create_managed_session_handle()?;
                     let tab_idx = tui.new_tab(tab_name, cli.model.clone(), new_session.id.clone());
@@ -5353,9 +5457,30 @@ struct LiveCli {
     /// the threshold check. Format: one-liner with tab_id, tokens, threshold,
     /// and decision. Updated every time `maybe_auto_compact` is called.
     last_compact_eval: Option<String>,
+    /// Task #706 Phase 1: per-session sliding-window timestamps of remote
+    /// `ssh_connect` attempts.  Used to rate-limit credential-spray attempts
+    /// to 5 per 60 seconds.  Cross-tab — a viewer can't bypass by opening
+    /// new tabs.  Populated lazily when the first remote SSH connect arrives.
+    ssh_connect_attempts: std::collections::VecDeque<std::time::Instant>,
+    /// Task #706 Phase 1: live remote SSH sessions keyed by `tab_id`.
+    /// Carries the stdin / resize senders so subsequent
+    /// `ssh_terminal_input` / `ssh_terminal_resize` / `ssh_disconnect`
+    /// messages route to the right russh session.  Dropping an entry
+    /// closes the underlying session.
+    remote_ssh_sessions:
+        std::collections::HashMap<usize, crate::tui::ssh_bridge::RemoteSshHandle>,
+    /// Task #706 Phase 1: monotonic counter for synthesising `tab_id`s for
+    /// remote SSH sessions.  Starts at 1_000_000 so it can't collide with
+    /// TUI tab indices (which start at 0 and grow by 1).
+    next_remote_ssh_tab_id: usize,
 }
 
 impl LiveCli {
+    /// Task #706 Phase 1: rate-limit window for remote `ssh_connect`.
+    /// 5 attempts per 60s, per session (cross-tab).
+    const SSH_CONNECT_LIMIT: usize = 5;
+    const SSH_CONNECT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
     fn new(
         model: String,
         enable_tools: bool,
@@ -5444,6 +5569,9 @@ impl LiveCli {
             instructions_mtime: std::collections::HashMap::new(),
             last_observed_cwd: None,
             last_compact_eval: None,
+            ssh_connect_attempts: std::collections::VecDeque::new(),
+            remote_ssh_sessions: std::collections::HashMap::new(),
+            next_remote_ssh_tab_id: 1_000_000,
         };
         // Publish initial cross-session snapshot now that the session id is
         // known.  Subsequent updates flow from AgentManager::spawn/poll.
@@ -9738,6 +9866,351 @@ Usage: /layout <variant>   /layout <kind> --tabs   /layout <kind> --global"
         Ok(())
     }
 
+    // ─── /ssh webui (Phase 1, task #706) ─────────────────────────────────────
+    //
+    // Six web→host handlers fan into the same russh driver the TUI uses, but
+    // every emission rides the relay broadcast channel instead of the TUI's
+    // sync mpsc.  Per the spec: vault gate + rate limit + secret zeroize
+    // happen here, NOT in the relay layer or the runtime SSH driver.
+    //
+    // Note: `/ssh` is intentionally NOT in `slash_dispatch_route`'s whitelist;
+    // webui SSH rides this dedicated message family so the slash-dispatch
+    // attack surface stays small (spec section 5.5).
+
+    /// Returns `true` if a new `ssh_connect` is permitted right now.  Also
+    /// records the attempt timestamp on the way in.  Sliding window: 5
+    /// attempts per 60s per session, cross-tab.  Delegates to the pure
+    /// `check_and_record_in_window` so the algorithm is unit-testable
+    /// without instantiating a full LiveCli.
+    fn check_and_record_ssh_connect(&mut self) -> bool {
+        check_and_record_in_window(
+            &mut self.ssh_connect_attempts,
+            std::time::Instant::now(),
+            Self::SSH_CONNECT_WINDOW,
+            Self::SSH_CONNECT_LIMIT,
+        )
+    }
+}
+
+/// Pure sliding-window rate-limit helper (#706 phase 1).  Evicts entries
+/// older than `window` from `attempts`, then returns `true` iff the post-eviction
+/// count is strictly less than `limit` — in which case `now` is pushed onto
+/// the deque.  Extracted as a free function so it can be unit-tested without
+/// constructing a full `LiveCli`.
+fn check_and_record_in_window(
+    attempts: &mut std::collections::VecDeque<std::time::Instant>,
+    now: std::time::Instant,
+    window: std::time::Duration,
+    limit: usize,
+) -> bool {
+    let cutoff = now.checked_sub(window);
+    if let Some(cutoff) = cutoff {
+        while attempts.front().map_or(false, |t| *t < cutoff) {
+            attempts.pop_front();
+        }
+    }
+    if attempts.len() < limit {
+        attempts.push_back(now);
+        true
+    } else {
+        false
+    }
+}
+
+impl LiveCli {
+
+    /// Web → Host: enumerate vault SSH aliases.  Replies with `ssh_alias_list`.
+    /// Vault must be unlocked; a locked vault returns an empty list (the
+    /// viewer renders its own "vault locked" banner from `vault_state`).
+    fn handle_remote_ssh_list_aliases(&self) {
+        let Some(tx) = self.relay_event_tx.as_ref() else {
+            return;
+        };
+        let mut entries: Vec<runtime::relay::SshAliasEntry> = Vec::new();
+        if runtime::vault_is_session_unlocked() {
+            if let Ok(labels) = runtime::with_session_vault(|vm| {
+                runtime::ssh::list_ssh_aliases(vm)
+                    .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+            }) {
+                for label in labels {
+                    let label_clone = label.clone();
+                    if let Ok(cfg) = runtime::with_session_vault(|vm| {
+                        runtime::ssh::load_ssh_alias(vm, &label_clone)
+                            .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+                    }) {
+                        let ssh_auth = match cfg.auth {
+                            runtime::ssh::SshAuthMethod::Agent => "agent",
+                            runtime::ssh::SshAuthMethod::KeyFile { .. } => "key",
+                            runtime::ssh::SshAuthMethod::Password(_) => "password",
+                            runtime::ssh::SshAuthMethod::KeyboardInteractive => "interactive",
+                        };
+                        entries.push(runtime::relay::SshAliasEntry {
+                            label,
+                            host: cfg.host,
+                            port: cfg.port,
+                            user: cfg.user,
+                            ssh_auth: ssh_auth.to_string(),
+                        });
+                        // cfg.auth (which may carry a Password / passphrase)
+                        // is dropped here — no path takes it any further.
+                    }
+                }
+            }
+        }
+        let _ = tx.send(runtime::relay::RelayMessage::SshAliasList { aliases: entries });
+    }
+
+    /// Web → Host: enumerate `~/.ssh` for private-key candidates.  Replies
+    /// with `ssh_key_list { names }` — bare filenames only, matching the
+    /// TUI's Ctrl+F picker (`tui::ssh_form::scan_ssh_keys`).
+    fn handle_remote_ssh_list_keys(&self) {
+        let Some(tx) = self.relay_event_tx.as_ref() else {
+            return;
+        };
+        let names = crate::tui::ssh_form::scan_ssh_keys();
+        let _ = tx.send(runtime::relay::RelayMessage::SshKeyList { names });
+    }
+
+    /// Web → Host: connect to an SSH host.  Spawns
+    /// `ssh_bridge::spawn_remote_session` which forks output bytes directly
+    /// onto the relay broadcast channel.
+    ///
+    /// Rate-limit: 5 connects per 60s per session (cross-tab).  Vault gate:
+    /// vault must be unlocked iff `use_alias` is `Some` OR `save_alias` is
+    /// `Some`.  Secret zeroize: the `secret` argument is overwritten
+    /// byte-by-byte after russh consumes it.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_remote_ssh_connect(
+        &mut self,
+        use_alias: Option<String>,
+        host: Option<String>,
+        port: Option<u16>,
+        user: Option<String>,
+        auth: Option<String>,
+        key_path: Option<String>,
+        secret: Option<String>,
+        cols: u32,
+        rows: u32,
+        save_alias: Option<String>,
+    ) {
+        let Some(tx) = self.relay_event_tx.clone() else {
+            return;
+        };
+
+        // 1. Rate limit.
+        if !self.check_and_record_ssh_connect() {
+            let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                tab_id: 0,
+                status: "rate_limited".into(),
+                detail: "too many connection attempts (5 per 60s)".into(),
+            });
+            zeroize_string(secret);
+            return;
+        }
+
+        // 2. Build SshConfig — either from a vault alias or ad-hoc form fields.
+        // Vault gate: only require unlock when an alias is involved (load or save).
+        let (config, will_save): (runtime::ssh::SshConfig, Option<String>) = if let Some(alias) =
+            use_alias.as_deref()
+        {
+            // Alias path → vault must be unlocked.
+            if !runtime::vault_is_session_unlocked() {
+                let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                    tab_id: 0,
+                    status: "vault_locked".into(),
+                    detail: "Vault must be unlocked to use saved credential".into(),
+                });
+                zeroize_string(secret);
+                return;
+            }
+            let alias_str = alias.to_string();
+            match runtime::with_session_vault(|vm| {
+                runtime::ssh::load_ssh_alias(vm, &alias_str)
+                    .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+            }) {
+                Ok(cfg) => (cfg, None),
+                Err(e) => {
+                    let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                        tab_id: 0,
+                        status: "error".into(),
+                        detail: format!("alias lookup failed: {e}"),
+                    });
+                    zeroize_string(secret);
+                    return;
+                }
+            }
+        } else {
+            // Ad-hoc form fields.
+            let host = match host {
+                Some(h) if !h.is_empty() => h,
+                _ => {
+                    let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                        tab_id: 0,
+                        status: "error".into(),
+                        detail: "host is required".into(),
+                    });
+                    zeroize_string(secret);
+                    return;
+                }
+            };
+            let port = port.unwrap_or(22);
+            let user = match user {
+                Some(u) if !u.is_empty() => u,
+                _ => {
+                    let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                        tab_id: 0,
+                        status: "error".into(),
+                        detail: "user is required".into(),
+                    });
+                    zeroize_string(secret);
+                    return;
+                }
+            };
+            let auth_method = match auth.as_deref().unwrap_or("agent") {
+                "agent" => runtime::ssh::SshAuthMethod::Agent,
+                "password" => {
+                    let pw = secret.clone().unwrap_or_default();
+                    runtime::ssh::SshAuthMethod::Password(pw)
+                }
+                "key" => {
+                    let kp = match key_path.as_deref() {
+                        Some(p) if !p.is_empty() => crate::tui::ssh_form::resolve_key_path(p),
+                        _ => {
+                            let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                                tab_id: 0,
+                                status: "error".into(),
+                                detail: "key_path is required for key auth".into(),
+                            });
+                            zeroize_string(secret);
+                            return;
+                        }
+                    };
+                    let passphrase = secret.clone().filter(|s| !s.is_empty());
+                    runtime::ssh::SshAuthMethod::KeyFile {
+                        path: kp,
+                        passphrase,
+                    }
+                }
+                other => {
+                    let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                        tab_id: 0,
+                        status: "error".into(),
+                        detail: format!("unsupported auth method: {other}"),
+                    });
+                    zeroize_string(secret);
+                    return;
+                }
+            };
+            let cfg = runtime::ssh::SshConfig {
+                host,
+                port,
+                user,
+                auth: auth_method,
+            };
+            // If save_alias is set, gate on vault unlock.  If locked, skip
+            // the save but proceed with the connect (per spec section 4.2).
+            let will_save = if save_alias.is_some() {
+                if runtime::vault_is_session_unlocked() {
+                    save_alias
+                } else {
+                    let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                        tab_id: 0,
+                        status: "vault_locked".into(),
+                        detail: "Vault locked — not saving alias".into(),
+                    });
+                    None
+                }
+            } else {
+                None
+            };
+            (cfg, will_save)
+        };
+
+        // 3. Secret zeroize.  We've cloned the secret into `SshConfig.auth`
+        // already; the local `secret` Option is no longer needed.  Overwrite
+        // its bytes in place before dropping.
+        zeroize_string(secret);
+
+        // 4. Optional save-alias step.
+        if let Some(label) = will_save.as_deref() {
+            let cfg_clone = config.clone();
+            let label_str = label.to_string();
+            if let Err(e) = runtime::with_session_vault(|vm| {
+                runtime::ssh::save_ssh_alias(vm, &label_str, &cfg_clone)
+                    .map_err(|e| runtime::vault::VaultError::Serialization(e.to_string()))
+            }) {
+                crate::tui::log_warning(&format!("remote SSH connect: save_alias failed: {e}"));
+            }
+        }
+
+        // 5. Allocate a remote tab_id and spawn the bridged session.
+        let tab_id = self.next_remote_ssh_tab_id;
+        self.next_remote_ssh_tab_id = self.next_remote_ssh_tab_id.saturating_add(1);
+        let dest = format!("{}@{}:{}", config.user, config.host, config.port);
+        let tab_name = format!("ssh:{dest}");
+
+        // Emit tab_opened so the viewer knows to mount an xterm.js pane.
+        let _ = tx.send(runtime::relay::RelayMessage::TabOpened {
+            tab_id,
+            name: tab_name,
+            model: "ssh".into(),
+            session_id: String::new(),
+        });
+
+        let handle = crate::tui::ssh_bridge::spawn_remote_session(
+            config,
+            (cols.max(1), rows.max(1)),
+            tab_id,
+            tx,
+        );
+        self.remote_ssh_sessions.insert(tab_id, handle);
+    }
+
+    /// Web → Host: forward typed bytes to the remote shell for a given tab.
+    fn handle_remote_ssh_terminal_input(&self, tab_id: usize, data_b64: &str) {
+        let Some(handle) = self.remote_ssh_sessions.get(&tab_id) else {
+            return;
+        };
+        use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+        use base64::Engine;
+        // STANDARD_NO_PAD matches the host-side encoder; STANDARD is accepted
+        // defensively for viewers that pad their output.
+        let bytes = STANDARD_NO_PAD
+            .decode(data_b64)
+            .or_else(|_| STANDARD.decode(data_b64));
+        if let Ok(bytes) = bytes {
+            let _ = handle.stdin_tx.send(bytes);
+        } else {
+            crate::tui::log_warning(&format!(
+                "remote SSH terminal_input: base64 decode failed for tab {tab_id}"
+            ));
+        }
+    }
+
+    /// Web → Host: forward a PTY window-change for a given tab.
+    fn handle_remote_ssh_terminal_resize(&self, tab_id: usize, cols: u32, rows: u32) {
+        let Some(handle) = self.remote_ssh_sessions.get(&tab_id) else {
+            return;
+        };
+        let _ = handle.resize_tx.send((cols.max(1), rows.max(1)));
+    }
+
+    /// Web → Host: tear down a remote SSH session.  Dropping the
+    /// `RemoteSshHandle` drops both `Sender`s, which closes the bridge's
+    /// recv() loops and the russh session.
+    fn handle_remote_ssh_disconnect(&mut self, tab_id: usize) {
+        if self.remote_ssh_sessions.remove(&tab_id).is_some() {
+            if let Some(tx) = &self.relay_event_tx {
+                let _ = tx.send(runtime::relay::RelayMessage::SshConnectionStatus {
+                    tab_id,
+                    status: "disconnected".into(),
+                    detail: String::new(),
+                });
+                let _ = tx.send(runtime::relay::RelayMessage::TabClosed { tab_id });
+            }
+        }
+    }
+
     // ─── Feature 14 — Log analysis ───────────────────────────────────────────
 
     // ─── Feature 15 — Markdown preview ───────────────────────────────────────
@@ -9864,6 +10337,26 @@ fn format_elapsed(secs: u64) -> String {
     } else {
         format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
     }
+}
+
+/// Task #706 Phase 1: overwrite a (possibly-Some) `String` byte-by-byte
+/// before dropping it.  Used by `handle_remote_ssh_connect` to clear any
+/// password / passphrase that arrived over the relay after russh has cloned
+/// what it needs into `SshConfig`.
+///
+/// We don't pull in the `zeroize` crate to avoid widening the dep surface;
+/// the manual `as_bytes_mut().fill(0) + clear()` pattern achieves the same
+/// "zero the heap before drop" guarantee for plain `String`.
+fn zeroize_string(mut maybe: Option<String>) {
+    if let Some(ref mut s) = maybe {
+        // SAFETY: we're not changing the length or UTF-8 validity — we only
+        // overwrite existing bytes with zeros, then `clear()` resets the
+        // length to 0 (still valid UTF-8).
+        let bytes = unsafe { s.as_bytes_mut() };
+        bytes.fill(0);
+        s.clear();
+    }
+    drop(maybe);
 }
 
 // ── Vault TUI helpers (#627) ─────────────────────────────────────────────────
