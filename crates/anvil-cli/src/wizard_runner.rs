@@ -131,6 +131,18 @@ use crate::tui::modals::streaming::{
 use crate::tui::modals::text_input::{TextInputAction, TextInputModal};
 use crate::tui::modals::textarea::{TextareaAction, TextareaModal};
 
+/// Unified event returned by `KeySource::next_event`.
+///
+/// Introduced in v2.2.18 task #685 to surface bracketed-paste events
+/// from `CrosstermKeySource` to `TextareaModal::handle_paste` without
+/// breaking all existing call-sites that only consume `KeyEvent`.
+pub(crate) enum KeyOrPaste {
+    /// A regular key press.
+    Key(KeyEvent),
+    /// A bracketed-paste sequence from the terminal.
+    Paste(String),
+}
+
 /// Source of key events for the runner. Production uses
 /// `CrosstermKeySource` which polls real terminal input; tests use
 /// `ScriptedKeySource` to inject a deterministic sequence.
@@ -149,6 +161,15 @@ pub(crate) trait KeySource {
     /// timeout.
     fn try_next_key(&mut self, _timeout: Duration) -> Option<KeyEvent> {
         self.next_key()
+    }
+
+    /// Block until the next input event, returning either a key press
+    /// or a bracketed-paste string.  Default impl wraps `next_key` so
+    /// all existing `KeySource` implementors continue to compile
+    /// unchanged; only `CrosstermKeySource` (and test sources that need
+    /// paste injection) override this.
+    fn next_event(&mut self) -> Option<KeyOrPaste> {
+        self.next_key().map(KeyOrPaste::Key)
     }
 
     /// Hint used by `run_oauth_flow` to know when to stop spinning in
@@ -184,6 +205,28 @@ impl KeySource for CrosstermKeySource {
         }
     }
 
+    /// Surface both key presses and bracketed-paste events.
+    ///
+    /// Overrides the default `next_event` so that `Event::Paste` text
+    /// produced by the terminal (when `EnableBracketedPaste` is active)
+    /// reaches `TextareaModal::handle_paste` instead of being silently
+    /// discarded by the `next_key` loop.  All other non-key events
+    /// (resize, focus, mouse) are still ignored.
+    fn next_event(&mut self) -> Option<KeyOrPaste> {
+        loop {
+            match crossterm::event::poll(self.poll_timeout) {
+                Ok(true) => match crossterm::event::read() {
+                    Ok(Event::Key(key)) => return Some(KeyOrPaste::Key(key)),
+                    Ok(Event::Paste(text)) => return Some(KeyOrPaste::Paste(text)),
+                    Ok(_) => continue, // resize / focus / mouse — not our concern
+                    Err(_) => return None,
+                },
+                Ok(false) => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+
     /// Bounded poll for a `KeyEvent`.  Returns `Some(key)` if one
     /// arrives within `timeout`, `None` if the timeout elapses.  Used
     /// by `WizardModalRunner::run_oauth_flow` to interleave callback
@@ -203,11 +246,35 @@ impl KeySource for CrosstermKeySource {
 #[cfg(test)]
 pub(crate) struct ScriptedKeySource {
     pub(crate) keys: std::collections::VecDeque<KeyEvent>,
+    /// Mixed key/paste events injected by tests that exercise the
+    /// bracketed-paste path (task #685).  Drained by `next_event`
+    /// BEFORE falling back to `keys`, preserving insertion order.
+    pub(crate) events: std::collections::VecDeque<KeyOrPaste>,
+}
+
+#[cfg(test)]
+impl ScriptedKeySource {
+    /// Convenience constructor that accepts a plain key list and leaves
+    /// `events` empty — unchanged from the pre-#685 call sites.
+    pub(crate) fn from_keys(keys: impl IntoIterator<Item = KeyEvent>) -> Self {
+        Self {
+            keys: keys.into_iter().collect(),
+            events: std::collections::VecDeque::new(),
+        }
+    }
 }
 
 #[cfg(test)]
 impl KeySource for ScriptedKeySource {
     fn next_key(&mut self) -> Option<KeyEvent> {
+        // Drain the mixed-event queue first (in case a test mixes keys
+        // and pastes via `events`), then fall back to `keys`.
+        if let Some(ev) = self.events.pop_front() {
+            match ev {
+                KeyOrPaste::Key(k) => return Some(k),
+                KeyOrPaste::Paste(_) => return None, // paste ≠ key
+            }
+        }
         self.keys.pop_front()
     }
 
@@ -217,11 +284,21 @@ impl KeySource for ScriptedKeySource {
     /// `run_oauth_flow` notice scripted-tests have run dry and
     /// finalize, instead of spinning on a never-arriving key.
     fn try_next_key(&mut self, _timeout: Duration) -> Option<KeyEvent> {
-        self.keys.pop_front()
+        self.next_key()
+    }
+
+    /// Return the next event from the mixed queue, falling back to the
+    /// plain `keys` deque.  This is what lets paste-injection tests
+    /// feed `KeyOrPaste::Paste(text)` directly.
+    fn next_event(&mut self) -> Option<KeyOrPaste> {
+        if let Some(ev) = self.events.pop_front() {
+            return Some(ev);
+        }
+        self.keys.pop_front().map(KeyOrPaste::Key)
     }
 
     fn is_exhausted_hint(&self) -> bool {
-        self.keys.is_empty()
+        self.keys.is_empty() && self.events.is_empty()
     }
 }
 
@@ -920,8 +997,9 @@ where
                     .map_err(|e| RunnerError::Draw(e.to_string()))?;
             }
 
-            // Block on key. If the source goes empty, treat as cancel.
-            let Some(key) = self.keys.next_key() else {
+            // Block on the next input event (key press OR bracketed
+            // paste).  If the source is exhausted, treat as cancel.
+            let Some(event) = self.keys.next_event() else {
                 return Ok(match queue.front().unwrap() {
                     QueuedModal::Choice { .. } => ModalAnswer::ChoiceCancelled,
                     QueuedModal::Confirm { .. } => {
@@ -940,71 +1018,101 @@ where
             };
 
             // Route to the modal's state machine.
+            //
+            // Non-textarea modals only accept key presses; a bracketed-
+            // paste arriving while a Choice / Confirm / Password / TextInput
+            // / HealthProbe modal is front-of-queue is ignored (loop
+            // continues).  TextareaInput handles both key and paste.
             let front = queue.front_mut().unwrap();
             match front {
-                QueuedModal::Choice { modal, .. } => match modal.handle_key(key) {
-                    ChoiceAction::Continue => continue,
-                    ChoiceAction::Committed(idx) => return Ok(ModalAnswer::Choice(idx)),
-                    ChoiceAction::Cancelled => return Ok(ModalAnswer::ChoiceCancelled),
-                },
-                QueuedModal::Confirm { modal, .. } => match modal.handle_key(key) {
-                    ConfirmAction::Continue => continue,
-                    ConfirmAction::Committed(choice) => {
-                        return Ok(ModalAnswer::Confirm(choice));
+                QueuedModal::Choice { modal, .. } => {
+                    let KeyOrPaste::Key(key) = event else { continue };
+                    match modal.handle_key(key) {
+                        ChoiceAction::Continue => continue,
+                        ChoiceAction::Committed(idx) => return Ok(ModalAnswer::Choice(idx)),
+                        ChoiceAction::Cancelled => return Ok(ModalAnswer::ChoiceCancelled),
                     }
-                },
-                QueuedModal::Password { modal, .. } => match modal.handle_key(key) {
-                    PasswordAction::Continue => continue,
-                    PasswordAction::Submit(_) => {
-                        // Real submission would be consumed by the host
-                        // (e.g. VaultManager::unlock); the runner
-                        // records boolean success only — the raw
-                        // password is intentionally never logged.
-                        return Ok(ModalAnswer::PasswordSubmitted(true));
+                }
+                QueuedModal::Confirm { modal, .. } => {
+                    let KeyOrPaste::Key(key) = event else { continue };
+                    match modal.handle_key(key) {
+                        ConfirmAction::Continue => continue,
+                        ConfirmAction::Committed(choice) => {
+                            return Ok(ModalAnswer::Confirm(choice));
+                        }
                     }
-                    PasswordAction::Cancel => return Ok(ModalAnswer::PasswordSubmitted(false)),
-                },
-                QueuedModal::TextInput { modal, .. } => match modal.handle_key(key) {
-                    TextInputAction::Continue => continue,
-                    TextInputAction::Submit(value) => return Ok(ModalAnswer::TextInput(value)),
-                    TextInputAction::Cancel(default) => {
-                        // Per the spec: Esc takes the default. So we
-                        // still return the default value as a successful
-                        // TextInput rather than a Cancelled signal — the
-                        // wizard's "Esc = default" UX is the contract.
-                        return Ok(ModalAnswer::TextInput(default));
+                }
+                QueuedModal::Password { modal, .. } => {
+                    let KeyOrPaste::Key(key) = event else { continue };
+                    match modal.handle_key(key) {
+                        PasswordAction::Continue => continue,
+                        PasswordAction::Submit(_) => {
+                            // Real submission would be consumed by the host
+                            // (e.g. VaultManager::unlock); the runner
+                            // records boolean success only — the raw
+                            // password is intentionally never logged.
+                            return Ok(ModalAnswer::PasswordSubmitted(true));
+                        }
+                        PasswordAction::Cancel => return Ok(ModalAnswer::PasswordSubmitted(false)),
                     }
-                },
-                QueuedModal::HealthProbe { modal, .. } => match modal.handle_key(key) {
-                    HealthProbeAction::Continue => continue,
-                    HealthProbeAction::Repair(repair) => {
-                        return Ok(ModalAnswer::HealthCheck {
-                            repair,
-                            quit: false,
-                        });
+                }
+                QueuedModal::TextInput { modal, .. } => {
+                    let KeyOrPaste::Key(key) = event else { continue };
+                    match modal.handle_key(key) {
+                        TextInputAction::Continue => continue,
+                        TextInputAction::Submit(value) => return Ok(ModalAnswer::TextInput(value)),
+                        TextInputAction::Cancel(default) => {
+                            // Per the spec: Esc takes the default. So we
+                            // still return the default value as a successful
+                            // TextInput rather than a Cancelled signal — the
+                            // wizard's "Esc = default" UX is the contract.
+                            return Ok(ModalAnswer::TextInput(default));
+                        }
                     }
-                    HealthProbeAction::Continue_ => {
-                        return Ok(ModalAnswer::HealthCheck {
-                            repair: Vec::new(),
-                            quit: false,
-                        });
+                }
+                QueuedModal::HealthProbe { modal, .. } => {
+                    let KeyOrPaste::Key(key) = event else { continue };
+                    match modal.handle_key(key) {
+                        HealthProbeAction::Continue => continue,
+                        HealthProbeAction::Repair(repair) => {
+                            return Ok(ModalAnswer::HealthCheck {
+                                repair,
+                                quit: false,
+                            });
+                        }
+                        HealthProbeAction::Continue_ => {
+                            return Ok(ModalAnswer::HealthCheck {
+                                repair: Vec::new(),
+                                quit: false,
+                            });
+                        }
+                        HealthProbeAction::Quit => {
+                            return Ok(ModalAnswer::HealthCheck {
+                                repair: Vec::new(),
+                                quit: true,
+                            });
+                        }
                     }
-                    HealthProbeAction::Quit => {
-                        return Ok(ModalAnswer::HealthCheck {
-                            repair: Vec::new(),
-                            quit: true,
-                        });
+                }
+                QueuedModal::TextareaInput { modal, .. } => {
+                    // TextareaInput handles BOTH key presses and
+                    // bracketed-paste events (task #685).
+                    match event {
+                        KeyOrPaste::Paste(text) => {
+                            modal.handle_paste(&text);
+                            continue;
+                        }
+                        KeyOrPaste::Key(key) => match modal.handle_key(key) {
+                            TextareaAction::Continue => continue,
+                            TextareaAction::Submit(value) => {
+                                return Ok(ModalAnswer::TextareaInput(value));
+                            }
+                            TextareaAction::Cancel(_) => {
+                                return Ok(ModalAnswer::TextareaInputCancelled);
+                            }
+                        },
                     }
-                },
-                QueuedModal::TextareaInput { modal, .. } => match modal.handle_key(key) {
-                    TextareaAction::Continue => continue,
-                    TextareaAction::Submit(value) => {
-                        return Ok(ModalAnswer::TextareaInput(value));
-                    }
-                    TextareaAction::Cancel(_) => {
-                        return Ok(ModalAnswer::TextareaInputCancelled);
-                    }
-                },
+                }
             }
         }
     }
@@ -1187,7 +1295,6 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::backend::TestBackend;
-    use std::collections::VecDeque;
 
     use crate::tui::modals::ConfirmChoice;
     use crate::tui::modals::confirm::ConfirmModal;
@@ -1210,9 +1317,7 @@ mod tests {
         session: &'a mut WizardSession<TestBackend, CountingHooks>,
         keys: Vec<KeyEvent>,
     ) -> WizardModalRunner<'a, TestBackend, CountingHooks, ScriptedKeySource> {
-        let scripted = ScriptedKeySource {
-            keys: VecDeque::from(keys),
-        };
+        let scripted = ScriptedKeySource::from_keys(keys);
         WizardModalRunner::new(session, scripted, Color::Cyan)
     }
 
@@ -1565,14 +1670,12 @@ mod tests {
         });
 
         {
-            let scripted = ScriptedKeySource {
-                keys: VecDeque::from(vec![
-                    key(KeyCode::Char('1')),
-                    key(KeyCode::Char('n')),
-                    key(KeyCode::Char('1')),
-                    key(KeyCode::Char('1')),
-                ]),
-            };
+            let scripted = ScriptedKeySource::from_keys(vec![
+                key(KeyCode::Char('1')),
+                key(KeyCode::Char('n')),
+                key(KeyCode::Char('1')),
+                key(KeyCode::Char('1')),
+            ]);
             let mut runner = WizardModalRunner::new(&mut session, scripted, Color::Cyan);
             runner.run_queue(&mut queue).expect("run_queue");
         }
@@ -2009,5 +2112,80 @@ mod tests {
             }
             other => panic!("expected HealthCheck, got {other:?}"),
         }
+    }
+
+    // ─── v2.2.18 task #685: bracketed paste in TextareaModal ─────────
+
+    /// #685: a synthetic `Event::Paste("line1\nline2")` fed through
+    /// the wizard runner lands in the textarea and both lines are
+    /// present on submit.  Uses `ScriptedKeySource::events` to inject
+    /// the paste event, then a `Ctrl+Enter` to commit.
+    #[test]
+    fn wizard_textarea_bracketed_paste_delivers_both_lines() {
+        use crate::tui::modals::textarea::TextareaModal;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        // Build a source with one paste event followed by Ctrl+Enter
+        // (the TextareaModal commit binding).
+        let mut scripted = ScriptedKeySource::from_keys(vec![]);
+        scripted.events.push_back(KeyOrPaste::Paste("line1\nline2".to_string()));
+        scripted.events.push_back(KeyOrPaste::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+        )));
+
+        let mut session = make_session();
+        let modal = TextareaModal::new("Desc", "Describe the MCP server");
+        let mut runner = WizardModalRunner::new(&mut session, scripted, Color::Cyan);
+
+        let mut queue = ModalQueue::new();
+        queue.push(QueuedModal::TextareaInput {
+            tag: "desc".to_string(),
+            modal,
+        });
+        runner.run_queue(&mut queue).expect("run_queue");
+
+        match queue.answer_for("desc") {
+            Some(ModalAnswer::TextareaInput(text)) => {
+                assert!(
+                    text.contains("line1"),
+                    "submitted text must contain 'line1'; got: {text:?}"
+                );
+                assert!(
+                    text.contains("line2"),
+                    "submitted text must contain 'line2'; got: {text:?}"
+                );
+            }
+            other => panic!("expected TextareaInput answer, got {other:?}"),
+        }
+    }
+
+    /// #685: a bracketed-paste event arriving while a non-textarea
+    /// modal (ConfirmModal) is front-of-queue is silently ignored and
+    /// does NOT cause a panic or premature commit.  The subsequent 'n'
+    /// key correctly resolves the Confirm modal to `No`.
+    #[test]
+    fn wizard_paste_ignored_for_non_textarea_modals() {
+        let mut scripted = ScriptedKeySource::from_keys(vec![]);
+        // Paste arrives first — must be discarded.
+        scripted.events.push_back(KeyOrPaste::Paste("oops paste".to_string()));
+        // Then the actual confirmation key.
+        scripted.events.push_back(KeyOrPaste::Key(key(KeyCode::Char('n'))));
+
+        let mut session = make_session();
+        let mut queue = ModalQueue::new();
+        queue.push(QueuedModal::Confirm {
+            tag: "confirm-paste-guard".to_string(),
+            modal: crate::tui::modals::confirm::ConfirmModal::new("Confirm?", "yes or no"),
+        });
+
+        let mut runner = WizardModalRunner::new(&mut session, scripted, Color::Cyan);
+        runner.run_queue(&mut queue).expect("run_queue");
+
+        assert_eq!(
+            queue.answer_for("confirm-paste-guard"),
+            Some(&ModalAnswer::Confirm(ConfirmChoice::No)),
+            "paste must be discarded; 'n' must still resolve Confirm to No"
+        );
     }
 }

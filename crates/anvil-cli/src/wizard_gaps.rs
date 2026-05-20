@@ -619,12 +619,10 @@ mod tests {
         let terminal = Terminal::new(backend).expect("test backend");
         let mut session = WizardSession::enter(terminal, CountingHooks::default())
             .expect("enter");
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![KeyEvent::new(
-                KeyCode::Char('y'),
-                KeyModifiers::NONE,
-            )]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::NONE,
+        )]);
         let mut runner =
             WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
         // Verify the ConfirmModal runs and returns Yes (proceed).

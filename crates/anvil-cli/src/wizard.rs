@@ -3388,9 +3388,7 @@ mod tests {
         use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('2'))]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Char('2'))]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3430,7 +3428,7 @@ mod tests {
             k.push_back(key(KeyCode::Char(ch)));
         }
         k.push_back(key(KeyCode::Enter));
-        let keys = ScriptedKeySource { keys: k };
+        let keys = ScriptedKeySource::from_keys(k);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3465,9 +3463,7 @@ mod tests {
         use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('3'))]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Char('3'))]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3504,9 +3500,7 @@ mod tests {
         use crate::tui::modals::queue::ModalAnswer;
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('n'))]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Char('n'))]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3537,9 +3531,7 @@ mod tests {
         use crate::tui::modals::queue::ModalAnswer;
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('y'))]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Char('y'))]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3573,9 +3565,7 @@ mod tests {
         let mut session = make_session();
         // No keys at all — the runner observes empty + immediately
         // returns the outcome from the flow's current state.
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::new(),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3684,18 +3674,16 @@ mod tests {
         });
 
         {
-            let keys = ScriptedKeySource {
-                keys: std::collections::VecDeque::from(vec![
-                    key(KeyCode::Char('y')),  // vault
-                    key(KeyCode::Char('1')),  // provider A
-                    key(KeyCode::Char('y')),  // OAuth yes
-                    key(KeyCode::Char('1')),  // model m1
-                    key(KeyCode::Char('1')),  // layout A
-                    key(KeyCode::Char('y')),  // tabs yes
-                    key(KeyCode::Char('n')),  // mouse no (default OFF)
-                    key(KeyCode::Char('1')),  // theme Dark
-                ]),
-            };
+            let keys = ScriptedKeySource::from_keys(vec![
+                key(KeyCode::Char('y')),  // vault
+                key(KeyCode::Char('1')),  // provider A
+                key(KeyCode::Char('y')),  // OAuth yes
+                key(KeyCode::Char('1')),  // model m1
+                key(KeyCode::Char('1')),  // layout A
+                key(KeyCode::Char('y')),  // tabs yes
+                key(KeyCode::Char('n')),  // mouse no (default OFF)
+                key(KeyCode::Char('1')),  // theme Dark
+            ]);
             let mut runner = WizardModalRunner::new(
                 &mut session,
                 keys,
@@ -3778,9 +3766,7 @@ mod tests {
         unsafe { std::env::set_var("ANVIL_CONFIG_HOME", &cfg); }
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::new(),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3829,9 +3815,7 @@ mod tests {
 
         let mut session = make_session();
         // Press 'n' → ConfirmChoice::No → step 9 writes skip flag.
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Char('n'))]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Char('n'))]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -3889,9 +3873,7 @@ mod tests {
         unsafe { std::env::set_var("ANVIL_CLAUDE_HOME", &cc_dir); }
 
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::new(), // empty — must not be consumed
-        };
+        let keys = ScriptedKeySource::from_keys(vec![]); // empty — must not be consumed
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
@@ -4089,19 +4071,17 @@ mod tests {
         });
 
         {
-            let keys = ScriptedKeySource {
-                keys: std::collections::VecDeque::from(vec![
-                    key(KeyCode::Char('y')),  // step1 vault
-                    key(KeyCode::Char('1')),  // step2 provider
-                    key(KeyCode::Char('y')),  // step3 auth
-                    key(KeyCode::Char('1')),  // step4 model
-                    key(KeyCode::Char('1')),  // step7 layout
-                    key(KeyCode::Char('y')),  // step7 tabs
-                    key(KeyCode::Char('n')),  // step8 mouse
-                    key(KeyCode::Char('1')),  // step8 theme
-                    key(KeyCode::Char('n')),  // step9 cc-migration -> skip
-                ]),
-            };
+            let keys = ScriptedKeySource::from_keys(vec![
+                key(KeyCode::Char('y')),  // step1 vault
+                key(KeyCode::Char('1')),  // step2 provider
+                key(KeyCode::Char('y')),  // step3 auth
+                key(KeyCode::Char('1')),  // step4 model
+                key(KeyCode::Char('1')),  // step7 layout
+                key(KeyCode::Char('y')),  // step7 tabs
+                key(KeyCode::Char('n')),  // step8 mouse
+                key(KeyCode::Char('1')),  // step8 theme
+                key(KeyCode::Char('n')),  // step9 cc-migration -> skip
+            ]);
             let mut runner = WizardModalRunner::new(
                 &mut session,
                 keys,
@@ -4148,9 +4128,7 @@ mod tests {
         // And a single alt-screen pair from a real WizardSession that
         // hosts the modal renders without panicking.
         let mut session = make_session();
-        let keys = ScriptedKeySource {
-            keys: std::collections::VecDeque::from(vec![key(KeyCode::Esc)]),
-        };
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Esc)]);
         let mut runner = WizardModalRunner::new(
             &mut session,
             keys,
