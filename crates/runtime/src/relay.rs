@@ -207,6 +207,13 @@ pub enum RelayMessage {
         qmd_status: Option<String>,
         block_time: Option<String>,
         status_line_preset: Option<String>,
+        /// Auth/cost type: "oauth" | "api" | "local" | "metered" | "cloud"
+        /// Matches the label shown in the TUI status bar (cost_provider_label).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cost_type: Option<String>,
+        /// Active layout: "classic" | "vertical_split" | "three_pane" | "journal"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        layout: Option<String>,
     },
 
     // ── Client requests ──

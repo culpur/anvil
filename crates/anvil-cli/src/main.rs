@@ -6337,6 +6337,22 @@ impl LiveCli {
                 // Wire the relay broadcast channel into the TUI for event forwarding
                 if let Some(tx) = &self.relay_event_tx {
                     tui.set_relay_tx(tx.clone());
+                    // Determine auth/cost label for status bar parity.
+                    // Priority: local (model has ':') > api (ANTHROPIC_API_KEY set) > oauth (claude- model) > metered/cloud
+                    let model_ref = &self.model;
+                    let cost_type_label = if model_ref.contains(":cloud") {
+                        "cloud".to_string()
+                    } else if model_ref.contains(':') {
+                        "local".to_string()
+                    } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                        "api".to_string()
+                    } else if model_ref.starts_with("claude-") {
+                        "oauth".to_string()
+                    } else {
+                        "metered".to_string()
+                    };
+                    // Layout kind as string alias for the web viewer.
+                    let layout_alias = runtime::tui_layout_to_alias(tui.current_layout()).to_string();
                     // Send session metadata so the web viewer has full context
                     let _ = tx.send(runtime::relay::RelayMessage::SessionMeta {
                         session_id: self.session_id().to_string(),
@@ -6351,6 +6367,8 @@ impl LiveCli {
                         },
                         block_time: None,
                         status_line_preset: Some(tui.status_line_config().preset.clone()),
+                        cost_type: Some(cost_type_label),
+                        layout: Some(layout_alias),
                     });
                     // Broadcast existing tabs so the viewer knows what tabs exist
                     for (idx, name, model, session_id) in tui.tab_details() {

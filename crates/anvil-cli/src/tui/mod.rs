@@ -2075,6 +2075,13 @@ impl AnvilTui {
         self.set_active_tab_layout(new, true);
     }
 
+    /// Return the current global layout configuration.
+    ///
+    /// Used by the relay emitter to include layout in `SessionMeta`.
+    pub fn current_layout(&self) -> &runtime::TuiLayoutConfig {
+        &self.tui_layout
+    }
+
     /// Write the layout config to `~/.anvil/config.json` (best-effort).
     fn persist_layout_to_config(new: &runtime::TuiLayoutConfig) {
         if let Some(home) = dirs_next::home_dir() {
@@ -3233,9 +3240,17 @@ impl AnvilTui {
     }
 
     /// Show a system message (e.g. slash command output).
+    ///
+    /// Also mirrors to the relay broadcast so the web viewer's chat log
+    /// stays in sync with the TUI scrollback (Bug 3 fix).
     pub fn push_system(&mut self, text: impl Into<String>) {
         let text = text.into();
         if !text.is_empty() {
+            let tab_id = self.active_tab().id;
+            self.relay_forward(runtime::relay::RelayMessage::System {
+                tab_id,
+                message: text.clone(),
+            });
             self.active_tab_mut().log.push(LogEntry::System(text));
         }
         self.scroll_to_bottom();
