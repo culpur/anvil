@@ -3317,7 +3317,24 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     remote_messages.push(msg);
                 }
             }
-            for (_tab_id, message) in remote_messages {
+            for (incoming_tab_id, message) in remote_messages {
+                // Route the message to the tab the viewer addressed. The viewer
+                // sends the stable Tab.id from the TabOpened event; without this
+                // hop, every viewer-side input flows into whatever tab the TUI
+                // last had focused — three tabs share one chat.
+                //
+                // Skip routing for tab_id=0 (sentinel for non-tab control messages
+                // like __config_get) and for __ prefixed control messages.
+                if incoming_tab_id != 0 && !message.starts_with("__") {
+                    if let Some(idx) = (0..tui.tab_count())
+                        .find(|i| tui.tab_id_at(*i) == Some(incoming_tab_id))
+                    {
+                        if idx != tui.active_tab_index() {
+                            tui.switch_tab(idx);
+                            cli.active_tab_idx = idx;
+                        }
+                    }
+                }
                 // Handle client connect/disconnect signals from the relay
                 if let Some(count_str) = message.strip_prefix("__client_connected:") {
                     let count: usize = count_str.parse().unwrap_or(1);
@@ -6580,8 +6597,13 @@ impl LiveCli {
         if !msg.is_empty() {
             tui.push_system(msg.clone());
             if let Some(tx) = &self.relay_event_tx {
+                // Use the active tab's stable Tab.id so the viewer can route
+                // the slash result to the right tab pane. Sending tab_id=0
+                // lands in a non-existent tab key on the viewer side.
+                let active_idx = tui.active_tab_index();
+                let active_tab_id = tui.tab_id_at(active_idx).unwrap_or(active_idx + 1);
                 let _ = tx.send(runtime::relay::RelayMessage::SlashResult {
-                    tab_id: 0,
+                    tab_id: active_tab_id,
                     command: command_name,
                     ok: true,
                     output: msg,
