@@ -5,7 +5,7 @@
 ![Version](https://img.shields.io/badge/version-2.2.18-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey)
-![Tests](https://img.shields.io/badge/tests-1657%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-3069%20passed-brightgreen)
 ![Security](https://img.shields.io/badge/security-AES--256--GCM%20vault-orange)
 
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 100+ slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.

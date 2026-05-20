@@ -10176,7 +10176,12 @@ mod maybe_auto_compact_tests {
     use serial_test::serial;
 
     /// Verify that Sonnet reports the 1 M context window, not the 64 k output cap.
+    /// Serialised with `env_override_wins` because both touch ANVIL_CONTEXT_SIZE
+    /// (this one reads, the other writes — under parallel test runs the env
+    /// override leaked across threads and made the unconditional model lookup
+    /// fail, returning 512 000 instead of the per-model 1 M).
     #[test]
+    #[serial(anvil_context_size)]
     fn sonnet_context_window_not_output_cap() {
         let w = crate::tui::context_max_for_model_pub("claude-sonnet-4-6");
         assert_eq!(w, 1_000_000,
@@ -10185,6 +10190,7 @@ mod maybe_auto_compact_tests {
 
     /// Verify that Opus reports the 1 M context window, not the 32 k output cap.
     #[test]
+    #[serial(anvil_context_size)]
     fn opus_context_window_not_output_cap() {
         let w = crate::tui::context_max_for_model_pub("claude-opus-4-5");
         assert_eq!(w, 1_000_000,
@@ -10193,6 +10199,7 @@ mod maybe_auto_compact_tests {
 
     /// Verify that gpt-4o reports 128 k, not 16 k output cap.
     #[test]
+    #[serial(anvil_context_size)]
     fn gpt4o_context_window_not_output_cap() {
         let w = crate::tui::context_max_for_model_pub("gpt-4o");
         assert_eq!(w, 128_000,
