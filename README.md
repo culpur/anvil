@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.17-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.18-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -74,6 +74,16 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 - **Encrypted** &mdash; secure WebSocket relay with automatic reconnection
 
 *Perfect for pair programming, teaching, demos, monitoring long-running tasks, or coding from your phone while your workstation does the heavy lifting.*
+
+---
+
+## What's new in v2.2.18 &mdash; Web Viewer Parity, Mouse Capture Default-OFF, Autocompact Hardening
+
+Three quiet correctness bugs resolved in one focused cycle. The autocompact threshold was measuring against the output cap (8K&ndash;16K) rather than the context window (64K&ndash;200K+), causing sessions on long-context models to compact after just a handful of turns &mdash; that&rsquo;s fixed. Mouse capture now defaults OFF on all platforms, restoring terminal copy-paste for users who hadn&rsquo;t opted in. The web viewer gets the same stable tab-routing layer the TUI has had since v2.2.16, including `/tab new/rename/switch`, Ctrl+T, and per-tab relay routing for concurrent sessions.
+
+Also in this release: bracketed paste in textarea modals, a PermissionPrompt round-trip regression test, `restore_alt_screen` raw-mode fix (the &ldquo;keyboard dies after `/mcp builder` cancel&rdquo; bug), and Phase 6 release-pipeline hardening against `set -e` silent-exit.
+
+See [RELEASE-NOTES-v2.2.18.md](RELEASE-NOTES-v2.2.18.md) for the full narrative.
 
 ---
 
@@ -276,6 +286,23 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 
 
+
+
+
+### v2.2.18 &mdash; May 20, 2026
+
+**Web Viewer Parity, Mouse Capture Default-OFF, Autocompact Hardening.**
+
+- &#10003; **Autocompact threshold fix (CRITICAL #697)** &mdash; `maybe_auto_compact` was comparing usage against `max_output_tokens` (8K&ndash;16K) instead of `context_window` (64K&ndash;200K+). Sessions on long-context models were compacting after ~6K input tokens. Fixed: threshold now reads `session.context_window`. `/compact why` prints the threshold calculation. New OTel span `anvil.autocompact.threshold` with `context_window`, `used_tokens`, `threshold_pct`, `triggered`.
+- &#10003; **Mouse capture default-OFF (#696 P4)** &mdash; mouse capture is now disabled by default on all platforms, restoring native terminal copy-paste. One-time toast on first run explains how to opt back in. `mouse_capture_default_off_regression` test guards against future regression.
+- &#10003; **Web viewer tab routing (#696)** &mdash; `/tab new/rename/switch` are first-class slash commands; Ctrl+T broadcasts new-tab to relay; tab IDs are stable and route `user_message`/`slash_result` to the correct tab. Removed the bad `paired_count` gate that blocked routing after reconnects.
+- &#10003; **Viewer default layout** &mdash; viewer opens with `vertical_split + tabs`, matching TUI default from v2.2.16. `MemorySnapshot` events cached + broadcast for rail-on-reconnect. `SessionMeta` carries `context_max` + `build_sha` for accurate context-window progress bar. Slash bar always visible in header; Cmd+K command palette.
+- &#10003; **`restore_alt_screen` raw-mode fix (#688)** &mdash; re-enables raw mode after inline operations; fixes &ldquo;keyboard stops working after `/mcp builder` cancel.&rdquo;
+- &#10003; **Bracketed paste in textarea modals (#685)** &mdash; pasting multi-line blocks into wizard textareas no longer collapses to one line or corrupts cursor position.
+- &#10003; **Textarea keybind fix (#686)** &mdash; Enter submits, Ctrl+N inserts newline. Previously inverted.
+- &#10003; **PermissionPrompt regression test (#677)** &mdash; end-to-end round-trip test guards against permission-prompt state desync.
+- &#10003; **Phase 6 release-pipeline hardening (#654)** &mdash; SSH calls in `release.sh` Phase 6 now guard against `set -e` silent-exit; failed hops surface immediately.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.17 &mdash; May 18, 2026
 
