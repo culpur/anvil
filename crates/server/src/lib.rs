@@ -14,6 +14,20 @@ use runtime::{ConversationMessage, Session as RuntimeSession};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
 
+// Task #683.A2 — slash command spec JSON shape for GET /api/slash-commands.
+/// Serialisable summary of a single slash command, safe to serve publicly.
+/// Only metadata the viewer needs for palette rendering.
+#[derive(Debug, Clone, Serialize)]
+pub struct SlashCommandEntry {
+    pub name: &'static str,
+    pub summary: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub argument_hint: Option<&'static str>,
+    pub aliases: &'static [&'static str],
+    pub category: &'static str,
+    pub web_available: bool,
+}
+
 pub type SessionId = String;
 pub type SessionStore = Arc<RwLock<HashMap<SessionId, Session>>>;
 
@@ -147,7 +161,31 @@ pub fn app(state: AppState) -> Router {
         .route("/sessions/{id}/events", get(stream_session_events))
         .route("/sessions/{id}/message", post(send_message))
         .route("/viewer/{hash}", get(serve_viewer))
+        // Task #683.A2 — slash command catalogue for the web palette.
+        // No auth required: this is static metadata (names + summaries only),
+        // the same information that appears in the public /help output.
+        .route("/api/slash-commands", get(get_slash_commands))
         .with_state(state)
+}
+
+/// Task #683.A2 — Return a JSON list of slash commands for the palette.
+///
+/// Builds the response once from the static `slash_command_specs()` table.
+/// The response is public-safe: names, summaries, argument hints, aliases,
+/// and categories only — no secrets, no internal infrastructure details.
+async fn get_slash_commands() -> Json<Vec<SlashCommandEntry>> {
+    let entries = commands::slash_command_specs()
+        .iter()
+        .map(|s| SlashCommandEntry {
+            name: s.name,
+            summary: s.summary,
+            argument_hint: s.argument_hint,
+            aliases: s.aliases,
+            category: s.category.title(),
+            web_available: s.web_available,
+        })
+        .collect();
+    Json(entries)
 }
 
 /// Serve the web viewer page for remote control sessions.
@@ -480,5 +518,53 @@ mod tests {
             details.session.messages[0],
             runtime::ConversationMessage::user_text("hello from test")
         );
+    }
+
+    /// Task #683.A2 — GET /api/slash-commands returns a non-empty JSON array
+    /// and each entry has `name`, `summary`, and `category` fields.
+    /// Also validates that the count matches the canonical spec count.
+    #[tokio::test]
+    async fn slash_commands_endpoint_returns_full_catalogue() {
+        let server = TestServer::spawn().await;
+        let client = Client::new();
+
+        let response = client
+            .get(server.url("/api/slash-commands"))
+            .send()
+            .await
+            .expect("slash-commands request should succeed")
+            .error_for_status()
+            .expect("slash-commands request should return 200");
+
+        let cmds: Vec<serde_json::Value> = response
+            .json()
+            .await
+            .expect("slash-commands response should be JSON array");
+
+        // Must have the same count as the canonical spec list.
+        let expected_count = commands::slash_command_specs().len();
+        assert_eq!(
+            cmds.len(),
+            expected_count,
+            "endpoint should return all {expected_count} specs"
+        );
+
+        // Spot-check a few known commands.
+        let help_entry = cmds.iter().find(|c| c["name"] == "help")
+            .expect("help command should be present");
+        assert_eq!(help_entry["web_available"], true);
+        assert!(help_entry["summary"].as_str().map_or(false, |s| !s.is_empty()),
+            "help summary should not be empty");
+
+        let version_entry = cmds.iter().find(|c| c["name"] == "version")
+            .expect("version command should be present");
+        assert_eq!(version_entry["category"], "Workspace & memory");
+
+        // Every entry must have name + summary + category.
+        for (i, cmd) in cmds.iter().enumerate() {
+            assert!(cmd["name"].is_string(), "entry {i} missing name");
+            assert!(cmd["summary"].is_string(), "entry {i} missing summary");
+            assert!(cmd["category"].is_string(), "entry {i} missing category");
+        }
     }
 }
