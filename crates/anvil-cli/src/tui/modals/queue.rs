@@ -58,6 +58,7 @@ use super::confirm::{ConfirmModal, ConfirmChoice};
 use super::health_probe::HealthProbeModal;
 use super::password::PasswordModal;
 use super::text_input::TextInputModal;
+use super::textarea::TextareaModal;
 
 /// One entry on the modal queue. The host pops the front, renders /
 /// drives it, and on resolution writes the answer back into the
@@ -96,6 +97,14 @@ pub(crate) enum QueuedModal {
         tag: String,
         modal: HealthProbeModal,
     },
+    /// task #684: multi-line textarea for long-description fields.
+    /// Enter inserts a newline; Ctrl+Enter submits. Resolves to
+    /// `ModalAnswer::TextareaInput(String)`.
+    #[allow(dead_code)]
+    TextareaInput {
+        tag: String,
+        modal: TextareaModal,
+    },
 }
 
 impl QueuedModal {
@@ -109,6 +118,7 @@ impl QueuedModal {
             Self::Choice { tag, .. } => tag,
             Self::TextInput { tag, .. } => tag,
             Self::HealthProbe { tag, .. } => tag,
+            Self::TextareaInput { tag, .. } => tag,
         }
     }
 }
@@ -161,6 +171,14 @@ pub(crate) enum ModalAnswer {
         repair: Vec<usize>,
         quit: bool,
     },
+    /// task #684: multi-line text submitted via a `TextareaModal`.
+    /// Carries the full buffer contents.
+    #[allow(dead_code)]
+    TextareaInput(String),
+    /// task #684: Esc/Ctrl+C on a `TextareaModal` — caller should
+    /// abort the wizard step.
+    #[allow(dead_code)]
+    TextareaInputCancelled,
 }
 
 /// FIFO queue of pending modals plus a parallel log of recorded answers.

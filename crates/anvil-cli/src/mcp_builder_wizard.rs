@@ -58,6 +58,7 @@ use crate::tui::modals::queue::{
 };
 use crate::tui::modals::streaming::StreamingOutputModal;
 use crate::tui::modals::text_input::TextInputModal;
+use crate::tui::modals::textarea::TextareaModal;
 use crate::wizard_runner::{
     CrosstermHooks, KeySource, RunnerError, WizardModalRunner, WizardSession,
 };
@@ -510,18 +511,21 @@ where
         break raw;
     };
 
-    // Tool description.
+    // Tool description — textarea so users can write more than one sentence
+    // when a tool has complex behaviour (task #684).
     let description = loop {
-        let modal = TextInputModal::new(
+        let modal = TextareaModal::new(
             format!("Description for '{name}'"),
-            "One-sentence description of what this tool does".to_string(),
-        );
-        let answer = match runner.run_text_input("mcp-tool-desc", modal) {
+            "Describe what this tool does (Ctrl+Enter to submit)".to_string(),
+        )
+        .with_max_rows(8);
+        let answer = match runner.run_textarea_input("mcp-tool-desc", modal) {
             Ok(a) => a,
             Err(_) => return ToolPromptOutcome::Cancelled,
         };
         let s = match answer {
-            ModalAnswer::TextInput(s) => s.trim().to_string(),
+            ModalAnswer::TextareaInput(s) => s.trim().to_string(),
+            ModalAnswer::TextareaInputCancelled => return ToolPromptOutcome::Cancelled,
             _ => return ToolPromptOutcome::Cancelled,
         };
         if s.is_empty() {
@@ -999,17 +1003,21 @@ where
     H: crate::wizard_runner::TerminalHooks,
     K: KeySource,
 {
-    // 1. Capture user prompt.
-    let modal = TextInputModal::new(
+    // 1. Capture user prompt — multi-line textarea so the user can write
+    //    a 200–500 word description (task #684).
+    let modal = TextareaModal::new(
         "AI: describe the MCP",
-        format!("Describe what the MCP should do. Active model: {active_model}"),
+        format!(
+            "Describe what the MCP should do (Enter=newline, Ctrl+Enter=submit). Model: {active_model}"
+        ),
     );
-    let answer = match runner.run_text_input("mcp-ai-prompt", modal) {
+    let answer = match runner.run_textarea_input("mcp-ai-prompt", modal) {
         Ok(a) => a,
         Err(_) => return AiOutcome::Cancelled,
     };
     let prompt = match answer {
-        ModalAnswer::TextInput(s) => s.trim().to_string(),
+        ModalAnswer::TextareaInput(s) => s.trim().to_string(),
+        ModalAnswer::TextareaInputCancelled => return AiOutcome::Cancelled,
         _ => return AiOutcome::Cancelled,
     };
     if prompt.is_empty() {

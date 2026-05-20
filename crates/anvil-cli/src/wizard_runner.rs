@@ -129,6 +129,7 @@ use crate::tui::modals::streaming::{
     self, StreamingAction, StreamingOutputModal, StreamingState, SubprocessHandle,
 };
 use crate::tui::modals::text_input::{TextInputAction, TextInputModal};
+use crate::tui::modals::textarea::{TextareaAction, TextareaModal};
 
 /// Source of key events for the runner. Production uses
 /// `CrosstermKeySource` which polls real terminal input; tests use
@@ -735,6 +736,27 @@ where
             .unwrap_or(ModalAnswer::TextInput(default)))
     }
 
+    /// Drive a single multi-line textarea modal to resolution (task #684).
+    /// Returns `ModalAnswer::TextareaInput(value)` on Ctrl+Enter, or
+    /// `ModalAnswer::TextareaInputCancelled` on Esc/Ctrl+C / empty source.
+    #[allow(dead_code)]
+    pub(crate) fn run_textarea_input(
+        &mut self,
+        tag: &str,
+        modal: TextareaModal,
+    ) -> Result<ModalAnswer, RunnerError> {
+        let mut q = ModalQueue::new();
+        q.push(QueuedModal::TextareaInput {
+            tag: tag.to_string(),
+            modal,
+        });
+        self.run_queue(&mut q)?;
+        Ok(q
+            .answer_for(tag)
+            .cloned()
+            .unwrap_or(ModalAnswer::TextareaInputCancelled))
+    }
+
     /// Drive an `OAuthFlow` to completion inside the active alt-screen
     /// session (task #642 Sub-task C + v2.2.17 #644 Item 3 / Item 4
     /// fix).
@@ -890,6 +912,9 @@ where
                             QueuedModal::HealthProbe { modal, .. } => {
                                 modal.render(frame, area, accent);
                             }
+                            QueuedModal::TextareaInput { modal, .. } => {
+                                modal.render(frame, area, accent);
+                            }
                         }
                     })
                     .map_err(|e| RunnerError::Draw(e.to_string()))?;
@@ -910,6 +935,7 @@ where
                         repair: Vec::new(),
                         quit: true,
                     },
+                    QueuedModal::TextareaInput { .. } => ModalAnswer::TextareaInputCancelled,
                 });
             };
 
@@ -968,6 +994,15 @@ where
                             repair: Vec::new(),
                             quit: true,
                         });
+                    }
+                },
+                QueuedModal::TextareaInput { modal, .. } => match modal.handle_key(key) {
+                    TextareaAction::Continue => continue,
+                    TextareaAction::Submit(value) => {
+                        return Ok(ModalAnswer::TextareaInput(value));
+                    }
+                    TextareaAction::Cancel(_) => {
+                        return Ok(ModalAnswer::TextareaInputCancelled);
                     }
                 },
             }

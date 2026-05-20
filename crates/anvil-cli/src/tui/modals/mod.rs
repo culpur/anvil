@@ -48,6 +48,7 @@ pub mod password;
 pub mod queue;
 pub mod streaming;
 pub mod text_input;
+pub mod textarea;
 
 use ratatui::style::Color;
 
@@ -108,6 +109,11 @@ pub(crate) use queue::{ModalQueue, ModalAnswer, QueuedModal, WizardChoiceModal};
 // and ModalAnswer::TextInput variants in queue.rs.
 #[allow(unused_imports)]
 pub(crate) use text_input::{TextInputAction, TextInputModal};
+// Task #684: TextareaModal — multi-line textarea for long-description fields
+// (/mcp builder AI prompt, tool descriptions, etc.). Plugged into ModalQueue
+// via QueuedModal::TextareaInput and ModalAnswer::TextareaInput variants.
+#[allow(unused_imports)]
+pub(crate) use textarea::{TextareaAction, TextareaModal};
 // Task #666 (v2.2.18, Agent A1): streaming output + health probe.
 // StreamingOutputModal is driven by WizardModalRunner::run_streaming_output
 // directly; HealthProbeModal is queue-able via QueuedModal::HealthProbe and
