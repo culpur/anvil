@@ -2,7 +2,7 @@
 
 **AI Coding Assistant by Culpur Defense**
 
-![Version](https://img.shields.io/badge/version-2.2.15-blue)
+![Version](https://img.shields.io/badge/version-2.2.18-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey)
 ![Tests](https://img.shields.io/badge/tests-1657%20passed-brightgreen)
@@ -11,6 +11,32 @@
 Anvil is a local AI coding-agent CLI implemented in safe Rust. It provides interactive sessions, one-shot prompts, workspace-aware tools, and 100+ slash commands from a single binary — with no telemetry, full air-gap support, and encrypted credential storage.
 
 **31 providers, one binary.** Anthropic, OpenAI, Anthropic Max-plan OAuth, OpenAI Codex, AWS Bedrock (manual SigV4, no AWS SDK), Google Gemini OAuth + Antigravity, GitHub Copilot, Azure OpenAI, Cursor Cloud Agents, Ollama (local + cloud), Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot AI, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, and more — pick any model from any provider with a single `/model` press.
+
+---
+
+## What's New in v2.2.18 — Web Viewer Parity + Mouse Capture Default-OFF + Autocompact Hardening
+
+Three quiet correctness bugs resolved in one focused cycle. The autocompact threshold was measuring against the output cap (8K–16K) rather than the context window (64K–200K+), causing sessions on long-context models to compact after just a handful of turns — that's fixed. Mouse capture now defaults OFF on all platforms, restoring terminal copy-paste for users who hadn't opted in. The web viewer gets the same stable tab-routing layer the TUI has had since v2.2.16, including `/tab new/rename/switch`, `Ctrl+T`, and per-tab relay routing for concurrent sessions.
+
+Also in this release: bracketed paste in textarea modals, a PermissionPrompt round-trip regression test, `restore_alt_screen` raw-mode fix (the "keyboard dies after `/mcp builder` cancel" bug), and Phase 6 release-pipeline hardening against `set -e` silent-exit.
+
+See [RELEASE-NOTES-v2.2.18.md](RELEASE-NOTES-v2.2.18.md) for the full narrative.
+
+---
+
+## What's New in v2.2.17 — The Setup Wizard, Reflection, Sandboxing, and the Source Viewer
+
+v2.2.17 is the first-impressions release. The setup wizard is a single continuous in-TUI experience from "Welcome to Anvil" through your first prompt. Anvil now detects when it's stuck and pivots via an autonomous reflection loop (`/reflect`). `anvil-sandbox-runner` detonates package installs before they touch your filesystem. The AnvilHub source viewer delivers GitHub-style file browsing across all 558 marketplace packages. 30+ commits over v2.2.16.
+
+See [RELEASE-NOTES-v2.2.17.md](RELEASE-NOTES-v2.2.17.md) for the full narrative.
+
+---
+
+## What's New in v2.2.16 — The TUI Layout System
+
+v2.2.16 is the visual-architecture release. Eight live-switchable layout variants — Vertical Split, Classic, Three-Pane, Journal, each with and without tabs — built on a per-tab `TuiLayoutConfig`. Fresh installs land on Vertical Split + Tabs. `/layout <kind>` swaps the renderer without restarting. 50 commits over v2.2.15.
+
+See [RELEASE-NOTES-v2.2.16.md](RELEASE-NOTES-v2.2.16.md) for the full narrative.
 
 ---
 
