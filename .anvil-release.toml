@@ -1,12 +1,11 @@
 [targets]
 anvilhub_path = "/opt/projects/anvilhub/packages/web"
 anvilhub_pm2_process = "anvilhub"
-# Task #655 (v2.2.18): anvilhub pm2 runs in CT 113 on the proxmox host,
-# NOT on dev0001. The MCP routes pm2 ops through:
-#   bastion → proxmox host → pct exec <container_id> → pm2
-anvilhub_pm2_proxmox_host = "188.40.211.105"
-anvilhub_pm2_container_id = "113"
-anvilhub_pm2_home = "/root/.pm2"
+# Task #698 (v2.2.18 revert of #655): anvilhub-web actually runs on dev0001
+# (10.0.70.80:3100), NOT in CT 113. Apache vhost `anvilhub.culpur.net.conf`
+# on guard has `ProxyPass / http://10.0.70.80:3100/`. MCP must SSH directly
+# to dev0001 for pm2 ops. CT 113 was a stale memory entry from prior arch.
+anvilhub_pm2_host = "dev0001"
 culpur_wp_page_id = 619
 culpur_wp_slug = "anvil"
 
