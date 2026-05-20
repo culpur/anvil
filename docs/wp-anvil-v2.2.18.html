@@ -1,0 +1,104 @@
+<!-- WordPress page id=619 (culpur.net/anvil/)                              -->
+<!-- Deploy: wpdb->update PHP script ONLY — never wp post update             -->
+<!-- Version shortcode: update [anvil_version] to return "2.2.18"            -->
+<!-- After deploy: clear wphb-cache + Cloudflare                             -->
+
+<div class="anvil-page">
+
+  <!-- Hero -->
+  <div class="anvil-hero" style="text-align:center;padding:60px 20px 40px;background:linear-gradient(135deg,#0d1117 0%,#161b22 100%);border-radius:12px;margin-bottom:40px;">
+    <h1 style="font-size:2.8em;font-weight:800;color:#fff;margin-bottom:12px;">Anvil <span style="color:#00d4d4;">v2.2.18</span></h1>
+    <p style="font-size:1.2em;color:#8b949e;max-width:640px;margin:0 auto 28px;">AI coding assistant for the terminal. Single binary. 35 providers. No telemetry.</p>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+      <a href="https://anvilhub.culpur.net/install" style="display:inline-block;padding:14px 32px;background:#00d4d4;color:#0d1117;border-radius:8px;font-weight:700;font-size:1em;text-decoration:none;">Install Anvil</a>
+      <a href="https://github.com/culpur/anvil/releases/tag/v2.2.18" style="display:inline-block;padding:14px 32px;background:transparent;color:#00d4d4;border:2px solid #00d4d4;border-radius:8px;font-weight:700;font-size:1em;text-decoration:none;">GitHub Release</a>
+    </div>
+  </div>
+
+  <!-- What's new in v2.2.18 -->
+  <div class="anvil-release-card" style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 40px;margin-bottom:36px;">
+    <h2 style="font-size:1.6em;font-weight:700;color:#fff;margin-top:0;margin-bottom:8px;">What's new in v2.2.18</h2>
+    <p style="color:#8b949e;font-size:0.95em;margin-bottom:24px;">Released May 20, 2026 &mdash; Web Viewer Parity + Mouse Capture Default-OFF + Autocompact Hardening</p>
+
+    <h3 style="color:#00d4d4;font-size:1.1em;margin-bottom:10px;">Autocompact fix (#697 &mdash; most user-visible)</h3>
+    <p style="color:#c9d1d9;line-height:1.7;margin-bottom:20px;">The autocompact threshold was comparing against <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">max_output_tokens</code> (8K&ndash;16K) instead of the context window (64K&ndash;200K+). On long-context models, sessions were being compacted after as few as 6K tokens of input &mdash; roughly one turn's worth. After this fix, sessions correctly run to ~80% of the full context window before compaction fires. If you've been hitting "session was compacted" messages early in long sessions, this is the fix.</p>
+
+    <h3 style="color:#00d4d4;font-size:1.1em;margin-bottom:10px;">Mouse capture default-OFF</h3>
+    <p style="color:#c9d1d9;line-height:1.7;margin-bottom:20px;">Mouse capture is now disabled by default on all platforms. The previous default broke terminal copy-paste for users on Gnome Terminal, kitty, and Windows Terminal who hadn't explicitly opted in. Enable mouse support with <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">/config mouse_capture true</code> or the <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">--mouse</code> flag.</p>
+
+    <h3 style="color:#00d4d4;font-size:1.1em;margin-bottom:10px;">Web viewer tab parity</h3>
+    <p style="color:#c9d1d9;line-height:1.7;margin-bottom:20px;">The AnvilHub web viewer now has the same tab architecture as the desktop TUI: stable tab IDs, <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">/tab new/rename/switch</code>, <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">Ctrl+T</code>, and per-tab routing so messages from one session don't bleed into another. Default layout is now Vertical Split + Tabs. Relay carries cost labels, memory snapshots, and session metadata for accurate status display.</p>
+
+    <h3 style="color:#00d4d4;font-size:1.1em;margin-bottom:10px;">TUI stability fixes</h3>
+    <ul style="color:#c9d1d9;line-height:1.8;margin-bottom:0;padding-left:20px;">
+      <li>Keyboard stops working after <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">/mcp builder</code> cancel &mdash; fixed (alt-screen raw-mode restore #688)</li>
+      <li>Bracketed paste in textarea modals &mdash; multi-line paste works correctly (#685)</li>
+      <li>MemorySnapshot rail rendering uses shared layout helpers (#695)</li>
+      <li>Release pipeline Phase 6 hardened against silent SSH failures (#654)</li>
+    </ul>
+  </div>
+
+  <!-- Install -->
+  <div class="anvil-install-card" style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 40px;margin-bottom:36px;">
+    <h2 style="font-size:1.6em;font-weight:700;color:#fff;margin-top:0;margin-bottom:20px;">Install</h2>
+
+    <h3 style="color:#8b949e;font-size:0.85em;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">macOS / Linux (one-liner)</h3>
+    <pre style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:16px 20px;color:#c9d1d9;overflow-x:auto;margin-bottom:20px;"><code>curl -fsSL https://anvilhub.culpur.net/install.sh | sh</code></pre>
+
+    <h3 style="color:#8b949e;font-size:0.85em;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Homebrew</h3>
+    <pre style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:16px 20px;color:#c9d1d9;overflow-x:auto;margin-bottom:20px;"><code>brew install culpur/anvil/anvil
+# or upgrade:
+brew upgrade culpur/anvil/anvil</code></pre>
+
+    <h3 style="color:#8b949e;font-size:0.85em;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Windows / FreeBSD / NetBSD</h3>
+    <p style="color:#c9d1d9;margin-bottom:0;">Download the binary for your platform from the <a href="https://github.com/culpur/anvil/releases/tag/v2.2.18" style="color:#00d4d4;">GitHub release page</a>. SHA256 checksums are published at <a href="https://anvilhub.culpur.net/sha256/2.2.18.txt" style="color:#00d4d4;">anvilhub.culpur.net/sha256/2.2.18.txt</a>.</p>
+  </div>
+
+  <!-- Platforms -->
+  <div class="anvil-platforms-card" style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 40px;margin-bottom:36px;">
+    <h2 style="font-size:1.6em;font-weight:700;color:#fff;margin-top:0;margin-bottom:20px;">Platforms</h2>
+    <p style="color:#c9d1d9;margin-bottom:20px;">Seven pre-compiled binaries ship with every release:</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;">
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">macOS ARM64 (Apple Silicon)</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">macOS x86_64 (Intel)</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">Linux x86_64</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">Linux ARM64</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">Windows x86_64</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">FreeBSD x86_64</div>
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:14px 16px;color:#c9d1d9;font-size:0.9em;">NetBSD x86_64</div>
+    </div>
+  </div>
+
+  <!-- Providers -->
+  <div class="anvil-providers-card" style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 40px;margin-bottom:36px;">
+    <h2 style="font-size:1.6em;font-weight:700;color:#fff;margin-top:0;margin-bottom:12px;">35 providers, one binary</h2>
+    <p style="color:#c9d1d9;line-height:1.7;margin-bottom:0;">Anthropic, Anthropic Max-plan OAuth, OpenAI, OpenAI Codex, AWS Bedrock (manual SigV4), Google Gemini OAuth + Antigravity, GitHub Copilot, Azure OpenAI, Cursor Cloud Agents, Ollama (local + cloud), Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot AI, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax, OpenCode, OpenCode-Go, and more. Switch providers mid-session with <code style="background:#0d1117;padding:2px 6px;border-radius:4px;color:#00d4d4;">/model&lt;TAB&gt;</code>.</p>
+  </div>
+
+  <!-- Quality bar -->
+  <div class="anvil-quality-card" style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 40px;margin-bottom:36px;">
+    <h2 style="font-size:1.6em;font-weight:700;color:#fff;margin-top:0;margin-bottom:20px;">Quality bar</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:16px;">
+      <div style="text-align:center;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:20px 12px;">
+        <div style="font-size:2em;font-weight:800;color:#00d4d4;">1657+</div>
+        <div style="color:#8b949e;font-size:0.85em;margin-top:4px;">tests passing</div>
+      </div>
+      <div style="text-align:center;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:20px 12px;">
+        <div style="font-size:2em;font-weight:800;color:#00d4d4;">35</div>
+        <div style="color:#8b949e;font-size:0.85em;margin-top:4px;">providers</div>
+      </div>
+      <div style="text-align:center;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:20px 12px;">
+        <div style="font-size:2em;font-weight:800;color:#00d4d4;">7</div>
+        <div style="color:#8b949e;font-size:0.85em;margin-top:4px;">platforms</div>
+      </div>
+      <div style="text-align:center;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:20px 12px;">
+        <div style="font-size:2em;font-weight:800;color:#00d4d4;">0</div>
+        <div style="color:#8b949e;font-size:0.85em;margin-top:4px;">telemetry</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Version shortcode note -->
+  <!-- On deploy, ensure [anvil_version] shortcode returns "2.2.18" -->
+
+</div>
