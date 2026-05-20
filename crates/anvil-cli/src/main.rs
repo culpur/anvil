@@ -6268,6 +6268,11 @@ impl LiveCli {
                 let _ = terminal::enable_raw_mode();
                 crate::tui::restore_alt_screen();
                 tui.push_system(result);
+                // Task #688 fix: same inline-op blank-screen fix as the
+                // run_command_for_tui fallthrough path.
+                if crate::tui::take_force_full_redraw() {
+                    tui.force_full_repaint_after_inline_op();
+                }
                 return Ok(false);
             }
             SlashCommand::Configure { .. } => {
@@ -6490,6 +6495,21 @@ impl LiveCli {
         // and never the handler's report (e.g. /ollama list, /schedule …).
         let command_name = slash_command_name(&command).to_string();
         let (msg, changed) = self.run_command_for_tui(command)?;
+        // Task #688 fix (root cause): if the command ran an inline op that
+        // temporarily left the alt-screen (e.g. `/mcp builder`),
+        // `restore_alt_screen()` set FORCE_FULL_REDRAW.  But that flag is only
+        // consumed by `commit_pending_redraw`, which is NOT reachable from the
+        // `read_input → draw()` path that fires on the next main-loop iteration.
+        // Result: the parent TUI re-enters the alt-screen but never repaints
+        // (ratatui's back-buffer believes every cell is already correct), so the
+        // user sees a blank screen until they press a key.
+        //
+        // Fix: push the result message into the scrollback FIRST (so it appears
+        // in the painted frame), then consume the flag HERE while we still hold
+        // `&mut tui`, and call `force_full_repaint_after_inline_op()`, which
+        // issues `draw_full()` (full clear + repaint) immediately before we
+        // return to the main loop.  The `draw()` inside `read_input` on the next
+        // iteration then sees an already-correct back-buffer and is a no-op.
         if !msg.is_empty() {
             tui.push_system(msg.clone());
             if let Some(tx) = &self.relay_event_tx {
@@ -6500,6 +6520,9 @@ impl LiveCli {
                     output: msg,
                 });
             }
+        }
+        if crate::tui::take_force_full_redraw() {
+            tui.force_full_repaint_after_inline_op();
         }
         Ok(changed)
     }

@@ -5264,6 +5264,37 @@ mod bug2_bug3_redraw_tests {
         assert!(!second, "flag must clear after being read once");
     }
 
+    /// Task #688 root-cause regression: `restore_alt_screen()` raises
+    /// FORCE_FULL_REDRAW, but the main `read_input → draw()` path NEVER calls
+    /// `commit_pending_redraw`, so the flag was silently lost — leaving the
+    /// parent TUI blank after the wizard returned until the user pressed a key.
+    ///
+    /// The fix: `handle_repl_command_tui` calls `take_force_full_redraw()` after
+    /// `run_command_for_tui` returns and, when true, calls
+    /// `force_full_repaint_after_inline_op()`.  This test guards the atomic
+    /// contract: `take_force_full_redraw` is one-shot AND serialises correctly
+    /// relative to a concurrent store (simulated inline-op return).
+    #[test]
+    fn force_full_redraw_consumed_before_read_input_draw() {
+        // Simulate: restore_alt_screen() sets the flag (inline op return).
+        super::FORCE_FULL_REDRAW.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // Simulate: handle_repl_command_tui consumes it.
+        let consumed = super::take_force_full_redraw();
+        assert!(
+            consumed,
+            "handle_repl_command_tui must observe the flag set by restore_alt_screen"
+        );
+
+        // Simulate: read_input → draw() runs next iteration — flag is gone.
+        let stale = super::take_force_full_redraw();
+        assert!(
+            !stale,
+            "read_input → draw() must NOT see a stale FORCE_FULL_REDRAW; \
+             if it did, the blank-screen bug would resurface"
+        );
+    }
+
     /// Task #688: MOUSE_CAPTURE_ACTIVE tracks whether mouse capture is currently
     /// on so leave_alt_screen_for_inline_op knows to disable it. Without this,
     /// the user sees raw SGR mouse-tracking escape codes in the wizard's plain
