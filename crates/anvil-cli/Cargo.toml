@@ -13,6 +13,14 @@ path = "src/main.rs"
 default = ["otel"]
 otel = ["runtime/otel", "api/otel"]
 
+# Build-only deps: `clap` + `clap_mangen` are used by build.rs to render
+# `OUT_DIR/anvil.1` from a declarative description of the CLI surface.  They
+# are NOT compiled into the runtime binary — `--gen-man` at runtime just
+# prints the file generated at build time via `include_str!`.
+[build-dependencies]
+clap = { version = "4.6", default-features = false, features = ["std", "help"] }
+clap_mangen = "0.2"
+
 [dependencies]
 api = { path = "../api", default-features = false }
 base64 = "0.22"

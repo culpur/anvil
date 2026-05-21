@@ -196,6 +196,17 @@ elif [ "$SKIP_BUILD" = false ]; then
     cp target/aarch64-apple-darwin/release/anvil-sandbox-runner "$OUTPUT_DIR/anvil-sandbox-runner-aarch64-apple-darwin"
     echo "        ✓ $(ls -lh "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $5}')"
 
+    # 1a.1 Regenerate man/anvil.1 from the freshly-built native binary (task #752).
+    # The binary embeds the manpage at build time via clap_mangen + the
+    # man/anvil.1.tail file; --gen-man writes it back out so the committed
+    # man/anvil.1 stays in lockstep with the live CLI surface every release.
+    # If this step is skipped the regression test in crates/anvil-cli/src/tests.rs
+    # (generated_manpage_matches_committed_copy) will fail on the next CI run.
+    echo "        ▸ Regenerating man/anvil.1 via --gen-man..."
+    "$PROJECT_DIR/target/aarch64-apple-darwin/release/anvil" --gen-man \
+        > "$PROJECT_DIR/man/anvil.1"
+    echo "          ✓ $(wc -l < "$PROJECT_DIR/man/anvil.1") lines, $(wc -c < "$PROJECT_DIR/man/anvil.1") bytes"
+
     # 1b. macOS Intel (native cross)
     echo "  [2/7] macOS Intel (x86_64-apple-darwin)..."
     rustup target add x86_64-apple-darwin 2>/dev/null || true

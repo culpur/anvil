@@ -2144,3 +2144,79 @@ mod slash_i18n_tests {
         }
     }
 }
+
+// ─── Task #752: build-time manpage pipeline regression gate ──────────────────
+
+/// Regression gate for the build-time manpage pipeline (task #752).
+///
+/// `build.rs` renders `OUT_DIR/anvil.1` from `build_cli_spec.rs` +
+/// `man/anvil.1.tail`.  `main.rs` exposes it through the hidden `--gen-man`
+/// flag, and `scripts/release.sh` rewrites `man/anvil.1` from that output on
+/// every release.  If anyone edits the CLI surface description or the tail
+/// without re-running the regen step, the committed `man/anvil.1` goes
+/// stale.  This test refuses to ship that drift: it diffs the generator
+/// output against the committed file and fails with the exact bytes that
+/// differ.
+///
+/// To fix a failure: run `anvil --gen-man > man/anvil.1` and commit.
+#[test]
+fn generated_manpage_matches_committed_copy() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let committed_path = std::path::Path::new(manifest_dir)
+        .join("..")
+        .join("..")
+        .join("man")
+        .join("anvil.1");
+
+    let committed = std::fs::read_to_string(&committed_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read committed manpage at {}: {err}.  \
+             Run `./target/release/anvil --gen-man > man/anvil.1` and commit.",
+            committed_path.display()
+        )
+    });
+
+    // Normalise the volatile `.TH ANVIL 1 \"<date>\" ...` line so a build on
+    // a different day doesn't fail the test.  Everything else must match.
+    let generated = normalize_manpage_date(super::GENERATED_MANPAGE);
+    let committed = normalize_manpage_date(&committed);
+
+    if generated != committed {
+        let preview_generated = generated.lines().take(20).collect::<Vec<_>>().join("\n");
+        let preview_committed = committed.lines().take(20).collect::<Vec<_>>().join("\n");
+        panic!(
+            "man/anvil.1 is out of date with build_cli_spec.rs + man/anvil.1.tail.\n\n\
+             Fix: rebuild anvil and run\n    \
+                 ./target/release/anvil --gen-man > man/anvil.1\n\
+             then commit the result.\n\n\
+             ── First 20 lines of generated manpage ──\n{preview_generated}\n\n\
+             ── First 20 lines of committed manpage ──\n{preview_committed}\n",
+        );
+    }
+}
+
+/// Strip the build-date positional from the `.TH` header so this test isn't a
+/// false-positive every midnight rebuild.  Everything else (NAME, SYNOPSIS,
+/// OPTIONS, all tail sections) must match byte-for-byte.
+///
+/// clap_mangen renders the header as:
+///   `.TH ANVIL 1 YYYY-MM-DD "Anvil X.Y.Z" "User Commands"`
+/// so the date is the third whitespace-separated field, unquoted.
+fn normalize_manpage_date(raw: &str) -> String {
+    raw.lines()
+        .map(|line| {
+            if line.starts_with(".TH ANVIL") {
+                let mut parts = line.splitn(4, ' ').collect::<Vec<_>>();
+                if parts.len() == 4 {
+                    parts[2] = "<DATE>";
+                    parts.join(" ")
+                } else {
+                    line.to_string()
+                }
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

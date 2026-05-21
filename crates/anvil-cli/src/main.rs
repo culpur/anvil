@@ -473,6 +473,15 @@ fn parse_reflect_turns_tail(rest: &str) -> Option<usize> {
     None
 }
 
+/// Manpage rendered at build time by `build.rs` (clap_mangen + `man/anvil.1.tail`).
+/// Surfaced at runtime through the hidden `--gen-man` flag, which writes this
+/// content to stdout so `scripts/release.sh` can regenerate `man/anvil.1`
+/// after every build. The CI test
+/// `generated_manpage_matches_committed_copy` diffs this string against
+/// `man/anvil.1` and fails if they drift — keeping the committed manpage in
+/// lockstep with the CLI surface description in `build_cli_spec.rs`.
+pub(crate) const GENERATED_MANPAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/anvil.1"));
+
 /// Phase A5 (task #645) — apply the runtime locale at the very top of
 /// `run()`, before `parse_args` and before any `t!()` call site.
 ///
@@ -547,6 +556,17 @@ fn apply_startup_locale(
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
+
+    // Hidden release-pipeline flag: print the build-time-rendered manpage and
+    // exit.  `scripts/release.sh` runs `anvil --gen-man > man/anvil.1` after
+    // building so the committed manpage tracks the live CLI surface.  We
+    // handle it ahead of parse_args / locale apply so it has zero impact on
+    // argument parsing semantics elsewhere.
+    if raw_args.iter().any(|a| a == "--gen-man") {
+        let mut stdout = io::stdout().lock();
+        let _ = stdout.write_all(GENERATED_MANPAGE.as_bytes());
+        return Ok(());
+    }
 
     // Phase A5 (task #645) — apply the runtime locale BEFORE any other
     // startup code emits user-visible strings (wizard banners, REPL
