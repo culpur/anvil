@@ -385,3 +385,132 @@ cmd.deps.no_package_manager: "Aucun gestionnaire de paquets reconnu trouvé."
 
 # Étiquettes CLI génériques réutilisées entre commandes
 cli.no_pr_diff: "Aucun diff de PR trouvé. Vérifiez que gh est installé, authentifié et qu'une PR est ouverte pour la branche courante."
+
+# ─── TUI layouts — chrome strings (task #746) ─────────────────────────────
+# English fallback. Translator: please localize these keys for your locale.
+# Strings rendered by the four layout renderers (classic, vertical_split,
+# three_pane, journal) plus the shared `common.rs` helpers.
+
+# Rail — left rail labels and section headers (vertical_split)
+tui.rail.sessions: "SESSIONS"
+tui.rail.agents: "AGENTS"
+tui.rail.agents_qualifier: "GLOBAL"
+tui.rail.status: "STATUT"
+tui.rail.status_qualifier: "TOUS ONGLETS"
+tui.rail.memory: "MÉMOIRE"
+tui.rail.model: "MODÈLE"
+tui.rail.permissions: "AUTORISATIONS"
+tui.rail.context: "CONTEXTE"
+tui.rail.keybinds: "TOUCHES"
+tui.rail.build: "BUILD"
+tui.rail.none_active: "aucun actif"
+tui.rail.deck_label: "PANNEAU : %{mode}"
+tui.rail.on_tab: " sur %{name}"
+
+# Status — bottom status footer + STATUS rail block
+tui.status.tab_count_one: "1 onglet"
+tui.status.tab_count_other: "%{count} onglets"
+tui.status.perm_count_one: "1 autorisation"
+tui.status.perm_count_other: "%{count} autorisations"
+tui.status.running: "en cours"
+tui.status.pending: "en attente"
+tui.status.cost: "coût"
+tui.status.cost_included: "inclus"
+tui.status.cost_subscription: "abonnement"
+tui.status.thinking: "réflexion"
+tui.status.thinking_yes: "oui"
+tui.status.thinking_no: "non"
+tui.status.session_block: "session %{pct} · bloc %{minutes}m"
+
+# Memory — 7-layer MEMORY block (rail + inline)
+tui.memory.working: "travail"
+tui.memory.working_val: "%{turns}t / %{tokens}tok"
+tui.memory.episodic: "épisodique"
+tui.memory.episodic_sessions_one: "1 session"
+tui.memory.episodic_sessions_other: "%{count} sessions"
+tui.memory.semantic: "sémantique"
+tui.memory.semantic_val: "%{c}c · %{a}a"
+tui.memory.procedural: "procédurale"
+tui.memory.procedural_val: "%{s}s · %{p}p"
+tui.memory.reflective: "réflexive"
+tui.memory.reflective_daily_one: "1 quotidien"
+tui.memory.reflective_daily_other: "%{count} quotidiens"
+tui.memory.long_term: "long terme"
+tui.memory.long_term_val_default: "L7/QMD"
+tui.memory.long_term_val_one: "L7/QMD (actif · 1 archive)"
+tui.memory.long_term_val_other: "L7/QMD (actif · %{count} archives)"
+tui.memory.permission: "autorisation"
+tui.memory.permission_prior_one: "1 antérieure"
+tui.memory.permission_prior_other: "%{count} antérieures"
+tui.memory.qmd: "qmd"
+tui.memory.qmd_active_one: "actif · 1 archive"
+tui.memory.qmd_active_other: "actif · %{count} archives"
+tui.memory.qmd_latest: "qmd-dernier"
+tui.memory.qmd_latest_val: "%{sid} (il y a %{days}j)"
+
+# Banner — HISTORICAL VIEW, update available, autocompact warnings
+tui.banner.historical_view: "─── VUE HISTORIQUE  (Fin pour revenir au direct) "
+tui.banner.update_available_with_version: " ⬆ mise à jour disponible  v%{version}"
+tui.banner.update_available_raw: " ⬆ %{message}"
+
+# Tab strip — hint shown to the right of the tab bar
+tui.tab.hint: "F2/F3 changer  Ctrl+T nouveau  Ctrl+W fermer  /help"
+
+# Agent panel — title, count rollups, empty state
+tui.agent.title: " Agents (%{summary}) "
+tui.agent.running: "%{count} en cours"
+tui.agent.completed: "%{count} terminés"
+tui.agent.failed: "%{count} échoués"
+
+# Tool / deck — no tool calls state, agent waiting
+tui.tool_card.no_tool_calls: "Aucun appel d'outil pour l'instant."
+tui.deck.waiting: "En attente…"
+tui.deck.no_conversation: "Aucune conversation. Tapez ci-dessous."
+
+# Configure footer breadcrumb
+tui.configure.footer: "   ↑↓ Naviguer  Enter Sélectionner  Esc Retour"
+
+# Footer queued indicator
+tui.footer.queued_count: "[%{count} en file]"
+tui.footer.queued_preview: " • %{preview}"
+tui.footer.queued_more: " • +%{count} de plus"
+
+# Three-pane band headers + chrome
+tui.three_pane.focus_header: "─── FOCUS"
+tui.three_pane.log_header: "─── JOURNAL"
+tui.three_pane.context_header: "─── CONTEXTE"
+tui.three_pane.ctx_model: "  Modèle : "
+tui.three_pane.ctx_git: "  Git:   "
+tui.three_pane.ctx_ctx: "  CTX:   ["
+tui.three_pane.ctx_cost_local: "local"
+tui.three_pane.ctx_cost_in_out: "in:%{input} out:%{output}"
+tui.three_pane.ctx_git_clean: "propre"
+tui.three_pane.log_label_you: "  toi  "
+tui.three_pane.log_label_ast: "  ast  "
+tui.three_pane.log_label_sys: "  sys  "
+tui.three_pane.keybinds: "  PageUp/PageDown défiler  ·  Ctrl+Tab onglets  ·  Ctrl+R panneau  ·  /quit quitter"
+
+# Journal layout chrome
+tui.journal.input_hint: " ▌ Ctrl-K palette de commandes · ↑ historique · Entrée pour envoyer"
+tui.journal.thread_hint: "Ctrl+Tab cycler"
+tui.journal.thread_separator: " · "
+tui.journal.new_thread: " · +"
+tui.journal.header: " %{branch} · v%{version} · %{model}"
+tui.journal.you_label: "         you  "
+tui.journal.palette_query_prompt: " ❯ "
+tui.journal.palette_hint: " ↑↓ naviguer  Entrée exécuter  Esc fermer"
+tui.journal.palette_active: "actif"
+tui.journal.palette_background: "arrière-plan"
+tui.journal.palette_recent: "prompt récent"
+tui.journal.palette_switch_thread: "Changer de fil : %{name}"
+tui.journal.default_branch: "anvil"
+
+# Slash command palette presets (journal Ctrl-K)
+tui.palette.help: "afficher l'aide"
+tui.palette.clear: "effacer la conversation"
+tui.palette.model: "changer de modèle"
+tui.palette.layout: "changer de layout TUI"
+tui.palette.status: "statut de session"
+tui.palette.config: "configuration"
+tui.palette.cost: "résumé coût en tokens"
+tui.palette.exit: "quitter Anvil"

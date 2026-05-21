@@ -385,3 +385,132 @@ cmd.deps.no_package_manager: "未识别到包管理器。"
 
 # 跨命令复用的通用 CLI 标签
 cli.no_pr_diff: "未找到 PR diff。请确认 gh 已安装、已认证，且当前分支有打开的 PR。"
+
+# ─── TUI layouts — chrome strings (task #746) ─────────────────────────────
+# English fallback. Translator: please localize these keys for your locale.
+# Strings rendered by the four layout renderers (classic, vertical_split,
+# three_pane, journal) plus the shared `common.rs` helpers.
+
+# Rail — left rail labels and section headers (vertical_split)
+tui.rail.sessions: "会话"
+tui.rail.agents: "代理"
+tui.rail.agents_qualifier: "全局"
+tui.rail.status: "状态"
+tui.rail.status_qualifier: "全部标签页"
+tui.rail.memory: "内存"
+tui.rail.model: "模型"
+tui.rail.permissions: "权限"
+tui.rail.context: "上下文"
+tui.rail.keybinds: "按键"
+tui.rail.build: "构建"
+tui.rail.none_active: "无活动"
+tui.rail.deck_label: "面板：%{mode}"
+tui.rail.on_tab: " 于 %{name}"
+
+# Status — bottom status footer + STATUS rail block
+tui.status.tab_count_one: "1 个标签页"
+tui.status.tab_count_other: "%{count} 个标签页"
+tui.status.perm_count_one: "1 个权限"
+tui.status.perm_count_other: "%{count} 个权限"
+tui.status.running: "运行中"
+tui.status.pending: "待处理"
+tui.status.cost: "费用"
+tui.status.cost_included: "已包含"
+tui.status.cost_subscription: "订阅"
+tui.status.thinking: "思考"
+tui.status.thinking_yes: "开"
+tui.status.thinking_no: "关"
+tui.status.session_block: "会话 %{pct} · 块 %{minutes}m"
+
+# Memory — 7-layer MEMORY block (rail + inline)
+tui.memory.working: "工作"
+tui.memory.working_val: "%{turns}t / %{tokens}tok"
+tui.memory.episodic: "情景"
+tui.memory.episodic_sessions_one: "1 个会话"
+tui.memory.episodic_sessions_other: "%{count} 个会话"
+tui.memory.semantic: "语义"
+tui.memory.semantic_val: "%{c}c · %{a}a"
+tui.memory.procedural: "程序"
+tui.memory.procedural_val: "%{s}s · %{p}p"
+tui.memory.reflective: "反思"
+tui.memory.reflective_daily_one: "1 日"
+tui.memory.reflective_daily_other: "%{count} 日"
+tui.memory.long_term: "长期"
+tui.memory.long_term_val_default: "L7/QMD"
+tui.memory.long_term_val_one: "L7/QMD (活动 · 1 归档)"
+tui.memory.long_term_val_other: "L7/QMD (活动 · %{count} 归档)"
+tui.memory.permission: "权限"
+tui.memory.permission_prior_one: "1 条历史"
+tui.memory.permission_prior_other: "%{count} 条历史"
+tui.memory.qmd: "qmd"
+tui.memory.qmd_active_one: "活动 · 1 归档"
+tui.memory.qmd_active_other: "活动 · %{count} 归档"
+tui.memory.qmd_latest: "qmd-最新"
+tui.memory.qmd_latest_val: "%{sid} (%{days} 天前)"
+
+# Banner — HISTORICAL VIEW, update available, autocompact warnings
+tui.banner.historical_view: "─── 历史视图（按 End 返回实时） "
+tui.banner.update_available_with_version: " ⬆ 有更新  v%{version}"
+tui.banner.update_available_raw: " ⬆ %{message}"
+
+# Tab strip — hint shown to the right of the tab bar
+tui.tab.hint: "F2/F3 切换  Ctrl+T 新建  Ctrl+W 关闭  /help"
+
+# Agent panel — title, count rollups, empty state
+tui.agent.title: " 代理 (%{summary}) "
+tui.agent.running: "%{count} 运行中"
+tui.agent.completed: "%{count} 完成"
+tui.agent.failed: "%{count} 失败"
+
+# Tool / deck — no tool calls state, agent waiting
+tui.tool_card.no_tool_calls: "暂无工具调用。"
+tui.deck.waiting: "等待中…"
+tui.deck.no_conversation: "暂无对话。在下方输入开始。"
+
+# Configure footer breadcrumb
+tui.configure.footer: "   ↑↓ 导航  Enter 选择  Esc 返回"
+
+# Footer queued indicator
+tui.footer.queued_count: "[%{count} 已排队]"
+tui.footer.queued_preview: " • %{preview}"
+tui.footer.queued_more: " • 还有 %{count} 条"
+
+# Three-pane band headers + chrome
+tui.three_pane.focus_header: "─── 焦点"
+tui.three_pane.log_header: "─── 日志"
+tui.three_pane.context_header: "─── 上下文"
+tui.three_pane.ctx_model: "  模型: "
+tui.three_pane.ctx_git: "  Git:   "
+tui.three_pane.ctx_ctx: "  CTX:   ["
+tui.three_pane.ctx_cost_local: "本地"
+tui.three_pane.ctx_cost_in_out: "in:%{input} out:%{output}"
+tui.three_pane.ctx_git_clean: "干净"
+tui.three_pane.log_label_you: "  你   "
+tui.three_pane.log_label_ast: "  助   "
+tui.three_pane.log_label_sys: "  系   "
+tui.three_pane.keybinds: "  PageUp/PageDown 滚动  ·  Ctrl+Tab 标签页  ·  Ctrl+R 面板  ·  /quit 退出"
+
+# Journal layout chrome
+tui.journal.input_hint: " ▌ Ctrl-K 命令面板 · ↑ 历史 · Enter 发送"
+tui.journal.thread_hint: "Ctrl+Tab 循环"
+tui.journal.thread_separator: " · "
+tui.journal.new_thread: " · +"
+tui.journal.header: " %{branch} · v%{version} · %{model}"
+tui.journal.you_label: "         you  "
+tui.journal.palette_query_prompt: " ❯ "
+tui.journal.palette_hint: " ↑↓ 导航  Enter 执行  Esc 关闭"
+tui.journal.palette_active: "活动"
+tui.journal.palette_background: "后台"
+tui.journal.palette_recent: "最近提示"
+tui.journal.palette_switch_thread: "切换线程: %{name}"
+tui.journal.default_branch: "anvil"
+
+# Slash command palette presets (journal Ctrl-K)
+tui.palette.help: "显示帮助"
+tui.palette.clear: "清空对话"
+tui.palette.model: "切换模型"
+tui.palette.layout: "切换 TUI 布局"
+tui.palette.status: "会话状态"
+tui.palette.config: "配置"
+tui.palette.cost: "Token 费用汇总"
+tui.palette.exit: "退出 Anvil"

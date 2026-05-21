@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use rust_i18n::t;
 
 use runtime::Rgb;
 
@@ -121,7 +122,7 @@ pub(super) fn render_tab_bar(
     }
 
     let hint = Span::styled(
-        "F2/F3 switch  Ctrl+T new  Ctrl+W close  /help nav",
+        t!("tui.tab.hint").to_string(),
         Style::default().fg(rgb(theme.border)),
     );
     let left_len: usize = tab_spans.iter().map(|s| s.content.chars().count()).sum();
@@ -329,13 +330,26 @@ pub(super) fn section_header_line(
     w: usize,
     style: Style,
 ) -> Line<'static> {
+    let q_owned = qualifier.map(str::to_owned);
+    section_header_line_owned(label.to_owned(), q_owned, w, style)
+}
+
+/// Like `section_header_line`, but accepts owned `String`s so callers can pass
+/// translated text from `rust_i18n::t!()` (which returns a `Cow<'_, str>`
+/// rather than a `&'static str`). Task #746 / i18n end-to-end.
+pub(super) fn section_header_line_owned(
+    label: String,
+    qualifier: Option<String>,
+    w: usize,
+    style: Style,
+) -> Line<'static> {
     let full = if let Some(q) = qualifier {
         format!(" {label} ({q})")
     } else {
         format!(" {label}")
     };
     let padded = truncate(
-        format!("{full}{}", " ".repeat(w.saturating_sub(full.len()))),
+        format!("{full}{}", " ".repeat(w.saturating_sub(full.chars().count()))),
         w,
     );
     Line::from(Span::styled(padded, style))

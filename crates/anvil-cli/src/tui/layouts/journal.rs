@@ -19,6 +19,7 @@ use ratatui::layout::{Constraint, Direction, Layout as RLayout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use rust_i18n::t;
 
 use super::common::{render_completion_popup, rgb};
 use super::{LayoutLocalState, TuiLayoutRenderer};
@@ -113,12 +114,18 @@ impl TuiLayoutRenderer for Renderer {
         // ── Header ────────────────────────────────────────────────────────────
         {
             let version = env!("CARGO_PKG_VERSION");
-            let header_text = format!(
-                " {} · v{} · {}",
-                if snap.git_branch.is_empty() { "anvil".to_string() } else { snap.git_branch.clone() },
-                version,
-                snap.model,
-            );
+            let branch = if snap.git_branch.is_empty() {
+                t!("tui.journal.default_branch").to_string()
+            } else {
+                snap.git_branch.clone()
+            };
+            let header_text = t!(
+                "tui.journal.header",
+                branch = branch,
+                version = version,
+                model = snap.model.clone()
+            )
+            .to_string();
             frame.render_widget(ratatui::widgets::Clear, header_area);
             frame.render_widget(
                 Paragraph::new(header_text).style(
@@ -138,7 +145,7 @@ impl TuiLayoutRenderer for Renderer {
         {
             let input_line = if snap.input_text.is_empty() {
                 Line::from(Span::styled(
-                    " ▌ ctrl-k for command palette · ↑ history · enter to send",
+                    t!("tui.journal.input_hint").to_string(),
                     Style::default().fg(Color::DarkGray),
                 ))
             } else {
@@ -241,19 +248,26 @@ fn render_thread_switcher(
 
         // Separator between tabs, " · " or " + " for the new-tab button.
         if idx + 1 < snap.tab_infos.len() {
-            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                t!("tui.journal.thread_separator").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
             cursor_col = label_end + 3;
         } else {
-            spans.push(Span::styled(" · +", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                t!("tui.journal.new_thread").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
             cursor_col = label_end + 4;
         }
         let _ = tab_id;
     }
 
     // Right-align a small hint.
-    let hint = "Ctrl+Tab cycle";
+    let hint = t!("tui.journal.thread_hint").to_string();
+    let hint_len = hint.chars().count();
     let left_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    let pad = width.saturating_sub(left_len + hint.len());
+    let pad = width.saturating_sub(left_len + hint_len);
     spans.push(Span::raw(" ".repeat(pad)));
     spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
 
@@ -282,7 +296,10 @@ fn render_journal_body(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
                     .take(width.saturating_sub(14))
                     .collect();
                 lines.push(Line::from(vec![
-                    Span::styled("         you  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        t!("tui.journal.you_label").to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                     Span::styled(summary, Style::default().fg(rgb(theme.accent))),
                 ]));
             }
@@ -394,36 +411,42 @@ fn render_palette(
     // Build items.
     let mut items: Vec<(String, String)> = Vec::new();
 
-    // Slash commands that fuzzy-match the query.
-    let slash_cmds: &[(&str, &str)] = &[
-        ("/help", "show help"),
-        ("/clear", "clear conversation"),
-        ("/model", "switch model"),
-        ("/layout", "switch TUI layout"),
-        ("/status", "session status"),
-        ("/config", "configuration"),
-        ("/cost", "token cost summary"),
-        ("/exit", "exit Anvil"),
+    // Slash commands that fuzzy-match the query. The command tokens are
+    // English-only (they're literal slash-commands the user types), but the
+    // hint text is translated.
+    let slash_cmds: [(&str, String); 8] = [
+        ("/help", t!("tui.palette.help").to_string()),
+        ("/clear", t!("tui.palette.clear").to_string()),
+        ("/model", t!("tui.palette.model").to_string()),
+        ("/layout", t!("tui.palette.layout").to_string()),
+        ("/status", t!("tui.palette.status").to_string()),
+        ("/config", t!("tui.palette.config").to_string()),
+        ("/cost", t!("tui.palette.cost").to_string()),
+        ("/exit", t!("tui.palette.exit").to_string()),
     ];
-    for (cmd, hint) in slash_cmds {
+    for (cmd, hint) in &slash_cmds {
         if query.is_empty() || cmd.contains(query) || hint.contains(query) {
-            items.push((cmd.to_string(), hint.to_string()));
+            items.push((cmd.to_string(), hint.clone()));
         }
     }
 
     // Thread names.
     for (_id, name, is_active, _unread, _perm) in &snap.tab_infos {
-        let label = format!("Switch thread: {name}");
+        let label = t!("tui.journal.palette_switch_thread", name = name.clone()).to_string();
         if query.is_empty() || name.contains(&query[..]) {
-            let hint = if *is_active { "active" } else { "background" };
-            items.push((label, hint.to_string()));
+            let hint = if *is_active {
+                t!("tui.journal.palette_active").to_string()
+            } else {
+                t!("tui.journal.palette_background").to_string()
+            };
+            items.push((label, hint));
         }
     }
 
     // Recent prompts from queued_preview (step 4 will add full history).
     for preview in &snap.queued_preview {
         if query.is_empty() || preview.contains(query) {
-            items.push((preview.clone(), "recent prompt".to_string()));
+            items.push((preview.clone(), t!("tui.journal.palette_recent").to_string()));
         }
     }
 
@@ -445,13 +468,16 @@ fn render_palette(
 
     // Query line.
     let query_line = Line::from(vec![
-        Span::styled(" ❯ ", Style::default().fg(rgb(theme.accent))),
+        Span::styled(
+            t!("tui.journal.palette_query_prompt").to_string(),
+            Style::default().fg(rgb(theme.accent)),
+        ),
         Span::raw(query.to_string()),
         Span::styled("█", Style::default().fg(Color::White)),
     ]);
 
     let hint_line = Line::from(Span::styled(
-        " ↑↓ navigate  Enter execute  Esc close",
+        t!("tui.journal.palette_hint").to_string(),
         Style::default().fg(Color::DarkGray),
     ));
 

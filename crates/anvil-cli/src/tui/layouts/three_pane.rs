@@ -16,6 +16,7 @@ use ratatui::layout::{Constraint, Direction, Layout as RLayout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use rust_i18n::t;
 
 use super::common::{rgb, render_completion_popup, render_tab_bar};
 use super::{LayoutLocalState, TuiLayoutRenderer};
@@ -113,7 +114,9 @@ fn render_focus_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let width = area.width as usize;
 
     // Header line: "─── FOCUS ────────"
-    let header = format!("─── FOCUS{}", "─".repeat(width.saturating_sub(8)));
+    let focus_label = t!("tui.three_pane.focus_header").to_string();
+    let label_chars = focus_label.chars().count();
+    let header = format!("{focus_label}{}", "─".repeat(width.saturating_sub(label_chars)));
     let header_line = Line::from(Span::styled(
         header,
         Style::default().fg(rgb(theme.border)),
@@ -138,7 +141,7 @@ fn render_focus_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
                     .collect()
             }
             _ => vec![Line::from(Span::styled(
-                "Waiting…",
+                t!("tui.deck.waiting").to_string(),
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
@@ -146,7 +149,7 @@ fn render_focus_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         }
     } else {
         vec![Line::from(Span::styled(
-            "No conversation yet. Start typing below.",
+            t!("tui.deck.no_conversation").to_string(),
             Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
@@ -251,7 +254,9 @@ fn render_log_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let theme = &snap.theme;
     let width = area.width as usize;
 
-    let header = format!("─── LOG{}", "─".repeat(width.saturating_sub(6)));
+    let log_label = t!("tui.three_pane.log_header").to_string();
+    let log_chars = log_label.chars().count();
+    let header = format!("{log_label}{}", "─".repeat(width.saturating_sub(log_chars)));
     let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
         header,
         Style::default().fg(rgb(theme.border)),
@@ -279,20 +284,33 @@ fn render_log_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
             _ => {}
         }
         let (prefix, content, color) = match entry {
-            LogEntry::User(t) => ("  you  ", t.as_str(), rgb(theme.accent)),
-            LogEntry::Assistant(t) => ("  ast  ", t.as_str(), Color::White),
-            LogEntry::System(t) => ("  sys  ", t.as_str(), Color::DarkGray),
+            LogEntry::User(txt) => (
+                t!("tui.three_pane.log_label_you").to_string(),
+                txt.as_str(),
+                rgb(theme.accent),
+            ),
+            LogEntry::Assistant(txt) => (
+                t!("tui.three_pane.log_label_ast").to_string(),
+                txt.as_str(),
+                Color::White,
+            ),
+            LogEntry::System(txt) => (
+                t!("tui.three_pane.log_label_sys").to_string(),
+                txt.as_str(),
+                Color::DarkGray,
+            ),
             _ => unreachable!(),
         };
+        let prefix_chars = prefix.chars().count();
         let summary: String = content
             .lines()
             .next()
             .unwrap_or("")
             .chars()
-            .take(width.saturating_sub(prefix.len()))
+            .take(width.saturating_sub(prefix_chars))
             .collect();
         lines.push(Line::from(vec![
-            Span::styled(prefix.to_string(), Style::default().fg(Color::DarkGray)),
+            Span::styled(prefix, Style::default().fg(Color::DarkGray)),
             Span::styled(summary, Style::default().fg(color)),
         ]));
     }
@@ -310,7 +328,9 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     let theme = &snap.theme;
     let width = area.width as usize;
 
-    let header = format!("─── CONTEXT{}", "─".repeat(width.saturating_sub(10)));
+    let ctx_label = t!("tui.three_pane.context_header").to_string();
+    let ctx_chars = ctx_label.chars().count();
+    let header = format!("{ctx_label}{}", "─".repeat(width.saturating_sub(ctx_chars)));
     let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
         header,
         Style::default().fg(rgb(theme.border)),
@@ -318,12 +338,20 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
 
     // Model + tokens + cost.
     let cost_str = if snap.model.contains(':') && !snap.model.contains(":cloud") {
-        "local".to_string()
+        t!("tui.three_pane.ctx_cost_local").to_string()
     } else {
-        format!("in:{} out:{}", snap.input_tokens, snap.output_tokens)
+        t!(
+            "tui.three_pane.ctx_cost_in_out",
+            input = snap.input_tokens.to_string(),
+            output = snap.output_tokens.to_string()
+        )
+        .to_string()
     };
     lines.push(Line::from(vec![
-        Span::styled("  Model: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            t!("tui.three_pane.ctx_model").to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(snap.model.clone(), Style::default().fg(Color::Yellow)),
         Span::styled("   ", Style::default()),
         Span::styled(cost_str, Style::default().fg(Color::DarkGray)),
@@ -332,12 +360,15 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     // Git branch + diff.
     if !snap.git_branch.is_empty() {
         let diff = if snap.git_diff_stats.is_empty() {
-            "clean".to_string()
+            t!("tui.three_pane.ctx_git_clean").to_string()
         } else {
             snap.git_diff_stats.clone()
         };
         lines.push(Line::from(vec![
-            Span::styled("  Git:   ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                t!("tui.three_pane.ctx_git").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(snap.git_branch.clone(), Style::default().fg(Color::Green)),
             Span::styled(format!("  {diff}"), Style::default().fg(Color::DarkGray)),
         ]));
@@ -352,7 +383,10 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
         let empty = bar_w.saturating_sub(filled);
         let bar_color = if pct >= 80.0 { Color::Yellow } else { Color::Blue };
         lines.push(Line::from(vec![
-            Span::styled("  CTX:   [", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                t!("tui.three_pane.ctx_ctx").to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("█".repeat(filled), Style::default().fg(bar_color)),
             Span::styled("░".repeat(empty), Style::default().fg(Color::Rgb(0x33, 0x33, 0x33))),
             Span::styled(format!("] {pct:.0}%"), Style::default().fg(Color::DarkGray)),
@@ -360,7 +394,7 @@ fn render_context_pane(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
     }
 
     // Keybind row at the bottom of context pane.
-    let keybind = "  PageUp/PageDown scroll  ·  Ctrl+Tab tabs  ·  Ctrl+R deck  ·  /quit exit";
+    let keybind = t!("tui.three_pane.keybinds").to_string();
     let keybind_trunc: String = keybind.chars().take(width).collect();
     // Pad to fill remaining rows.
     while lines.len() < area.height.saturating_sub(1) as usize {

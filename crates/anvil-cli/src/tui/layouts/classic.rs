@@ -19,12 +19,13 @@ use ratatui::layout::{Constraint, Direction, Layout as RLayout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use rust_i18n::t;
 
 use runtime::{format_usd, pricing_for_model};
 
 use super::common::{
     rgb, render_completion_popup, render_model_bar, render_tab_bar,
-    right_aligned_row, section_header_line,
+    right_aligned_row, section_header_line_owned,
 };
 use super::{LayoutLocalState, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
@@ -281,10 +282,9 @@ impl TuiLayoutRenderer for Renderer {
             // Historical scrollback view.
             let visible_lines: Vec<Line<'static>> =
                 if let Some(ref hist_lines) = snap.scrollback_view_lines {
-                    let banner_pad = "─".repeat(width.saturating_sub(50));
-                    let banner_text = format!(
-                        "─── HISTORICAL VIEW  (Press End to return to live) {banner_pad}"
-                    );
+                    let banner_prefix = t!("tui.banner.historical_view").to_string();
+                    let pad_n = width.saturating_sub(banner_prefix.chars().count());
+                    let banner_text = format!("{banner_prefix}{}", "─".repeat(pad_n));
                     let banner = Line::from(Span::styled(
                         banner_text,
                         Style::default()
@@ -361,12 +361,18 @@ fn render_agent_panel(frame: &mut Frame, panel_area: Rect, snap: &LayoutSnapshot
     let done = snap.agent_rows.iter().filter(|r| r.4 == "✓").count();
     let failed = snap.agent_rows.iter().filter(|r| r.4 == "✗").count();
     let mut status_parts = Vec::new();
-    if running > 0 { status_parts.push(format!("{running} running")); }
-    if done > 0 { status_parts.push(format!("{done} completed")); }
-    if failed > 0 { status_parts.push(format!("{failed} failed")); }
+    if running > 0 {
+        status_parts.push(t!("tui.agent.running", count = running.to_string()).to_string());
+    }
+    if done > 0 {
+        status_parts.push(t!("tui.agent.completed", count = done.to_string()).to_string());
+    }
+    if failed > 0 {
+        status_parts.push(t!("tui.agent.failed", count = failed.to_string()).to_string());
+    }
     let status_str = status_parts.join(", ");
-    let header_label = format!(" Agents ({status_str}) ");
-    let dashes_after = "─".repeat(panel_width.saturating_sub(header_label.len() + 2));
+    let header_label = t!("tui.agent.title", summary = status_str).to_string();
+    let dashes_after = "─".repeat(panel_width.saturating_sub(header_label.chars().count() + 2));
     let header_line = Line::from(vec![
         Span::styled("─", Style::default().fg(rgb(theme.border))),
         Span::styled(
@@ -455,54 +461,81 @@ fn render_memory_block(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot) {
 
     let rule = Line::from(Span::styled("─".repeat(w), rule_style));
 
-    let working_val = format!(
-        "{}t / {}tok",
-        snap.memory_working_turns, snap.memory_working_tokens
-    );
+    let working_val = t!(
+        "tui.memory.working_val",
+        turns = snap.memory_working_turns.to_string(),
+        tokens = snap.memory_working_tokens.to_string()
+    )
+    .to_string();
     let episodic_val = if snap.memory_episodic_sessions == 1 {
-        "1 session".to_string()
+        t!("tui.memory.episodic_sessions_one").to_string()
     } else {
-        format!("{} sessions", snap.memory_episodic_sessions)
+        t!(
+            "tui.memory.episodic_sessions_other",
+            count = snap.memory_episodic_sessions.to_string()
+        )
+        .to_string()
     };
-    let semantic_val = format!(
-        "{}c · {}a",
-        snap.memory_semantic_collections, snap.memory_semantic_archives
-    );
-    let procedural_val = format!(
-        "{}s · {}p",
-        snap.memory_procedural_skills, snap.memory_procedural_plugins
-    );
+    let semantic_val = t!(
+        "tui.memory.semantic_val",
+        c = snap.memory_semantic_collections.to_string(),
+        a = snap.memory_semantic_archives.to_string()
+    )
+    .to_string();
+    let procedural_val = t!(
+        "tui.memory.procedural_val",
+        s = snap.memory_procedural_skills.to_string(),
+        p = snap.memory_procedural_plugins.to_string()
+    )
+    .to_string();
     let reflective_val = if snap.memory_reflective_daily == 1 {
-        "1 daily".to_string()
+        t!("tui.memory.reflective_daily_one").to_string()
     } else {
-        format!("{} daily", snap.memory_reflective_daily)
+        t!(
+            "tui.memory.reflective_daily_other",
+            count = snap.memory_reflective_daily.to_string()
+        )
+        .to_string()
     };
     // Layer 7 (long-term) folds the QMD archive count inline so the classic
     // block keeps to one row per layer. Matches the rail's wording from task
     // #596 where QMD became a sub-row of MEMORY.
     let long_term_val = if snap.qmd_archive_count == 0 {
-        "L7/QMD".to_string()
+        t!("tui.memory.long_term_val_default").to_string()
     } else if snap.qmd_archive_count == 1 {
-        "L7/QMD (active · 1 archive)".to_string()
+        t!("tui.memory.long_term_val_one").to_string()
     } else {
-        format!("L7/QMD (active · {} archives)", snap.qmd_archive_count)
+        t!(
+            "tui.memory.long_term_val_other",
+            count = snap.qmd_archive_count.to_string()
+        )
+        .to_string()
     };
     let permission_val = if snap.memory_permission_decisions == 1 {
-        "1 prior".to_string()
+        t!("tui.memory.permission_prior_one").to_string()
     } else {
-        format!("{} prior", snap.memory_permission_decisions)
+        t!(
+            "tui.memory.permission_prior_other",
+            count = snap.memory_permission_decisions.to_string()
+        )
+        .to_string()
     };
 
     let lines: Vec<Line<'static>> = vec![
         rule.clone(),
-        section_header_line("MEMORY", None, w, header_style),
-        right_aligned_row("working", &working_val, w, value_style),
-        right_aligned_row("episodic", &episodic_val, w, value_style),
-        right_aligned_row("semantic", &semantic_val, w, value_style),
-        right_aligned_row("procedural", &procedural_val, w, value_style),
-        right_aligned_row("reflective", &reflective_val, w, value_style),
-        right_aligned_row("long-term", &long_term_val, w, value_style),
-        right_aligned_row("permission", &permission_val, w, value_style),
+        section_header_line_owned(
+            t!("tui.rail.memory").to_string(),
+            None,
+            w,
+            header_style,
+        ),
+        right_aligned_row(&t!("tui.memory.working").to_string(), &working_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.episodic").to_string(), &episodic_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.semantic").to_string(), &semantic_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.procedural").to_string(), &procedural_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.reflective").to_string(), &reflective_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.long_term").to_string(), &long_term_val, w, value_style),
+        right_aligned_row(&t!("tui.memory.permission").to_string(), &permission_val, w, value_style),
         rule,
         Line::from(""),
     ];
@@ -541,7 +574,7 @@ fn render_footer(
                     Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::DIM),
                 ),
                 Span::styled(
-                    "   ↑↓ Navigate  Enter Select  Esc Back",
+                    t!("tui.configure.footer").to_string(),
                     Style::default().fg(rgb(theme.border)),
                 ),
             ])]
@@ -558,18 +591,26 @@ fn render_footer(
     let queued_indicator: Option<Line<'static>> = if snap.queued_count > 0 {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled(
-            format!("[{} queued]", snap.queued_count),
+            t!(
+                "tui.footer.queued_count",
+                count = snap.queued_count.to_string()
+            )
+            .to_string(),
             Style::default().fg(rgb(theme.warning)).add_modifier(Modifier::BOLD),
         ));
         for preview in &snap.queued_preview {
             spans.push(Span::styled(
-                format!(" • {preview}"),
+                t!("tui.footer.queued_preview", preview = preview.clone()).to_string(),
                 Style::default().fg(Color::DarkGray),
             ));
         }
         if snap.queued_count > snap.queued_preview.len() {
             spans.push(Span::styled(
-                format!(" • +{} more", snap.queued_count - snap.queued_preview.len()),
+                t!(
+                    "tui.footer.queued_more",
+                    count = (snap.queued_count - snap.queued_preview.len()).to_string()
+                )
+                .to_string(),
                 Style::default().fg(Color::DarkGray),
             ));
         }

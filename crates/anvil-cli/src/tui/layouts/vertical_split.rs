@@ -27,10 +27,11 @@ use ratatui::layout::{Constraint, Direction, Layout as RLayout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
+use rust_i18n::t;
 
 use super::common::{
     rgb, render_completion_popup, render_tab_bar, right_aligned_row,
-    section_header_line, truncate,
+    section_header_line_owned, truncate,
 };
 use super::{LayoutLocalState, RightDeckMode, TuiLayoutRenderer};
 use crate::tui::configure_types::ConfigureState;
@@ -322,7 +323,12 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     let inactive_dot_style = Style::default().fg(Color::DarkGray);
 
     // ── SESSIONS section ──────────────────────────────────────────────────────
-    lines.push(section_header_line("SESSIONS", None, w, sessions_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.sessions").to_string(),
+        None,
+        w,
+        sessions_style,
+    ));
 
     for (_, tab_name, is_active, has_unread, _has_perm) in &snap.tab_infos {
         let dot = if *is_active { "●" } else { "○" };
@@ -344,7 +350,12 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     // ── AGENTS (GLOBAL) section ───────────────────────────────────────────────
-    lines.push(section_header_line("AGENTS", Some("GLOBAL"), w, agents_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.agents").to_string(),
+        Some(t!("tui.rail.agents_qualifier").to_string()),
+        w,
+        agents_style,
+    ));
 
     let tab_id_to_name: std::collections::HashMap<usize, &str> = snap
         .tab_infos
@@ -361,7 +372,7 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     if snap.agent_rows.is_empty() {
         lines.push(Line::from(vec![
             Span::styled(" │ ", dim),
-            Span::styled("none active".to_string(), dim),
+            Span::styled(t!("tui.rail.none_active").to_string(), dim),
         ]));
     } else {
         for (agent_tab_id, type_label, _task, elapsed, icon) in snap.agent_rows.iter().take(4) {
@@ -375,7 +386,7 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
                 if *agent_tab_id != 0 && *agent_tab_id != active_tab_id {
                     tab_id_to_name
                         .get(agent_tab_id)
-                        .map(|name| format!(" on {name}"))
+                        .map(|name| t!("tui.rail.on_tab", name = name).to_string())
                 } else {
                     None
                 };
@@ -400,17 +411,30 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     // ── STATUS (ALL TABS) section ─────────────────────────────────────────────
     // STATUS is informational only — no key binding focuses it directly, so it
     // always renders unfocused.
-    lines.push(section_header_line("STATUS", Some("ALL TABS"), w, unfocused_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.status").to_string(),
+        Some(t!("tui.rail.status_qualifier").to_string()),
+        w,
+        unfocused_style,
+    ));
 
     let running_val = if snap.running_tab_count == 1 {
-        "1 tab".to_string()
+        t!("tui.status.tab_count_one").to_string()
     } else {
-        format!("{} tabs", snap.running_tab_count)
+        t!(
+            "tui.status.tab_count_other",
+            count = snap.running_tab_count.to_string()
+        )
+        .to_string()
     };
     let pending_val = if snap.pending_permission_count == 1 {
-        "1 perm".to_string()
+        t!("tui.status.perm_count_one").to_string()
     } else {
-        format!("{} perms", snap.pending_permission_count)
+        t!(
+            "tui.status.perm_count_other",
+            count = snap.pending_permission_count.to_string()
+        )
+        .to_string()
     };
     // #696 P1: OAuth Max / local / cloud users don't pay per-token — the
     // model is covered by their subscription. Synthesizing a per-token
@@ -419,15 +443,18 @@ fn build_rail_top(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     // label as a stand-in; the dollar amount is only shown for `api` and
     // `metered` paths where per-token pricing IS what gets billed.
     let cost_val = match snap.cost_provider_label.as_str() {
-        "OAuth"  => "included".to_string(),
+        "OAuth"  => t!("tui.status.cost_included").to_string(),
         "local"  => "$0.00".to_string(),
-        "cloud"  => "subscription".to_string(),
+        "cloud"  => t!("tui.status.cost_subscription").to_string(),
         _        => format!("${:.2}", snap.total_session_cost_usd),
     };
 
-    lines.push(right_aligned_row("running", &running_val, w, dim));
-    lines.push(right_aligned_row("pending", &pending_val, w, dim));
-    lines.push(right_aligned_row("cost", &cost_val, w, dim));
+    let running_label = t!("tui.status.running").to_string();
+    let pending_label = t!("tui.status.pending").to_string();
+    let cost_label = t!("tui.status.cost").to_string();
+    lines.push(right_aligned_row(&running_label, &running_val, w, dim));
+    lines.push(right_aligned_row(&pending_label, &pending_val, w, dim));
+    lines.push(right_aligned_row(&cost_label, &cost_val, w, dim));
 
     lines
 }
@@ -450,64 +477,168 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     // ── MEMORY section (task #594 / BUG-13 + task #596) ───────────────────────
     // QMD rows are folded in here: QMD is layers 3-7 of the seven-layer
     // memory architecture, so a standalone QMD section was double-counting.
-    lines.push(section_header_line("MEMORY", None, w, section_style));
-    let working_val = format!("{}t / {}tok", snap.memory_working_turns, snap.memory_working_tokens);
-    lines.push(right_aligned_row("working", &working_val, w, dim));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.memory").to_string(),
+        None,
+        w,
+        section_style,
+    ));
+    let working_val = t!(
+        "tui.memory.working_val",
+        turns = snap.memory_working_turns.to_string(),
+        tokens = snap.memory_working_tokens.to_string()
+    )
+    .to_string();
+    lines.push(right_aligned_row(
+        &t!("tui.memory.working").to_string(),
+        &working_val,
+        w,
+        dim,
+    ));
     let episodic_val = if snap.memory_episodic_sessions == 1 {
-        "1 session".to_string()
+        t!("tui.memory.episodic_sessions_one").to_string()
     } else {
-        format!("{} sessions", snap.memory_episodic_sessions)
+        t!(
+            "tui.memory.episodic_sessions_other",
+            count = snap.memory_episodic_sessions.to_string()
+        )
+        .to_string()
     };
-    lines.push(right_aligned_row("episodic", &episodic_val, w, dim));
-    let semantic_val = format!(
-        "{}c · {}a",
-        snap.memory_semantic_collections, snap.memory_semantic_archives
-    );
-    lines.push(right_aligned_row("semantic", &semantic_val, w, dim));
-    let procedural_val = format!(
-        "{}s · {}p",
-        snap.memory_procedural_skills, snap.memory_procedural_plugins
-    );
-    lines.push(right_aligned_row("procedural", &procedural_val, w, dim));
+    lines.push(right_aligned_row(
+        &t!("tui.memory.episodic").to_string(),
+        &episodic_val,
+        w,
+        dim,
+    ));
+    let semantic_val = t!(
+        "tui.memory.semantic_val",
+        c = snap.memory_semantic_collections.to_string(),
+        a = snap.memory_semantic_archives.to_string()
+    )
+    .to_string();
+    lines.push(right_aligned_row(
+        &t!("tui.memory.semantic").to_string(),
+        &semantic_val,
+        w,
+        dim,
+    ));
+    let procedural_val = t!(
+        "tui.memory.procedural_val",
+        s = snap.memory_procedural_skills.to_string(),
+        p = snap.memory_procedural_plugins.to_string()
+    )
+    .to_string();
+    lines.push(right_aligned_row(
+        &t!("tui.memory.procedural").to_string(),
+        &procedural_val,
+        w,
+        dim,
+    ));
     let reflective_val = if snap.memory_reflective_daily == 1 {
-        "1 daily".to_string()
+        t!("tui.memory.reflective_daily_one").to_string()
     } else {
-        format!("{} daily", snap.memory_reflective_daily)
+        t!(
+            "tui.memory.reflective_daily_other",
+            count = snap.memory_reflective_daily.to_string()
+        )
+        .to_string()
     };
-    lines.push(right_aligned_row("reflective", &reflective_val, w, dim));
-    lines.push(right_aligned_row("long-term", "L7/QMD", w, dim));
+    lines.push(right_aligned_row(
+        &t!("tui.memory.reflective").to_string(),
+        &reflective_val,
+        w,
+        dim,
+    ));
+    lines.push(right_aligned_row(
+        &t!("tui.memory.long_term").to_string(),
+        &t!("tui.memory.long_term_val_default").to_string(),
+        w,
+        dim,
+    ));
     let perm_decisions_val = if snap.memory_permission_decisions == 1 {
-        "1 prior".to_string()
+        t!("tui.memory.permission_prior_one").to_string()
     } else {
-        format!("{} prior", snap.memory_permission_decisions)
+        t!(
+            "tui.memory.permission_prior_other",
+            count = snap.memory_permission_decisions.to_string()
+        )
+        .to_string()
     };
-    lines.push(right_aligned_row("permission", &perm_decisions_val, w, dim));
+    lines.push(right_aligned_row(
+        &t!("tui.memory.permission").to_string(),
+        &perm_decisions_val,
+        w,
+        dim,
+    ));
     // QMD rows — folded in as part of the MEMORY section per task #596.
     let qmd_val = if snap.qmd_archive_count == 1 {
-        "active · 1 archive".to_string()
+        t!("tui.memory.qmd_active_one").to_string()
     } else {
-        format!("active · {} archives", snap.qmd_archive_count)
+        t!(
+            "tui.memory.qmd_active_other",
+            count = snap.qmd_archive_count.to_string()
+        )
+        .to_string()
     };
-    lines.push(right_aligned_row("qmd", &qmd_val, w, dim));
+    lines.push(right_aligned_row(
+        &t!("tui.memory.qmd").to_string(),
+        &qmd_val,
+        w,
+        dim,
+    ));
     if let Some(ref sid) = snap.qmd_latest_session_id {
         let short_sid: String = sid.chars().take(12).collect();
         let age = snap.qmd_latest_age_days.unwrap_or(0);
-        let qmd_latest_val = format!("{short_sid} ({age}d ago)");
-        lines.push(right_aligned_row("qmd-latest", &qmd_latest_val, w, dim));
+        let qmd_latest_val = t!(
+            "tui.memory.qmd_latest_val",
+            sid = short_sid,
+            days = age.to_string()
+        )
+        .to_string();
+        lines.push(right_aligned_row(
+            &t!("tui.memory.qmd_latest").to_string(),
+            &qmd_latest_val,
+            w,
+            dim,
+        ));
     }
     lines.push(Line::from(""));
 
     // ── MODEL section ─────────────────────────────────────────────────────────
-    lines.push(section_header_line("MODEL", None, w, section_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.model").to_string(),
+        None,
+        w,
+        section_style,
+    ));
     let model_truncated = truncate(format!(" {}", snap.model), w);
     lines.push(Line::from(Span::styled(model_truncated, Style::default().fg(Color::Yellow))));
-    let thinking_val = if snap.thinking_enabled { "yes" } else { "no" };
-    lines.push(right_aligned_row("thinking", thinking_val, w, dim));
-    lines.push(right_aligned_row("cost", &snap.cost_provider_label, w, dim));
+    let thinking_val = if snap.thinking_enabled {
+        t!("tui.status.thinking_yes").to_string()
+    } else {
+        t!("tui.status.thinking_no").to_string()
+    };
+    lines.push(right_aligned_row(
+        &t!("tui.status.thinking").to_string(),
+        &thinking_val,
+        w,
+        dim,
+    ));
+    lines.push(right_aligned_row(
+        &t!("tui.status.cost").to_string(),
+        &snap.cost_provider_label,
+        w,
+        dim,
+    ));
     lines.push(Line::from(""));
 
     // ── PERMISSIONS section ───────────────────────────────────────────────────
-    lines.push(section_header_line("PERMISSIONS", None, w, section_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.permissions").to_string(),
+        None,
+        w,
+        section_style,
+    ));
     let perm_label = truncate(format!(" {}", snap.permission_mode_label), w);
     lines.push(Line::from(Span::styled(
         perm_label,
@@ -516,22 +647,34 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(""));
 
     // ── CONTEXT section ───────────────────────────────────────────────────────
-    lines.push(section_header_line("CONTEXT", None, w, section_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.context").to_string(),
+        None,
+        w,
+        section_style,
+    ));
     lines.push(context_bar_line(
         snap.context_used_tokens,
         snap.context_limit_tokens,
         w,
     ));
-    let block_val = format!(
-        "session {:.1}% · block {}m",
-        snap.session_pct, snap.block_minutes
-    );
+    let block_val = t!(
+        "tui.status.session_block",
+        pct = format!("{:.1}%", snap.session_pct),
+        minutes = snap.block_minutes.to_string()
+    )
+    .to_string();
     let block_truncated = truncate(format!(" {block_val}"), w);
     lines.push(Line::from(Span::styled(block_truncated, dim)));
     lines.push(Line::from(""));
 
     // ── KEYBINDS section ──────────────────────────────────────────────────────
-    lines.push(section_header_line("KEYBINDS", None, w, section_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.keybinds").to_string(),
+        None,
+        w,
+        section_style,
+    ));
     for kb in RAIL_KEYBIND_LINES {
         let kb_truncated = truncate(kb.to_string(), w);
         lines.push(Line::from(Span::styled(kb_truncated, dim)));
@@ -549,8 +692,16 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
         // Fall back to the full message when the parser doesn't match.
         let latest = parse_update_latest(&snap.update_available);
         let label = match latest {
-            Some(v) => format!(" ⬆ update available  v{v}"),
-            None => format!(" ⬆ {}", snap.update_available),
+            Some(v) => t!(
+                "tui.banner.update_available_with_version",
+                version = v
+            )
+            .to_string(),
+            None => t!(
+                "tui.banner.update_available_raw",
+                message = snap.update_available.clone()
+            )
+            .to_string(),
         };
         let label_truncated = truncate(label, w);
         lines.push(Line::from(Span::styled(
@@ -562,7 +713,12 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
     }
 
     // ── BUILD section ─────────────────────────────────────────────────────────
-    lines.push(section_header_line("BUILD", None, w, section_style));
+    lines.push(section_header_line_owned(
+        t!("tui.rail.build").to_string(),
+        None,
+        w,
+        section_style,
+    ));
     let build_val = format!(" v{} · {}", snap.build_version, snap.build_git_sha_short);
     let build_truncated = truncate(build_val, w);
     lines.push(Line::from(Span::styled(
@@ -739,10 +895,9 @@ fn render_deck(
 
         let visible_lines: Vec<Line<'static>> =
             if let Some(ref hist_lines) = snap.scrollback_view_lines {
-                let banner_pad = "─".repeat(width.saturating_sub(50));
-                let banner_text = format!(
-                    "─── HISTORICAL VIEW  (Press End to return to live) {banner_pad}"
-                );
+                let banner_prefix = t!("tui.banner.historical_view").to_string();
+                let pad_n = width.saturating_sub(banner_prefix.chars().count());
+                let banner_text = format!("{banner_prefix}{}", "─".repeat(pad_n));
                 let banner = Line::from(Span::styled(
                     banner_text,
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -795,7 +950,9 @@ fn render_deck_header(frame: &mut Frame, area: Rect, snap: &LayoutSnapshot, deck
     let theme = &snap.theme;
     let w = area.width as usize;
     let mode_label = deck_mode.label();
-    let header_text = format!("DECK: {mode_label}{}", " ".repeat(w.saturating_sub(6 + mode_label.len())));
+    let label = t!("tui.rail.deck_label", mode = mode_label).to_string();
+    let label_chars = label.chars().count();
+    let header_text = format!("{label}{}", " ".repeat(w.saturating_sub(label_chars)));
     // Task #634: when rail focus is on Deck (the default) or Tools, paint the
     // deck header with strong-accent emphasis. When focus is on Sessions or
     // Agents (a rail block), drop the deck header to the dim accent so the
@@ -882,7 +1039,7 @@ fn build_content_lines(
             }
             if lines.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "No tool calls yet.",
+                    t!("tui.tool_card.no_tool_calls").to_string(),
                     Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                 )));
             }
@@ -973,22 +1130,36 @@ fn render_footer(
             vec![Line::from(vec![
                 Span::styled("⚒ ", Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::BOLD)),
                 Span::styled(breadcrumb, Style::default().fg(rgb(theme.accent)).add_modifier(Modifier::DIM)),
-                Span::styled("   ↑↓ Navigate  Enter Select  Esc Back", Style::default().fg(rgb(theme.border))),
+                Span::styled(
+                    t!("tui.configure.footer").to_string(),
+                    Style::default().fg(rgb(theme.border)),
+                ),
             ])]
         };
 
     let queued_indicator: Option<Line<'static>> = if snap.queued_count > 0 {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled(
-            format!("[{} queued]", snap.queued_count),
+            t!(
+                "tui.footer.queued_count",
+                count = snap.queued_count.to_string()
+            )
+            .to_string(),
             Style::default().fg(rgb(theme.warning)).add_modifier(Modifier::BOLD),
         ));
         for preview in &snap.queued_preview {
-            spans.push(Span::styled(format!(" • {preview}"), Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                t!("tui.footer.queued_preview", preview = preview.clone()).to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         if snap.queued_count > snap.queued_preview.len() {
             spans.push(Span::styled(
-                format!(" • +{} more", snap.queued_count - snap.queued_preview.len()),
+                t!(
+                    "tui.footer.queued_more",
+                    count = (snap.queued_count - snap.queued_preview.len()).to_string()
+                )
+                .to_string(),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -1021,6 +1192,15 @@ fn render_input_lines(snap: &LayoutSnapshot, width: usize) -> Vec<Line<'static>>
 mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    /// Mutex held by any test in this module that depends on, or mutates,
+    /// the process-global `rust_i18n` locale. Two tests participate:
+    ///   * `rail_and_chrome_translate_when_locale_switches` (sets locale=ja)
+    ///   * `rail_focus_sessions_emphasizes_sessions_header` (reads English
+    ///     chrome literals)
+    /// See feedback-test-isolation-three-causes.md for why #[serial] alone
+    /// isn't sufficient — we need an explicit module-private mutex.
+    static LOCALE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn extract_text(terminal: &Terminal<TestBackend>) -> String {
         let buf = terminal.backend().buffer();
@@ -1904,6 +2084,16 @@ mod tests {
     /// of the label. Snapshot tests pin the rendered glyph stream.
     #[test]
     fn rail_focus_sessions_emphasizes_sessions_header() {
+        // Serialise against any test in this module that mutates
+        // `rust_i18n::set_locale` — the global locale atomic is read
+        // through `t!()` while rendering, so a concurrent locale switch
+        // could turn the literal "SESSIONS" we assert below into a
+        // translated form.
+        let _guard = LOCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        rust_i18n::set_locale("en");
+
         let mut snap = LayoutSnapshot::test_default();
         snap.model = "claude-sonnet-4-6".to_string();
         snap.tab_infos = vec![(1, "main".to_string(), true, false, false)];
@@ -1992,6 +2182,81 @@ mod tests {
             }
         }
         panic!("did not find row containing label '{label}'");
+    }
+
+    // ── Task #746: i18n end-to-end regression gate ───────────────────────
+    //
+    // After v2.2.19 advertised "i18n end-to-end (18 locales)" but every TUI
+    // layout file shipped hardcoded English strings, this test pins the
+    // contract that switching `rust_i18n::set_locale(...)` actually flips
+    // the chrome (rail headers, status footer, banner). If a future change
+    // reintroduces a hardcoded English literal in any of the four layout
+    // files, the assertion below will catch it.
+    //
+    // `rust_i18n::set_locale` is a process-global atomic — serialise this
+    // test against other tests in this module that also assert on chrome
+    // text (which assumes the default "en" locale) via the `i18n_locale`
+    // serial token.
+    #[test]
+    fn rail_and_chrome_translate_when_locale_switches() {
+        // `rust_i18n::set_locale` is a process-global atomic, so we have
+        // to hold a serial lock against any other test in this file that
+        // asserts on English chrome text. The lock is a module-private
+        // `Mutex` lazily initialised the first time any locale-mutating
+        // test runs.
+        let _guard = LOCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Restore-on-drop guard so a panic doesn't leak `ja` to the rest
+        // of the test process.
+        struct LocaleGuard;
+        impl Drop for LocaleGuard {
+            fn drop(&mut self) {
+                rust_i18n::set_locale("en");
+            }
+        }
+        let _restore = LocaleGuard;
+
+        rust_i18n::set_locale("ja");
+
+        let mut snap = populated_snap();
+        snap.update_available =
+            "Update available! 2.2.18 → 2.2.19  Run: anvil --update".to_string();
+        let rendered = render_real_rail(&snap, 32, 80);
+
+        // Forbidden English section headers / value labels. If any of
+        // these are present after a locale switch, the layout is
+        // hardcoding chrome (regression).
+        //
+        // Intentionally NOT in this list: the KEYBINDS hint rows
+        // (`s sessions`, `a agents`, etc.) — those are keybind labels
+        // that retain the physical key name + a short English mnemonic;
+        // localising them would break the drift-gate test
+        // `every_advertised_rail_key_has_a_handler`.
+        for literal in [
+            "SESSIONS",
+            "AGENTS",
+            "MEMORY",
+            "MODEL",
+            "PERMISSIONS",
+            "BUILD",
+            // The `working`, `episodic`, etc. memory-row labels are also
+            // chrome — check the row to the right of the colon by looking
+            // at value tokens.
+            "12 sessions",
+            "8 daily",
+            "47 archives",
+            "active · 47 archives",
+            "update available  v",
+        ] {
+            assert!(
+                !rendered.contains(literal),
+                "rail still shows English literal {literal:?} after \
+                 set_locale(\"ja\") — this means a chrome string in the \
+                 layout file is not wired through t!(). Full render:\n{rendered}",
+            );
+        }
     }
 }
 
