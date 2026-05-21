@@ -295,8 +295,17 @@ pub(crate) fn send_desktop_notification(title: &str, message: &str) -> String {
 /// Order matches the i18n migration plan's Tier-1 ordering — wizard +
 /// configure pickers display in this order.
 pub(crate) const SUPPORTED_LANGUAGES: &[&str] = &[
+    // Tier 1 (v2.2.19 baseline)
     "en", "es", "zh-CN", "fr", "pt-BR", "ru", "ja", "de", "ko", "it", "tr", "vi", "pl", "id", "nl",
     "sv", "nb", "uk",
+    // Task #749 expansion — EU official gaps (16, alphabetical)
+    "bg", "cs", "da", "el", "et", "fi", "ga", "hr", "hu", "lt", "lv", "mt", "pt-PT", "ro", "sk",
+    "sl",
+    // Non-EU European (10, alphabetical)
+    "be", "bs", "ca", "eu", "gl", "is", "mk", "nn", "sq", "sr",
+    // Major world (16, alphabetical)
+    "am", "ar", "bn", "fa", "he", "hi", "ms", "sw", "ta", "te", "th", "tl", "ur", "zh-HK", "zh-TW",
+    "zu",
 ];
 
 /// Persist `language: <code>` to `~/.anvil/config.json`, preserving all
