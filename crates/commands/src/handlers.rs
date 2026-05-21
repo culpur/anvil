@@ -3158,17 +3158,6 @@ fn memory_prune(arg: &str) -> String {
         // the non-dry-run path is intentionally a pointer (`/file-cache prune`
         // and `/cmd-cache prune` already exist for the real deletion path).
         "cache" => memory_prune_cache(dry_run),
-        // Task #732 — Layer 2 episodic prune with trash-bin safety net.
-        // Dry-run is the default; actual file moves require `--confirm`.
-        // Strip the leading `episodic` token before delegating so the
-        // episodic flag parser sees only flags (`--ttl <days>`, etc.).
-        "episodic" => {
-            let rest = arg
-                .strip_prefix("episodic")
-                .map(str::trim)
-                .unwrap_or("");
-            handle_memory_prune_episodic(rest)
-        }
         "" => {
             if dry_run {
                 memory_prune_legacy_dry_run()
@@ -3178,7 +3167,7 @@ fn memory_prune(arg: &str) -> String {
         }
         other => format!(
             "Unknown /memory prune target: {other}\n\
-             Usage: /memory prune [cache|episodic] [--dry-run]"
+             Usage: /memory prune [cache] [--dry-run]"
         ),
     }
 }
@@ -3314,6 +3303,426 @@ fn memory_prune_cache(dry_run: bool) -> String {
         );
     }
     lines.join("\n")
+}
+
+// ─── Task #732 — Memory Cohesion I.3: Episodic tier exposure (L2) ─────────────
+//
+// Three independent stores back the episodic layer:
+//   1. Daily summaries — `~/.anvil/daily/<YYYY-MM-DD>.json`
+//   2. History archives — `~/.anvil/history/<session>-<ts>.md`
+//   3. Workspace sessions — `<cwd>/.anvil/sessions/<id>.json`
+//
+// Before #732 each lived in its own command (or wasn't exposed at all);
+// `/memory show episodic` rendered only the history archives. The new
+// public handler [`handle_memory_show_episodic`] walks all three and emits
+// a unified `Source | Date | Title | Size` table.
+// [`handle_memory_prune_episodic`] adds retention management with a
+// trash-bin so the prune is reversible (`mv` recovers the file).
+
+/// One row of the unified episodic-tier table — used by
+/// [`handle_memory_show_episodic`] and the episodic prune planner.
+#[derive(Debug, Clone)]
+pub struct EpisodicEntry {
+    /// `daily`, `history`, or `session`.
+    pub source: &'static str,
+    /// UTC `YYYY-MM-DD` mtime, or `"active"` for a running workspace session
+    /// when its file lacks a usable mtime (best-effort labelling).
+    pub date: String,
+    /// Short human title (filename stem, session id, archive label).
+    pub title: String,
+    /// File size in bytes (0 when stat fails).
+    pub size_bytes: u64,
+    /// Path on disk — held so the pruner can move by exact path.
+    pub path: std::path::PathBuf,
+    /// Unix mtime in seconds. Drives retention decisions; `0` means
+    /// "unknown" and the file is conservatively skipped from candidates.
+    pub mtime_secs: u64,
+}
+
+/// Default TTL for `/memory prune episodic` in days.
+///
+/// Picked to match `HistoryArchiver::DEFAULT_HISTORY_RETENTION_DAYS` so the
+/// L2 prune cuts in lockstep with the existing history-archive retention
+/// when the user accepts the defaults.
+pub const DEFAULT_EPISODIC_TTL_DAYS: u64 = 90;
+
+/// Public handler for `/memory show episodic` (unified-table form).
+///
+/// Additive on top of the existing `render_episodic_show` (history archives
+/// + daily sub-view); call this directly when you want the full L2 picture
+/// instead of the history-archive-centric default view.
+///
+/// Output is plain text — TUI-safe (no `println!`).
+#[must_use]
+pub fn handle_memory_show_episodic() -> String {
+    let entries = collect_episodic_entries(&anvil_home(), &current_cwd());
+    render_episodic_table(&entries)
+}
+
+/// Public handler for `/memory prune episodic [--dry-run] [--ttl <days>]
+/// [--confirm]`.
+///
+/// Behaviour:
+///   * Defaults to `--dry-run`. Without `--confirm` no filesystem mutation
+///     occurs (the safer choice — pruning is destructive without trash).
+///   * Files older than `--ttl <days>` (default 90) are MOVED into
+///     `~/.anvil/trash/<unix-ts>/` rather than deleted. Restore via `mv`.
+///   * Workspace sessions under `<cwd>/.anvil/sessions/*.json` are also
+///     pruned by mtime. The active session naturally survives because its
+///     mtime keeps advancing.
+///   * `--dry-run` + `--confirm` together is an explicit conflict — we
+///     refuse to act and ask the user to pick one.
+#[must_use]
+pub fn handle_memory_prune_episodic(arg: &str) -> String {
+    let (dry_run, ttl_days) = match parse_episodic_prune_flags(arg) {
+        Ok(parsed) => parsed,
+        Err(msg) => return msg,
+    };
+    handle_memory_prune_episodic_impl(
+        &anvil_home(),
+        &current_cwd(),
+        dry_run,
+        ttl_days,
+        now_unix_secs(),
+    )
+}
+
+/// Inner implementation taking explicit home, cwd, and clock — exposed so
+/// tests can drive synthetic directories without touching `~/.anvil/`.
+pub(crate) fn handle_memory_prune_episodic_impl(
+    anvil_home: &std::path::Path,
+    cwd: &std::path::Path,
+    dry_run: bool,
+    ttl_days: u64,
+    now_secs: u64,
+) -> String {
+    let cutoff = now_secs.saturating_sub(ttl_days.saturating_mul(86_400));
+    let entries = collect_episodic_entries(anvil_home, cwd);
+    let mut candidates: Vec<EpisodicEntry> = entries
+        .into_iter()
+        .filter(|e| e.mtime_secs > 0 && e.mtime_secs < cutoff)
+        .collect();
+    candidates.sort_by(|a, b| a.mtime_secs.cmp(&b.mtime_secs));
+
+    let mode_label = if dry_run { "dry-run" } else { "confirm" };
+
+    if candidates.is_empty() {
+        return format!(
+            "/memory prune episodic [{mode_label}]: 0 candidate(s) older than {ttl_days} day(s)."
+        );
+    }
+
+    let trash_root = anvil_home.join("trash").join(format!("{now_secs}"));
+    let cutoff_date = runtime::daily::epoch_secs_to_date(cutoff);
+    let mut lines = vec![format!(
+        "/memory prune episodic [{mode_label}] — ttl={ttl_days}d, cutoff={cutoff_date}"
+    )];
+    lines.push(format!(
+        "  Candidates: {} file(s) → {}",
+        candidates.len(),
+        trash_root.display()
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "  {:<8}  {:<12}  {:>8}  Title",
+        "Source", "Date", "Size"
+    ));
+    for c in &candidates {
+        lines.push(format!(
+            "  {:<8}  {:<12}  {:>8}  {}",
+            c.source,
+            c.date,
+            format_size(c.size_bytes),
+            c.title
+        ));
+    }
+
+    if dry_run {
+        lines.push(String::new());
+        lines.push(
+            "Dry-run only — no files moved. Re-run with --confirm to move the listed files \
+             into the trash-bin (recoverable; restore with `mv`)."
+                .to_string(),
+        );
+        return lines.join("\n");
+    }
+
+    // --confirm path.
+    if let Err(e) = std::fs::create_dir_all(&trash_root) {
+        return format!(
+            "Failed to create trash bucket {}: {e}\nNo files were moved.",
+            trash_root.display()
+        );
+    }
+
+    let mut moved = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    for c in &candidates {
+        // Disambiguate by source + filename so daily/2024-01-01.json and
+        // history/2024-01-01.md cannot collide inside the same bucket.
+        let dest_name = match c.path.file_name() {
+            Some(n) => format!("{}-{}", c.source, n.to_string_lossy()),
+            None => format!("{}-orphan", c.source),
+        };
+        let dest = trash_root.join(&dest_name);
+        match move_episodic_file(&c.path, &dest) {
+            Ok(()) => moved += 1,
+            Err(e) => errors.push(format!("{}: {e}", c.path.display())),
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(format!(
+        "Moved {moved} file(s) to {} ({} error(s)).",
+        trash_root.display(),
+        errors.len()
+    ));
+    for err in &errors {
+        lines.push(format!("  ! {err}"));
+    }
+    lines.join("\n")
+}
+
+/// Parse `[--dry-run] [--ttl <days>|--ttl=<days>] [--confirm]` into a
+/// `(dry_run, ttl_days)` tuple. Returns the user-facing error string on
+/// invalid input so the caller can return it verbatim.
+fn parse_episodic_prune_flags(arg: &str) -> Result<(bool, u64), String> {
+    let mut tokens = arg.split_whitespace().peekable();
+    let mut confirm = false;
+    let mut explicit_dry_run = false;
+    let mut ttl_days: u64 = DEFAULT_EPISODIC_TTL_DAYS;
+    while let Some(tok) = tokens.next() {
+        match tok {
+            "--confirm" => confirm = true,
+            "--dry-run" | "-n" => explicit_dry_run = true,
+            "--ttl" => {
+                let v = tokens.next().ok_or_else(|| {
+                    "Missing value for --ttl\n\
+                     Usage: /memory prune episodic [--dry-run] [--ttl <days>] [--confirm]"
+                        .to_string()
+                })?;
+                ttl_days = parse_ttl_value(v)?;
+            }
+            other if other.starts_with("--ttl=") => {
+                ttl_days = parse_ttl_value(&other[6..])?;
+            }
+            other => {
+                return Err(format!(
+                    "Unknown flag: {other}\n\
+                     Usage: /memory prune episodic [--dry-run] [--ttl <days>] [--confirm]"
+                ));
+            }
+        }
+    }
+    if explicit_dry_run && confirm {
+        return Err("Conflicting flags: --dry-run and --confirm together is ambiguous.\n\
+                    Pick one: --dry-run for preview, --confirm to apply."
+            .to_string());
+    }
+    Ok((!confirm, ttl_days))
+}
+
+fn parse_ttl_value(s: &str) -> Result<u64, String> {
+    match s.parse::<u64>() {
+        Ok(n) if n > 0 => Ok(n),
+        _ => Err(format!(
+            "Invalid --ttl value: {s:?}\nMust be a positive integer (days)."
+        )),
+    }
+}
+
+/// Walk all three episodic backends and return their entries newest-first.
+///
+/// `pub(crate)` so tests can feed synthetic paths instead of touching
+/// `~/.anvil/`.
+pub(crate) fn collect_episodic_entries(
+    anvil_home: &std::path::Path,
+    cwd: &std::path::Path,
+) -> Vec<EpisodicEntry> {
+    let mut out: Vec<EpisodicEntry> = Vec::new();
+
+    // --- Daily summaries (~/.anvil/daily/<YYYY-MM-DD>.json) ---
+    let daily_dir = anvil_home.join("daily");
+    if let Ok(entries) = std::fs::read_dir(&daily_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let (size, mtime) = stat_size_mtime(&path);
+            out.push(EpisodicEntry {
+                source: "daily",
+                date: stem.clone(),
+                title: format!("Daily summary {stem}"),
+                size_bytes: size,
+                path,
+                mtime_secs: mtime,
+            });
+        }
+    }
+
+    // --- History archives (~/.anvil/history/<session>-<ts>.md) ---
+    let history_dir = anvil_home.join("history");
+    if let Ok(entries) = std::fs::read_dir(&history_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let (size, mtime) = stat_size_mtime(&path);
+            let date_str = if mtime > 0 {
+                runtime::daily::epoch_secs_to_date(mtime)
+            } else {
+                "unknown".to_string()
+            };
+            let title = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("archive")
+                .to_string();
+            out.push(EpisodicEntry {
+                source: "history",
+                date: date_str,
+                title,
+                size_bytes: size,
+                path,
+                mtime_secs: mtime,
+            });
+        }
+    }
+
+    // --- Workspace sessions (<cwd>/.anvil/sessions/<id>.json) ---
+    let sessions_dir = cwd.join(".anvil").join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            // Skip `.meta.json` sidecar (session name metadata).
+            if stem.ends_with(".meta") {
+                continue;
+            }
+            let (size, mtime) = stat_size_mtime(&path);
+            let date_str = if mtime > 0 {
+                runtime::daily::epoch_secs_to_date(mtime)
+            } else {
+                "active".to_string()
+            };
+            out.push(EpisodicEntry {
+                source: "session",
+                date: date_str,
+                title: stem,
+                size_bytes: size,
+                path,
+                mtime_secs: mtime,
+            });
+        }
+    }
+
+    // Newest-first by date string (YYYY-MM-DD compares lexically; "active"
+    // and "unknown" sort to the bottom).
+    out.sort_by(|a, b| b.date.cmp(&a.date));
+    out
+}
+
+/// Render the unified episodic table from a pre-collected entry list.
+///
+/// Split out from [`handle_memory_show_episodic`] so test code can feed
+/// synthetic entries and assert the formatter without touching `~/.anvil/`.
+#[must_use]
+pub fn render_episodic_table(entries: &[EpisodicEntry]) -> String {
+    if entries.is_empty() {
+        return "/memory show episodic — no entries found across daily/history/sessions."
+            .to_string();
+    }
+    let mut lines = vec![
+        format!(
+            "=== L2 Episodic — unified view ({} entr{}) ===",
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" }
+        ),
+        String::new(),
+        format!("  {:<8}  {:<12}  {:<32}  {:>8}", "Source", "Date", "Title", "Size"),
+    ];
+    for e in entries {
+        let mut title: String = e.title.chars().take(31).collect();
+        if e.title.chars().count() > 31 {
+            title.push('…');
+        }
+        let size_str = if e.mtime_secs == 0 && e.source == "session" {
+            "active".to_string()
+        } else {
+            format_size(e.size_bytes)
+        };
+        lines.push(format!(
+            "  {:<8}  {:<12}  {:<32}  {:>8}",
+            e.source, e.date, title, size_str
+        ));
+    }
+    lines.join("\n")
+}
+
+/// `(size_bytes, mtime_secs)` for a path, best-effort. Returns `(0, 0)` on
+/// failure — callers treat `mtime == 0` as "unknown" and skip the file.
+fn stat_size_mtime(path: &std::path::Path) -> (u64, u64) {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return (0, 0),
+    };
+    let size = if meta.is_file() { meta.len() } else { 0 };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    (size, mtime)
+}
+
+/// Format a byte count as a compact human string ("12 B", "3.4 KB", "1.2 MB").
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    }
+}
+
+/// Cross-volume-safe move: prefer rename, fall back to copy + remove on
+/// EXDEV (`~/.anvil/` and `<cwd>/.anvil/sessions/` may live on different
+/// mounts).
+fn move_episodic_file(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::rename(src, dest) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(src, dest)?;
+            std::fs::remove_file(src)?;
+            Ok(())
+        }
+    }
+}
+
+/// `current_cwd()` is used by the episodic handlers; the existing
+/// helpers in this module read CWD inline so this thin wrapper keeps the
+/// new code testable without forcing a change to `env::current_dir`.
+fn current_cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
 fn count_old_files(dir: &std::path::Path, max_age_days: u64) -> usize {
