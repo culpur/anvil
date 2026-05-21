@@ -1,4 +1,5 @@
 mod helpers;
+pub mod anvild;
 pub mod hooks;
 pub mod lsp;
 pub mod mcp;
@@ -31,6 +32,10 @@ use profile::{parse_active_profile, parse_profiles};
 use sandbox::parse_optional_sandbox_config;
 
 // Re-export all public types so callers can still use `crate::config::*`.
+pub use anvild::{
+    AnvildAutostart, AnvildConfig, anvild_config_to_json, load_anvild_config,
+    parse_optional_anvild_config, save_anvild_config,
+};
 pub use hooks::RuntimeHookConfig;
 pub use lsp::{LspConfig, LspServerEntry};
 pub use mcp::{

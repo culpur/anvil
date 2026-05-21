@@ -189,6 +189,39 @@ pub fn run(sub: DaemonSubcommand, anvil_binary: PathBuf, anvil_version: String) 
     }
 }
 
+/// Public accessor for the anvild PID-file health check.
+///
+/// Reads the `~/.anvil/run/anvild.pid` file and verifies the recorded PID
+/// is still alive. Returns `false` for both "no PID file" and "stale PID."
+/// Used by `anvild_bootstrap::ensure_anvild_for_session` and TUI keep-alive
+/// gates that want to know whether the daemon is taking over OAuth refresh.
+#[must_use]
+pub fn anvild_running() -> bool {
+    let home = anvil_home();
+    match read_pid(&home) {
+        Some(pid) => pid_alive(pid),
+        None => false,
+    }
+}
+
+/// Append a timestamped line to `~/.anvil/run/anvild.log`. Best-effort: any
+/// IO failure is swallowed since the daemon log is observational, not
+/// load-bearing.
+pub fn daemon_log(home: &Path, msg: &str) {
+    let path = log_path(home);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "[{}] {}", unix_now(), msg);
+    }
+}
+
 fn anvil_home() -> PathBuf {
     if let Ok(explicit) = std::env::var("ANVIL_CONFIG_HOME") {
         if !explicit.is_empty() {
@@ -239,6 +272,40 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
 
     let stop = Arc::new(AtomicBool::new(false));
     install_signal_handler(Arc::clone(&stop));
+
+    // Task #761 (v2.2.20): spawn the OAuth keep-alive ticker on a side
+    // thread.  This is the same code path `bg_handlers::spawn_oauth_keepalive`
+    // uses for the in-TUI fallback — sharing the implementation keeps the
+    // refresh semantics identical whether the daemon or the TUI is in
+    // charge.  When the daemon is up, the TUI bg_handler should *not*
+    // also spawn; that gate lives in `bg_handlers.rs` via
+    // `daemon::anvild_running()`.
+    let oauth_stop_flag = Arc::clone(&stop);
+    std::thread::spawn(move || {
+        let runtime_handle = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        runtime_handle.block_on(async move {
+            let refresher = Arc::new(api::AnthropicKeepaliveRefresher);
+            let (tx, mut rx) =
+                tokio::sync::mpsc::unbounded_channel::<runtime::KeepaliveEvent>();
+            let _handle = runtime::spawn_oauth_keepalive(refresher, tx);
+            while !oauth_stop_flag.load(Ordering::Relaxed) {
+                tokio::select! {
+                    maybe = rx.recv() => match maybe {
+                        Some(runtime::KeepaliveEvent::Stopped) => break,
+                        Some(_) => continue,
+                        None => break,
+                    },
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                }
+            }
+        });
+    });
 
     let started_at = unix_now();
     let mut status = DaemonStatus {
@@ -424,7 +491,7 @@ fn install_signal_handler(_stop: Arc<AtomicBool>) {
 
 // ─── start (detached spawn) ──────────────────────────────────────────────────
 
-fn spawn_detached(home: &Path, anvil_binary: &Path) -> i32 {
+pub fn spawn_detached(home: &Path, anvil_binary: &Path) -> i32 {
     if let Err(e) = validate_anvil_binary(anvil_binary) {
         eprintln!("anvil daemon: {e}");
         return 2;
@@ -629,7 +696,7 @@ fn fmt_duration(secs: u64) -> String {
 
 // ─── Service unit generators ────────────────────────────────────────────────
 
-fn install_service(home: &Path, anvil_binary: &Path) -> i32 {
+pub fn install_service(home: &Path, anvil_binary: &Path) -> i32 {
     if let Err(e) = validate_anvil_binary(anvil_binary) {
         eprintln!("anvil daemon: {e}");
         return 2;

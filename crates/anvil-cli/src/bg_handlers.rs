@@ -68,6 +68,19 @@ pub struct KeepaliveBg {
     pub last_event: Slot<runtime::KeepaliveEvent>,
 }
 
+impl KeepaliveBg {
+    /// Task #761 (v2.2.20): a no-op `KeepaliveBg` used when anvild owns
+    /// OAuth refresh.  The slot stays empty forever, so the main loop's
+    /// `try_lock + take` reads `None` every frame and never pushes a
+    /// banner — silent, harmless inertness.
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            last_event: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
 /// Spawn the OAuth keep-alive ticker (Task #597 deliverable #3 / #4).
 ///
 /// The ticker proactively refreshes the saved Anthropic OAuth bearer

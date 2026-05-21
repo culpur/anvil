@@ -33,6 +33,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod agents;
+mod anvild_bootstrap;
 mod auth;
 mod cmd_ai;
 mod cmd_cache;
@@ -3430,6 +3431,16 @@ fn run_startup_hooks(wizard_vault_unlocked: bool) {
     // missing expires_at) and refreshes near-expiry tokens so resumed
     // sessions don't error out on stale OAuth.
     validate_and_migrate_oauth_credentials_at_startup();
+
+    // Task #761 (v2.2.20): ensure the anvild background service is up
+    // (or honour the user's "no thanks" preference).  When daemon is
+    // alive it takes over OAuth refresh + routines; when not, the
+    // in-TUI keepalive ticker handles refresh.  Either way: this
+    // CALL itself never panics — first-launch users get a prompt,
+    // headless/CI users skip it.  See `feedback-anvil-capability-contract`.
+    if env::var("ANVIL_SKIP_DAEMON_BOOTSTRAP").is_err() {
+        anvild_bootstrap::ensure_anvild_for_session();
+    }
 }
 
 fn run_repl(
@@ -3637,7 +3648,21 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
     // user does not hit a forced re-OAuth after a long pause.  Pairs with
     // the SAFETY_WINDOW lazy-refresh (#1) and the 401-retry wrapper (#2)
     // in `crates/api/src/providers/anvil_provider.rs`.
-    let oauth_keepalive = bg_handlers::spawn_oauth_keepalive();
+    //
+    // Task #761 (v2.2.20): when anvild is running, IT owns OAuth refresh —
+    // running the keepalive in both places causes two processes racing to
+    // refresh the same token, with the loser's credentials.json write
+    // silently overwriting a fresh token.  Gate on a one-shot probe so the
+    // TUI still gets keepalive when the daemon is down (user opted out or
+    // service unit failed).
+    let oauth_keepalive = if daemon::anvild_running() {
+        tui.push_system(
+            "anvild is running — OAuth refresh delegated to background service.".to_string(),
+        );
+        bg_handlers::KeepaliveBg::disabled()
+    } else {
+        bg_handlers::spawn_oauth_keepalive()
+    };
 
     let mut task_check_instant = Instant::now();
     // ── Screensaver state ──────────────────────────────────────────────────────

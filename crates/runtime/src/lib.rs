@@ -75,7 +75,9 @@ pub use compact::{
     get_compact_continuation_message, should_compact, CompactionConfig, CompactionResult,
 };
 pub use config::{
-    default_config_home, ConfigEntry, ConfigError, ConfigLoader, ConfigSource, EgressConfig,
+    anvild_config_to_json, default_config_home, load_anvild_config,
+    parse_optional_anvild_config, save_anvild_config, AnvildAutostart, AnvildConfig,
+    ConfigEntry, ConfigError, ConfigLoader, ConfigSource, EgressConfig,
     HubConfig, LspConfig, LspServerEntry, McpManagedProxyServerConfig, McpConfigCollection,
     McpOAuthConfig, McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig,
     McpStdioServerConfig, McpTransport, McpWebSocketServerConfig, OAuthConfig, OtelConfig,
