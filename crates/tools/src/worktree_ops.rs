@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 use serde_json::json;
-use runtime::{ConfigLoader, CwdChangedPayload, HookRunner};
+use runtime::{ConfigLoader, CwdChangedPayload, HookRunner, McpConfigCollection};
 
 use crate::to_pretty_json;
 
@@ -42,6 +42,13 @@ struct WorktreeState {
     /// history written by the parent session) can recover it after the
     /// process CWD has been switched into the worktree.
     original_sessions_dir: PathBuf,
+    /// CC parity (community #61062, task #728): the project-scoped
+    /// `McpConfigCollection` resolved from `<original_dir>/.anvil/` /
+    /// `<original_dir>/.anvil.json` BEFORE the cwd switch. Worktree-scoped
+    /// MCP lookups consult this snapshot so a `mcp.json` from the parent
+    /// tree keeps working in the new worktree (whose `.anvil/` is typically
+    /// empty). `None` when the original tree had no resolvable MCP config.
+    original_mcp_config: Option<McpConfigCollection>,
 }
 
 fn worktree_state() -> &'static Mutex<Option<WorktreeState>> {
@@ -77,6 +84,27 @@ pub fn original_dir() -> Option<PathBuf> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     state.as_ref().map(|ws| ws.original_dir.clone())
+}
+
+/// CC parity (community #61062, task #728): return the project-scoped MCP
+/// config snapshot resolved from the ORIGINAL CWD at `EnterWorktree` time,
+/// or `None` when either (a) no worktree is currently active, or (b) the
+/// original tree had no resolvable MCP config.
+///
+/// MCP-aware code that needs to enumerate / connect servers while inside a
+/// worktree should prefer this over re-running `ConfigLoader::default_for`
+/// against the worktree path — the worktree's `.anvil/` is typically empty
+/// and would silently drop the user's project-scoped MCP servers.
+///
+/// `ExitWorktree` clears the snapshot via the existing `state.take()`
+/// pattern, so post-exit calls resolve `None` and normal CWD-rooted
+/// resolution resumes.
+#[must_use]
+pub fn original_mcp_config() -> Option<McpConfigCollection> {
+    let state = worktree_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.as_ref().and_then(|ws| ws.original_mcp_config.clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,11 +209,27 @@ pub(crate) fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, St
     // `<cwd>/.anvil/sessions/` resolve would point inside the worktree.
     let original_sessions_dir = current.join(".anvil").join("sessions");
 
+    // CC parity (community #61062, task #728): snapshot the resolved MCP
+    // config from the ORIGINAL CWD before `set_current_dir` swaps it. The
+    // worktree's `.anvil/` is typically empty, so a fresh
+    // `ConfigLoader::default_for(new_cwd).load().mcp()` would return an
+    // empty collection and the user's project-scoped MCP servers would
+    // silently disappear inside the worktree. `original_mcp_config` is the
+    // ground truth consulted by MCP-aware code while a worktree is active
+    // (see `worktree_ops::original_mcp_config()`). `None` is recorded
+    // rather than `Some(empty)` so callers can distinguish "unconfigured"
+    // from "load failed at enter time" via the secondary `try_load`.
+    let original_mcp_config = ConfigLoader::default_for(&current)
+        .load()
+        .ok()
+        .map(|cfg| cfg.feature_config().mcp().clone());
+
     *state = Some(WorktreeState {
         worktree_path: worktree_path.clone(),
         branch: branch_name.clone(),
         original_dir: current,
         original_sessions_dir,
+        original_mcp_config,
     });
 
     to_pretty_json(json!({

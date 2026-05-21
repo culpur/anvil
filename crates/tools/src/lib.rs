@@ -2750,4 +2750,110 @@ printf 'pwsh:%s' "$1"
         std::env::set_current_dir(&original_cwd).expect("restore cwd");
         let _ = fs::remove_dir_all(parent);
     }
+
+    // ── #728: EnterWorktree MCP config preservation (CC community #61062) ─
+    //
+    // The community report: when EnterWorktree switches CWD, the
+    // project-scoped `.anvil/settings.json`'s mcpServers from the ORIGINAL
+    // CWD don't follow — the new worktree's `.anvil/` (usually empty)
+    // becomes authoritative and the user's MCP servers silently disappear.
+    //
+    // The fix snapshots the resolved `McpConfigCollection` from the
+    // original CWD at enter time and exposes it via
+    // `worktree_ops::original_mcp_config()`. MCP-aware code that runs while
+    // inside a worktree consults this snapshot instead of re-resolving
+    // against the worktree path.
+    #[test]
+    #[serial]
+    fn enter_worktree_preserves_original_mcp_config() {
+        use std::process::Command;
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let git_ok = Command::new("git").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        if !git_ok {
+            eprintln!("[skip] git not available; #728 worktree-mcp test cannot run");
+            return;
+        }
+
+        let parent = temp_path("worktree-mcp-parent");
+        fs::create_dir_all(parent.join(".anvil")).expect("mkdir .anvil");
+        let original_cwd = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&parent).expect("cd parent");
+
+        // Initialise a minimal git repo.
+        let init = Command::new("git").args(["init", "--quiet", "--initial-branch=main"]).current_dir(&parent).output().expect("git init");
+        assert!(init.status.success(), "git init failed: {}", String::from_utf8_lossy(&init.stderr));
+        for (k, v) in [("user.name", "Anvil Test"), ("user.email", "test@anvil.local")] {
+            let _ = Command::new("git").args(["config", k, v]).current_dir(&parent).output();
+        }
+        fs::write(parent.join("README.md"), "init\n").expect("write README");
+        let _ = Command::new("git").args(["add", "README.md"]).current_dir(&parent).output();
+        let commit = Command::new("git").args(["commit", "--quiet", "-m", "init"]).current_dir(&parent).output().expect("git commit");
+        assert!(commit.status.success(), "git commit failed: {}", String::from_utf8_lossy(&commit.stderr));
+
+        // Write a project-scoped `.anvil/settings.json` carrying an MCP
+        // server. The worktree at the test ends will NOT contain a copy.
+        let settings_path = parent.join(".anvil").join("settings.json");
+        let settings = serde_json::json!({
+            "mcpServers": {
+                "test-server-728": {
+                    "command": "echo",
+                    "args": ["test-mcp-server-for-728"]
+                }
+            }
+        });
+        fs::write(&settings_path, settings.to_string()).expect("write settings");
+
+        // Sanity: re-loading from parent sees the test server BEFORE enter.
+        {
+            let pre = runtime::ConfigLoader::default_for(&parent)
+                .load()
+                .expect("pre-enter load");
+            assert!(
+                pre.feature_config().mcp().get("test-server-728").is_some(),
+                "pre-enter MCP load must see test-server-728"
+            );
+        }
+
+        // Step 2: enter the worktree (CWD switches into the new branch).
+        let enter_json = execute_tool(
+            "EnterWorktree",
+            &json!({ "branch": "test-branch-task-728" }),
+        )
+        .expect("EnterWorktree should succeed");
+        let enter_value: serde_json::Value = serde_json::from_str(&enter_json).expect("json");
+        assert_eq!(enter_value["status"], "entered_worktree");
+
+        // Inside the worktree: a fresh `ConfigLoader::default_for(cwd)`
+        // would NOT see the parent's MCP servers (the worktree's `.anvil/`
+        // is empty). The snapshot must.
+        let snapshot = super::worktree_ops::original_mcp_config()
+            .expect("original_mcp_config must be Some inside a worktree with parent MCP config");
+        assert!(
+            snapshot.get("test-server-728").is_some(),
+            "EnterWorktree dropped the project-scoped MCP server from the original CWD (#728)"
+        );
+
+        // Confirm the worktree's own `.anvil/` is empty so the snapshot is
+        // genuinely the only path that surfaces the test server.
+        let worktree_cwd = std::env::current_dir().expect("cwd after enter");
+        assert_ne!(worktree_cwd, parent, "cwd must have moved into worktree");
+        let worktree_anvil_dir = worktree_cwd.join(".anvil");
+        assert!(
+            !worktree_anvil_dir.exists() || fs::read_dir(&worktree_anvil_dir).map(|mut it| it.next().is_none()).unwrap_or(true),
+            "worktree's `.anvil/` is unexpectedly populated; this test only proves a snapshot wins if the worktree itself has no settings"
+        );
+
+        // Tear down: exit + cleanup, marker must clear.
+        let _ = execute_tool("ExitWorktree", &json!({ "cleanup": true }));
+        assert!(
+            super::worktree_ops::original_mcp_config().is_none(),
+            "ExitWorktree must clear the MCP-config snapshot"
+        );
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+        let _ = fs::remove_dir_all(parent);
+    }
 }
