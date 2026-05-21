@@ -36,11 +36,47 @@ struct WorktreeState {
     branch: String,
     /// The working directory that was active before `EnterWorktree` was called.
     original_dir: PathBuf,
+    /// CC parity (v2.1.144-B10, task #724): the absolute session-storage
+    /// directory (`<original_dir>/.anvil/sessions/`) captured at enter time
+    /// so `/branch` (and any other command that wants to load conversation
+    /// history written by the parent session) can recover it after the
+    /// process CWD has been switched into the worktree.
+    original_sessions_dir: PathBuf,
 }
 
 fn worktree_state() -> &'static Mutex<Option<WorktreeState>> {
     static INSTANCE: OnceLock<Mutex<Option<WorktreeState>>> = OnceLock::new();
     INSTANCE.get_or_init(|| Mutex::new(None))
+}
+
+/// CC parity (v2.1.144-B10, task #724): return the absolute session-storage
+/// directory captured at `EnterWorktree` time, or `None` if no worktree is
+/// currently active.
+///
+/// `/branch` and any other command that loads conversation history written
+/// by the parent session should consult this before falling back to
+/// `<cwd>/.anvil/sessions/` — otherwise post-worktree-switch lookups will
+/// resolve against the (empty) worktree's sessions directory and surface
+/// "No conversation to branch".
+#[must_use]
+pub fn original_sessions_dir() -> Option<PathBuf> {
+    let state = worktree_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.as_ref().map(|ws| ws.original_sessions_dir.clone())
+}
+
+/// CC parity (v2.1.144-B10, task #724): return the absolute working
+/// directory active before `EnterWorktree` was called, or `None` if no
+/// worktree is currently active. This is the parent-tree CWD; callers can
+/// resolve other relative paths (hook configs, MCP files, .anvil/*) against
+/// it during worktree-scoped work.
+#[must_use]
+pub fn original_dir() -> Option<PathBuf> {
+    let state = worktree_state()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.as_ref().map(|ws| ws.original_dir.clone())
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,10 +173,19 @@ pub(crate) fn run_enter_worktree(input: EnterWorktreeInput) -> Result<String, St
         .map_err(|e| format!("cannot cd into worktree: {e}"))?;
     fire_cwd_changed(&current, &worktree_path);
 
+    // CC parity (v2.1.144-B10, task #724): capture the original session
+    // storage directory BEFORE the cwd switch so `/branch` and any other
+    // post-enter conversation-history lookup can recover the path it was
+    // resolved against at session start. The current code already swaps
+    // CWD via `set_current_dir` above, so any subsequent
+    // `<cwd>/.anvil/sessions/` resolve would point inside the worktree.
+    let original_sessions_dir = current.join(".anvil").join("sessions");
+
     *state = Some(WorktreeState {
         worktree_path: worktree_path.clone(),
         branch: branch_name.clone(),
         original_dir: current,
+        original_sessions_dir,
     });
 
     to_pretty_json(json!({
