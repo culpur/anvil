@@ -8,9 +8,21 @@
 #   ./scripts/release.sh --skip-build     # Skip build, upload existing binaries
 #   ./scripts/release.sh --skip-verify    # Skip post-publish verification gate
 #   ./scripts/release.sh --dry-run-verify # Print verification plan, no network
+#   ./scripts/release.sh --dry-run        # Full pipeline dry-run; stubs every
+#                                         # destructive op (build/push/upload).
+#                                         # Used by scripts/test-release-gates.sh
+#                                         # to verify the per-phase START/OK
+#                                         # markers without touching prod.
 #
 # Requires: cargo, docker, gh (GitHub CLI), rustup, jq
 set -euo pipefail
+
+# v2.2.19 Arc C1 (#730): source per-phase step-gate helpers so every phase
+# emits explicit START / OK / FAIL markers + a machine-readable status JSON.
+# Without this, a silent-exit failure mode (v2.2.18 incident) leaves no
+# breadcrumb for the operator.
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-helpers/step-gates.sh"
 
 # Ensure rustup's rustc takes precedence over any system Rust (brew, distro pkgs).
 # Without this, multi-target cross-compile fails with "can't find crate for 'core'"
@@ -29,14 +41,32 @@ BUILD_ONLY=false
 SKIP_BUILD=false
 SKIP_VERIFY=false
 DRY_RUN_VERIFY=false
+DRY_RUN=false
 for arg in "$@"; do
     case "$arg" in
         --build-only)     BUILD_ONLY=true ;;
         --skip-build)     SKIP_BUILD=true ;;
         --skip-verify)    SKIP_VERIFY=true ;;
         --dry-run-verify) DRY_RUN_VERIFY=true ;;
+        --dry-run)        DRY_RUN=true ;;
     esac
 done
+
+# v2.2.19 Arc C1 (#730): in --dry-run mode, every destructive op (cargo build,
+# docker build/run, gh release create/upload, git tag/push, ssh, gh api PUT,
+# wp eval, pm2 restart, verify_release HTTPs probes) is replaced by a no-op
+# stub that just prints what would have run. This lets test-release-gates.sh
+# exercise the per-phase START/OK gate plumbing without touching prod.
+_dry() {
+    if [ "$DRY_RUN" = "true" ]; then
+        echo "  [dry-run] would: $*"
+        return 0
+    fi
+    return 1
+}
+
+# Initialise step-gate state now that VERSION + TAG are known.
+init_step_gates "$VERSION" "$TAG"
 
 # Source the post-publish verification helper (modular per
 # feedback-anvil-main-rs-modularity — release.sh itself stays focused on
@@ -67,54 +97,64 @@ echo
 #   2. A local tag $TAG already exists at a commit OTHER than HEAD.
 #   3. The remote tag $TAG exists at a commit OTHER than the local tag.
 #   4. We're not on a branch tip — release.sh expects to tag HEAD.
+step "P0" "Pre-flight: clean tree + tag agreement"
 echo "▸ Phase 0: Pre-flight checks..."
 
-# 0.1 — uncommitted changes
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "  ✘ Working tree has uncommitted changes."
-    echo "    Run 'git status' to see what's pending. Either commit or stash."
-    exit 1
-fi
-echo "  ✓ Working tree is clean"
-
-# 0.2 — fetch remote tags so the remote-tag check sees the truth
-git fetch --tags --quiet || {
-    echo "  ⚠ Could not fetch tags (offline?). Continuing with local view only."
-}
-
-CURRENT_HEAD=$(git rev-parse HEAD)
-
-# 0.3 — local tag must point at HEAD if it exists
-if git tag -l "$TAG" | grep -q "^${TAG}$"; then
-    LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG")
-    if [ "$LOCAL_TAG_SHA" != "$CURRENT_HEAD" ]; then
-        echo "  ✘ Local tag $TAG points at $LOCAL_TAG_SHA"
-        echo "    but HEAD is $CURRENT_HEAD."
-        echo "    Either move HEAD to the tagged commit, or delete + retag:"
-        echo "        git tag -d $TAG && git push origin :refs/tags/$TAG"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "git diff / git fetch --tags / tag-vs-HEAD checks"
+else
+    # 0.1 — uncommitted changes
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "  ✘ Working tree has uncommitted changes."
+        echo "    Run 'git status' to see what's pending. Either commit or stash."
+        fail "P0" "working tree has uncommitted changes"
         exit 1
     fi
-    echo "  ✓ Local tag $TAG points at HEAD"
-fi
+    echo "  ✓ Working tree is clean"
 
-# 0.4 — remote tag (if any) must agree with local tag
-REMOTE_TAG_SHA=$(git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | awk '{print $1}' | head -1 || true)
-if [ -n "$REMOTE_TAG_SHA" ]; then
-    LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG" 2>/dev/null || echo "")
-    if [ -z "$LOCAL_TAG_SHA" ]; then
-        echo "  ✘ Remote tag $TAG exists ($REMOTE_TAG_SHA) but no local tag."
-        echo "    Run: git fetch --tags"
-        exit 1
+    # 0.2 — fetch remote tags so the remote-tag check sees the truth
+    git fetch --tags --quiet || {
+        echo "  ⚠ Could not fetch tags (offline?). Continuing with local view only."
+    }
+
+    CURRENT_HEAD=$(git rev-parse HEAD)
+
+    # 0.3 — local tag must point at HEAD if it exists
+    if git tag -l "$TAG" | grep -q "^${TAG}$"; then
+        LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG")
+        if [ "$LOCAL_TAG_SHA" != "$CURRENT_HEAD" ]; then
+            echo "  ✘ Local tag $TAG points at $LOCAL_TAG_SHA"
+            echo "    but HEAD is $CURRENT_HEAD."
+            echo "    Either move HEAD to the tagged commit, or delete + retag:"
+            echo "        git tag -d $TAG && git push origin :refs/tags/$TAG"
+            fail "P0" "local tag disagrees with HEAD"
+            exit 1
+        fi
+        echo "  ✓ Local tag $TAG points at HEAD"
     fi
-    if [ "$LOCAL_TAG_SHA" != "$REMOTE_TAG_SHA" ]; then
-        echo "  ✘ Local tag $TAG ($LOCAL_TAG_SHA)"
-        echo "    disagrees with remote tag ($REMOTE_TAG_SHA)."
-        echo "    Resolve before releasing — usually means an aborted prior"
-        echo "    release left the remote tag in a stale state."
-        exit 1
+
+    # 0.4 — remote tag (if any) must agree with local tag
+    REMOTE_TAG_SHA=$(git ls-remote --tags origin "refs/tags/${TAG}" 2>/dev/null | awk '{print $1}' | head -1 || true)
+    if [ -n "$REMOTE_TAG_SHA" ]; then
+        LOCAL_TAG_SHA=$(git rev-list -n1 "$TAG" 2>/dev/null || echo "")
+        if [ -z "$LOCAL_TAG_SHA" ]; then
+            echo "  ✘ Remote tag $TAG exists ($REMOTE_TAG_SHA) but no local tag."
+            echo "    Run: git fetch --tags"
+            fail "P0" "remote tag exists with no local tag"
+            exit 1
+        fi
+        if [ "$LOCAL_TAG_SHA" != "$REMOTE_TAG_SHA" ]; then
+            echo "  ✘ Local tag $TAG ($LOCAL_TAG_SHA)"
+            echo "    disagrees with remote tag ($REMOTE_TAG_SHA)."
+            echo "    Resolve before releasing — usually means an aborted prior"
+            echo "    release left the remote tag in a stale state."
+            fail "P0" "local tag disagrees with remote tag"
+            exit 1
+        fi
+        echo "  ✓ Remote tag $TAG matches local"
     fi
-    echo "  ✓ Remote tag $TAG matches local"
 fi
+ok "P0"
 echo
 
 TARGETS=(
@@ -136,7 +176,10 @@ mkdir -p "$OUTPUT_DIR"
 
 # ─── Phase 1: Build ──────────────────────────────────────────────────────────
 
-if [ "$SKIP_BUILD" = false ]; then
+step "P1" "Build: cross-compile all 7 platform binaries"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "cargo build --release for 7 targets + docker cross-builds (linux/win/freebsd/netbsd)"
+elif [ "$SKIP_BUILD" = false ]; then
     echo "▸ Phase 1: Building all targets..."
     echo
 
@@ -241,7 +284,10 @@ DOCKERFILE
     echo
     echo "▸ Build complete:"
     ls -lh "$OUTPUT_DIR"/anvil-*
+else
+    echo "▸ Phase 1: skipped (--skip-build)"
 fi
+ok "P1"
 
 # ─── Phase 1.5: Regenerate sha256 manifests ─────────────────────────────────
 # Each binary gets a paired `<binary>.sha256` manifest. These are uploaded
@@ -252,36 +298,48 @@ fi
 
 echo
 echo "▸ Phase 1.5: Regenerate sha256 manifests..."
-# v2.2.17 / #570: sandbox-runner binaries get the same per-platform manifest
-# treatment as `anvil` itself so `anvil upgrade` can verify them too.
-for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
-    if [ ! -f "$f" ]; then continue; fi
-    name=$(basename "$f")
-    shasum -a 256 "$f" | awk -v n="$name" '{print $1"  "n}' > "$f.sha256"
-    echo "  ✓ $name.sha256 → $(awk '{print $1}' "$f.sha256" | head -c 16)…"
-done
+step "P1.5" "Regenerate sha256 manifests for every binary"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "shasum -a 256 each binary in $OUTPUT_DIR/ -> .sha256 sidecars"
+else
+    # v2.2.17 / #570: sandbox-runner binaries get the same per-platform manifest
+    # treatment as `anvil` itself so `anvil upgrade` can verify them too.
+    for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
+             "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
+             "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
+        if [ ! -f "$f" ]; then continue; fi
+        name=$(basename "$f")
+        shasum -a 256 "$f" | awk -v n="$name" '{print $1"  "n}' > "$f.sha256"
+        echo "  ✓ $name.sha256 → $(awk '{print $1}' "$f.sha256" | head -c 16)…"
+    done
+fi
+ok "P1.5"
 
 # ─── Phase 2: Test ───────────────────────────────────────────────────────────
 
 echo
 echo "▸ Phase 2: Verify binaries..."
-for f in "$OUTPUT_DIR"/anvil-*; do
-    name=$(basename "$f")
-    size=$(ls -lh "$f" | awk '{print $5}')
-    filetype=$(file -b "$f" | head -c 60)
-    echo "  ✓ $name ($size) — $filetype"
-done
+step "P2" "Inspect each built binary (size + file type)"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "ls -lh + file -b across $OUTPUT_DIR/anvil-*"
+else
+    for f in "$OUTPUT_DIR"/anvil-*; do
+        name=$(basename "$f")
+        size=$(ls -lh "$f" | awk '{print $5}')
+        filetype=$(file -b "$f" | head -c 60)
+        echo "  ✓ $name ($size) — $filetype"
+    done
+fi
+ok "P2"
 
 # ─── Phase 2.5: Sanity-check binary↔manifest pairing ────────────────────────
 # Refuses to release if any binary's actual hash doesn't match what's in
@@ -290,27 +348,34 @@ done
 
 echo
 echo "▸ Phase 2.5: Verify each binary's hash matches its manifest..."
-for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
-         "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
-    if [ ! -f "$f" ]; then continue; fi
-    actual=$(shasum -a 256 "$f" | awk '{print $1}')
-    expected=$(awk '{print $1}' "$f.sha256")
-    if [ "$actual" != "$expected" ]; then
-        echo "  ✗ $(basename "$f"): actual=$actual manifest=$expected — ABORTING release"
-        exit 1
-    fi
-    echo "  ✓ $(basename "$f")"
-done
+step "P2.5" "Per-binary sha256 vs .sha256 sidecar"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "shasum -a 256 each binary, compare with sidecar .sha256"
+else
+    for f in "$OUTPUT_DIR"/anvil-aarch64-apple-darwin "$OUTPUT_DIR"/anvil-x86_64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-aarch64-unknown-linux-gnu "$OUTPUT_DIR"/anvil-x86_64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-x86_64-pc-windows-gnu.exe \
+             "$OUTPUT_DIR"/anvil-x86_64-unknown-freebsd \
+             "$OUTPUT_DIR"/anvil-x86_64-unknown-netbsd \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-apple-darwin \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-aarch64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-linux-gnu \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-pc-windows-gnu.exe \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-freebsd \
+             "$OUTPUT_DIR"/anvil-sandbox-runner-x86_64-unknown-netbsd; do
+        if [ ! -f "$f" ]; then continue; fi
+        actual=$(shasum -a 256 "$f" | awk '{print $1}')
+        expected=$(awk '{print $1}' "$f.sha256")
+        if [ "$actual" != "$expected" ]; then
+            echo "  ✗ $(basename "$f"): actual=$actual manifest=$expected — ABORTING release"
+            fail "P2.5" "manifest mismatch on $(basename "$f")"
+            exit 1
+        fi
+        echo "  ✓ $(basename "$f")"
+    done
+fi
+ok "P2.5"
 
 # ─── Phase 2.6: Embedded GIT_SHA must match HEAD (T1-B) ────────────────────
 #
@@ -327,24 +392,31 @@ done
 # match here implies a match everywhere.
 echo
 echo "▸ Phase 2.6: Embedded GIT_SHA must match HEAD..."
-EXPECTED_SHA=$(git rev-parse --short HEAD)
-NATIVE_BIN="$OUTPUT_DIR/anvil-aarch64-apple-darwin"
-if [ -f "$NATIVE_BIN" ] && [ -x "$NATIVE_BIN" ]; then
-    EMBEDDED_SHA=$("$NATIVE_BIN" --version 2>/dev/null | awk '/Git SHA/ {print $3}' | head -1)
-    if [ -z "$EMBEDDED_SHA" ]; then
-        echo "  ⚠ Could not extract Git SHA from $NATIVE_BIN — skipping check"
-    elif [ "$EMBEDDED_SHA" != "$EXPECTED_SHA" ]; then
-        echo "  ✘ Native binary reports Git SHA $EMBEDDED_SHA"
-        echo "    but HEAD is $EXPECTED_SHA."
-        echo "    This usually means build.rs cached a stale rev. Try:"
-        echo "        cargo clean -p anvil-cli && bash scripts/release.sh"
-        exit 1
-    else
-        echo "  ✓ Native binary embeds Git SHA $EMBEDDED_SHA (matches HEAD)"
-    fi
+step "P2.6" "Embedded GIT_SHA in native binary == HEAD"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "exec anvil-aarch64-apple-darwin --version and compare embedded Git SHA"
 else
-    echo "  ⚠ Native binary not present or not executable — skipping check"
+    EXPECTED_SHA=$(git rev-parse --short HEAD)
+    NATIVE_BIN="$OUTPUT_DIR/anvil-aarch64-apple-darwin"
+    if [ -f "$NATIVE_BIN" ] && [ -x "$NATIVE_BIN" ]; then
+        EMBEDDED_SHA=$("$NATIVE_BIN" --version 2>/dev/null | awk '/Git SHA/ {print $3}' | head -1)
+        if [ -z "$EMBEDDED_SHA" ]; then
+            echo "  ⚠ Could not extract Git SHA from $NATIVE_BIN — skipping check"
+        elif [ "$EMBEDDED_SHA" != "$EXPECTED_SHA" ]; then
+            echo "  ✘ Native binary reports Git SHA $EMBEDDED_SHA"
+            echo "    but HEAD is $EXPECTED_SHA."
+            echo "    This usually means build.rs cached a stale rev. Try:"
+            echo "        cargo clean -p anvil-cli && bash scripts/release.sh"
+            fail "P2.6" "embedded SHA $EMBEDDED_SHA != HEAD $EXPECTED_SHA"
+            exit 1
+        else
+            echo "  ✓ Native binary embeds Git SHA $EMBEDDED_SHA (matches HEAD)"
+        fi
+    else
+        echo "  ⚠ Native binary not present or not executable — skipping check"
+    fi
 fi
+ok "P2.6"
 
 if [ "$BUILD_ONLY" = true ]; then
     echo
@@ -357,18 +429,23 @@ fi
 
 echo
 echo "▸ Phase 3: Git tag..."
-if git tag -l "$TAG" | grep -q "$TAG"; then
+step "P3" "Create + push git tag $TAG"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "git tag -a $TAG / git push origin $TAG"
+elif git tag -l "$TAG" | grep -q "$TAG"; then
     echo "  Tag $TAG already exists"
 else
     git tag -a "$TAG" -m "Anvil $TAG"
     git push origin "$TAG"
     echo "  Created and pushed tag $TAG"
 fi
+ok "P3"
 
 # ─── Phase 4: GitHub Release ─────────────────────────────────────────────────
 
 echo
 echo "▸ Phase 4: GitHub Release..."
+step "P4" "Create/update GitHub Release + upload binaries"
 
 # Release notes are sourced from RELEASE-NOTES-<TAG>.md at the repo root.
 # This file is hand-written for each release per memory feedback-release-notes
@@ -377,11 +454,27 @@ echo "▸ Phase 4: GitHub Release..."
 # body. v2.2.10 and v2.2.11 shipped with no narrative because release.sh
 # previously ignored these files; never again.
 RELEASE_NOTES_FILE="$PROJECT_DIR/RELEASE-NOTES-$TAG.md"
-if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+if [ "$DRY_RUN" = "true" ]; then
+    # In dry-run we still need RELEASE_NOTES_FILE to point somewhere readable
+    # for Phase 7's thread builder; if it doesn't exist, fall back to a
+    # synthetic stub on a tmp path. We never write to the real path.
+    if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+        RELEASE_NOTES_FILE="/tmp/anvil-dryrun-release-notes-${TAG}.md"
+        cat > "$RELEASE_NOTES_FILE" <<EOF
+# Anvil ${TAG}
+
+Dry-run synthetic release notes. No real release-notes file at repo root.
+
+- Synthetic bullet 1
+- Synthetic bullet 2
+EOF
+    fi
+elif [ ! -f "$RELEASE_NOTES_FILE" ]; then
     echo "✗ FAIL: release notes not found at $RELEASE_NOTES_FILE" >&2
     echo "  Every release MUST have a hand-written RELEASE-NOTES-<TAG>.md file" >&2
     echo "  at the repo root. Create one before re-running this script." >&2
     echo "  (See RELEASE-NOTES-v2.2.11.md for the expected format.)" >&2
+    fail "P4" "missing $RELEASE_NOTES_FILE"
     exit 1
 fi
 
@@ -422,7 +515,9 @@ PUBLIC_REPO="culpur/anvil"
 if [ -f "$PROJECT_DIR/man/anvil.1" ]; then
     cp "$PROJECT_DIR/man/anvil.1" "$OUTPUT_DIR/anvil.1"
 fi
-if gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "gh release create/upload $TAG to $PUBLIC_REPO with $OUTPUT_DIR/anvil-* + anvil.1"
+elif gh release view "$TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
     echo "  Release $TAG exists on $PUBLIC_REPO — uploading assets..."
     gh release upload "$TAG" --repo "$PUBLIC_REPO" "$OUTPUT_DIR"/anvil-* --clobber
     [ -f "$OUTPUT_DIR/anvil.1" ] && \
@@ -443,6 +538,7 @@ else
             "$OUTPUT_DIR"/anvil-*
     fi
 fi
+ok "P4"
 
 
 # ─── Phase 4.5: Publish AnvilHub sha256 manifest ────────────────────────────
@@ -457,13 +553,17 @@ fi
 #   bash scripts/release-helpers/upload-sha256-manifest.sh <ver> <output_dir>
 echo
 echo "▸ Phase 4.5: Publish AnvilHub sha256 manifest..."
-if [ "$SKIP_BUILD" = false ]; then
+step "P4.5" "Publish AnvilHub /sha256/${VERSION}.txt manifest"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "upload_sha256_manifest $VERSION $OUTPUT_DIR -> AnvilHub /sha256/${VERSION}.txt"
+elif [ "$SKIP_BUILD" = false ]; then
     if ! upload_sha256_manifest "$VERSION" "$OUTPUT_DIR"; then
         rc=$?
         echo "✘ sha256 manifest publish FAILED (rc=$rc) — /sha256/$VERSION.txt may 404" >&2
         echo "  Re-run manually:" >&2
         echo "    bash $SCRIPT_DIR/release-helpers/upload-sha256-manifest.sh $VERSION $OUTPUT_DIR" >&2
         echo "  …then re-run scripts/release.sh --skip-build for Phase 8." >&2
+        fail "P4.5" "upload_sha256_manifest rc=$rc"
         exit "$rc"
     fi
 else
@@ -471,9 +571,15 @@ else
     echo "    Run manually if needed:"
     echo "      bash $SCRIPT_DIR/release-helpers/upload-sha256-manifest.sh $VERSION $OUTPUT_DIR"
 fi
+ok "P4.5"
 
 echo
 echo "▸ Phase 5: Update Homebrew formula..."
+step "P5" "Bump culpur/homebrew-anvil formula to $TAG"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "regenerate Formula/anvil.rb with per-arch sha256 + PUT via gh api"
+    ok "P5"
+else
 ARM_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-apple-darwin" | awk '{print $1}')
 INTEL_MAC=$(shasum -a 256 "$OUTPUT_DIR/anvil-x86_64-apple-darwin" | awk '{print $1}')
 ARM_LINUX=$(shasum -a 256 "$OUTPUT_DIR/anvil-aarch64-unknown-linux-gnu" | awk '{print $1}')
@@ -536,14 +642,31 @@ BREWEOF
 else
     echo "  ⚠ Could not update Homebrew (missing sha)"
 fi
+ok "P5"
+fi  # /DRY_RUN guard for Phase 5
 
 echo
 echo "▸ Phase 6: Update version configs..."
-# AnvilHub config.ts — update version (if accessible via SSH)
+step "P6" "Update AnvilHub config.ts + WordPress shortcode + README badge"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "ssh bastion -> dev0001 sed of anvil-config.ts / WordPress python edit / gh api README PUT"
+    ok "P6"
+else
+# v2.2.18 silent-exit hardening (#730): wrap the AnvilHub-config SSH in a
+# set +e / set -e fence so a remote failure can't kill the script before
+# we've emitted a P6 phase marker. The downstream WordPress + README
+# branches already use the same `|| true` pattern; this fence brings the
+# first SSH call to parity.
+set +e
 ssh -p 30022 -i ~/.ssh/id_ed25519_guard soulofall@guard.armored.ninja \
-    "ssh dev0001 'sed -i \"s/version: \\\"[0-9.]*\\\"/version: \\\"$VERSION\\\"/\" /opt/projects/anvilhub/packages/web/src/lib/anvil-config.ts'" 2>/dev/null \
-    && echo "  ✓ AnvilHub config.ts updated" \
-    || echo "  ⚠ AnvilHub config.ts update skipped (SSH not available)"
+    "ssh dev0001 'sed -i \"s/version: \\\"[0-9.]*\\\"/version: \\\"$VERSION\\\"/\" /opt/projects/anvilhub/packages/web/src/lib/anvil-config.ts'" 2>/dev/null
+SSH_RC=$?
+set -e
+if [ "$SSH_RC" -eq 0 ]; then
+    echo "  ✓ AnvilHub config.ts updated"
+else
+    echo "  ⚠ AnvilHub config.ts update skipped (SSH not available, rc=$SSH_RC)"
+fi
 
 # WordPress shortcodes — update ANVIL_VERSION constant.
 #
@@ -650,6 +773,8 @@ if [ -n "$README_SHA" ]; then
         echo "  ✓ GitHub README badge updated to $TAG"
     fi
 fi
+ok "P6"
+fi  # /DRY_RUN guard for Phase 6
 
 
 # ─── Phase 7: X/Twitter announcement ────────────────────────────────────────
@@ -668,6 +793,11 @@ fi
 #
 echo
 echo "▸ Phase 7: X/Twitter announcement..."
+step "P7" "X/Twitter release announcement (gated by RELEASE_AUTO_POST=1)"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "build X thread from $RELEASE_NOTES_FILE; would post only if RELEASE_AUTO_POST=1"
+    ok "P7"
+else
 
 X_CREDS_OK=false
 X_CREDS_CHECK=$(node --input-type=module -e "
@@ -836,19 +966,27 @@ rl.on('close', () => { const d = JSON.parse(json); process.stdout.write(d.error?
         fi
     fi
 fi
+ok "P7"
+fi  # /DRY_RUN guard for Phase 7
 
 echo
 echo "▸ Phase 8: Generate release notes draft..."
-PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
-if [ -n "$PREV_TAG" ]; then
-    echo "  Changes since $PREV_TAG:"
-    git log --oneline "$PREV_TAG..$TAG" | head -20
-    echo
-    echo "  ── Draft changelog entry ──"
-    echo "  v${VERSION} — $(date +%B\ %d,\ %Y)"
-    git log --oneline "$PREV_TAG..$TAG" | sed 's/^[a-f0-9]* /  - /'
-    echo
+step "P8" "Print git-log changelog draft since previous tag"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "git describe + git log oneline since previous tag"
+else
+    PREV_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo "")
+    if [ -n "$PREV_TAG" ]; then
+        echo "  Changes since $PREV_TAG:"
+        git log --oneline "$PREV_TAG..$TAG" | head -20
+        echo
+        echo "  ── Draft changelog entry ──"
+        echo "  v${VERSION} — $(date +%B\ %d,\ %Y)"
+        git log --oneline "$PREV_TAG..$TAG" | sed 's/^[a-f0-9]* /  - /'
+        echo
+    fi
 fi
+ok "P8"
 
 # ─── Phase 9: Post-publish verification gate ────────────────────────────────
 #
@@ -870,7 +1008,10 @@ fi
 # Both must pass. Stage 9a runs first because surface drift is more common
 # than filename mismatch; failing fast on a stale homepage is more useful
 # than waiting for the binary probe.
-if [ "$SKIP_VERIFY" = "true" ]; then
+step "P9" "Post-publish verification (surfaces + /api/version binary URLs)"
+if [ "$DRY_RUN" = "true" ]; then
+    _dry "bash verify-release-surfaces.sh + verify_release HTTPs probes"
+elif [ "$SKIP_VERIFY" = "true" ]; then
     echo
     echo "▸ Phase 9: Post-publish verification SKIPPED (--skip-verify)"
 elif [ "$DRY_RUN_VERIFY" = "true" ]; then
@@ -878,12 +1019,14 @@ elif [ "$DRY_RUN_VERIFY" = "true" ]; then
     echo "▸ Phase 9a: Surface manifest verification (dry-run)..."
     if ! bash "$SCRIPT_DIR/verify-release-surfaces.sh" "$VERSION" --dry-run; then
         echo "✘ Manifest dry-run reported a problem (rc=$?)." >&2
+        fail "P9" "surface manifest dry-run failed"
         exit 3
     fi
     echo
     echo "▸ Phase 9b: Binary-URL probe (dry-run)..."
     verify_release "$VERSION" --dry-run || {
         echo "✘ Verification dry-run reported a problem (rc=$?)." >&2
+        fail "P9" "binary-URL probe dry-run failed"
         exit 3
     }
 else
@@ -898,6 +1041,7 @@ else
         echo "  deploy_path so you can fix the source and re-run:" >&2
         echo "      bash scripts/verify-release-surfaces.sh $VERSION" >&2
         echo "  Then re-run the release with --skip-build to repeat Phase 9." >&2
+        fail "P9" "surface manifest rc=$rc"
         exit "$rc"
     fi
     echo
@@ -908,9 +1052,11 @@ else
         echo "✘ Post-publish verification FAILED (rc=$rc)." >&2
         echo "  The GitHub Release exists and binaries are uploaded, but a" >&2
         echo "  downstream surface is broken. See remediation block above." >&2
+        fail "P9" "verify_release rc=$rc"
         exit "$rc"
     fi
 fi
+ok "P9"
 
 echo "╔══════════════════════════════════════════════╗"
 echo "║  ✓ Release complete: Anvil $TAG              ║"
