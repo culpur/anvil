@@ -42,6 +42,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    allow_list: &crate::permission_allow::PermissionAllowList,
     permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
     cancel_token: &Arc<AtomicBool>,
     stop_hook_counter: &mut StopHookBlockCounter,
@@ -65,6 +66,7 @@ pub(super) fn run_turn_inner<C: ApiClient, T: ToolExecutor>(
         prompter,
         reviewer,
         auto_mode,
+        allow_list,
         permission_memory,
         cancel_token,
         stop_hook_counter,
@@ -92,6 +94,7 @@ fn run_turn_inner_body<C: ApiClient, T: ToolExecutor>(
     prompter: &mut Option<&mut dyn PermissionPrompter>,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    allow_list: &crate::permission_allow::PermissionAllowList,
     permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
     cancel_token: &Arc<AtomicBool>,
     stop_hook_counter: &mut StopHookBlockCounter,
@@ -248,6 +251,7 @@ fn run_turn_inner_body<C: ApiClient, T: ToolExecutor>(
                 tool_executor,
                 reviewer,
                 auto_mode,
+                allow_list,
                 permission_memory,
             );
             let elapsed_ms = start.elapsed().as_millis() as u64;

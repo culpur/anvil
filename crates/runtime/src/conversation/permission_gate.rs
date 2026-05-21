@@ -36,6 +36,7 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     executor: &mut T,
     reviewer: &Reviewer,
     auto_mode: &AutoModeConfig,
+    allow_list: &crate::permission_allow::PermissionAllowList,
     permission_memory: Option<&Arc<Mutex<PermissionMemory>>>,
 ) -> ConversationMessage {
     // CC-136-F2: auto-mode hard-deny short-circuit.
@@ -126,6 +127,28 @@ pub(super) fn evaluate_and_execute<T: ToolExecutor>(
     let memory_allowed = memory_effect == Some(PermissionEffect::Allow);
     if memory_allowed && hook_permission.decision != Some(HookPermissionDecision::Deny) {
         otel::permission_decision(&tool_name, "allow", "memory");
+        return run_allow_branch(
+            tool_use_id,
+            tool_name,
+            input,
+            hook_runner,
+            executor,
+        );
+    }
+
+    // Task #717 (community issue anthropics/claude-code#61077):
+    // settings.json#/permissions/allow short-circuit. Patterns parsed
+    // from `permissions.allow` pre-approve matching tool calls. Ranks
+    // ABOVE the reviewer + prompter (so MCP tools listed under allow
+    // don't keep raising approval prompts) but BELOW auto-mode hard-
+    // deny, hook-deny, and memory-deny. A memory Prompt effect also
+    // out-ranks allow.
+    let memory_prompt = memory_effect == Some(PermissionEffect::Prompt);
+    if !memory_prompt
+        && hook_permission.decision != Some(HookPermissionDecision::Deny)
+        && allow_list.matches(&tool_name, input)
+    {
+        otel::permission_decision(&tool_name, "allow", "settings_allow");
         return run_allow_branch(
             tool_use_id,
             tool_name,
@@ -478,6 +501,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
 
@@ -515,6 +539,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
 
@@ -549,6 +574,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
 
@@ -583,6 +609,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
         let (text, is_err) = result_text(&msg);
@@ -599,6 +626,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
         let (text2, is_err2) = result_text(&msg2);
@@ -675,6 +703,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -704,6 +733,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
 
@@ -739,6 +769,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -779,6 +810,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -828,6 +860,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -871,6 +904,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -923,6 +957,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             Some(&mem),
         );
 
@@ -1003,6 +1038,7 @@ mod tests {
                 &mut exec,
                 &reviewer,
                 &auto_mode,
+                &crate::permission_allow::PermissionAllowList::default(),
                 Some(&mem),
             );
             let (text, is_err) = result_text(&msg);
@@ -1057,6 +1093,7 @@ mod tests {
             &mut exec,
             &reviewer,
             &auto_mode,
+            &crate::permission_allow::PermissionAllowList::default(),
             None,
         );
 

@@ -178,6 +178,12 @@ pub struct ConversationRuntime<C, T> {
     /// Auto-mode hard-deny list (CC-136-F2). Evaluated before hooks when
     /// the active permission mode is `WorkspaceWrite`.
     auto_mode: AutoModeConfig,
+    /// Task #717: pre-approved tool patterns parsed from
+    /// `settings.json#/permissions/allow`. Consulted by the permission
+    /// gate BEFORE the prompter — a matching call skips manual approval.
+    /// Auto-mode hard-deny, hook deny, and memory Deny still override.
+    /// Default empty — unconfigured runtimes keep the legacy prompt flow.
+    allow_list: crate::permission_allow::PermissionAllowList,
     /// L6 PermissionMemory store. Populated when
     /// `permissions.use_permission_memory` is true in settings.json AND a
     /// `project_dir` was passed to `new_with_features`. When `None`, the
@@ -279,6 +285,8 @@ where
         let usage_tracker = UsageTracker::from_session(&session);
         let reviewer = Reviewer::new(feature_config.reviewer());
         let auto_mode = feature_config.auto_mode().clone();
+        // Task #717: build the allowlist from settings.json#/permissions/allow.
+        let allow_list = feature_config.permissions().allow_list();
         let permission_memory = if feature_config.permissions().use_permission_memory() {
             project_dir.map(|dir| {
                 let mem = PermissionMemory::load(&dir);
@@ -299,6 +307,7 @@ where
             hook_runner: HookRunner::from_feature_config(&feature_config),
             reviewer,
             auto_mode,
+            allow_list,
             permission_memory,
             cancel_token: Arc::new(AtomicBool::new(false)),
             stop_hook_counter: crate::hooks::StopHookBlockCounter::default(),
@@ -407,6 +416,7 @@ where
             prompter,
             &self.reviewer,
             &self.auto_mode,
+            &self.allow_list,
             self.permission_memory.as_ref(),
             &self.cancel_token,
             &mut self.stop_hook_counter,
