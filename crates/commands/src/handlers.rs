@@ -2725,24 +2725,70 @@ fn memory_inspect(key: &str) -> String {
 ///   /memory promote <nomination-id>
 ///   /memory promote --dry-run <nomination-id>
 ///   /memory promote <nomination-id> --dry-run     (either order)
+///   /memory promote <nomination-id> --target <file>   (Task #733: route
+///       to an explicit target file instead of the default `ANVIL.md` in
+///       the current workspace — useful when promoting an infra fact into
+///       a separate memory file such as `~/.anvil/MEMORY.md`)
+///
+/// # Task #733 — Semantic promotion (Layer 3)
+///
+/// The audit doc at docs/memory-cohesion-audit-2026-05-21.md described
+/// `memory_promote` as a stub that flipped status without persisting. That
+/// description matched a prior revision; the live code already runs the
+/// full chain (write → accept → QMD index). This commit adds two things:
+///   1. A `--target <file>` override so callers can pick a destination
+///      other than the default `<cwd>/ANVIL.md` (relative paths resolve
+///      against `<cwd>`; absolute paths and `~` expansion are honored).
+///   2. Two extra provenance comment lines in the appended stanza:
+///         `<!-- # nominated_at: <ISO timestamp> -->`
+///         `<!-- # source: nomination/<id> -->`
+///      These let downstream graders (and humans) trace which nomination
+///      produced which ANVIL.md line. The existing HTML attribution
+///      comment is preserved so the round-trip test stays green.
 fn memory_promote(id_arg: &str) -> String {
     let arg = id_arg.trim();
     if arg.is_empty() {
-        return "Usage: /memory promote [--dry-run] <nomination-id>".to_string();
+        return "Usage: /memory promote [--dry-run] [--target <file>] <nomination-id>"
+            .to_string();
     }
 
-    // Parse --dry-run (either before or after the id).
+    // Parse `[--dry-run] [--target <file>] <id>` in any order. `--target`
+    // and `--dry-run` may appear before or after the id; the first
+    // positional non-flag token is the id.
     let mut dry_run = false;
     let mut id_opt: Option<&str> = None;
-    for token in arg.split_whitespace() {
-        if token == "--dry-run" || token == "-n" {
-            dry_run = true;
-        } else if id_opt.is_none() {
-            id_opt = Some(token);
+    let mut target_override: Option<String> = None;
+    let mut tokens = arg.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        match token {
+            "--dry-run" | "-n" => dry_run = true,
+            "--target" => match tokens.next() {
+                Some(v) => target_override = Some(v.to_string()),
+                None => {
+                    return "Missing value for --target\n\
+                            Usage: /memory promote [--dry-run] [--target <file>] <nomination-id>"
+                        .to_string();
+                }
+            },
+            other if other.starts_with("--target=") => {
+                target_override = Some(other[9..].to_string());
+            }
+            other if id_opt.is_none() && !other.starts_with("--") => {
+                id_opt = Some(other);
+            }
+            other if other.starts_with("--") => {
+                return format!(
+                    "Unknown flag: {other}\n\
+                     Usage: /memory promote [--dry-run] [--target <file>] <nomination-id>"
+                );
+            }
+            // Extra positional after id — ignored for now (forward-compat).
+            _ => {}
         }
     }
     let Some(id) = id_opt else {
-        return "Usage: /memory promote [--dry-run] <nomination-id>".to_string();
+        return "Usage: /memory promote [--dry-run] [--target <file>] <nomination-id>"
+            .to_string();
     };
 
     let home = anvil_home();
@@ -2759,6 +2805,14 @@ fn memory_promote(id_arg: &str) -> String {
         }
     };
 
+    // Resolve the final target path. Default: `<cwd>/ANVIL.md`. Override:
+    // `--target <file>` — relative paths resolve against `<cwd>`; absolute
+    // paths and `~/...` expansion are honored.
+    let target_path = match target_override.as_deref() {
+        None => cwd.join("ANVIL.md"),
+        Some(s) => resolve_promote_target(s, &cwd),
+    };
+
     if matches!(nom.status, runtime::nominations::NominationStatus::Accepted) {
         return format!(
             "Nomination '{id}' is already promoted (previously written to {}).",
@@ -2766,16 +2820,21 @@ fn memory_promote(id_arg: &str) -> String {
         );
     }
 
-    let anvil_md_path = cwd.join("ANVIL.md");
     let category_label = format!("{:?}", nom.category);
     let confidence_pct = (nom.confidence * 100.0).round() as i64;
     let timestamp = nom.created_at.clone();
     let body_text = nom.content.trim().to_string();
 
-    // The promotion stanza we append to ANVIL.md. Keep it compact and
-    // attributable so future readers can diff-trace where the line came from.
+    // The promotion stanza appended to the target file. Two layers of
+    // attribution: the pre-existing HTML comment (kept verbatim so the
+    // round-trip test from v2.2.13 still asserts on its content) plus the
+    // Task #733 frontmatter-style comment lines (`# nominated_at:` and
+    // `# source: nomination/<id>`) requested by the audit.
     let stanza = format!(
-        "\n<!-- promoted from {id} ({category_label}, confidence {confidence_pct}%, {timestamp}) -->\n- {body_text}\n"
+        "\n<!-- promoted from {id} ({category_label}, confidence {confidence_pct}%, {timestamp}) -->\n\
+         <!-- # nominated_at: {timestamp} -->\n\
+         <!-- # source: nomination/{id} -->\n\
+         - {body_text}\n"
     );
 
     if dry_run {
@@ -2783,7 +2842,7 @@ fn memory_promote(id_arg: &str) -> String {
             format!("[dry-run] Would promote nomination '{id}'"),
             format!("  category: {category_label}"),
             format!("  confidence: {confidence_pct}%"),
-            format!("  target:    {}", anvil_md_path.display()),
+            format!("  target:    {}", target_path.display()),
             format!("  status:    {:?} -> Accepted", nom.status),
             "  content:".to_string(),
         ];
@@ -2794,21 +2853,23 @@ fn memory_promote(id_arg: &str) -> String {
         return lines.join("\n");
     }
 
-    // Atomic append-or-create on ANVIL.md.
-    if let Err(e) = atomic_append_anvil_md(&anvil_md_path, &stanza) {
+    // Atomic append-or-create on the target file.
+    if let Err(e) = atomic_append_anvil_md(&target_path, &stanza) {
         return format!(
             "Error promoting nomination '{id}': could not write {}: {e}",
-            anvil_md_path.display()
+            target_path.display()
         );
     }
 
     // Mark the nomination as accepted with the absolute target path so the
-    // pipeline closes back on the JSON.
-    let target_str = anvil_md_path.to_string_lossy();
+    // pipeline closes back on the JSON. CRITICAL: this MUST run only after
+    // the file write succeeds so a failed write leaves the nomination
+    // unaccepted (retryable).
+    let target_str = target_path.to_string_lossy();
     if let Err(e) = store.accept(id, &target_str) {
         return format!(
             "Wrote to {} but failed to mark nomination accepted: {e}\nFix the JSON manually or re-run /memory promote.",
-            anvil_md_path.display()
+            target_path.display()
         );
     }
 
@@ -2821,9 +2882,30 @@ fn memory_promote(id_arg: &str) -> String {
 
     format!(
         "Nomination '{id}' promoted.\n  target:    {}\n{}  status:    Accepted",
-        anvil_md_path.display(),
+        target_path.display(),
         qmd_msg
     )
+}
+
+/// Resolve a `--target <file>` argument against the workspace `cwd`.
+///
+/// Rules:
+///   * Absolute path → returned as-is.
+///   * `~/...` → expanded against `$HOME`.
+///   * Anything else → joined to `cwd` (so `--target docs/x.md` lands at
+///     `<cwd>/docs/x.md`).
+fn resolve_promote_target(raw: &str, cwd: &std::path::Path) -> std::path::PathBuf {
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    }
+    let candidate = std::path::PathBuf::from(raw);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    }
 }
 
 /// Atomic append-or-create of `stanza` onto `path`.
@@ -5138,6 +5220,230 @@ mod memory_tests {
     fn memory_forget_empty_key_returns_usage() {
         let result = memory_forget("");
         assert!(result.contains("Usage"), "should show usage for empty key");
+    }
+
+    // ── Task #733 — Memory Cohesion I.4: Semantic promotion provenance ────────
+    //
+    // The audit doc flagged `/memory promote` as a stub that flipped
+    // nomination status without persisting. That description matched a
+    // prior revision; the live code already runs the full chain. The
+    // remaining gaps for #733 were:
+    //   1. `--target <file>` override so callers can route to a memory
+    //      file other than the default `<cwd>/ANVIL.md`.
+    //   2. `# nominated_at:` + `# source: nomination/<id>` provenance
+    //      comment lines in the appended stanza so downstream graders can
+    //      trace which nomination produced which line.
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_promote_writes_nominated_at_and_source_comments() {
+        // Round-trip test mirroring `memory_promote_roundtrip_writes_*`
+        // but asserting the NEW provenance lines land in the target file.
+        let _lock = env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let prev_home = std::env::var_os("HOME");
+        let prev_cwd = std::env::current_dir().ok();
+        // SAFETY: serialised via env_lock(); restored on the way out.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let _ = std::env::set_current_dir(project.path());
+
+        let store = runtime::nominations::NominationStore::with_dir(
+            home.path().join(".anvil").join("nominations"),
+        );
+        store.ensure_dir().unwrap();
+        let nom = store
+            .create(
+                "test-session-733",
+                runtime::nominations::NominationCategory::Configuration,
+                "Use rust-i18n v4 unwrapped YAML at locale root",
+                0.85,
+            )
+            .expect("create nomination");
+
+        let result = memory_promote(&nom.id);
+        assert!(result.contains("promoted"), "must announce success; got: {result}");
+
+        let body = std::fs::read_to_string(project.path().join("ANVIL.md")).unwrap();
+        assert!(
+            body.contains("# nominated_at:"),
+            "stanza must include `# nominated_at:` line; got: {body}"
+        );
+        assert!(
+            body.contains(&format!("# source: nomination/{}", nom.id)),
+            "stanza must include `# source: nomination/<id>` line; got: {body}"
+        );
+        assert!(
+            body.contains("Use rust-i18n v4 unwrapped YAML at locale root"),
+            "body content missing; got: {body}"
+        );
+
+        // Nomination must be marked Accepted with the absolute target.
+        let updated = store.get(&nom.id).expect("nom still on disk");
+        assert_eq!(updated.status, runtime::nominations::NominationStatus::Accepted);
+        let stored_target = updated.promoted_to.expect("promoted_to should be set");
+        assert!(
+            stored_target.ends_with("ANVIL.md"),
+            "default target should be ANVIL.md; got: {stored_target}"
+        );
+
+        // Restore env.
+        if let Some(prev) = prev_home {
+            unsafe {
+                std::env::set_var("HOME", prev);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        if let Some(prev) = prev_cwd {
+            let _ = std::env::set_current_dir(prev);
+        }
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_promote_target_override_routes_to_explicit_file() {
+        // --target lets the user redirect to a custom file. The nomination
+        // status should reflect the actual file written, not the default
+        // ANVIL.md.
+        let _lock = env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let prev_home = std::env::var_os("HOME");
+        let prev_cwd = std::env::current_dir().ok();
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let _ = std::env::set_current_dir(project.path());
+
+        let store = runtime::nominations::NominationStore::with_dir(
+            home.path().join(".anvil").join("nominations"),
+        );
+        store.ensure_dir().unwrap();
+        let nom = store
+            .create(
+                "test-session-733b",
+                runtime::nominations::NominationCategory::Architecture,
+                "Passage is independent from Anvil",
+                0.95,
+            )
+            .expect("create nomination");
+
+        let custom = project.path().join("docs").join("INFRA.md");
+        let result =
+            memory_promote(&format!("--target {} {}", custom.display(), nom.id));
+        assert!(
+            result.contains("promoted"),
+            "must announce success; got: {result}"
+        );
+
+        // Custom target was written; default ANVIL.md was NOT.
+        assert!(custom.exists(), "--target file must be created at {custom:?}");
+        assert!(
+            !project.path().join("ANVIL.md").exists(),
+            "default ANVIL.md must remain absent when --target is supplied",
+        );
+        let body = std::fs::read_to_string(&custom).unwrap();
+        assert!(body.contains("Passage is independent from Anvil"));
+        assert!(
+            body.contains(&format!("# source: nomination/{}", nom.id)),
+            "provenance comment must appear in custom target; got: {body}"
+        );
+
+        // promoted_to should record the custom path.
+        let updated = store.get(&nom.id).unwrap();
+        let promoted_to = updated.promoted_to.expect("promoted_to set");
+        assert!(
+            promoted_to.contains("INFRA.md"),
+            "promoted_to must record the custom target; got: {promoted_to}"
+        );
+
+        // Restore env.
+        if let Some(prev) = prev_home {
+            unsafe {
+                std::env::set_var("HOME", prev);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        if let Some(prev) = prev_cwd {
+            let _ = std::env::set_current_dir(prev);
+        }
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_promote_bad_id_does_not_mutate_filesystem() {
+        // Negative: unknown id returns NotFound, and the default ANVIL.md
+        // must not be created or touched.
+        let _lock = env_lock();
+        let home = tempfile::tempdir().expect("home");
+        let project = tempfile::tempdir().expect("project");
+        let prev_home = std::env::var_os("HOME");
+        let prev_cwd = std::env::current_dir().ok();
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        let _ = std::env::set_current_dir(project.path());
+
+        let result = memory_promote("nom-bogus-99999");
+        assert!(
+            result.contains("not found") || result.contains("Error"),
+            "unknown id must error; got: {result}"
+        );
+        assert!(
+            !project.path().join("ANVIL.md").exists(),
+            "no file mutation on lookup failure",
+        );
+
+        if let Some(prev) = prev_home {
+            unsafe {
+                std::env::set_var("HOME", prev);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("HOME");
+            }
+        }
+        if let Some(prev) = prev_cwd {
+            let _ = std::env::set_current_dir(prev);
+        }
+    }
+
+    #[test]
+    fn memory_promote_target_resolves_absolute_and_relative_paths() {
+        // Pure-function check on the path resolver. Relative paths land
+        // under cwd; absolute paths pass through unchanged.
+        let cwd = std::path::Path::new("/tmp/anvil-cwd-test");
+        let rel = resolve_promote_target("docs/x.md", cwd);
+        assert_eq!(rel, cwd.join("docs/x.md"));
+
+        let abs = resolve_promote_target("/etc/notes.md", cwd);
+        assert_eq!(abs, std::path::PathBuf::from("/etc/notes.md"));
+    }
+
+    #[test]
+    fn memory_promote_target_without_value_errors() {
+        let result = memory_promote("--target");
+        assert!(
+            result.contains("Missing value for --target") || result.contains("Usage"),
+            "must surface error for `--target` with no value; got: {result}"
+        );
+    }
+
+    #[test]
+    fn memory_promote_unknown_flag_errors() {
+        let result = memory_promote("--not-a-real-flag nom-xxx");
+        assert!(
+            result.contains("Unknown flag"),
+            "must reject unknown flag; got: {result}"
+        );
     }
 
     #[test]
