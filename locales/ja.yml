@@ -1,83 +1,83 @@
-# TUI header / footer
+# TUI ヘッダー / フッター
 footer.help: "Tab: 補完  Enter: 送信  Ctrl+C: キャンセル  Ctrl+D: 終了  /help: コマンド"
-footer.configure: "↑↓: ナビゲート  Enter: 選択  Esc: 戻る  Ctrl+C: 終了"
+footer.configure: "↑↓: 移動  Enter: 選択  Esc: 戻る  Ctrl+C: 終了"
 header.title: "Anvil"
 header.version: "v%{version}"
 
-# Status / session
+# ステータス / セッション
 status.model: "モデル"
 status.provider: "プロバイダー"
 status.permission: "権限モード"
 status.session: "セッション"
 status.messages: "メッセージ"
 status.turns: "ターン"
-status.tokens_used: "使用済みトークン"
+status.tokens_used: "使用トークン"
 
-# Command descriptions
+# コマンドの説明（/help の出力で使用）
 cmd.help.summary: "利用可能なスラッシュコマンドを表示"
 cmd.status.summary: "現在のセッション状態を表示"
-cmd.compact.summary: "ローカルセッション履歴を圧縮"
-cmd.model.summary: "アクティブなモデルを表示または切り替え"
-cmd.permissions.summary: "権限モードを表示または切り替え"
+cmd.compact.summary: "ローカルのセッション履歴を圧縮"
+cmd.model.summary: "現在のモデルを表示または切り替え"
+cmd.permissions.summary: "現在の権限モードを表示または切り替え"
 cmd.clear.summary: "新しいローカルセッションを開始"
-cmd.cost.summary: "セッションの累積トークン使用量を表示"
-cmd.provider.summary: "プロバイダーを表示、切り替え、または一覧表示"
-cmd.login.summary: "ログインまたは認証情報を更新"
-cmd.resume.summary: "保存済みセッションをREPLに読み込む"
-cmd.config.summary: "Anvil設定ファイルを検査"
-cmd.memory.summary: "読み込まれたAnvilメモリファイルを検査"
-cmd.init.summary: "このリポジトリにANVIL.mdを作成"
-cmd.diff.summary: "現在のワークスペース変更のgit diffを表示"
-cmd.version.summary: "CLIバージョンとビルド情報を表示"
-cmd.bughunter.summary: "コードベースのバグを検査"
-cmd.branch.summary: "gitブランチの一覧表示、作成、切り替え"
-cmd.worktree.summary: "gitワークツリーを管理"
-cmd.commit.summary: "コミットメッセージを生成してコミットを作成"
-cmd.pr.summary: "会話からプルリクエストを下書きまたは作成"
-cmd.issue.summary: "会話からGitHub issueを下書きまたは作成"
-cmd.hub.summary: "AnvilHubマーケットプレイスからパッケージを閲覧・インストール"
+cmd.cost.summary: "このセッションの累計トークン使用量を表示"
+cmd.provider.summary: "プロバイダーとそのモデルを表示、切替、または一覧表示"
+cmd.login.summary: "プロバイダーへのログインまたは認証情報の更新"
+cmd.resume.summary: "保存済みセッションを REPL に読み込む"
+cmd.config.summary: "Anvil の設定ファイルやマージ済みセクションを確認"
+cmd.memory.summary: "読み込まれている Anvil の指示メモリファイルを確認"
+cmd.init.summary: "このリポジトリ用の初期 ANVIL.md を作成"
+cmd.diff.summary: "現在のワークスペースの変更の git diff を表示"
+cmd.version.summary: "CLI のバージョンとビルド情報を表示"
+cmd.bughunter.summary: "コードを点検して潜在的なバグを探す"
+cmd.branch.summary: "git ブランチの一覧、作成、切り替え"
+cmd.worktree.summary: "git worktree の一覧、追加、削除、整理"
+cmd.commit.summary: "コミットメッセージを生成して git コミットを作成"
+cmd.pr.summary: "会話から pull request を下書きまたは作成"
+cmd.issue.summary: "会話から GitHub issue を下書きまたは作成"
+cmd.hub.summary: "AnvilHub マーケットプレイスのパッケージを閲覧・インストール"
 cmd.language.summary: "表示言語を設定 (en, de, es, fr, ja, zh-CN, ru)"
 
-# Error messages
+# エラーメッセージ
 error.unknown_command: "不明なコマンド: /%{name}"
-error.missing_argument: "/%{cmd}の必須引数がありません"
-error.not_available_tui: "TUIモードではこのコマンドは使用できません。"
+error.missing_argument: "/%{cmd} に必須の引数がありません"
+error.not_available_tui: "このコマンドは TUI モードでは利用できません。"
 error.provider_not_found: "プロバイダーが見つかりません: %{name}"
-error.hub_fetch_failed: "AnvilHubからパッケージの取得に失敗しました: %{reason}"
-error.hub_install_failed: "パッケージ'%{name}'のインストールに失敗しました: %{reason}"
+error.hub_fetch_failed: "AnvilHub からのパッケージ取得に失敗しました: %{reason}"
+error.hub_install_failed: "パッケージ '%{name}' のインストールに失敗しました: %{reason}"
 error.hub_not_found: "パッケージが見つかりません: %{name}"
-error.invalid_language: "サポートされていない言語'%{lang}'です。利用可能: en, de, es, fr, ja, zh-CN, ru"
+error.invalid_language: "サポートされていない言語 '%{lang}'。利用可能: en, de, es, fr, ja, zh-CN, ru"
 error.config_save_failed: "設定の保存に失敗しました: %{reason}"
 
-# Hub command messages
-hub.top_packages: "AnvilHubのトップパッケージ"
-hub.search_results: "\"%{query}\"の検索結果"
+# Hub コマンドのメッセージ
+hub.top_packages: "AnvilHub の人気パッケージ"
+hub.search_results: "「%{query}」の検索結果"
 hub.no_results: "パッケージが見つかりませんでした。"
-hub.installing: "%{name} %{version}をインストール中..."
-hub.installed: "%{name} %{version}を%{path}にインストールしました"
-hub.downloads: "%{count}ダウンロード"
-hub.package_info: "パッケージ: %{name} v%{version} 作者: %{author}"
-hub.package_type: "タイプ: %{type}"
+hub.installing: "%{name} %{version} をインストール中..."
+hub.installed: "%{name} %{version} を %{path} にインストールしました"
+hub.downloads: "%{count} ダウンロード"
+hub.package_info: "パッケージ: %{name} v%{version}（作者: %{author}）"
+hub.package_type: "種類: %{type}"
 hub.package_desc: "説明: %{desc}"
 hub.usage_hint: |
   使い方:
-    /hub                       カテゴリ別トップパッケージを表示
-    /hub search <クエリ>       全パッケージを検索
-    /hub skills                トップスキル
-    /hub plugins               トッププラグイン
-    /hub agents                トップエージェント
-    /hub themes                トップテーマ
-    /hub install <名前>        パッケージをダウンロードしてインストール
-    /hub info <名前>           パッケージの詳細を表示
+    /hub                     カテゴリ別に人気パッケージを表示
+    /hub search <クエリ>     すべてのパッケージを検索
+    /hub skills              人気の skill
+    /hub plugins             人気の plugin
+    /hub agents              人気の agent
+    /hub themes              人気のテーマ
+    /hub install <名前>      パッケージをダウンロードしてインストール
+    /hub info <名前>         パッケージの詳細を表示
 
-# Language command messages
+# Language コマンドのメッセージ
 language.current: "現在の言語: %{lang}"
 language.changed: "言語を設定しました: %{lang}"
 language.available: "利用可能な言語: en, de, es, fr, ja, zh-CN, ru"
 language.usage: "使い方: /language [en|de|es|fr|ja|zh-CN|ru]"
 
-# Configure menu labels
-configure.title: "Anvilを設定"
+# 設定メニューのラベル
+configure.title: "Anvil を設定"
 configure.providers: "プロバイダー"
 configure.models: "モデル"
 configure.context: "コンテキスト"
@@ -87,11 +87,295 @@ configure.display: "表示"
 configure.integrations: "統合"
 configure.language: "言語"
 
-# Login/provider prompts
-login.prompt_provider: "ログインするプロバイダーを選択 [anthropic/openai/ollama]: "
-login.success: "%{provider}へのログインに成功しました。"
+# ログイン / プロバイダーのプロンプト
+login.prompt_provider: "ログインするプロバイダーを選択してください [anthropic/openai/ollama]: "
+login.success: "%{provider} にログインしました。"
 login.failed: "ログインに失敗しました: %{reason}"
-login.enter_api_key: "APIキーを入力: "
-login.testing_connection: "%{host}への接続をテスト中..."
+login.enter_api_key: "API key を入力: "
+login.testing_connection: "%{host} への接続をテスト中..."
 login.connected: "接続済み"
 login.connection_failed: "接続できませんでした"
+
+# ─── ウィザード — 初回セットアップ ────────────────────────────────────────
+# ウェルカムカード（alt-screen の入口）
+wizard.welcome.title: "Anvil v%{version} へようこそ"
+wizard.welcome.tagline: "どこでも動く AI コーディングパートナー — Anthropic、OpenAI、Ollama、その他 32 のプロバイダーに対応。"
+wizard.welcome.kicker: "セットアップを始めましょう。"
+wizard.welcome.hint: "Enter で続行 · Esc でセットアップをスキップ"
+
+# インラインバナー（stdin フォールバックパス）
+wizard.banner.welcome: "⚒  Anvil v%{version} へようこそ"
+wizard.banner.subtitle: "   Culpur Defense による AI コーディングアシスタント"
+wizard.banner.lets_setup: "   セットアップを始めましょう。"
+
+# ステップのヘッダー
+wizard.step_header: "ステップ %{step}/%{total}: %{title}"
+wizard.step.vault_title: "Vault のセットアップ（認証情報の暗号化）"
+wizard.step.ollama_title: "Ollama（ローカル AI）"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "プロバイダーの優先順位とデフォルトモデル"
+wizard.step.tui_layout_title: "TUI レイアウト"
+wizard.step.tui_prefs_title: "TUI 設定"
+
+# Vault ステップ
+wizard.vault.body_l1: "Anvil は API key を AES-256-GCM で暗号化された vault に保存します。"
+wizard.vault.body_l2: "ここでマスターパスワードを設定します — どこにも保存されません。"
+wizard.vault.body_l3: "Anvil を起動するたびに 1 回入力が必要です。"
+wizard.vault.opt_setup: "[1] 暗号化された vault をセットアップする（推奨）"
+wizard.vault.opt_skip: "[s] スキップ — API key は平文で credentials.json に保存されます"
+wizard.vault.skipping: "Vault のセットアップをスキップします。"
+wizard.vault.warn_plaintext: "警告: API key は平文で保存されます。"
+wizard.vault.tip_retry_setup: "後で /vault setup を実行して認証情報を暗号化できます。"
+wizard.vault.already_initialized: "Vault は ~/.anvil/vault/ で既に初期化されています"
+wizard.vault.unlocking: "このセッション用にロック解除中..."
+wizard.vault.prompt_master_password: "マスターパスワード: "
+wizard.vault.unlocked: "Vault のロックを解除しました。"
+wizard.vault.not_yet_initialized: "Vault がまだ初期化されていません — 想定外の状態です。"
+wizard.vault.unlock_failed: "ロック解除に失敗しました: %{reason}"
+wizard.vault.continue_no_vault: "Vault なしで続行します — key は平文で保存されます。"
+wizard.vault.prompt_set_password: "マスターパスワードを設定: "
+wizard.vault.prompt_confirm_password: "マスターパスワードを再入力: "
+wizard.vault.empty_password: "パスワードを空にはできません。もう一度入力してください。"
+wizard.vault.password_mismatch: "パスワードが一致しません。もう一度入力してください。"
+wizard.vault.created_and_unlocked: "Vault を作成しロックを解除しました。"
+wizard.vault.keys_encrypted_note: "このウィザードで入力した API key は暗号化して保存されます。"
+wizard.vault.created_session_lock_failed: "Vault は作成しましたが、セッションロックに失敗しました。"
+wizard.vault.keys_plaintext_this_run: "この実行では key は平文で保存されます。"
+wizard.vault.setup_failed: "Vault のセットアップに失敗しました: %{reason}"
+wizard.vault.continue_keys_plaintext: "Vault なしで続行します — key は平文で保存されます。"
+
+# Ollama ステップ
+wizard.ollama.body_l1: "Ollama はあなたのマシン上でローカルに AI モデルを実行します。"
+wizard.ollama.body_l2: "基本的な利用には API key は不要です。"
+wizard.ollama.opt_default: "[1] Ollama に接続（デフォルト: http://localhost:11434）"
+wizard.ollama.opt_custom: "[2] カスタム URL で接続"
+wizard.ollama.opt_apikey: "[3] API key で接続"
+wizard.ollama.opt_skip: "[s] スキップ"
+wizard.ollama.testing_connection: "%{url} への接続をテスト中... "
+wizard.ollama.connected: "接続済み"
+wizard.ollama.failed: "失敗 (%{reason})"
+wizard.ollama.available_models: "利用可能なモデル:"
+wizard.ollama.start_hint: "Ollama をスキップします — Ollama が起動していることを確認してください: ollama serve"
+wizard.ollama.config_saved_retry: "接続に失敗しました。設定は保存済みです。`anvil login ollama` で再試行できます。"
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "検証できませんでした (%{reason}) — そのまま保存します"
+wizard.ollama.skipping: "Ollama をスキップします。"
+
+# Anthropic ステップ
+wizard.anthropic.body: "Anthropic は最も高性能な AI アシスタント Claude を提供します。"
+wizard.anthropic.opt_oauth: "[1] OAuth でログイン（推奨 — ブラウザを開きます）"
+wizard.anthropic.opt_apikey: "[2] API key を手動で入力"
+wizard.anthropic.opt_skip: "[s] スキップ"
+wizard.anthropic.oauth_complete: "Anthropic の OAuth が完了しました。"
+wizard.anthropic.oauth_failed: "OAuth に失敗しました: %{reason}"
+wizard.anthropic.retry_hint: "後で `anvil login anthropic` で再試行できます"
+wizard.anthropic.console_url: "key の取得先: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "key が入力されなかったため、Anthropic をスキップします。"
+wizard.anthropic.validating_key: "key を検証中... "
+wizard.anthropic.valid: "有効"
+wizard.anthropic.could_not_verify: "検証できませんでした — そのまま保存します"
+wizard.anthropic.skipping: "Anthropic をスキップします。"
+
+# OpenAI ステップ
+wizard.openai.body: "OpenAI はコーディングと推論のための GPT モデルを提供します。"
+wizard.openai.opt_apikey: "[1] API key を入力"
+wizard.openai.opt_skip: "[s] スキップ"
+wizard.openai.console_url: "key の取得先: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "key が入力されなかったため、OpenAI をスキップします。"
+wizard.openai.validating_key: "key を検証中... "
+wizard.openai.valid: "有効"
+wizard.openai.could_not_verify: "検証できませんでした — そのまま保存します"
+wizard.openai.skipping: "OpenAI をスキップします。"
+
+# xAI ステップ
+wizard.xai.body: "xAI は Grok モデルを提供します。"
+wizard.xai.opt_apikey: "[1] API key を入力"
+wizard.xai.opt_skip: "[s] スキップ"
+wizard.xai.console_url: "key の取得先: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "key が入力されなかったため、xAI をスキップします。"
+wizard.xai.saved: "xAI の API key を保存しました。"
+wizard.xai.skipping: "xAI をスキップします。"
+
+# 不明な選択肢のフォールバック
+wizard.unknown_choice_skipping: "不明な選択 '%{choice}'、%{provider} をスキップします。"
+
+# プロバイダーの優先順位ステップ
+wizard.priority.none_configured: "プロバイダーが設定されていません。"
+wizard.priority.configure_later: "後で `anvil login` でプロバイダーを設定できます"
+wizard.priority.you_configured: "設定済み: %{providers}"
+wizard.priority.set_order: "プロバイダーの優先順位を設定してください（先頭 = メイン、その他 = フェイルオーバー）:"
+wizard.priority.current_order: "現在の順序:"
+wizard.priority.opt_keep: "[1] この順序のまま"
+wizard.priority.opt_reorder: "[2] 並び替え（番号を入力: 例 \"2,1\"）"
+wizard.priority.prompt_new_order: "新しい順序: "
+wizard.priority.could_not_parse: "順序を解析できませんでした。元の順序を保持します。"
+wizard.priority.unknown_keep: "不明な選択です。元の順序を保持します。"
+
+# シンキングモードの切替
+wizard.thinking.title: "シンキングモードを有効にしますか？"
+wizard.thinking.body_l1: "一部のモデル（Qwen3、Claude、o3）は拡張的な思考/推論をサポートしています。"
+wizard.thinking.body_l2: "有効にすると、モデルは回答前に推論過程を示します。"
+wizard.thinking.opt_yes: "[1] はい — シンキングモードを有効化（コーディングに推奨）"
+wizard.thinking.opt_no: "[2] いいえ — 通常の応答のみ"
+wizard.thinking.enabled: "シンキングモードを有効化しました。`/think` でいつでも切り替えられます"
+wizard.thinking.disabled: "シンキングモードをオフにしました。`/think` でいつでも切り替えられます"
+
+# TUI レイアウトステップ
+wizard.layout.opt_vertical: "[1] 縦分割  （デフォルト）"
+wizard.layout.opt_classic: "[2] クラシック"
+wizard.layout.opt_threepane: "[3] 3ペイン"
+wizard.layout.opt_journal: "[4] ジャーナル"
+wizard.layout.show_tabs_prompt: "ワークスペースタブを表示しますか？ [1] はい (デフォルト)  [2] いいえ"
+
+# TUI 設定ステップ
+wizard.prefs.mouse_prompt: "マウスキャプチャを有効にしますか？ [1] オフ (デフォルト、推奨)  [2] オン"
+wizard.prefs.theme_prompt: "テーマは？ [1] ダーク (デフォルト)  [2] ライト  [3] 自動"
+wizard.prefs.permission_prompt: "デフォルトの権限モードは？ [1] ask (デフォルト)  [2] workspace-write  [3] danger-full-access"
+
+# ウィザードのプロンプト
+wizard.prompt.choice_default1: "選択 [1]: "
+wizard.prompt.choice: "選択: "
+
+# ウィザード後のサマリーバナー
+wizard.summary.complete: "セットアップ完了！"
+wizard.summary.default_model: "デフォルトモデル:  %{model}"
+wizard.summary.providers: "プロバイダー:       %{providers}"
+wizard.summary.config_saved: "設定の保存先:       %{path}"
+wizard.summary.migration: "マイグレーション:   %{summary}"
+wizard.summary.run_anvil: "`anvil` を実行してコーディングを開始しましょう。"
+wizard.summary.type_help: "全コマンドを見るには `/help` と入力してください。"
+
+# ウィザードの警告 / エラー
+wizard.warn.altscreen_unavailable: "注: alt-screen ウィザードを利用できません (%{reason})。"
+wizard.warn.fallback_inline: "インライン / stdin プロンプトにフォールバックします。"
+wizard.warn.altscreen_modal: "注: alt-screen を利用できません (%{reason})。stdin プロンプトにフォールバックします。"
+wizard.warn.could_not_save_config: "警告: 設定を保存できませんでした: %{reason}"
+
+# Ollama インストールモーダル（wizard_ollama.rs）
+wizard.ollama_modal.step_header: "ステップ %{step}/%{total} — ローカル AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil は Ollama を直接インストール＋実行できるので、オフラインでも動くローカルモデルを用意できます。Ollama の管理を Anvil に任せますか？"
+wizard.ollama_modal.already_running: "Ollama は既に %{url} で %{count} 個のモデルとともに稼働しています:\n  %{models}\n\nこの既存のデーモンを使いますか？"
+wizard.ollama_modal.already_setup_title: "Ollama は既にセットアップ済み ✓"
+wizard.ollama_modal.resume_label: "再開 — Anvil が以前にインストールした Ollama を再利用"
+wizard.ollama_modal.use_existing_label: "Anvil が検出したシステムの Ollama を使用"
+wizard.ollama_modal.install_label: "今すぐ Ollama をインストール（Anvil がダウンロード＋管理）— 推奨"
+wizard.ollama_modal.title_local_ai: "ローカル AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Ollama は自分で管理する"
+wizard.ollama_modal.choice_skip: "スキップ — ローカル AI なし"
+wizard.ollama_modal.choice_later: "後で"
+wizard.ollama_modal.use_existing_title: "既存の Ollama を使用"
+wizard.ollama_modal.use_existing_body: "デフォルトの Ollama URL: %{url}\nデーモン: %{status}\n\n別の URL が必要な場合は後で /ollama setup を実行してください。"
+wizard.ollama_modal.status_reachable: "到達可能"
+wizard.ollama_modal.status_not_reachable: "到達不可 — メッセージを送る前に起動してください"
+wizard.ollama_modal.install_failed_title: "インストール失敗"
+wizard.ollama_modal.install_failed_body: "Ollama をインストールできませんでした:\n  %{reason}\n\n後で /ollama setup から再試行するか、別のオプションを選択してください。"
+wizard.ollama_modal.already_installed_title: "Ollama バイナリは既にインストール済み ✓"
+wizard.ollama_modal.already_installed_body: "以前のインストールから %{path} を見つけました。"
+
+# Ollama 適合度ラベル
+wizard.ollama_fit.recommended: "推奨"
+wizard.ollama_fit.fits: "適合"
+wizard.ollama_fit.tight: "余裕なし"
+wizard.ollama_fit.too_big: "大きすぎ — OOM になります"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — 一般的なコーディングで最良 (~4.7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — 小型で高速 (~2.0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — 8 GB RAM で動作 (~1.0 GB)"
+
+# ─── TUI — モーダルラベル ─────────────────────────────────────────────────
+tui.modal.permission_required: " 権限が必要です "
+tui.modal.edit_lines: "行を編集"
+tui.modal.edit_key_prompt: "%{key} を編集:"
+tui.modal.files_changed: "このターンで変更されたファイル: +%{added} −%{removed} (完全な unified diff は /diff で表示)"
+
+# ─── コマンド — voice / collab / docker / k8s / iac / deps ────────────────
+cmd.docker.usage: |
+  使い方:
+    /docker ps                   稼働中のコンテナを一覧表示
+    /docker logs <コンテナ>      コンテナログの最後の 50 行を表示
+    /docker compose              docker-compose のサービスを表示（存在する場合）
+    /docker build                カレントディレクトリの Dockerfile からイメージをビルド
+cmd.docker.logs_usage: "使い方: /docker logs <コンテナ>"
+cmd.docker.unknown_sub: "不明な docker サブコマンド: %{sub}\n使い方は `/docker help` を実行してください。"
+
+cmd.voice.start: |
+  音声入力 — 近日公開
+
+  音声キャプチャにはマイクへのアクセスと speech-to-text バックエンドが必要です。
+  予定: /voice start  ->  マイク入力をキャプチャし prompt として注入。
+cmd.voice.stop: |
+  音声入力 — 近日公開
+
+  停止できるアクティブな音声セッションはありません。
+cmd.voice.help: |
+  音声入力（近日公開）
+
+  コマンド:
+    /voice start   マイク入力のキャプチャを開始
+    /voice stop    キャプチャを停止して送信
+
+  ローカルの speech-to-text エンジン（例: whisper.cpp）が必要です。
+cmd.voice.unknown_sub: "不明な /voice サブコマンド: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  コラボレーション — 近日公開
+
+  予定: /collab share  ->  共有可能なセッション ID を生成。
+  この機能は将来のリリース向けに予約されています。
+cmd.collab.join: |
+  コラボレーション — 近日公開
+
+  使い方: /collab join <session-id>
+  この機能は将来のリリース向けに予約されています。
+cmd.collab.help: |
+  コラボレーション（近日公開）
+
+  コマンド:
+    /collab share          このセッションを共有（招待 ID を生成）
+    /collab join <id>      他のユーザーの共有セッションに参加
+
+  AnvilHub アカウントが必要です。提供時期は changelog を確認してください。
+cmd.collab.unknown_sub: "不明な /collab サブコマンド: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  使い方:
+    /k8s pods                   現在の namespace の pod を一覧表示
+    /k8s logs <pod>             pod ログの最後の 50 行を追跡
+    /k8s apply <ファイル>       kubectl で manifest を適用
+    /k8s describe <リソース>    リソースを説明
+cmd.k8s.kubectl_missing: "PATH に kubectl が見つかりません。https://kubernetes.io/docs/tasks/tools/ からインストールしてください"
+cmd.k8s.logs_usage: "使い方: /k8s logs <pod>"
+cmd.k8s.apply_usage: "使い方: /k8s apply <ファイル>"
+cmd.k8s.describe_usage: "使い方: /k8s describe <リソース>"
+cmd.k8s.unknown_sub: "不明な /k8s サブコマンド: %{args}\n使い方は `/k8s help` を実行してください。"
+
+cmd.iac.usage: |
+  使い方:
+    /iac plan       terraform/tofu plan を実行
+    /iac apply      terraform/tofu apply を実行
+    /iac validate   設定ファイルを検証
+    /iac drift      インフラのドリフトを検出 (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: TUI 内の確認モーダルが完了しませんでした。再試行してください — もしくは通常のシェルから `anvil --print /iac apply` を実行して CLI の確認プロンプトを使ってください。"
+cmd.iac.no_terraform: "PATH に 'tofu' も 'terraform' も見つかりません。\nOpenTofu をインストール: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "これはインフラに変更を適用します。続行しますか？ (y/N) "
+cmd.iac.cancelled: "Apply をキャンセルしました。"
+cmd.iac.unknown_sub: "不明な /iac サブコマンド: %{sub}\n使い方は `/iac help` を実行してください。"
+cmd.iac.no_binary_for_apply: "PATH に terraform/tofu バイナリが見つかりません。apply の前に OpenTofu をインストールしてください。"
+cmd.iac.confirm_body_with_plan: "これはインフラに変更を適用します。\n\n%{plan}\n\n確認前にプランを注意深くレビューしてください。"
+cmd.iac.confirm_body_generic: "これはインフラに変更を適用します。\n\n確認前にプランを注意深くレビューしてください。"
+
+cmd.deps.usage: |
+  使い方:
+    /deps tree            依存関係ツリーを表示
+    /deps outdated        古くなった依存関係を表示
+    /deps audit           依存関係のセキュリティ監査
+    /deps why <パッケージ> 依存関係が含まれている理由を説明
+cmd.deps.no_package_manager: "認識できるパッケージマネージャーが見つかりません。"
+
+# 複数コマンドで再利用する汎用 CLI ラベル
+cli.no_pr_diff: "PR の diff が見つかりません。gh がインストール・認証済みで、現在のブランチに対して PR が開かれていることを確認してください。"

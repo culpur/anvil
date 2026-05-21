@@ -1,84 +1,84 @@
-# TUI header / footer
+# TUI 顶部 / 底部栏
 footer.help: "Tab: 补全  Enter: 发送  Ctrl+C: 取消  Ctrl+D: 退出  /help: 命令"
 footer.configure: "↑↓: 导航  Enter: 选择  Esc: 返回  Ctrl+C: 退出"
 header.title: "Anvil"
 header.version: "v%{version}"
 
-# Status / session
+# 状态 / 会话
 status.model: "模型"
-status.provider: "提供商"
+status.provider: "提供方"
 status.permission: "权限模式"
 status.session: "会话"
 status.messages: "消息"
 status.turns: "轮次"
-status.tokens_used: "已用令牌"
+status.tokens_used: "已用 token"
 
-# Command descriptions
+# 命令说明（用于 /help 输出）
 cmd.help.summary: "显示可用的斜杠命令"
 cmd.status.summary: "显示当前会话状态"
 cmd.compact.summary: "压缩本地会话历史"
-cmd.model.summary: "显示或切换活动模型"
-cmd.permissions.summary: "显示或切换权限模式"
-cmd.clear.summary: "开始新的本地会话"
-cmd.cost.summary: "显示本次会话的累计令牌使用量"
-cmd.provider.summary: "显示、切换或列出提供商"
-cmd.login.summary: "登录或刷新提供商凭据"
+cmd.model.summary: "显示或切换当前模型"
+cmd.permissions.summary: "显示或切换当前权限模式"
+cmd.clear.summary: "开始一个新的本地会话"
+cmd.cost.summary: "显示本会话的累计 token 用量"
+cmd.provider.summary: "显示、切换或列出提供方及其模型"
+cmd.login.summary: "登录或刷新提供方的凭证"
 cmd.resume.summary: "将已保存的会话加载到 REPL"
-cmd.config.summary: "检查 Anvil 配置文件"
-cmd.memory.summary: "检查已加载的 Anvil 内存文件"
-cmd.init.summary: "为此仓库创建 ANVIL.md"
-cmd.diff.summary: "显示当前工作区更改的 git diff"
+cmd.config.summary: "查看 Anvil 配置文件或合并后的配置段"
+cmd.memory.summary: "查看已加载的 Anvil 指令记忆文件"
+cmd.init.summary: "为当前仓库创建初始的 ANVIL.md"
+cmd.diff.summary: "显示当前工作区改动的 git diff"
 cmd.version.summary: "显示 CLI 版本和构建信息"
-cmd.bughunter.summary: "检查代码库中可能存在的错误"
+cmd.bughunter.summary: "扫描代码以发现潜在 bug"
 cmd.branch.summary: "列出、创建或切换 git 分支"
-cmd.worktree.summary: "管理 git 工作树"
-cmd.commit.summary: "生成提交消息并创建 git 提交"
-cmd.pr.summary: "从对话中起草或创建拉取请求"
-cmd.issue.summary: "从对话中起草或创建 GitHub Issue"
-cmd.hub.summary: "浏览并从 AnvilHub 市场安装包"
+cmd.worktree.summary: "列出、添加、删除或清理 git worktree"
+cmd.commit.summary: "生成 commit 信息并创建 git commit"
+cmd.pr.summary: "根据会话起草或创建 pull request"
+cmd.issue.summary: "根据会话起草或创建 GitHub issue"
+cmd.hub.summary: "浏览并安装 AnvilHub 市场中的包"
 cmd.language.summary: "设置显示语言 (en, de, es, fr, ja, zh-CN, ru)"
 
-# Error messages
-error.unknown_command: "未知命令：/%{name}"
-error.missing_argument: "/%{cmd} 缺少必需参数"
+# 错误信息
+error.unknown_command: "未知命令: /%{name}"
+error.missing_argument: "/%{cmd} 缺少必需的参数"
 error.not_available_tui: "TUI 模式下不可用此命令。"
-error.provider_not_found: "未找到提供商：%{name}"
-error.hub_fetch_failed: "从 AnvilHub 获取包失败：%{reason}"
-error.hub_install_failed: "安装包'%{name}'失败：%{reason}"
-error.hub_not_found: "未找到包：%{name}"
-error.invalid_language: "不支持的语言'%{lang}'。可用：en, de, es, fr, ja, zh-CN, ru"
-error.config_save_failed: "保存配置失败：%{reason}"
+error.provider_not_found: "未找到提供方: %{name}"
+error.hub_fetch_failed: "从 AnvilHub 获取包失败: %{reason}"
+error.hub_install_failed: "安装包 '%{name}' 失败: %{reason}"
+error.hub_not_found: "未找到包: %{name}"
+error.invalid_language: "不支持的语言 '%{lang}'。可选: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "保存配置失败: %{reason}"
 
-# Hub command messages
+# Hub 命令消息
 hub.top_packages: "AnvilHub 热门包"
-hub.search_results: "\"%{query}\"的搜索结果"
+hub.search_results: "\"%{query}\" 的搜索结果"
 hub.no_results: "未找到包。"
 hub.installing: "正在安装 %{name} %{version}..."
 hub.installed: "已将 %{name} %{version} 安装到 %{path}"
 hub.downloads: "%{count} 次下载"
-hub.package_info: "包：%{name} v%{version}，作者：%{author}"
-hub.package_type: "类型：%{type}"
-hub.package_desc: "描述：%{desc}"
+hub.package_info: "包: %{name} v%{version}，作者 %{author}"
+hub.package_type: "类型: %{type}"
+hub.package_desc: "描述: %{desc}"
 hub.usage_hint: |
-  用法：
-    /hub                       按类别显示热门包
-    /hub search <查询>         搜索所有包
-    /hub skills                热门技能
-    /hub plugins               热门插件
-    /hub agents                热门智能体
-    /hub themes                热门主题
-    /hub install <名称>        下载并安装包
-    /hub info <名称>           显示包详情
+  用法:
+    /hub                     按类别显示热门包
+    /hub search <关键词>     搜索所有包
+    /hub skills              热门 skill
+    /hub plugins             热门 plugin
+    /hub agents              热门 agent
+    /hub themes              热门主题
+    /hub install <名称>      下载并安装一个包
+    /hub info <名称>         显示包的详细信息
 
-# Language command messages
-language.current: "当前语言：%{lang}"
-language.changed: "语言已设置为：%{lang}"
-language.available: "可用语言：en, de, es, fr, ja, zh-CN, ru"
-language.usage: "用法：/language [en|de|es|fr|ja|zh-CN|ru]"
+# Language 命令消息
+language.current: "当前语言: %{lang}"
+language.changed: "语言已设置为: %{lang}"
+language.available: "可用语言: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "用法: /language [en|de|es|fr|ja|zh-CN|ru]"
 
-# Configure menu labels
+# 配置菜单标签
 configure.title: "配置 Anvil"
-configure.providers: "提供商"
+configure.providers: "提供方"
 configure.models: "模型"
 configure.context: "上下文"
 configure.search: "搜索"
@@ -87,11 +87,295 @@ configure.display: "显示"
 configure.integrations: "集成"
 configure.language: "语言"
 
-# Login/provider prompts
-login.prompt_provider: "选择登录提供商 [anthropic/openai/ollama]："
+# 登录 / 提供方提示
+login.prompt_provider: "选择要登录的提供方 [anthropic/openai/ollama]: "
 login.success: "%{provider} 登录成功。"
-login.failed: "登录失败：%{reason}"
-login.enter_api_key: "输入 API 密钥："
+login.failed: "登录失败: %{reason}"
+login.enter_api_key: "输入 API key: "
 login.testing_connection: "正在测试与 %{host} 的连接..."
 login.connected: "已连接"
 login.connection_failed: "无法连接"
+
+# ─── 向导 — 首次运行设置 ──────────────────────────────────────────────────
+# 欢迎卡片（alt-screen 入口）
+wizard.welcome.title: "欢迎使用 Anvil v%{version}"
+wizard.welcome.tagline: "你的 AI 编码伙伴，随处可用 — Anthropic、OpenAI、Ollama 及另外 32 个提供方。"
+wizard.welcome.kicker: "我们来完成设置吧。"
+wizard.welcome.hint: "按 Enter 继续 · Esc 跳过设置"
+
+# 行内横幅（stdin 回退路径）
+wizard.banner.welcome: "⚒  欢迎使用 Anvil v%{version}"
+wizard.banner.subtitle: "   由 Culpur Defense 出品的 AI 编码助手"
+wizard.banner.lets_setup: "   我们来完成设置吧。"
+
+# 步骤标题
+wizard.step_header: "第 %{step} 步，共 %{total} 步: %{title}"
+wizard.step.vault_title: "Vault 设置（凭证加密）"
+wizard.step.ollama_title: "Ollama（本地 AI）"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "提供方优先级与默认模型"
+wizard.step.tui_layout_title: "TUI 布局"
+wizard.step.tui_prefs_title: "TUI 偏好设置"
+
+# Vault 步骤
+wizard.vault.body_l1: "Anvil 将你的 API key 保存在 AES-256-GCM 加密的 vault 中。"
+wizard.vault.body_l2: "你现在设置一个主密码 — 它不会保存到任何地方。"
+wizard.vault.body_l3: "每次启动 Anvil 时你需要输入一次该密码。"
+wizard.vault.opt_setup: "[1] 设置加密 vault（推荐）"
+wizard.vault.opt_skip: "[s] 跳过 — API key 将以明文形式保存在 credentials.json"
+wizard.vault.skipping: "跳过 vault 设置。"
+wizard.vault.warn_plaintext: "警告: API key 将以明文形式保存。"
+wizard.vault.tip_retry_setup: "稍后运行 /vault setup 来加密你的凭证。"
+wizard.vault.already_initialized: "Vault 已在 ~/.anvil/vault/ 初始化"
+wizard.vault.unlocking: "正在为本次会话解锁..."
+wizard.vault.prompt_master_password: "主密码: "
+wizard.vault.unlocked: "Vault 已解锁。"
+wizard.vault.not_yet_initialized: "Vault 尚未初始化 — 这是意外情况。"
+wizard.vault.unlock_failed: "解锁失败: %{reason}"
+wizard.vault.continue_no_vault: "在没有 vault 的情况下继续 — key 将以明文形式保存。"
+wizard.vault.prompt_set_password: "设置主密码: "
+wizard.vault.prompt_confirm_password: "确认主密码: "
+wizard.vault.empty_password: "密码不能为空。请重试。"
+wizard.vault.password_mismatch: "两次密码不一致。请重试。"
+wizard.vault.created_and_unlocked: "Vault 已创建并解锁。"
+wizard.vault.keys_encrypted_note: "本向导中输入的 API key 将以加密形式保存。"
+wizard.vault.created_session_lock_failed: "Vault 已创建，但本会话锁定失败。"
+wizard.vault.keys_plaintext_this_run: "本次运行 key 将以明文形式保存。"
+wizard.vault.setup_failed: "Vault 设置失败: %{reason}"
+wizard.vault.continue_keys_plaintext: "在没有 vault 的情况下继续 — key 以明文形式保存。"
+
+# Ollama 步骤
+wizard.ollama.body_l1: "Ollama 在你本地机器上运行 AI 模型。"
+wizard.ollama.body_l2: "基本使用无需 API key。"
+wizard.ollama.opt_default: "[1] 连接到 Ollama（默认: http://localhost:11434）"
+wizard.ollama.opt_custom: "[2] 使用自定义 URL 连接"
+wizard.ollama.opt_apikey: "[3] 使用 API key 连接"
+wizard.ollama.opt_skip: "[s] 跳过"
+wizard.ollama.testing_connection: "正在测试与 %{url} 的连接... "
+wizard.ollama.connected: "已连接"
+wizard.ollama.failed: "失败 (%{reason})"
+wizard.ollama.available_models: "可用模型:"
+wizard.ollama.start_hint: "跳过 Ollama — 请确认 Ollama 正在运行: ollama serve"
+wizard.ollama.config_saved_retry: "连接失败。配置已保存；你可以使用 `anvil login ollama` 重试。"
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "无法验证 (%{reason}) — 仍将保存"
+wizard.ollama.skipping: "跳过 Ollama。"
+
+# Anthropic 步骤
+wizard.anthropic.body: "Anthropic 提供 Claude — 最强大的 AI 助手。"
+wizard.anthropic.opt_oauth: "[1] 使用 OAuth 登录（推荐 — 打开浏览器）"
+wizard.anthropic.opt_apikey: "[2] 手动输入 API key"
+wizard.anthropic.opt_skip: "[s] 跳过"
+wizard.anthropic.oauth_complete: "Anthropic OAuth 完成。"
+wizard.anthropic.oauth_failed: "OAuth 失败: %{reason}"
+wizard.anthropic.retry_hint: "你可以稍后使用以下命令重试: anvil login anthropic"
+wizard.anthropic.console_url: "在此获取 key: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "未输入 key，跳过 Anthropic。"
+wizard.anthropic.validating_key: "正在验证 key... "
+wizard.anthropic.valid: "有效"
+wizard.anthropic.could_not_verify: "无法验证 — 仍将保存"
+wizard.anthropic.skipping: "跳过 Anthropic。"
+
+# OpenAI 步骤
+wizard.openai.body: "OpenAI 提供用于编码和推理的 GPT 模型。"
+wizard.openai.opt_apikey: "[1] 输入 API key"
+wizard.openai.opt_skip: "[s] 跳过"
+wizard.openai.console_url: "在此获取 key: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "未输入 key，跳过 OpenAI。"
+wizard.openai.validating_key: "正在验证 key... "
+wizard.openai.valid: "有效"
+wizard.openai.could_not_verify: "无法验证 — 仍将保存"
+wizard.openai.skipping: "跳过 OpenAI。"
+
+# xAI 步骤
+wizard.xai.body: "xAI 提供 Grok 模型。"
+wizard.xai.opt_apikey: "[1] 输入 API key"
+wizard.xai.opt_skip: "[s] 跳过"
+wizard.xai.console_url: "在此获取 key: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "未输入 key，跳过 xAI。"
+wizard.xai.saved: "xAI API key 已保存。"
+wizard.xai.skipping: "跳过 xAI。"
+
+# 未知选项回退
+wizard.unknown_choice_skipping: "未知选项 '%{choice}'，跳过 %{provider}。"
+
+# 提供方优先级步骤
+wizard.priority.none_configured: "未配置任何提供方。"
+wizard.priority.configure_later: "你可以稍后使用以下命令配置提供方: anvil login"
+wizard.priority.you_configured: "你已配置: %{providers}"
+wizard.priority.set_order: "设置提供方优先级（第一个 = 主用，其余 = 故障切换）:"
+wizard.priority.current_order: "当前顺序:"
+wizard.priority.opt_keep: "[1] 保持当前顺序"
+wizard.priority.opt_reorder: "[2] 重新排序（输入数字: 例如 \"2,1\"）"
+wizard.priority.prompt_new_order: "新顺序: "
+wizard.priority.could_not_parse: "无法解析顺序，保持原顺序。"
+wizard.priority.unknown_keep: "未知选项，保持原顺序。"
+
+# 思考模式开关
+wizard.thinking.title: "是否启用思考模式？"
+wizard.thinking.body_l1: "部分模型（Qwen3、Claude、o3）支持扩展思考/推理。"
+wizard.thinking.body_l2: "启用后，模型会在回答前展示其推理过程。"
+wizard.thinking.opt_yes: "[1] 是 — 启用思考模式（编码推荐）"
+wizard.thinking.opt_no: "[2] 否  — 仅常规响应"
+wizard.thinking.enabled: "思考模式已启用。随时可用 /think 切换"
+wizard.thinking.disabled: "思考模式已关闭。随时可用 /think 切换"
+
+# TUI 布局步骤
+wizard.layout.opt_vertical: "[1] 垂直分屏  （默认）"
+wizard.layout.opt_classic: "[2] 经典"
+wizard.layout.opt_threepane: "[3] 三栏"
+wizard.layout.opt_journal: "[4] 日志式"
+wizard.layout.show_tabs_prompt: "是否显示工作区标签页？ [1] 是 (默认)  [2] 否"
+
+# TUI 偏好步骤
+wizard.prefs.mouse_prompt: "是否启用鼠标捕获？ [1] 关闭 (默认，推荐)  [2] 开启"
+wizard.prefs.theme_prompt: "主题？ [1] 深色 (默认)  [2] 浅色  [3] 自动"
+wizard.prefs.permission_prompt: "默认权限模式？ [1] ask (默认)  [2] workspace-write  [3] danger-full-access"
+
+# 向导提示
+wizard.prompt.choice_default1: "选择 [1]: "
+wizard.prompt.choice: "选择: "
+
+# 向导完成后的摘要横幅
+wizard.summary.complete: "设置完成！"
+wizard.summary.default_model: "默认模型: %{model}"
+wizard.summary.providers: "提供方:    %{providers}"
+wizard.summary.config_saved: "配置已保存: %{path}"
+wizard.summary.migration: "迁移:      %{summary}"
+wizard.summary.run_anvil: "运行 `anvil` 开始编码。"
+wizard.summary.type_help: "输入 `/help` 查看所有命令。"
+
+# 向导警告 / 错误
+wizard.warn.altscreen_unavailable: "提示: alt-screen 向导不可用 (%{reason})。"
+wizard.warn.fallback_inline: "回退到行内 / stdin 提示。"
+wizard.warn.altscreen_modal: "提示: alt-screen 不可用 (%{reason})，回退到 stdin 提示。"
+wizard.warn.could_not_save_config: "警告: 无法保存配置: %{reason}"
+
+# Ollama 安装模态（wizard_ollama.rs）
+wizard.ollama_modal.step_header: "第 %{step} 步，共 %{total} 步 — 本地 AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil 可以直接安装并运行 Ollama，让你拥有一个可离线工作的本地模型。要让 Anvil 为你管理 Ollama 吗？"
+wizard.ollama_modal.already_running: "Ollama 已在 %{url} 运行，共 %{count} 个模型:\n  %{models}\n\n是否使用这个现有的 daemon？"
+wizard.ollama_modal.already_setup_title: "Ollama 已设置 ✓"
+wizard.ollama_modal.resume_label: "继续 — 复用 Anvil 之前安装的 Ollama"
+wizard.ollama_modal.use_existing_label: "使用 Anvil 检测到的系统 Ollama"
+wizard.ollama_modal.install_label: "现在安装 Ollama（Anvil 下载并管理）— 推荐"
+wizard.ollama_modal.title_local_ai: "本地 AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "我自己管理 Ollama"
+wizard.ollama_modal.choice_skip: "跳过 — 不使用本地 AI"
+wizard.ollama_modal.choice_later: "稍后再说"
+wizard.ollama_modal.use_existing_title: "使用现有 Ollama"
+wizard.ollama_modal.use_existing_body: "默认 Ollama URL: %{url}\nDaemon: %{status}\n\n如需其他 URL，稍后使用 /ollama setup。"
+wizard.ollama_modal.status_reachable: "可达"
+wizard.ollama_modal.status_not_reachable: "不可达 — 发送消息前请先启动"
+wizard.ollama_modal.install_failed_title: "安装失败"
+wizard.ollama_modal.install_failed_body: "无法安装 Ollama:\n  %{reason}\n\n稍后从 /ollama setup 重试，或选择其他选项。"
+wizard.ollama_modal.already_installed_title: "Ollama 二进制已安装 ✓"
+wizard.ollama_modal.already_installed_body: "在 %{path} 发现先前的安装。"
+
+# Ollama 适配性标签
+wizard.ollama_fit.recommended: "推荐"
+wizard.ollama_fit.fits: "适合"
+wizard.ollama_fit.tight: "勉强"
+wizard.ollama_fit.too_big: "太大 — 会 OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — 通用编码最佳 (~4.7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — 小巧快速 (~2.0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — 8 GB 内存可用 (~1.0 GB)"
+
+# ─── TUI — 模态标签 ───────────────────────────────────────────────────────
+tui.modal.permission_required: " 需要权限 "
+tui.modal.edit_lines: "编辑行"
+tui.modal.edit_key_prompt: "编辑 %{key}:"
+tui.modal.files_changed: "本轮变更文件: +%{added} −%{removed}（运行 /diff 查看完整 unified diff）"
+
+# ─── 命令 — voice / collab / docker / k8s / iac / deps ────────────────────
+cmd.docker.usage: |
+  用法:
+    /docker ps                   列出运行中的容器
+    /docker logs <容器>          显示容器日志的最后 50 行
+    /docker compose              显示 docker-compose 服务（如有）
+    /docker build                从当前目录的 Dockerfile 构建镜像
+cmd.docker.logs_usage: "用法: /docker logs <容器>"
+cmd.docker.unknown_sub: "未知的 docker 子命令: %{sub}\n运行 `/docker help` 查看用法。"
+
+cmd.voice.start: |
+  语音输入 — 即将推出
+
+  语音捕获需要麦克风访问权限和语音转文字后端。
+  规划中: /voice start  ->  捕获麦克风输入并作为 prompt 注入。
+cmd.voice.stop: |
+  语音输入 — 即将推出
+
+  没有可停止的活动语音会话。
+cmd.voice.help: |
+  语音输入（即将推出）
+
+  命令:
+    /voice start   开始捕获麦克风输入
+    /voice stop    停止捕获并提交
+
+  需要本地语音转文字引擎（如 whisper.cpp）。
+cmd.voice.unknown_sub: "未知的 /voice 子命令: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  协作 — 即将推出
+
+  规划中: /collab share  ->  生成一个可分享的 session ID。
+  此功能保留至未来版本。
+cmd.collab.join: |
+  协作 — 即将推出
+
+  用法: /collab join <session-id>
+  此功能保留至未来版本。
+cmd.collab.help: |
+  协作（即将推出）
+
+  命令:
+    /collab share          分享本会话（生成一个邀请 ID）
+    /collab join <id>      加入其他用户分享的会话
+
+  需要 AnvilHub 账号。请关注 changelog 了解可用性。
+cmd.collab.unknown_sub: "未知的 /collab 子命令: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  用法:
+    /k8s pods                   列出当前 namespace 下的 pod
+    /k8s logs <pod>             跟踪 pod 日志的最后 50 行
+    /k8s apply <文件>           使用 kubectl 应用一个 manifest
+    /k8s describe <资源>        描述一个资源
+cmd.k8s.kubectl_missing: "在 PATH 中未找到 kubectl。请从 https://kubernetes.io/docs/tasks/tools/ 安装"
+cmd.k8s.logs_usage: "用法: /k8s logs <pod>"
+cmd.k8s.apply_usage: "用法: /k8s apply <文件>"
+cmd.k8s.describe_usage: "用法: /k8s describe <资源>"
+cmd.k8s.unknown_sub: "未知的 /k8s 子命令: %{args}\n运行 `/k8s help` 查看用法。"
+
+cmd.iac.usage: |
+  用法:
+    /iac plan       执行 terraform/tofu plan
+    /iac apply      执行 terraform/tofu apply
+    /iac validate   验证配置文件
+    /iac drift      检测基础设施漂移 (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: TUI 内确认模态未能完成。请重试 — 或从普通 shell 运行 `anvil --print /iac apply` 来使用 CLI 确认提示。"
+cmd.iac.no_terraform: "在 PATH 中未找到 'tofu' 或 'terraform'。\n安装 OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "此操作将对你的基础设施应用更改。是否继续？(y/N) "
+cmd.iac.cancelled: "Apply 已取消。"
+cmd.iac.unknown_sub: "未知的 /iac 子命令: %{sub}\n运行 `/iac help` 查看用法。"
+cmd.iac.no_binary_for_apply: "在 PATH 中未找到 terraform/tofu 二进制。请在 apply 前安装 OpenTofu。"
+cmd.iac.confirm_body_with_plan: "此操作将对你的基础设施应用更改。\n\n%{plan}\n\n请在确认前仔细审查计划。"
+cmd.iac.confirm_body_generic: "此操作将对你的基础设施应用更改。\n\n请在确认前仔细审查计划。"
+
+cmd.deps.usage: |
+  用法:
+    /deps tree         显示依赖树
+    /deps outdated     显示过时的依赖
+    /deps audit        依赖的安全审计
+    /deps why <包名>   解释为何包含某个依赖
+cmd.deps.no_package_manager: "未识别到包管理器。"
+
+# 跨命令复用的通用 CLI 标签
+cli.no_pr_diff: "未找到 PR diff。请确认 gh 已安装、已认证，且当前分支有打开的 PR。"

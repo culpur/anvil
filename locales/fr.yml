@@ -1,47 +1,47 @@
-# TUI header / footer
-footer.help: "Tab: compléter  Entrée: envoyer  Ctrl+C: annuler  Ctrl+D: quitter  /help: commandes"
-footer.configure: "↑↓: naviguer  Entrée: sélectionner  Esc: retour  Ctrl+C: quitter"
+# En-tête / pied du TUI
+footer.help: "Tab : compléter  Entrée : envoyer  Ctrl+C : annuler  Ctrl+D : quitter  /help : commandes"
+footer.configure: "↑↓ : naviguer  Entrée : sélectionner  Esc : retour  Ctrl+C : quitter"
 header.title: "Anvil"
 header.version: "v%{version}"
 
-# Status / session
+# État / session
 status.model: "Modèle"
 status.provider: "Fournisseur"
-status.permission: "Mode de permission"
+status.permission: "Mode de permissions"
 status.session: "Session"
 status.messages: "Messages"
 status.turns: "Tours"
 status.tokens_used: "Tokens utilisés"
 
-# Command descriptions
+# Descriptions de commandes (utilisées dans la sortie de /help)
 cmd.help.summary: "Afficher les commandes slash disponibles"
-cmd.status.summary: "Afficher l'état de la session actuelle"
-cmd.compact.summary: "Compacter l'historique de session local"
+cmd.status.summary: "Afficher l'état de la session courante"
+cmd.compact.summary: "Compacter l'historique local de la session"
 cmd.model.summary: "Afficher ou changer le modèle actif"
-cmd.permissions.summary: "Afficher ou changer le mode de permission"
+cmd.permissions.summary: "Afficher ou changer le mode de permissions actif"
 cmd.clear.summary: "Démarrer une nouvelle session locale"
-cmd.cost.summary: "Afficher l'utilisation cumulée des tokens"
-cmd.provider.summary: "Afficher, changer ou lister les fournisseurs"
-cmd.login.summary: "Se connecter ou actualiser les identifiants"
-cmd.resume.summary: "Charger une session sauvegardée"
-cmd.config.summary: "Inspecter les fichiers de configuration Anvil"
-cmd.memory.summary: "Inspecter les fichiers mémoire Anvil chargés"
-cmd.init.summary: "Créer un ANVIL.md de démarrage pour ce dépôt"
-cmd.diff.summary: "Afficher le diff git des modifications actuelles"
-cmd.version.summary: "Afficher la version CLI et les informations de build"
-cmd.bughunter.summary: "Inspecter la base de code pour détecter les bugs"
-cmd.branch.summary: "Lister, créer ou changer les branches git"
-cmd.worktree.summary: "Gérer les worktrees git"
-cmd.commit.summary: "Générer un message de commit et créer un commit"
-cmd.pr.summary: "Rédiger ou créer une pull request"
-cmd.issue.summary: "Rédiger ou créer un issue GitHub"
+cmd.cost.summary: "Afficher l'usage cumulé des tokens pour cette session"
+cmd.provider.summary: "Afficher, changer ou lister les fournisseurs et leurs modèles"
+cmd.login.summary: "Se connecter ou renouveler les identifiants d'un fournisseur"
+cmd.resume.summary: "Charger une session sauvegardée dans le REPL"
+cmd.config.summary: "Inspecter les fichiers de configuration d'Anvil ou les sections fusionnées"
+cmd.memory.summary: "Inspecter les fichiers de mémoire d'instructions d'Anvil"
+cmd.init.summary: "Créer un ANVIL.md initial pour ce dépôt"
+cmd.diff.summary: "Afficher le diff git des changements du workspace courant"
+cmd.version.summary: "Afficher la version de la CLI et les informations de build"
+cmd.bughunter.summary: "Inspecter le code à la recherche de bugs probables"
+cmd.branch.summary: "Lister, créer ou changer de branches git"
+cmd.worktree.summary: "Lister, ajouter, supprimer ou nettoyer les worktrees git"
+cmd.commit.summary: "Générer un message de commit et créer un commit git"
+cmd.pr.summary: "Rédiger ou créer une pull request à partir de la conversation"
+cmd.issue.summary: "Rédiger ou créer une issue GitHub à partir de la conversation"
 cmd.hub.summary: "Parcourir et installer des paquets depuis le marketplace AnvilHub"
 cmd.language.summary: "Définir la langue d'affichage (en, de, es, fr, ja, zh-CN, ru)"
 
-# Error messages
+# Messages d'erreur
 error.unknown_command: "Commande inconnue : /%{name}"
 error.missing_argument: "Argument requis manquant pour /%{cmd}"
-error.not_available_tui: "Commande non disponible en mode TUI."
+error.not_available_tui: "Commande indisponible en mode TUI."
 error.provider_not_found: "Fournisseur introuvable : %{name}"
 error.hub_fetch_failed: "Échec de la récupération des paquets depuis AnvilHub : %{reason}"
 error.hub_install_failed: "Échec de l'installation du paquet '%{name}' : %{reason}"
@@ -49,8 +49,8 @@ error.hub_not_found: "Paquet introuvable : %{name}"
 error.invalid_language: "Langue non prise en charge '%{lang}'. Disponibles : en, de, es, fr, ja, zh-CN, ru"
 error.config_save_failed: "Échec de la sauvegarde de la configuration : %{reason}"
 
-# Hub command messages
-hub.top_packages: "Meilleurs paquets sur AnvilHub"
+# Messages de la commande hub
+hub.top_packages: "Paquets les plus populaires sur AnvilHub"
 hub.search_results: "Résultats de recherche pour \"%{query}\""
 hub.no_results: "Aucun paquet trouvé."
 hub.installing: "Installation de %{name} %{version}..."
@@ -61,22 +61,22 @@ hub.package_type: "Type : %{type}"
 hub.package_desc: "Description : %{desc}"
 hub.usage_hint: |
   Utilisation :
-    /hub                       Afficher les meilleurs paquets par catégorie
-    /hub search <requête>      Rechercher dans tous les paquets
-    /hub skills                Meilleures compétences
-    /hub plugins               Meilleurs plugins
-    /hub agents                Meilleurs agents
-    /hub themes                Meilleurs thèmes
-    /hub install <nom>         Télécharger et installer un paquet
-    /hub info <nom>            Afficher les détails d'un paquet
+    /hub                     Afficher les paquets populaires par catégorie
+    /hub search <requête>    Rechercher dans tous les paquets
+    /hub skills              Skills populaires
+    /hub plugins             Plugins populaires
+    /hub agents              Agents populaires
+    /hub themes              Thèmes populaires
+    /hub install <nom>       Télécharger et installer un paquet
+    /hub info <nom>          Afficher les détails du paquet
 
-# Language command messages
+# Messages de la commande language
 language.current: "Langue actuelle : %{lang}"
 language.changed: "Langue définie sur : %{lang}"
 language.available: "Langues disponibles : en, de, es, fr, ja, zh-CN, ru"
 language.usage: "Utilisation : /language [en|de|es|fr|ja|zh-CN|ru]"
 
-# Configure menu labels
+# Étiquettes du menu de configuration
 configure.title: "Configurer Anvil"
 configure.providers: "Fournisseurs"
 configure.models: "Modèles"
@@ -87,11 +87,295 @@ configure.display: "Affichage"
 configure.integrations: "Intégrations"
 configure.language: "Langue"
 
-# Login/provider prompts
-login.prompt_provider: "Sélectionner le fournisseur pour se connecter [anthropic/openai/ollama] : "
+# Invites de connexion / fournisseur
+login.prompt_provider: "Sélectionnez le fournisseur pour vous connecter [anthropic/openai/ollama] : "
 login.success: "Connexion réussie pour %{provider}."
 login.failed: "Échec de la connexion : %{reason}"
-login.enter_api_key: "Entrer la clé API : "
-login.testing_connection: "Test de connexion à %{host}..."
+login.enter_api_key: "Entrez la clé API : "
+login.testing_connection: "Test de la connexion vers %{host}..."
 login.connected: "Connecté"
 login.connection_failed: "Impossible de se connecter"
+
+# ─── Assistant — configuration initiale ───────────────────────────────────
+# Carte de bienvenue (point d'entrée en alt-screen)
+wizard.welcome.title: "Bienvenue dans Anvil v%{version}"
+wizard.welcome.tagline: "Votre partenaire de programmation IA qui fonctionne partout — Anthropic, OpenAI, Ollama et 32 autres fournisseurs."
+wizard.welcome.kicker: "Procédons à la configuration."
+wizard.welcome.hint: "Appuyez sur Entrée pour continuer · Esc pour ignorer la configuration"
+
+# Bannière inline (chemin de repli stdin)
+wizard.banner.welcome: "⚒  Bienvenue dans Anvil v%{version}"
+wizard.banner.subtitle: "   Assistant de programmation propulsé par l'IA — Culpur Defense"
+wizard.banner.lets_setup: "   Procédons à la configuration."
+
+# En-têtes d'étape
+wizard.step_header: "Étape %{step} sur %{total} : %{title}"
+wizard.step.vault_title: "Configuration du coffre-fort (chiffrement des identifiants)"
+wizard.step.ollama_title: "Ollama (IA locale)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Priorité des fournisseurs et modèle par défaut"
+wizard.step.tui_layout_title: "Disposition du TUI"
+wizard.step.tui_prefs_title: "Préférences du TUI"
+
+# Étape coffre-fort
+wizard.vault.body_l1: "Anvil stocke vos clés API dans un coffre-fort chiffré en AES-256-GCM."
+wizard.vault.body_l2: "Vous définissez un mot de passe maître maintenant — il n'est stocké nulle part."
+wizard.vault.body_l3: "Vous devrez le saisir une fois à chaque démarrage d'Anvil."
+wizard.vault.opt_setup: "[1] Configurer le coffre-fort chiffré (recommandé)"
+wizard.vault.opt_skip: "[s] Ignorer — les clés API seront stockées en clair dans credentials.json"
+wizard.vault.skipping: "Configuration du coffre-fort ignorée."
+wizard.vault.warn_plaintext: "Avertissement : les clés API seront stockées en clair."
+wizard.vault.tip_retry_setup: "Lancez /vault setup plus tard pour chiffrer vos identifiants."
+wizard.vault.already_initialized: "Coffre-fort déjà initialisé dans ~/.anvil/vault/"
+wizard.vault.unlocking: "Déverrouillage pour cette session..."
+wizard.vault.prompt_master_password: "Mot de passe maître : "
+wizard.vault.unlocked: "Coffre-fort déverrouillé."
+wizard.vault.not_yet_initialized: "Coffre-fort pas encore initialisé — c'est inattendu."
+wizard.vault.unlock_failed: "Échec du déverrouillage : %{reason}"
+wizard.vault.continue_no_vault: "Poursuite sans coffre-fort — les clés seront stockées en clair."
+wizard.vault.prompt_set_password: "Définir le mot de passe maître : "
+wizard.vault.prompt_confirm_password: "Confirmer le mot de passe maître : "
+wizard.vault.empty_password: "Le mot de passe ne peut pas être vide. Réessayez."
+wizard.vault.password_mismatch: "Les mots de passe ne correspondent pas. Réessayez."
+wizard.vault.created_and_unlocked: "Coffre-fort créé et déverrouillé."
+wizard.vault.keys_encrypted_note: "Les clés API saisies dans cet assistant seront stockées chiffrées."
+wizard.vault.created_session_lock_failed: "Coffre-fort créé mais le verrouillage de session a échoué."
+wizard.vault.keys_plaintext_this_run: "Les clés seront stockées en clair pour cette exécution."
+wizard.vault.setup_failed: "Échec de la configuration du coffre-fort : %{reason}"
+wizard.vault.continue_keys_plaintext: "Poursuite sans coffre-fort — clés stockées en clair."
+
+# Étape Ollama
+wizard.ollama.body_l1: "Ollama exécute des modèles d'IA en local sur votre machine."
+wizard.ollama.body_l2: "Aucune clé API requise pour un usage de base."
+wizard.ollama.opt_default: "[1] Se connecter à Ollama (par défaut : http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Se connecter avec une URL personnalisée"
+wizard.ollama.opt_apikey: "[3] Se connecter avec une clé API"
+wizard.ollama.opt_skip: "[s] Ignorer"
+wizard.ollama.testing_connection: "Test de la connexion vers %{url}... "
+wizard.ollama.connected: "connecté"
+wizard.ollama.failed: "échec (%{reason})"
+wizard.ollama.available_models: "Modèles disponibles :"
+wizard.ollama.start_hint: "Ollama ignoré — assurez-vous qu'Ollama est en cours d'exécution : ollama serve"
+wizard.ollama.config_saved_retry: "Échec de la connexion. Configuration enregistrée ; vous pouvez réessayer avec `anvil login ollama`."
+wizard.ollama.prompt_url: "URL Ollama [http://localhost:11434] : "
+wizard.ollama.prompt_api_key: "Clé API : "
+wizard.ollama.could_not_verify_saving: "impossible à vérifier (%{reason}) — enregistré tout de même"
+wizard.ollama.skipping: "Ollama ignoré."
+
+# Étape Anthropic
+wizard.anthropic.body: "Anthropic fournit Claude — l'assistant IA le plus performant."
+wizard.anthropic.opt_oauth: "[1] Se connecter avec OAuth (recommandé — ouvre le navigateur)"
+wizard.anthropic.opt_apikey: "[2] Saisir la clé API manuellement"
+wizard.anthropic.opt_skip: "[s] Ignorer"
+wizard.anthropic.oauth_complete: "OAuth Anthropic terminé."
+wizard.anthropic.oauth_failed: "Échec OAuth : %{reason}"
+wizard.anthropic.retry_hint: "Vous pouvez réessayer plus tard avec : anvil login anthropic"
+wizard.anthropic.console_url: "Obtenez votre clé ici : https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "Clé API (sk-ant-...) : "
+wizard.anthropic.no_key_skipping: "Aucune clé saisie, Anthropic ignoré."
+wizard.anthropic.validating_key: "Validation de la clé... "
+wizard.anthropic.valid: "valide"
+wizard.anthropic.could_not_verify: "impossible à vérifier — enregistré tout de même"
+wizard.anthropic.skipping: "Anthropic ignoré."
+
+# Étape OpenAI
+wizard.openai.body: "OpenAI fournit les modèles GPT pour le code et le raisonnement."
+wizard.openai.opt_apikey: "[1] Saisir la clé API"
+wizard.openai.opt_skip: "[s] Ignorer"
+wizard.openai.console_url: "Obtenez votre clé ici : https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "Clé API (sk-...) : "
+wizard.openai.no_key_skipping: "Aucune clé saisie, OpenAI ignoré."
+wizard.openai.validating_key: "Validation de la clé... "
+wizard.openai.valid: "valide"
+wizard.openai.could_not_verify: "impossible à vérifier — enregistré tout de même"
+wizard.openai.skipping: "OpenAI ignoré."
+
+# Étape xAI
+wizard.xai.body: "xAI fournit les modèles Grok."
+wizard.xai.opt_apikey: "[1] Saisir la clé API"
+wizard.xai.opt_skip: "[s] Ignorer"
+wizard.xai.console_url: "Obtenez votre clé ici : https://console.x.ai"
+wizard.xai.prompt_api_key: "Clé API (xai-...) : "
+wizard.xai.no_key_skipping: "Aucune clé saisie, xAI ignoré."
+wizard.xai.saved: "Clé API xAI enregistrée."
+wizard.xai.skipping: "xAI ignoré."
+
+# Repli choix inconnu
+wizard.unknown_choice_skipping: "Choix inconnu '%{choice}', %{provider} ignoré."
+
+# Étape priorité des fournisseurs
+wizard.priority.none_configured: "Aucun fournisseur configuré."
+wizard.priority.configure_later: "Vous pouvez configurer les fournisseurs plus tard avec : anvil login"
+wizard.priority.you_configured: "Vous avez configuré : %{providers}"
+wizard.priority.set_order: "Définissez la priorité de vos fournisseurs (le premier = principal, les autres = repli) :"
+wizard.priority.current_order: "Ordre actuel :"
+wizard.priority.opt_keep: "[1] Conserver cet ordre"
+wizard.priority.opt_reorder: "[2] Réorganiser (saisissez les numéros : par ex. \"2,1\")"
+wizard.priority.prompt_new_order: "Nouvel ordre : "
+wizard.priority.could_not_parse: "Impossible d'interpréter l'ordre, ordre original conservé."
+wizard.priority.unknown_keep: "Choix inconnu, ordre original conservé."
+
+# Bascule du mode de réflexion
+wizard.thinking.title: "Activer le mode de réflexion ?"
+wizard.thinking.body_l1: "Certains modèles (Qwen3, Claude, o3) prennent en charge la réflexion/raisonnement étendu."
+wizard.thinking.body_l2: "Une fois activé, le modèle montre son raisonnement avant de répondre."
+wizard.thinking.opt_yes: "[1] Oui — activer le mode de réflexion (recommandé pour coder)"
+wizard.thinking.opt_no: "[2] Non — réponses standard uniquement"
+wizard.thinking.enabled: "Mode de réflexion activé. Basculez à tout moment avec /think"
+wizard.thinking.disabled: "Mode de réflexion désactivé. Basculez à tout moment avec /think"
+
+# Étape disposition du TUI
+wizard.layout.opt_vertical: "[1] Division verticale  (par défaut)"
+wizard.layout.opt_classic: "[2] Classique"
+wizard.layout.opt_threepane: "[3] Trois panneaux"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Afficher les onglets de workspace ? [1] Oui (par défaut)  [2] Non"
+
+# Étape préférences du TUI
+wizard.prefs.mouse_prompt: "Activer la capture de la souris ? [1] Désactivée (par défaut, recommandé)  [2] Activée"
+wizard.prefs.theme_prompt: "Thème ? [1] Sombre (par défaut)  [2] Clair  [3] Auto"
+wizard.prefs.permission_prompt: "Mode de permissions par défaut ? [1] ask (par défaut)  [2] workspace-write  [3] danger-full-access"
+
+# Invites de l'assistant
+wizard.prompt.choice_default1: "Choix [1] : "
+wizard.prompt.choice: "Choix : "
+
+# Bannière de résumé post-assistant
+wizard.summary.complete: "Configuration terminée !"
+wizard.summary.default_model: "Modèle par défaut :  %{model}"
+wizard.summary.providers: "Fournisseurs :       %{providers}"
+wizard.summary.config_saved: "Config enregistrée : %{path}"
+wizard.summary.migration: "Migration :          %{summary}"
+wizard.summary.run_anvil: "Lancez `anvil` pour commencer à coder."
+wizard.summary.type_help: "Tapez `/help` pour toutes les commandes."
+
+# Avertissements / erreurs de l'assistant
+wizard.warn.altscreen_unavailable: "Note : assistant alt-screen indisponible (%{reason})."
+wizard.warn.fallback_inline: "Repli sur les invites inline / stdin."
+wizard.warn.altscreen_modal: "Note : alt-screen indisponible (%{reason}) ; repli sur les invites stdin."
+wizard.warn.could_not_save_config: "Avertissement : impossible d'enregistrer la configuration : %{reason}"
+
+# Modal d'installation Ollama (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Étape %{step} sur %{total} — IA locale (Ollama)"
+wizard.ollama_modal.intro: "Anvil peut installer et exécuter Ollama directement pour que vous disposiez d'un modèle local fonctionnant hors ligne. Voulez-vous qu'Anvil gère Ollama pour vous ?"
+wizard.ollama_modal.already_running: "Ollama tourne déjà sur %{url} avec %{count} modèle(s) :\n  %{models}\n\nUtiliser ce daemon existant ?"
+wizard.ollama_modal.already_setup_title: "Ollama déjà configuré ✓"
+wizard.ollama_modal.resume_label: "Reprendre — réutiliser l'Ollama installé précédemment par Anvil"
+wizard.ollama_modal.use_existing_label: "Utiliser l'Ollama système détecté par Anvil"
+wizard.ollama_modal.install_label: "Installer Ollama maintenant (Anvil télécharge + le gère) — recommandé"
+wizard.ollama_modal.title_local_ai: "IA locale (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Je m'occupe d'Ollama moi-même"
+wizard.ollama_modal.choice_skip: "Ignorer — pas d'IA locale"
+wizard.ollama_modal.choice_later: "Peut-être plus tard"
+wizard.ollama_modal.use_existing_title: "Utiliser l'Ollama existant"
+wizard.ollama_modal.use_existing_body: "URL Ollama par défaut : %{url}\nDaemon : %{status}\n\nUtilisez /ollama setup plus tard si vous avez besoin d'une autre URL."
+wizard.ollama_modal.status_reachable: "joignable"
+wizard.ollama_modal.status_not_reachable: "NON joignable — démarrez-le avant d'envoyer un message"
+wizard.ollama_modal.install_failed_title: "Échec de l'installation"
+wizard.ollama_modal.install_failed_body: "Impossible d'installer Ollama :\n  %{reason}\n\nRéessayez depuis /ollama setup plus tard, ou choisissez une autre option."
+wizard.ollama_modal.already_installed_title: "Binaire Ollama déjà installé ✓"
+wizard.ollama_modal.already_installed_body: "%{path} trouvé depuis une installation précédente."
+
+# Étiquettes d'adéquation Ollama
+wizard.ollama_fit.recommended: "Recommandé"
+wizard.ollama_fit.fits: "Convient"
+wizard.ollama_fit.tight: "Juste"
+wizard.ollama_fit.too_big: "Trop gros — risque de OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — meilleur usage général pour coder (~4,7 Go)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — petit et rapide (~2,0 Go)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — fonctionne avec 8 Go de RAM (~1,0 Go)"
+
+# ─── TUI — étiquettes des modaux ──────────────────────────────────────────
+tui.modal.permission_required: " Permission requise "
+tui.modal.edit_lines: "Éditer les lignes"
+tui.modal.edit_key_prompt: "Éditer %{key} :"
+tui.modal.files_changed: "Fichiers modifiés ce tour : +%{added} −%{removed} (lancez /diff pour le diff unifié complet)"
+
+# ─── Commandes — voice / collab / docker / k8s / iac / deps ───────────────
+cmd.docker.usage: |
+  Utilisation :
+    /docker ps                     Lister les conteneurs en cours
+    /docker logs <conteneur>       Afficher les 50 dernières lignes des logs du conteneur
+    /docker compose                Afficher les services docker-compose (s'ils existent)
+    /docker build                  Construire une image depuis le Dockerfile du répertoire courant
+cmd.docker.logs_usage: "Utilisation : /docker logs <conteneur>"
+cmd.docker.unknown_sub: "Sous-commande docker inconnue : %{sub}\nLancez `/docker help` pour l'utilisation."
+
+cmd.voice.start: |
+  Entrée vocale — bientôt disponible
+
+  La capture vocale nécessite l'accès au microphone et un moteur speech-to-text.
+  Prévu : /voice start  ->  capturer l'entrée du micro et l'injecter comme prompt.
+cmd.voice.stop: |
+  Entrée vocale — bientôt disponible
+
+  Aucune session vocale active à arrêter.
+cmd.voice.help: |
+  Entrée vocale (bientôt disponible)
+
+  Commandes :
+    /voice start   Démarrer la capture du microphone
+    /voice stop    Arrêter la capture et soumettre
+
+  Nécessite un moteur speech-to-text local (par ex. whisper.cpp).
+cmd.voice.unknown_sub: "Sous-commande /voice inconnue : %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Collaboration — bientôt disponible
+
+  Prévu : /collab share  ->  générer un identifiant de session partageable.
+  Cette fonctionnalité est réservée à une future version.
+cmd.collab.join: |
+  Collaboration — bientôt disponible
+
+  Utilisation : /collab join <session-id>
+  Cette fonctionnalité est réservée à une future version.
+cmd.collab.help: |
+  Collaboration (bientôt disponible)
+
+  Commandes :
+    /collab share          Partager cette session (génère un ID d'invitation)
+    /collab join <id>      Rejoindre la session partagée d'un autre utilisateur
+
+  Nécessite un compte AnvilHub. Consultez le changelog pour la disponibilité.
+cmd.collab.unknown_sub: "Sous-commande /collab inconnue : %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Utilisation :
+    /k8s pods                   Lister les pods du namespace courant
+    /k8s logs <pod>             Suivre les 50 dernières lignes des logs du pod
+    /k8s apply <fichier>        Appliquer un manifest avec kubectl
+    /k8s describe <ressource>   Décrire une ressource
+cmd.k8s.kubectl_missing: "kubectl introuvable dans PATH. Installez-le depuis https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Utilisation : /k8s logs <pod>"
+cmd.k8s.apply_usage: "Utilisation : /k8s apply <fichier>"
+cmd.k8s.describe_usage: "Utilisation : /k8s describe <ressource>"
+cmd.k8s.unknown_sub: "Sous-commande /k8s inconnue : %{args}\nLancez `/k8s help` pour l'utilisation."
+
+cmd.iac.usage: |
+  Utilisation :
+    /iac plan       Lancer terraform/tofu plan
+    /iac apply      Lancer terraform/tofu apply
+    /iac validate   Valider les fichiers de configuration
+    /iac drift      Détecter la dérive d'infrastructure (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply : le modal de confirmation dans le TUI n'a pas abouti. Réessayez — ou lancez `anvil --print /iac apply` depuis un shell normal pour utiliser la confirmation CLI."
+cmd.iac.no_terraform: "Ni 'tofu' ni 'terraform' trouvé dans PATH.\nInstallez OpenTofu : https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Cela appliquera des changements à votre infrastructure. Continuer ? (y/N) "
+cmd.iac.cancelled: "Apply annulé."
+cmd.iac.unknown_sub: "Sous-commande /iac inconnue : %{sub}\nLancez `/iac help` pour l'utilisation."
+cmd.iac.no_binary_for_apply: "Aucun binaire terraform/tofu trouvé dans PATH. Installez OpenTofu avant d'appliquer."
+cmd.iac.confirm_body_with_plan: "Cela appliquera des changements à votre infrastructure.\n\n%{plan}\n\nRelisez le plan attentivement avant de confirmer."
+cmd.iac.confirm_body_generic: "Cela appliquera des changements à votre infrastructure.\n\nRelisez le plan attentivement avant de confirmer."
+
+cmd.deps.usage: |
+  Utilisation :
+    /deps tree           Afficher l'arbre des dépendances
+    /deps outdated       Afficher les dépendances obsolètes
+    /deps audit          Audit de sécurité des dépendances
+    /deps why <paquet>   Expliquer pourquoi une dépendance est incluse
+cmd.deps.no_package_manager: "Aucun gestionnaire de paquets reconnu trouvé."
+
+# Étiquettes CLI génériques réutilisées entre commandes
+cli.no_pr_diff: "Aucun diff de PR trouvé. Vérifiez que gh est installé, authentifié et qu'une PR est ouverte pour la branche courante."
