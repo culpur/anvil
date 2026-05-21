@@ -45,8 +45,7 @@ pub fn write_clipboard(text: &str) -> Result<(), String> {
             OSC52_MAX_BYTES,
         ));
     }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let payload = format!("\x1b]52;c;{encoded}\x07");
+    let payload = osc52_encode(text);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle
@@ -58,8 +57,8 @@ pub fn write_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Encode `text` as an OSC 52 escape string. Pure helper exposed for
-/// testability — `write_clipboard` calls this then writes to stdout.
+/// Encode `text` as an OSC 52 escape string. Pure helper used by
+/// `write_clipboard` and exposed for testability.
 #[must_use]
 pub fn osc52_encode(text: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
