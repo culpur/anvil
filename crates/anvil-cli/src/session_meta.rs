@@ -434,6 +434,99 @@ mod tests {
         assert_eq!(parse_string_field(raw, "name"), None);
     }
 
+    // ─── Task #721 — Resume session model preservation ───────────────────────
+    //
+    // CC parity, community issue anthropics/claude-code#61068. Audit doc:
+    // docs/cc-parity-audit-2026-05-21.md TASK-N.
+    //
+    // The sidecar is the source of truth for the model identifier across
+    // resume. The provider's /models endpoint MUST NOT override the
+    // persisted value (it can change between releases — e.g. by dropping
+    // the [1m] context window suffix on resume). These tests pin the
+    // contract: whatever string is written via set_session_model comes
+    // back from get_session_model byte-for-byte.
+    //
+    // Two spec tests:
+    //   1. claude-opus-4-7-1m (the 1M context window variant) round-trips
+    //      with its -1m suffix intact.
+    //   2. An exotic provider:tag model name (anvil-mock:test) is
+    //      preserved verbatim, including the colon.
+
+    /// Switch into a fresh temp cwd, run `f`, then restore the original cwd.
+    /// Serialised across tests via #[serial(cwd_session_meta)] because
+    /// `std::env::set_current_dir` mutates process-global state.
+    fn with_temp_workspace<F: FnOnce()>(f: F) {
+        let orig = std::env::current_dir().expect("orig cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("set_current_dir to temp");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        // Restore cwd before re-raising any panic so the next test starts clean.
+        std::env::set_current_dir(&orig).expect("restore cwd");
+        if let Err(p) = result {
+            std::panic::resume_unwind(p);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(cwd_session_meta)]
+    fn model_round_trip_preserves_1m_context_suffix() {
+        // Spec test 1: the 1M context window variant must round-trip
+        // exactly. A session created on claude-opus-4-7-1m must NOT
+        // come back as plain claude-opus-4-7 (the bug observed in
+        // anthropics/claude-code#61068).
+        with_temp_workspace(|| {
+            let id = "session-1m-test";
+            set_session_model(id, "claude-opus-4-7-1m").expect("set model");
+            let got = get_session_model(id);
+            assert_eq!(
+                got.as_deref(),
+                Some("claude-opus-4-7-1m"),
+                "model[1m] suffix MUST round-trip without being normalised"
+            );
+        });
+    }
+
+    #[test]
+    #[serial_test::serial(cwd_session_meta)]
+    fn model_round_trip_preserves_exotic_provider_tag() {
+        // Spec test 2: an exotic provider:tag model name (with a colon,
+        // unusual prefix) must come back byte-for-byte. The persisted
+        // sidecar is the source of truth; no provider lookup may rewrite it.
+        with_temp_workspace(|| {
+            let id = "session-exotic-test";
+            set_session_model(id, "anvil-mock:test").expect("set model");
+            let got = get_session_model(id);
+            assert_eq!(
+                got.as_deref(),
+                Some("anvil-mock:test"),
+                "exotic provider:tag model must preserve verbatim"
+            );
+        });
+    }
+
+    #[test]
+    #[serial_test::serial(cwd_session_meta)]
+    fn model_round_trip_survives_name_then_model_update() {
+        // Real-world ordering: a session is renamed first, then a model
+        // is recorded. The name must not be lost when the model is
+        // written, and the model must come back exactly.
+        with_temp_workspace(|| {
+            let id = "session-combined-test";
+            set_session_name(id, "auth-refactor").expect("set name");
+            set_session_model(id, "claude-opus-4-7-1m").expect("set model");
+            assert_eq!(
+                get_session_name(id).as_deref(),
+                Some("auth-refactor"),
+                "name must survive a subsequent model write"
+            );
+            assert_eq!(
+                get_session_model(id).as_deref(),
+                Some("claude-opus-4-7-1m"),
+                "model must round-trip after the name write"
+            );
+        });
+    }
+
     #[test]
     fn parse_number_field_works() {
         let raw = r#"{"renamed_at":1778365293,"other":"x"}"#;

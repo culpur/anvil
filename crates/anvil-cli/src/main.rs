@@ -1587,18 +1587,30 @@ fn print_version() {
 fn resume_session(session_path: &Path, commands: &[String]) {
     // T3-J: if the literal path doesn't exist, treat it as a session ID
     // or friendly name and resolve via the sidecar metadata.
-    let resolved_path: PathBuf = if session_path.exists() {
-        session_path.to_path_buf()
+    //
+    // Task #721 (CC parity, community issue anthropics/claude-code#61068):
+    // capture the resolved session ID so we can read the persisted model
+    // from the sidecar. The sidecar is the SOURCE OF TRUTH for which
+    // model the session was last using — we MUST NOT re-fetch a current
+    // default from the provider's /models endpoint, since that strips
+    // user-selected context-window variants (e.g. the `-1m` suffix on
+    // `claude-opus-4-7-1m`).
+    let (resolved_id, resolved_path): (Option<String>, PathBuf) = if session_path.exists() {
+        let id = session_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(str::to_string);
+        (id, session_path.to_path_buf())
     } else if let Some(reference) = session_path.to_str() {
         match session_meta::resolve_reference_extended(reference) {
-            Ok((_id, p)) => p,
+            Ok((id, p)) => (Some(id), p),
             Err(error) => {
                 eprintln!("failed to restore session: {error}");
                 std::process::exit(1);
             }
         }
     } else {
-        session_path.to_path_buf()
+        (None, session_path.to_path_buf())
     };
     let session_path = resolved_path.as_path();
 
@@ -1610,12 +1622,28 @@ fn resume_session(session_path: &Path, commands: &[String]) {
         }
     };
 
+    // Task #721: read the persisted model. None means the sidecar didn't
+    // store one (older session, or one that never persisted post-`/model`);
+    // callers fall back to their own default in that case. We deliberately
+    // do NOT clamp/normalise this string — `claude-opus-4-7-1m` stays
+    // exact, exotic `provider:tag` names pass through verbatim.
+    let persisted_model = resolved_id
+        .as_deref()
+        .and_then(session_meta::get_session_model);
+
     if commands.is_empty() {
-        println!(
-            "Restored session from {} ({} messages).",
-            session_path.display(),
-            session.messages.len()
-        );
+        match persisted_model.as_deref() {
+            Some(model) => println!(
+                "Restored session from {} ({} messages) · model {model}",
+                session_path.display(),
+                session.messages.len(),
+            ),
+            None => println!(
+                "Restored session from {} ({} messages).",
+                session_path.display(),
+                session.messages.len()
+            ),
+        }
         return;
     }
 
