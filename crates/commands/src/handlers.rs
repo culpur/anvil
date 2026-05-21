@@ -1692,9 +1692,14 @@ pub fn handle_memory_command(action: Option<&str>, ctx: &MemoryContext<'_>) -> S
                 "budget"  => memory_budget(ctx),
                 "prune"   => memory_prune(),
                 "clean"   => handle_memory_clean(arg, None),
+                // Task #731 — `/memory layer <N>` routes to the per-layer
+                // inspector view (currently only L1 is wired). The router
+                // delegates to the existing renderers so behaviour stays
+                // in lock-step with `/memory show <tier>`.
+                "layer"   => memory_layer(arg, ctx),
                 other     => format!(
                     "Unknown /memory subcommand: {other}\n\
-                     Usage: /memory [show|inspect|promote|forget|why|budget|prune|clean] [arg]"
+                     Usage: /memory [show|inspect|promote|forget|why|budget|prune|clean|layer] [arg]"
                 ),
             }
         }
@@ -2014,12 +2019,22 @@ fn render_episodic_show(sub: Option<&str>) -> String {
 /// When `None` we explain that this view requires an active runtime — the
 /// parser/test path does not have one.
 fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
+    use runtime::PromptSectionsExt;
+
     let Some(snapshot) = ctx.working else {
         return "No live working-memory snapshot available in this context.\n\
             (the `/memory show working` view requires a running interactive session)"
             .to_string();
     };
-    let total_bytes: usize = snapshot.sections.iter().map(|s| s.body.len()).sum();
+    // Task #731 / L1 §4: walk the snapshot via `PromptSectionsExt::iter_by_kind`
+    // so the trait stays the single read-side accessor for L1 introspection.
+    // The rendered output is the live working-memory inventory rather than the
+    // hand-shaped text the previous `/memory why` produced.
+    let total_bytes: usize = snapshot
+        .sections
+        .iter_by_kind()
+        .map(|(_, body)| body.len())
+        .sum();
     let mut lines = vec![format!(
         "=== L1 Working memory snapshot ===\n\
         sections={}  prompt_bytes={}  ~tokens={}  generated_at={}",
@@ -2029,6 +2044,10 @@ fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
         snapshot.generated_at
     )];
     lines.push(String::new());
+    lines.push(format!(
+        "  {:>2}  {:<24}  {:>6}  Preview",
+        "#", "Kind", "Size"
+    ));
     for (idx, section) in snapshot.sections.iter().enumerate() {
         let label = section
             .label
@@ -2042,19 +2061,14 @@ fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
             .unwrap_or("")
             .trim()
             .chars()
-            .take(80)
+            .take(60)
             .collect::<String>();
         lines.push(format!(
-            "  {:>2}. {:<24}{}  ({} bytes, ~{} tok)",
+            "  {:>2}  {:<24}  {:>6}  {preview}",
             idx + 1,
-            section.kind.as_tag(),
-            label,
+            format!("{}{}", section.kind.as_tag(), label),
             section.body.len(),
-            section.body.len() / 4
         ));
-        if !preview.is_empty() {
-            lines.push(format!("      {preview}"));
-        }
     }
     lines.push(String::new());
     lines.push(format!(
@@ -2062,6 +2076,64 @@ fn render_working_memory_show(ctx: &MemoryContext<'_>) -> String {
         ctx.message_count, ctx.message_estimated_tokens
     ));
     lines.join("\n")
+}
+
+/// Route `/memory layer <N>` to the per-layer renderer.
+///
+/// Task #731 (Layer 1): `/memory layer 1` renders the live working-memory
+/// inventory via [`render_working_memory_show`]. Higher layers route to
+/// their existing `/memory show <tier>` renderers so the vocabulary stays
+/// consistent across both surfaces.
+fn memory_layer(arg: &str, ctx: &MemoryContext<'_>) -> String {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return "Usage: /memory layer <N>\n\
+            Layers:\n  \
+            1  Working    (live system-prompt inventory)\n  \
+            2  Episodic   (alias for /memory show episodic)\n  \
+            3  Semantic   (alias for /memory show semantic)\n  \
+            4  Procedural (alias for /memory show procedural)\n  \
+            5  Identity   (alias for /memory show identity)\n  \
+            6  Policy     (alias for /memory show policy)\n  \
+            7  Cache      (alias for /memory show cache)"
+            .to_string();
+    }
+    // Split `<N> [rest]` so callers can pass sub-views like `/memory layer 7 file`.
+    let (layer, sub) = if let Some(idx) = arg.find(char::is_whitespace) {
+        let (a, b) = arg.split_at(idx);
+        (a, b.trim())
+    } else {
+        (arg, "")
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    match layer {
+        "1" => render_working_memory_show(ctx),
+        "2" => render_episodic_show(if sub.is_empty() { None } else { Some(sub) }),
+        "3" => {
+            let raw = if sub.is_empty() {
+                "semantic".to_string()
+            } else {
+                format!("semantic {sub}")
+            };
+            memory_show(Some(raw.as_str()), ctx)
+        }
+        "4" => render_procedural_show(
+            if sub.is_empty() { None } else { Some(sub) },
+            ctx,
+            cwd.as_path(),
+        ),
+        "5" => render_identity_show(),
+        "6" => render_policy_show(cwd.as_path()),
+        "7" => render_cache_show(
+            if sub.is_empty() { None } else { Some(sub) },
+            cwd.as_path(),
+        ),
+        other => format!(
+            "Unknown memory layer: {other}\n\
+             Known layers: 1 (working), 2 (episodic), 3 (semantic), \
+             4 (procedural), 5 (identity), 6 (policy), 7 (cache)"
+        ),
+    }
 }
 
 /// Render `/memory show procedural [goals|skills|cron|routines]`.
@@ -4139,6 +4211,63 @@ mod memory_tests {
         assert!(result.contains("[alpha]"), "skill label should appear");
         assert!(result.contains("sections=3"), "section count");
         assert!(result.contains("message(s)"), "buffer count line");
+    }
+
+    // Task #731 — `/memory layer 1` renders the live working snapshot via
+    // the new `PromptSectionsExt::iter_by_kind` accessor. The router lives
+    // alongside `/memory show working`; the tests below pin the router and
+    // its output shape so regressions surface immediately.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_layer_1_renders_live_working_snapshot() {
+        use runtime::{PromptSection, PromptSectionKind, WorkingMemorySnapshot};
+        let snap = WorkingMemorySnapshot::new(vec![
+            PromptSection::new(PromptSectionKind::Environment, "Anvil v2.2.18 cwd=/tmp"),
+            PromptSection::new(
+                PromptSectionKind::RetrievalOrder,
+                "Block: 1. Env, 2. ANVIL.md, 3. tree, 4. QMD",
+            ),
+            PromptSection::new(PromptSectionKind::InstructionFiles, "# Project: Anvil"),
+        ]);
+        let ctx = MemoryContext::with_working(&snap, 0, 0);
+        let result = handle_memory_command(Some("layer 1"), &ctx);
+        assert!(
+            result.contains("L1 Working memory snapshot"),
+            "header missing; got: {result}"
+        );
+        assert!(result.contains("environment"), "environment kind tag");
+        assert!(
+            result.contains("retrieval_order"),
+            "retrieval_order kind tag"
+        );
+        assert!(
+            result.contains("instruction_files"),
+            "instruction_files kind tag"
+        );
+        let env_len = "Anvil v2.2.18 cwd=/tmp".len();
+        assert!(
+            result.contains(&env_len.to_string()),
+            "byte count for environment ({env_len}) should appear; got: {result}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_layer_without_arg_lists_layers() {
+        let result = handle_memory_command(Some("layer"), &MemoryContext::default());
+        assert!(result.contains("Working"), "should list L1");
+        assert!(result.contains("Episodic"), "should list L2");
+        assert!(result.contains("Cache"), "should list L7");
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_layer_unknown_index_reports_known_layers() {
+        let result = handle_memory_command(Some("layer 9"), &MemoryContext::default());
+        assert!(
+            result.contains("Unknown memory layer"),
+            "unknown layer should error"
+        );
     }
 
     #[test]
