@@ -8,8 +8,9 @@ mod types;
 
 pub use client::{
     oauth_token_is_expired, read_base_url, read_ollama_base_url, read_xai_base_url,
-    resolve_saved_oauth_token, resolve_startup_auth_source, FailoverClient, FailoverNotify,
-    MessageStream, OAuthTokenSet, ProviderClient,
+    resolve_saved_oauth_token, resolve_startup_auth_source, with_side_channel_timeout,
+    FailoverClient, FailoverNotify, MessageStream, OAuthTokenSet, ProviderClient,
+    SIDE_CHANNEL_TIMEOUT,
 };
 pub use error::ApiError;
 pub use failover::{

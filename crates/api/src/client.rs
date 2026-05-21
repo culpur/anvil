@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::error::ApiError;
 use crate::failover::{FailoverChain, FailoverEvent, format_failover_event};
 use crate::providers::anvil_provider::{self, AuthSource, AnvilApiClient};
@@ -10,6 +12,46 @@ use crate::providers::cursor::CursorClient;
 use crate::providers::gemini_oauth::GeminiOAuthClient;
 use crate::providers::{self, Provider, ProviderKind};
 use crate::types::{MessageRequest, MessageResponse, StreamEvent};
+
+/// Maximum wall-clock time we'll wait for any single side-channel /
+/// probe HTTP call (model-list fetch, rate-limit-header probe, etc.).
+///
+/// CC parity (v2.1.144-B1, task #722): when `api.anthropic.com` (or the
+/// configured base URL) is unreachable — firewall, captive portal, broken
+/// DNS — the default reqwest connect attempt blocks ~75 s before failing
+/// with a connect error. That latency surfaces as a startup hang because
+/// the TUI calls `fetch_anthropic_models` / similar fetchers on the model
+/// picker's first TAB and on the cache-warm path.
+///
+/// 15 s is CC's chosen ceiling — long enough for a real cross-continent
+/// `/models` call, short enough that an unreachable host doesn't pin the
+/// foreground for a minute. The main inference path is NOT wrapped by
+/// this helper; only side-channel probes are. See `with_side_channel_timeout`
+/// below.
+pub const SIDE_CHANNEL_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Wrap a side-channel async operation in a hard 15 s timeout.
+///
+/// Returns:
+///   - `Ok(Ok(value))` on success
+///   - `Ok(Err(e))`    when the inner future completed with its own error
+///   - `Err(())`       when the 15 s budget was exhausted
+///
+/// On timeout the caller should log a non-fatal warning (the
+/// `crate::tui::log_warning` helper in `anvil-cli`) and continue startup
+/// with safe defaults — the side-channel data is, by definition, optional.
+///
+/// CC parity (v2.1.144-B1, task #722). Never wrap the main inference
+/// path with this; long generations are expected to exceed 15 s.
+pub async fn with_side_channel_timeout<F, T, E>(fut: F) -> Result<Result<T, E>, ()>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    match tokio::time::timeout(SIDE_CHANNEL_TIMEOUT, fut).await {
+        Ok(inner) => Ok(inner),
+        Err(_elapsed) => Err(()),
+    }
+}
 
 async fn send_via_provider<P: Provider>(
     provider: &P,
@@ -397,7 +439,9 @@ impl FailoverClient {
 
 #[cfg(test)]
 mod tests {
+    use super::{with_side_channel_timeout, SIDE_CHANNEL_TIMEOUT};
     use crate::providers::{detect_provider_kind, resolve_model_alias, ProviderKind};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn resolves_existing_and_grok_aliases() {
@@ -412,6 +456,35 @@ mod tests {
         assert_eq!(
             detect_provider_kind("claude-sonnet-4-6"),
             ProviderKind::AnvilApi
+        );
+    }
+
+    /// CC parity (v2.1.144-B1, task #722): a side-channel HTTP call to an
+    /// unroutable address must surrender to the 15 s timeout instead of
+    /// hanging on the OS's ~75 s connect-syn budget.
+    ///
+    /// `10.255.255.1` is an RFC1918 address that is virtually never routed
+    /// in dev environments, so reqwest will spin on the connect attempt
+    /// until the OS gives up. Wrapping the future in
+    /// `with_side_channel_timeout` must cap the wall-clock at < 16 s.
+    #[tokio::test(flavor = "current_thread")]
+    async fn side_channel_timeout_caps_unroutable_call() {
+        // Reqwest client with NO timeouts of its own, so the only safety net
+        // is our `with_side_channel_timeout` wrapper.
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("build reqwest client");
+
+        let probe = client.get("http://10.255.255.1:80/").send();
+
+        let start = Instant::now();
+        let result = with_side_channel_timeout(probe).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "expected Err(()) on timeout, got {result:?}");
+        assert!(
+            elapsed < SIDE_CHANNEL_TIMEOUT + Duration::from_secs(1),
+            "side-channel call took {elapsed:?}, expected < 16s",
         );
     }
 }
