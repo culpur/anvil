@@ -455,8 +455,97 @@ fn render_cli_error(problem: &str) -> String {
     lines.join("\n")
 }
 
+/// Phase A5 (task #645) — apply the runtime locale at the very top of
+/// `run()`, before `parse_args` and before any `t!()` call site.
+///
+/// Consumes `--lang <code>` / `--lang=<code>` from the argument list:
+///   * Returns the args with both flag-form variants stripped so they
+///     do not leak into the prompt-fallback path or the resume-commands
+///     list.
+///   * Calls `rust_i18n::set_locale(&code)` when the code is in
+///     [`utils::SUPPORTED_LANGUAGES`].  This is per-invocation only —
+///     the value is NOT persisted to `~/.anvil/config.json` (use
+///     `/language <code>` for that).
+///   * Prints `Unsupported language: <code>. Available: <list>` to
+///     stderr and exits with code 2 when the code is unsupported —
+///     before any other startup work, so the user sees the message
+///     even from the bare `anvil --lang xx` invocation that would
+///     otherwise enter the wizard.
+///
+/// When no `--lang` flag is present, falls back to the persisted
+/// `language` field from `~/.anvil/config.json` (default `"en"`).
+fn apply_startup_locale(
+    args: Vec<String>,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut explicit_lang: Option<String> = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--lang" {
+            // Two-token form: consume the next argv entry as the value.
+            // Missing value is an error so users do not silently get an
+            // English session because they typed `--lang` with nothing
+            // after it.
+            let value = iter.next().ok_or_else(|| {
+                "missing value for --lang (expected: --lang <code>)".to_string()
+            })?;
+            explicit_lang = Some(value);
+        } else if let Some(value) = arg.strip_prefix("--lang=") {
+            explicit_lang = Some(value.to_string());
+        } else {
+            filtered.push(arg);
+        }
+    }
+
+    if let Some(code) = explicit_lang {
+        let trimmed = code.trim();
+        if utils::SUPPORTED_LANGUAGES.contains(&trimmed) {
+            rust_i18n::set_locale(trimmed);
+        } else {
+            // Pre-TUI stderr: alt-screen is not yet active, no other
+            // user-visible output has run.  The print-discipline rule
+            // (feedback-tui-stdout-anti-pattern) explicitly allows
+            // stderr before TUI init.
+            #[allow(clippy::print_stderr, reason = "pre-TUI startup error path; alt-screen not entered yet")]
+            {
+                eprintln!(
+                    "Unsupported language: {trimmed}. Available: {}",
+                    utils::SUPPORTED_LANGUAGES.join(", ")
+                );
+            }
+            std::process::exit(2);
+        }
+    } else {
+        // Fall back to the persisted language code (defaults to "en").
+        // rust-i18n picks its own guess otherwise, so this call is
+        // load-bearing — without it the wizard renders in the user's
+        // OS locale instead of the one /language wrote.
+        let code = utils::current_language_code();
+        rust_i18n::set_locale(&code);
+    }
+
+    Ok(filtered)
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+
+    // Phase A5 (task #645) — apply the runtime locale BEFORE any other
+    // startup code emits user-visible strings (wizard banners, REPL
+    // help text, status banners, error messages).  Two sources, in
+    // order of precedence:
+    //   1. `--lang <code>` / `--lang=<code>` — per-invocation override,
+    //      never persisted.  Unsupported codes are a hard error here
+    //      (exit 2) since they would otherwise silently fall back to
+    //      English on the first `t!()` call.
+    //   2. `~/.anvil/config.json::language` — the value /language and
+    //      the wizard write.  Fallback is "en" via `current_language_code`.
+    //
+    // The helper also strips the consumed `--lang` flag from the args
+    // vector so it does not bleed into `parse_args`' prompt-fallback
+    // path or accumulate in the resume-command list.
+    let args = apply_startup_locale(raw_args)?;
+
     match parse_args(&args)? {
         CliAction::DumpManifests => dump_manifests(),
         CliAction::BootstrapPlan => print_bootstrap_plan(),

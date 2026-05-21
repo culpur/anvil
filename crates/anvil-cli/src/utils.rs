@@ -278,14 +278,63 @@ pub(crate) fn send_desktop_notification(title: &str, message: &str) -> String {
 
 
 
-pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
-    const SUPPORTED: &[&str] = &["en", "de", "es", "fr", "ja", "zh-CN", "ru"];
+/// Canonical Tier-1 language code list (single source of truth).
+///
+/// Used by:
+///   * `run_language_command_static` (the `/language <code>` slash command),
+///   * the `--lang <code>` CLI flag (`main::run`),
+///   * the first-run wizard's language picker step (`wizard.rs`),
+///   * the `/configure` Language entry (`tui::mod`),
+///   * the drift-gate test that asserts every code here has a sibling
+///     `locales/<code>.yml` (regression for the v2.2.19 pt-BR omission).
+///
+/// Order matches the i18n migration plan's Tier-1 ordering — wizard +
+/// configure pickers display in this order.
+pub(crate) const SUPPORTED_LANGUAGES: &[&str] =
+    &["en", "es", "zh-CN", "fr", "pt-BR", "ru", "ja", "de"];
 
+/// Persist `language: <code>` to `~/.anvil/config.json`, preserving all
+/// other keys, and apply it to the live `rust_i18n` locale.
+///
+/// Shared by `run_language_command_static`, the wizard's language step,
+/// and `/configure` Language picker — single persistence path (DRY) so
+/// every entry point produces the same on-disk shape.
+///
+/// Returns `Ok(())` on success or the underlying I/O error.  Callers
+/// format their own user-facing messages off the result.
+pub(crate) fn save_language(code: &str) -> std::io::Result<()> {
+    let anvil_dir = anvil_home_dir();
+    let path = anvil_dir.join("config.json");
+    let mut map = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| {
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok()
+            })
+            .unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+    map.insert(
+        "language".to_string(),
+        serde_json::Value::String(code.to_string()),
+    );
+
+    fs::create_dir_all(&anvil_dir)?;
+    fs::write(
+        &path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default(),
+    )?;
+    rust_i18n::set_locale(code);
+    Ok(())
+}
+
+pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
     let Some(lang) = lang else {
         let current = current_language_code();
         return format!(
             "Language: {current}\nAvailable: {}\nUsage: /language <code>",
-            SUPPORTED.join(", ")
+            SUPPORTED_LANGUAGES.join(", ")
         );
     };
 
@@ -294,35 +343,19 @@ pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
         return format!(
             "Language: {}\nAvailable: {}\nUsage: /language <code>",
             current_language_code(),
-            SUPPORTED.join(", ")
+            SUPPORTED_LANGUAGES.join(", ")
         );
     }
 
-    if !SUPPORTED.contains(&lang) {
+    if !SUPPORTED_LANGUAGES.contains(&lang) {
         return format!(
             "Unsupported language '{lang}'. Available: {}",
-            SUPPORTED.join(", ")
+            SUPPORTED_LANGUAGES.join(", ")
         );
     }
 
-    let anvil_dir = anvil_home_dir();
-    let path = anvil_dir.join("config.json");
-    let mut map = if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|data| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data).ok())
-            .unwrap_or_default()
-    } else {
-        serde_json::Map::new()
-    };
-    map.insert("language".to_string(), serde_json::Value::String(lang.to_string()));
-
-    let _ = fs::create_dir_all(&anvil_dir);
-    match fs::write(&path, serde_json::to_string_pretty(&serde_json::Value::Object(map)).unwrap_or_default()) {
-        Ok(()) => {
-            rust_i18n::set_locale(lang);
-            format!("Language set to: {lang}")
-        }
+    match save_language(lang) {
+        Ok(()) => format!("Language set to: {lang}"),
         Err(e) => format!("Failed to save language setting: {e}"),
     }
 }
@@ -1712,6 +1745,151 @@ mod color_env_tests {
         // FORCE_COLOR is checked first so explicit force wins.
         with_env(Some("1"), Some("1"), || {
             assert!(should_use_color(false), "FORCE_COLOR=1 must beat NO_COLOR=1");
+        });
+    }
+}
+
+// ─── Phase A5 (task #645): SUPPORTED_LANGUAGES drift gate ────────────────
+//
+// Two regression gates that catch the exact failure mode that occurred
+// on v2.2.19 commit 854a23c: the translator agent shipped pt-BR.yml
+// but the SUPPORTED list in `run_language_command_static` was not
+// updated, so /language pt-BR rejected the code as unsupported even
+// though every key was already translated.
+//
+// 1. `supported_languages_match_locale_files` — every entry in
+//    `SUPPORTED_LANGUAGES` must have a sibling `locales/<code>.yml`,
+//    and every `.yml` under `locales/` must appear in the constant.
+//    Both directions are enforced so neither "translated but
+//    unreachable" (the 854a23c bug) nor "advertised but missing
+//    translations" (silent fall-back to en) can slip through.
+//
+// 2. `current_language_code_falls_back_to_en` — the boot-time loader
+//    must return `"en"` when config.json is missing, malformed, or
+//    lacks the `language` field, NOT panic.  Any panic here would
+//    crash `anvil` before the wizard could even start.
+#[cfg(test)]
+#[allow(unsafe_code)] // env::set_var/remove_var require unsafe in edition 2024
+mod supported_languages_drift_tests {
+    use super::{current_language_code, SUPPORTED_LANGUAGES};
+    use serial_test::serial;
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+
+    /// Resolve the workspace `locales/` directory from the crate's
+    /// CARGO_MANIFEST_DIR (which points at `crates/anvil-cli/`).
+    fn locales_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../locales")
+            .canonicalize()
+            .expect("locales/ directory should exist at workspace root")
+    }
+
+    #[test]
+    fn supported_languages_match_locale_files() {
+        let dir = locales_dir();
+        let mut yaml_codes: BTreeSet<String> = BTreeSet::new();
+        for entry in fs::read_dir(&dir).expect("read locales/") {
+            let entry = entry.expect("read locales/ entry");
+            let path = entry.path();
+            // Accept .yml only (we don't ship .yaml today; if that
+            // changes, this gate will flag it intentionally so the
+            // implementer adds the dual-extension rule consciously).
+            if path.extension().and_then(|s| s.to_str()) == Some("yml") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    yaml_codes.insert(stem.to_string());
+                }
+            }
+        }
+
+        let advertised: BTreeSet<String> = SUPPORTED_LANGUAGES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        // Forward: every advertised code must have a YAML file.
+        let missing_yaml: Vec<&String> = advertised.difference(&yaml_codes).collect();
+        assert!(
+            missing_yaml.is_empty(),
+            "SUPPORTED_LANGUAGES advertises codes with no locales/<code>.yml: {missing_yaml:?}"
+        );
+
+        // Reverse: every YAML file must be advertised in SUPPORTED_LANGUAGES.
+        // This catches the v2.2.19 854a23c bug (pt-BR.yml landed without
+        // SUPPORTED being updated).
+        let orphan_yaml: Vec<&String> = yaml_codes.difference(&advertised).collect();
+        assert!(
+            orphan_yaml.is_empty(),
+            "locales/ has YAML files not advertised in SUPPORTED_LANGUAGES: {orphan_yaml:?}"
+        );
+    }
+
+    /// Scope an env override + temp ANVIL_CONFIG_HOME to one test.
+    /// Restores the prior environment on drop so neighbouring tests
+    /// (which also touch `ANVIL_CONFIG_HOME` via `#[serial(anvil_config_home)]`)
+    /// see a clean slate.
+    fn with_anvil_home<F: FnOnce(&std::path::Path)>(label: &str, f: F) {
+        let tmp = std::env::temp_dir().join(format!(
+            "anvil-i18n-fallback-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).expect("create temp anvil home");
+        let prev = std::env::var("ANVIL_CONFIG_HOME").ok();
+        unsafe {
+            std::env::set_var("ANVIL_CONFIG_HOME", &tmp);
+        }
+        f(&tmp);
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ANVIL_CONFIG_HOME", v),
+                None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn current_language_code_falls_back_when_config_missing() {
+        with_anvil_home("missing", |_dir| {
+            assert_eq!(current_language_code(), "en");
+        });
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn current_language_code_falls_back_when_language_absent() {
+        with_anvil_home("no-field", |dir| {
+            let path = dir.join("config.json");
+            std::fs::write(&path, r#"{"default_model": "claude-opus-4-6"}"#)
+                .expect("seed config.json");
+            assert_eq!(current_language_code(), "en");
+        });
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn current_language_code_returns_persisted_value() {
+        with_anvil_home("persisted", |dir| {
+            let path = dir.join("config.json");
+            std::fs::write(&path, r#"{"language": "pt-BR"}"#).expect("seed config.json");
+            // The loader does NOT validate against SUPPORTED_LANGUAGES —
+            // it simply returns the persisted string.  The /language
+            // command and the wizard picker are the validation choke
+            // points (drift gate above ensures pt-BR is reachable).
+            assert_eq!(current_language_code(), "pt-BR");
+        });
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn current_language_code_falls_back_on_malformed_json() {
+        with_anvil_home("malformed", |dir| {
+            let path = dir.join("config.json");
+            std::fs::write(&path, "this is not json {").expect("seed config.json");
+            assert_eq!(current_language_code(), "en");
         });
     }
 }
