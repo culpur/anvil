@@ -1106,4 +1106,151 @@ mod tests {
         // The point of this test is that the gate doesn't panic when
         // memory is None and the prompter returns AllowAlways.
     }
+
+    // ── Task #717 / community issue anthropics/claude-code#61077 ───────────
+    //
+    // Two scenarios pinned per the task spec:
+    //   1. permissions.allow = ["mcp__test__hello"] → mcp__test__hello
+    //      runs without raising a PermissionPrompt.
+    //   2. permissions.allow = ["mcp__test__*"] → same outcome.
+    // Both use `PanickingPrompter`, which panics if the gate ever reaches
+    // the prompter — proving the allowlist short-circuit fires.
+
+    fn make_mcp_executor() -> StaticToolExecutor {
+        StaticToolExecutor::new()
+            .register("mcp__test__hello", |_| Ok("<hello>".to_string()))
+    }
+
+    #[test]
+    fn allow_list_exact_pattern_skips_prompt_for_mcp_tool() {
+        use crate::permission_allow::PermissionAllowList;
+        // Active mode is WorkspaceWrite + the tool requires DangerFullAccess
+        // — the legacy path would reach the prompter. The allowlist
+        // short-circuit must fire first.
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement(
+                "mcp__test__hello",
+                PermissionMode::DangerFullAccess,
+            );
+        let mut panicking = PanickingPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut panicking);
+        let runner = empty_hook_runner();
+        let mut exec = make_mcp_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+        let allow_list =
+            PermissionAllowList::from_patterns(["mcp__test__hello"]);
+
+        let msg = evaluate_and_execute(
+            "tid-allow-exact".into(),
+            "mcp__test__hello".into(),
+            r#"{"text":"hi"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            &allow_list,
+            None,
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(
+            !is_err,
+            "exact-match allow pattern must let the tool run without error"
+        );
+        assert_eq!(
+            text, "<hello>",
+            "the executor's output must surface — proving the allowlist \
+             routed through run_allow_branch"
+        );
+        // PanickingPrompter not panicking proves the prompter was NOT
+        // reached: short-circuit fired correctly.
+    }
+
+    #[test]
+    fn allow_list_wildcard_pattern_skips_prompt_for_mcp_tool() {
+        use crate::permission_allow::PermissionAllowList;
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement(
+                "mcp__test__hello",
+                PermissionMode::DangerFullAccess,
+            );
+        let mut panicking = PanickingPrompter;
+        let mut prompter: Option<&mut dyn PermissionPrompter> =
+            Some(&mut panicking);
+        let runner = empty_hook_runner();
+        let mut exec = make_mcp_executor();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+        // Wildcard form: mcp__test__* matches every tool from the test
+        // MCP server, including mcp__test__hello.
+        let allow_list =
+            PermissionAllowList::from_patterns(["mcp__test__*"]);
+
+        let msg = evaluate_and_execute(
+            "tid-allow-wild".into(),
+            "mcp__test__hello".into(),
+            r#"{"text":"hi"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            &allow_list,
+            None,
+        );
+
+        let (text, is_err) = result_text(&msg);
+        assert!(
+            !is_err,
+            "wildcard allow pattern must let the tool run without error"
+        );
+        assert_eq!(text, "<hello>");
+    }
+
+    #[test]
+    fn allow_list_does_not_match_other_server_tools() {
+        // Negative case: `permissions.allow = ["mcp__test__*"]` MUST NOT
+        // promote `mcp__other__hello`. The gate falls through to the
+        // policy path; with WorkspaceWrite + DangerFullAccess requirement
+        // and no prompter, the call is denied.
+        use crate::permission_allow::PermissionAllowList;
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement(
+                "mcp__other__hello",
+                PermissionMode::DangerFullAccess,
+            );
+        let mut prompter: Option<&mut dyn PermissionPrompter> = None;
+        let runner = empty_hook_runner();
+        let mut exec = StaticToolExecutor::new();
+        let reviewer = Reviewer::new(&ReviewerConfig::default());
+        let auto_mode = AutoModeConfig::default();
+        let allow_list =
+            PermissionAllowList::from_patterns(["mcp__test__*"]);
+
+        let msg = evaluate_and_execute(
+            "tid-allow-miss".into(),
+            "mcp__other__hello".into(),
+            r#"{"text":"hi"}"#,
+            &policy,
+            &mut prompter,
+            &runner,
+            &mut exec,
+            &reviewer,
+            &auto_mode,
+            &allow_list,
+            None,
+        );
+
+        let (_, is_err) = result_text(&msg);
+        assert!(
+            is_err,
+            "tool from a different MCP server MUST NOT be allowed by \
+             mcp__test__* — the policy path should deny without a prompter"
+        );
+    }
 }
