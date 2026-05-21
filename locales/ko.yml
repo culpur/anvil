@@ -1,0 +1,387 @@
+# TUI 헤더 / 푸터
+footer.help: "Tab: 자동완성  Enter: 전송  Ctrl+C: 취소  Ctrl+D: 종료  /help: 명령어"
+footer.configure: "↑↓: 이동  Enter: 선택  Esc: 뒤로  Ctrl+C: 종료"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# 상태 / 세션
+status.model: "모델"
+status.provider: "프로바이더"
+status.permission: "권한 모드"
+status.session: "세션"
+status.messages: "메시지"
+status.turns: "턴"
+status.tokens_used: "사용한 토큰"
+
+# 명령 설명 (/help 출력에서 사용)
+cmd.help.summary: "사용 가능한 슬래시 명령어 표시"
+cmd.status.summary: "현재 세션 상태 표시"
+cmd.compact.summary: "로컬 세션 히스토리 압축"
+cmd.model.summary: "활성 모델 표시 또는 전환"
+cmd.permissions.summary: "활성 권한 모드 표시 또는 전환"
+cmd.clear.summary: "새 로컬 세션 시작"
+cmd.cost.summary: "이 세션의 누적 토큰 사용량 표시"
+cmd.provider.summary: "프로바이더와 해당 모델 표시, 전환 또는 목록 조회"
+cmd.login.summary: "프로바이더에 로그인하거나 자격 증명 갱신"
+cmd.resume.summary: "저장된 세션을 REPL에 로드"
+cmd.config.summary: "Anvil 설정 파일 또는 병합된 섹션 확인"
+cmd.memory.summary: "로드된 Anvil 지시 메모리 파일 확인"
+cmd.init.summary: "이 저장소를 위한 기본 ANVIL.md 생성"
+cmd.diff.summary: "현재 워크스페이스 변경 사항의 git diff 표시"
+cmd.version.summary: "CLI 버전 및 빌드 정보 표시"
+cmd.bughunter.summary: "코드베이스에서 의심되는 버그 검사"
+cmd.branch.summary: "git 브랜치 목록, 생성 또는 전환"
+cmd.worktree.summary: "git worktree 목록, 추가, 제거 또는 정리"
+cmd.commit.summary: "커밋 메시지를 생성하고 git 커밋 만들기"
+cmd.pr.summary: "대화 내용으로부터 풀 리퀘스트 초안 작성 또는 생성"
+cmd.issue.summary: "대화 내용으로부터 GitHub 이슈 초안 작성 또는 생성"
+cmd.hub.summary: "AnvilHub 마켓플레이스에서 패키지 탐색 및 설치"
+cmd.language.summary: "표시 언어 설정 (en, de, es, fr, ja, zh-CN, ru)"
+
+# 오류 메시지
+error.unknown_command: "알 수 없는 명령: /%{name}"
+error.missing_argument: "/%{cmd}에 필수 인자가 없습니다"
+error.not_available_tui: "이 명령은 TUI 모드에서 사용할 수 없습니다."
+error.provider_not_found: "프로바이더를 찾을 수 없음: %{name}"
+error.hub_fetch_failed: "AnvilHub에서 패키지를 가져오지 못했습니다: %{reason}"
+error.hub_install_failed: "패키지 '%{name}' 설치 실패: %{reason}"
+error.hub_not_found: "패키지를 찾을 수 없음: %{name}"
+error.invalid_language: "지원하지 않는 언어 '%{lang}'. 사용 가능: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "설정 저장 실패: %{reason}"
+
+# Hub 명령 메시지
+hub.top_packages: "AnvilHub의 인기 패키지"
+hub.search_results: "\"%{query}\"에 대한 검색 결과"
+hub.no_results: "패키지를 찾을 수 없습니다."
+hub.installing: "%{name} %{version} 설치 중..."
+hub.installed: "%{name} %{version}을(를) %{path}에 설치했습니다"
+hub.downloads: "다운로드 %{count}회"
+hub.package_info: "패키지: %{name} v%{version} (작성자: %{author})"
+hub.package_type: "유형: %{type}"
+hub.package_desc: "설명: %{desc}"
+hub.usage_hint: |
+  사용법:
+    /hub                     카테고리별 인기 패키지 표시
+    /hub search <쿼리>        모든 패키지 검색
+    /hub skills              인기 스킬
+    /hub plugins             인기 플러그인
+    /hub agents              인기 에이전트
+    /hub themes              인기 테마
+    /hub install <이름>       패키지 다운로드 및 설치
+    /hub info <이름>          패키지 세부 정보 표시
+
+# Language 명령 메시지
+language.current: "현재 언어: %{lang}"
+language.changed: "언어를 다음으로 설정함: %{lang}"
+language.available: "사용 가능한 언어: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "사용법: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure 메뉴 레이블
+configure.title: "Anvil 설정"
+configure.providers: "프로바이더"
+configure.models: "모델"
+configure.context: "컨텍스트"
+configure.search: "검색"
+configure.permissions: "권한"
+configure.display: "표시"
+configure.integrations: "통합"
+configure.language: "언어"
+
+# 로그인 / 프로바이더 프롬프트
+login.prompt_provider: "로그인할 프로바이더 선택 [anthropic/openai/ollama]: "
+login.success: "%{provider}에 로그인되었습니다."
+login.failed: "로그인 실패: %{reason}"
+login.enter_api_key: "API 키 입력: "
+login.testing_connection: "%{host}에 연결 테스트 중..."
+login.connected: "연결됨"
+login.connection_failed: "연결할 수 없음"
+
+# ─── 마법사 — 최초 실행 설정 ──────────────────────────────────────────────
+# 환영 카드 (alt-screen 진입점)
+wizard.welcome.title: "Anvil v%{version}에 오신 것을 환영합니다"
+wizard.welcome.tagline: "어디서나 실행되는 AI 코딩 파트너 — Anthropic, OpenAI, Ollama 및 32개 이상의 프로바이더."
+wizard.welcome.kicker: "설정을 시작해 봅시다."
+wizard.welcome.hint: "Enter로 계속 · Esc로 설정 건너뛰기"
+
+# 인라인 배너 (stdin 폴백 경로)
+wizard.banner.welcome: "⚒  Anvil v%{version}에 오신 것을 환영합니다"
+wizard.banner.subtitle: "   Culpur Defense의 AI 기반 코딩 어시스턴트"
+wizard.banner.lets_setup: "   설정을 시작해 봅시다."
+
+# 단계 헤더
+wizard.step_header: "단계 %{step}/%{total}: %{title}"
+wizard.step.vault_title: "볼트 설정 (자격 증명 암호화)"
+wizard.step.ollama_title: "Ollama (로컬 AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "프로바이더 우선순위 및 기본 모델"
+wizard.step.tui_layout_title: "TUI 레이아웃"
+wizard.step.tui_prefs_title: "TUI 환경설정"
+
+# 언어 단계 (Phase A6, task #645)
+wizard.language.title: "언어를 선택하세요"
+wizard.language.body: "Anvil의 TUI와 최초 실행 마법사는 이 언어를 사용합니다. 나중에 /language 또는 /configure에서 변경할 수 있습니다."
+wizard.language.continue: "계속"
+wizard.language.skip: "건너뛰기"
+
+# 볼트 단계
+wizard.vault.body_l1: "Anvil은 AES-256-GCM으로 암호화된 볼트에 API 키를 저장합니다."
+wizard.vault.body_l2: "지금 마스터 비밀번호를 설정합니다 — 어디에도 저장되지 않습니다."
+wizard.vault.body_l3: "Anvil을 시작할 때마다 한 번씩 입력해야 합니다."
+wizard.vault.opt_setup: "[1] 암호화된 볼트 설정 (권장)"
+wizard.vault.opt_skip: "[s] 건너뛰기 — API 키를 credentials.json에 평문으로 저장"
+wizard.vault.skipping: "볼트 설정을 건너뜁니다."
+wizard.vault.warn_plaintext: "경고: API 키가 평문으로 저장됩니다."
+wizard.vault.tip_retry_setup: "나중에 /vault setup을 실행하여 자격 증명을 암호화하세요."
+wizard.vault.already_initialized: "볼트가 이미 ~/.anvil/vault/에 초기화되어 있습니다"
+wizard.vault.unlocking: "이 세션을 위해 잠금 해제 중..."
+wizard.vault.prompt_master_password: "마스터 비밀번호: "
+wizard.vault.unlocked: "볼트 잠금이 해제되었습니다."
+wizard.vault.not_yet_initialized: "볼트가 아직 초기화되지 않았습니다 — 예상치 못한 상황입니다."
+wizard.vault.unlock_failed: "잠금 해제 실패: %{reason}"
+wizard.vault.continue_no_vault: "볼트 없이 계속 — 키가 평문으로 저장됩니다."
+wizard.vault.prompt_set_password: "마스터 비밀번호 설정: "
+wizard.vault.prompt_confirm_password: "마스터 비밀번호 확인: "
+wizard.vault.empty_password: "비밀번호는 비워둘 수 없습니다. 다시 시도하세요."
+wizard.vault.password_mismatch: "비밀번호가 일치하지 않습니다. 다시 시도하세요."
+wizard.vault.created_and_unlocked: "볼트가 생성되고 잠금 해제되었습니다."
+wizard.vault.keys_encrypted_note: "이 마법사에서 입력한 API 키는 암호화되어 저장됩니다."
+wizard.vault.created_session_lock_failed: "볼트는 생성되었지만 세션 잠금에 실패했습니다."
+wizard.vault.keys_plaintext_this_run: "이번 실행에서 키는 평문으로 저장됩니다."
+wizard.vault.setup_failed: "볼트 설정 실패: %{reason}"
+wizard.vault.continue_keys_plaintext: "볼트 없이 계속 — 키가 평문으로 저장됩니다."
+
+# Ollama 단계
+wizard.ollama.body_l1: "Ollama는 사용자의 컴퓨터에서 AI 모델을 로컬로 실행합니다."
+wizard.ollama.body_l2: "기본 사용에는 API 키가 필요하지 않습니다."
+wizard.ollama.opt_default: "[1] Ollama에 연결 (기본값: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] 사용자 지정 URL로 연결"
+wizard.ollama.opt_apikey: "[3] API 키로 연결"
+wizard.ollama.opt_skip: "[s] 건너뛰기"
+wizard.ollama.testing_connection: "%{url}에 연결 테스트 중... "
+wizard.ollama.connected: "연결됨"
+wizard.ollama.failed: "실패 (%{reason})"
+wizard.ollama.available_models: "사용 가능한 모델:"
+wizard.ollama.start_hint: "Ollama를 건너뜁니다 — Ollama가 실행 중인지 확인하세요: ollama serve"
+wizard.ollama.config_saved_retry: "연결 실패. 설정이 저장되었습니다. `anvil login ollama`로 다시 시도할 수 있습니다."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API 키: "
+wizard.ollama.could_not_verify_saving: "확인할 수 없음 (%{reason}) — 그래도 저장합니다"
+wizard.ollama.skipping: "Ollama를 건너뜁니다."
+
+# Anthropic 단계
+wizard.anthropic.body: "Anthropic은 가장 뛰어난 AI 어시스턴트인 Claude를 제공합니다."
+wizard.anthropic.opt_oauth: "[1] OAuth로 로그인 (권장 — 브라우저 열기)"
+wizard.anthropic.opt_apikey: "[2] API 키를 수동으로 입력"
+wizard.anthropic.opt_skip: "[s] 건너뛰기"
+wizard.anthropic.oauth_complete: "Anthropic OAuth가 완료되었습니다."
+wizard.anthropic.oauth_failed: "OAuth 실패: %{reason}"
+wizard.anthropic.retry_hint: "나중에 다음 명령으로 재시도할 수 있습니다: anvil login anthropic"
+wizard.anthropic.console_url: "키 발급: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API 키 (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "키를 입력하지 않아 Anthropic을 건너뜁니다."
+wizard.anthropic.validating_key: "키 검증 중... "
+wizard.anthropic.valid: "유효함"
+wizard.anthropic.could_not_verify: "확인할 수 없음 — 그래도 저장합니다"
+wizard.anthropic.skipping: "Anthropic을 건너뜁니다."
+
+# OpenAI 단계
+wizard.openai.body: "OpenAI는 코딩과 추론을 위한 GPT 모델을 제공합니다."
+wizard.openai.opt_apikey: "[1] API 키 입력"
+wizard.openai.opt_skip: "[s] 건너뛰기"
+wizard.openai.console_url: "키 발급: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API 키 (sk-...): "
+wizard.openai.no_key_skipping: "키를 입력하지 않아 OpenAI를 건너뜁니다."
+wizard.openai.validating_key: "키 검증 중... "
+wizard.openai.valid: "유효함"
+wizard.openai.could_not_verify: "확인할 수 없음 — 그래도 저장합니다"
+wizard.openai.skipping: "OpenAI를 건너뜁니다."
+
+# xAI 단계
+wizard.xai.body: "xAI는 Grok 모델을 제공합니다."
+wizard.xai.opt_apikey: "[1] API 키 입력"
+wizard.xai.opt_skip: "[s] 건너뛰기"
+wizard.xai.console_url: "키 발급: https://console.x.ai"
+wizard.xai.prompt_api_key: "API 키 (xai-...): "
+wizard.xai.no_key_skipping: "키를 입력하지 않아 xAI를 건너뜁니다."
+wizard.xai.saved: "xAI API 키가 저장되었습니다."
+wizard.xai.skipping: "xAI를 건너뜁니다."
+
+# 알 수 없는 선택 폴백
+wizard.unknown_choice_skipping: "알 수 없는 선택 '%{choice}', %{provider}을(를) 건너뜁니다."
+
+# 프로바이더 우선순위 단계
+wizard.priority.none_configured: "구성된 프로바이더가 없습니다."
+wizard.priority.configure_later: "나중에 다음 명령으로 프로바이더를 구성할 수 있습니다: anvil login"
+wizard.priority.you_configured: "구성한 프로바이더: %{providers}"
+wizard.priority.set_order: "프로바이더 우선순위를 설정하세요 (첫 번째 = 기본, 나머지 = 페일오버):"
+wizard.priority.current_order: "현재 순서:"
+wizard.priority.opt_keep: "[1] 이 순서 유지"
+wizard.priority.opt_reorder: "[2] 재정렬 (숫자 입력: 예 \"2,1\")"
+wizard.priority.prompt_new_order: "새 순서: "
+wizard.priority.could_not_parse: "순서를 해석할 수 없어 원본을 유지합니다."
+wizard.priority.unknown_keep: "알 수 없는 선택, 원본 순서를 유지합니다."
+
+# Thinking 모드 토글
+wizard.thinking.title: "Thinking 모드를 활성화할까요?"
+wizard.thinking.body_l1: "일부 모델(Qwen3, Claude, o3)은 확장된 thinking/reasoning을 지원합니다."
+wizard.thinking.body_l2: "활성화되면 모델이 답변 전에 추론 과정을 보여줍니다."
+wizard.thinking.opt_yes: "[1] 예 — thinking 모드 활성화 (코딩에 권장)"
+wizard.thinking.opt_no: "[2] 아니오 — 표준 응답만"
+wizard.thinking.enabled: "Thinking 모드가 활성화되었습니다. 언제든 /think로 전환할 수 있습니다"
+wizard.thinking.disabled: "Thinking 모드가 비활성화되었습니다. 언제든 /think로 전환할 수 있습니다"
+
+# TUI 레이아웃 단계
+wizard.layout.opt_vertical: "[1] 수직 분할  (기본값)"
+wizard.layout.opt_classic: "[2] 클래식"
+wizard.layout.opt_threepane: "[3] 3분할"
+wizard.layout.opt_journal: "[4] 저널"
+wizard.layout.show_tabs_prompt: "워크스페이스 탭을 표시할까요? [1] 예 (기본값)  [2] 아니오"
+
+# TUI 환경설정 단계
+wizard.prefs.mouse_prompt: "마우스 캡처를 활성화할까요? [1] 끔 (기본값, 권장)  [2] 켬"
+wizard.prefs.theme_prompt: "테마? [1] 다크 (기본값)  [2] 라이트  [3] 자동"
+wizard.prefs.permission_prompt: "기본 권한 모드? [1] ask (기본값)  [2] workspace-write  [3] danger-full-access"
+
+# 마법사 프롬프트
+wizard.prompt.choice_default1: "선택 [1]: "
+wizard.prompt.choice: "선택: "
+
+# 마법사 종료 후 요약 배너
+wizard.summary.complete: "설정이 완료되었습니다!"
+wizard.summary.default_model: "기본 모델:      %{model}"
+wizard.summary.providers: "프로바이더:     %{providers}"
+wizard.summary.config_saved: "설정 저장됨:    %{path}"
+wizard.summary.migration: "마이그레이션:   %{summary}"
+wizard.summary.run_anvil: "`anvil`을 실행해 코딩을 시작하세요."
+wizard.summary.type_help: "모든 명령어를 보려면 `/help`를 입력하세요."
+
+# 마법사 경고 / 오류
+wizard.warn.altscreen_unavailable: "참고: alt-screen 마법사를 사용할 수 없습니다 (%{reason})."
+wizard.warn.fallback_inline: "인라인 / stdin 프롬프트로 폴백합니다."
+wizard.warn.altscreen_modal: "참고: alt-screen을 사용할 수 없습니다 (%{reason}); stdin 프롬프트로 폴백합니다."
+wizard.warn.could_not_save_config: "경고: 설정을 저장할 수 없습니다: %{reason}"
+
+# Ollama 설치 모달 (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "단계 %{step}/%{total} — 로컬 AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil이 Ollama를 직접 설치 및 실행하여 오프라인에서 작동하는 로컬 모델을 제공할 수 있습니다. Anvil이 Ollama를 관리하도록 할까요?"
+wizard.ollama_modal.already_running: "Ollama가 이미 %{url}에서 %{count}개의 모델로 실행 중입니다:\n  %{models}\n\n기존 데몬을 사용할까요?"
+wizard.ollama_modal.already_setup_title: "Ollama가 이미 설정되어 있습니다 ✓"
+wizard.ollama_modal.resume_label: "재개 — Anvil이 이전에 설치한 Ollama를 재사용"
+wizard.ollama_modal.use_existing_label: "Anvil이 감지한 시스템 Ollama 사용"
+wizard.ollama_modal.install_label: "지금 Ollama 설치 (Anvil이 다운로드 + 관리) — 권장"
+wizard.ollama_modal.title_local_ai: "로컬 AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Ollama를 직접 관리하겠습니다"
+wizard.ollama_modal.choice_skip: "건너뛰기 — 로컬 AI 없음"
+wizard.ollama_modal.choice_later: "나중에"
+wizard.ollama_modal.use_existing_title: "기존 Ollama 사용"
+wizard.ollama_modal.use_existing_body: "기본 Ollama URL: %{url}\n데몬: %{status}\n\n다른 URL이 필요하면 나중에 /ollama setup을 사용하세요."
+wizard.ollama_modal.status_reachable: "도달 가능"
+wizard.ollama_modal.status_not_reachable: "도달 불가 — 메시지를 보내기 전에 시작하세요"
+wizard.ollama_modal.install_failed_title: "설치 실패"
+wizard.ollama_modal.install_failed_body: "Ollama를 설치할 수 없습니다:\n  %{reason}\n\n나중에 /ollama setup에서 재시도하거나 다른 옵션을 선택하세요."
+wizard.ollama_modal.already_installed_title: "Ollama 바이너리가 이미 설치되어 있습니다 ✓"
+wizard.ollama_modal.already_installed_body: "이전 설치에서 %{path}을(를) 찾았습니다."
+
+# Ollama 적합도 레이블
+wizard.ollama_fit.recommended: "권장"
+wizard.ollama_fit.fits: "적합"
+wizard.ollama_fit.tight: "빠듯함"
+wizard.ollama_fit.too_big: "너무 큼 — OOM 발생 예상"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — 최고의 범용 코딩 (~4.7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — 작고 빠름 (~2.0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — 8 GB RAM에서 작동 (~1.0 GB)"
+
+# ─── TUI — 모달 레이블 ────────────────────────────────────────────────────
+tui.modal.permission_required: " 권한 필요 "
+tui.modal.edit_lines: "줄 편집"
+tui.modal.edit_key_prompt: "%{key} 편집:"
+tui.modal.files_changed: "이번 턴에서 변경된 파일: +%{added} −%{removed} (전체 unified diff은 /diff 실행)"
+
+# ─── 명령어 — voice / collab / docker / k8s / iac / deps ──────────────────
+cmd.docker.usage: |
+  사용법:
+    /docker ps                   실행 중인 컨테이너 목록
+    /docker logs <컨테이너>       컨테이너 로그의 마지막 50줄 표시
+    /docker compose              docker-compose 서비스 표시 (있는 경우)
+    /docker build                현재 디렉터리의 Dockerfile로 이미지 빌드
+cmd.docker.logs_usage: "사용법: /docker logs <컨테이너>"
+cmd.docker.unknown_sub: "알 수 없는 docker 서브명령: %{sub}\n사용법은 `/docker help`로 확인하세요."
+
+cmd.voice.start: |
+  음성 입력 — 곧 제공 예정
+
+  음성 캡처에는 마이크 액세스와 speech-to-text 백엔드가 필요합니다.
+  계획: /voice start  ->  마이크 입력을 캡처해 프롬프트로 주입.
+cmd.voice.stop: |
+  음성 입력 — 곧 제공 예정
+
+  중지할 활성 음성 세션이 없습니다.
+cmd.voice.help: |
+  음성 입력 (곧 제공 예정)
+
+  명령어:
+    /voice start   마이크 입력 캡처 시작
+    /voice stop    캡처를 중지하고 전송
+
+  로컬 speech-to-text 엔진이 필요합니다 (예: whisper.cpp).
+cmd.voice.unknown_sub: "알 수 없는 /voice 서브명령: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  협업 — 곧 제공 예정
+
+  계획: /collab share  ->  공유 가능한 세션 ID 생성.
+  이 기능은 향후 릴리스를 위해 예약되어 있습니다.
+cmd.collab.join: |
+  협업 — 곧 제공 예정
+
+  사용법: /collab join <session-id>
+  이 기능은 향후 릴리스를 위해 예약되어 있습니다.
+cmd.collab.help: |
+  협업 (곧 제공 예정)
+
+  명령어:
+    /collab share          이 세션 공유 (초대 ID 생성)
+    /collab join <id>      다른 사용자의 공유 세션에 참여
+
+  AnvilHub 계정이 필요합니다. 사용 가능 시점은 changelog를 확인하세요.
+cmd.collab.unknown_sub: "알 수 없는 /collab 서브명령: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  사용법:
+    /k8s pods                   현재 네임스페이스의 파드 목록
+    /k8s logs <pod>             파드 로그의 마지막 50줄 표시
+    /k8s apply <파일>            kubectl로 매니페스트 적용
+    /k8s describe <리소스>       리소스 설명
+cmd.k8s.kubectl_missing: "PATH에서 kubectl을 찾을 수 없습니다. 설치: https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "사용법: /k8s logs <pod>"
+cmd.k8s.apply_usage: "사용법: /k8s apply <파일>"
+cmd.k8s.describe_usage: "사용법: /k8s describe <리소스>"
+cmd.k8s.unknown_sub: "알 수 없는 /k8s 서브명령: %{args}\n사용법은 `/k8s help`로 확인하세요."
+
+cmd.iac.usage: |
+  사용법:
+    /iac plan       terraform/tofu plan 실행
+    /iac apply      terraform/tofu apply 실행
+    /iac validate   설정 파일 검증
+    /iac drift      인프라 드리프트 감지 (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: TUI 내 확인 모달이 해결되지 않았습니다. 다시 시도하거나 일반 셸에서 `anvil --print /iac apply`를 실행해 CLI 확인 프롬프트를 사용하세요."
+cmd.iac.no_terraform: "PATH에서 'tofu' 또는 'terraform'을 찾을 수 없습니다.\nOpenTofu 설치: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "이 작업은 인프라에 변경 사항을 적용합니다. 계속할까요? (y/N) "
+cmd.iac.cancelled: "Apply가 취소되었습니다."
+cmd.iac.unknown_sub: "알 수 없는 /iac 서브명령: %{sub}\n사용법은 `/iac help`로 확인하세요."
+cmd.iac.no_binary_for_apply: "PATH에서 terraform/tofu 바이너리를 찾을 수 없습니다. apply 전에 OpenTofu를 설치하세요."
+cmd.iac.confirm_body_with_plan: "이 작업은 인프라에 변경 사항을 적용합니다.\n\n%{plan}\n\n확인 전에 plan을 신중히 검토하세요."
+cmd.iac.confirm_body_generic: "이 작업은 인프라에 변경 사항을 적용합니다.\n\n확인 전에 plan을 신중히 검토하세요."
+
+cmd.deps.usage: |
+  사용법:
+    /deps tree           의존성 트리 표시
+    /deps outdated       오래된 의존성 표시
+    /deps audit          의존성 보안 감사
+    /deps why <pkg>      의존성이 포함된 이유 설명
+cmd.deps.no_package_manager: "인식 가능한 패키지 관리자를 찾을 수 없습니다."
+
+# 여러 명령에서 재사용되는 일반 CLI 레이블
+cli.no_pr_diff: "PR diff를 찾을 수 없습니다. gh가 설치되어 인증되어 있고 현재 브랜치에 PR이 열려 있는지 확인하세요."

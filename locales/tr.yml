@@ -1,0 +1,387 @@
+# TUI başlığı / alt bilgi
+footer.help: "Tab: tamamla  Enter: gönder  Ctrl+C: iptal  Ctrl+D: çık  /help: komutlar"
+footer.configure: "↑↓: gezin  Enter: seç  Esc: geri  Ctrl+C: çık"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Durum / oturum
+status.model: "Model"
+status.provider: "Sağlayıcı"
+status.permission: "İzin modu"
+status.session: "Oturum"
+status.messages: "Mesajlar"
+status.turns: "Tur"
+status.tokens_used: "Kullanılan token"
+
+# Komut açıklamaları (/help çıktısında kullanılır)
+cmd.help.summary: "Kullanılabilir slash komutlarını göster"
+cmd.status.summary: "Mevcut oturum durumunu göster"
+cmd.compact.summary: "Yerel oturum geçmişini sıkıştır"
+cmd.model.summary: "Etkin modeli göster veya değiştir"
+cmd.permissions.summary: "Etkin izin modunu göster veya değiştir"
+cmd.clear.summary: "Yeni bir yerel oturum başlat"
+cmd.cost.summary: "Bu oturum için kümülatif token kullanımını göster"
+cmd.provider.summary: "Sağlayıcıları ve modellerini göster, değiştir veya listele"
+cmd.login.summary: "Bir sağlayıcıda oturum aç veya kimlik bilgilerini yenile"
+cmd.resume.summary: "Kayıtlı bir oturumu REPL'e yükle"
+cmd.config.summary: "Anvil yapılandırma dosyalarını veya birleştirilmiş bölümleri incele"
+cmd.memory.summary: "Yüklenmiş Anvil yönerge belleği dosyalarını incele"
+cmd.init.summary: "Bu depo için başlangıç ANVIL.md dosyası oluştur"
+cmd.diff.summary: "Mevcut çalışma alanı değişiklikleri için git diff göster"
+cmd.version.summary: "CLI sürümünü ve build bilgisini göster"
+cmd.bughunter.summary: "Kod tabanını olası hatalara karşı incele"
+cmd.branch.summary: "Git branch'lerini listele, oluştur veya değiştir"
+cmd.worktree.summary: "Git worktree'lerini listele, ekle, kaldır veya temizle"
+cmd.commit.summary: "Bir commit mesajı üret ve git commit oluştur"
+cmd.pr.summary: "Konuşmadan bir pull request taslağı oluştur veya gönder"
+cmd.issue.summary: "Konuşmadan bir GitHub issue taslağı oluştur veya gönder"
+cmd.hub.summary: "AnvilHub marketplace'ten paketleri gözat ve yükle"
+cmd.language.summary: "Görüntüleme dilini ayarla (en, de, es, fr, ja, zh-CN, ru)"
+
+# Hata mesajları
+error.unknown_command: "Bilinmeyen komut: /%{name}"
+error.missing_argument: "/%{cmd} için zorunlu argüman eksik"
+error.not_available_tui: "Bu komut TUI modunda kullanılamaz."
+error.provider_not_found: "Sağlayıcı bulunamadı: %{name}"
+error.hub_fetch_failed: "AnvilHub'dan paketler alınamadı: %{reason}"
+error.hub_install_failed: "'%{name}' paketinin yüklenmesi başarısız: %{reason}"
+error.hub_not_found: "Paket bulunamadı: %{name}"
+error.invalid_language: "Desteklenmeyen dil '%{lang}'. Mevcut: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Yapılandırma kaydedilemedi: %{reason}"
+
+# Hub komutu mesajları
+hub.top_packages: "AnvilHub'da en popüler paketler"
+hub.search_results: "\"%{query}\" için arama sonuçları"
+hub.no_results: "Paket bulunamadı."
+hub.installing: "%{name} %{version} yükleniyor..."
+hub.installed: "%{name} %{version} %{path} konumuna yüklendi"
+hub.downloads: "%{count} indirme"
+hub.package_info: "Paket: %{name} v%{version} — yazar: %{author}"
+hub.package_type: "Tür: %{type}"
+hub.package_desc: "Açıklama: %{desc}"
+hub.usage_hint: |
+  Kullanım:
+    /hub                     Kategoriye göre en popüler paketleri göster
+    /hub search <sorgu>      Tüm paketlerde ara
+    /hub skills              En popüler skill'ler
+    /hub plugins             En popüler plugin'ler
+    /hub agents              En popüler agent'lar
+    /hub themes              En popüler tema'lar
+    /hub install <ad>        Bir paketi indir ve yükle
+    /hub info <ad>           Paket ayrıntılarını göster
+
+# Language komutu mesajları
+language.current: "Geçerli dil: %{lang}"
+language.changed: "Dil ayarlandı: %{lang}"
+language.available: "Kullanılabilir diller: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Kullanım: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure menü etiketleri
+configure.title: "Anvil'i yapılandır"
+configure.providers: "Sağlayıcılar"
+configure.models: "Modeller"
+configure.context: "Bağlam"
+configure.search: "Arama"
+configure.permissions: "İzinler"
+configure.display: "Görüntü"
+configure.integrations: "Entegrasyonlar"
+configure.language: "Dil"
+
+# Login / sağlayıcı sorguları
+login.prompt_provider: "Oturum açılacak sağlayıcıyı seçin [anthropic/openai/ollama]: "
+login.success: "%{provider} için oturum açma başarılı."
+login.failed: "Oturum açma başarısız: %{reason}"
+login.enter_api_key: "API anahtarını girin: "
+login.testing_connection: "%{host} adresine bağlantı test ediliyor..."
+login.connected: "Bağlandı"
+login.connection_failed: "Bağlanılamadı"
+
+# ─── Sihirbaz — ilk çalıştırma kurulumu ───────────────────────────────────
+# Karşılama kartı (alt-screen giriş noktası)
+wizard.welcome.title: "Anvil v%{version}'a hoş geldiniz"
+wizard.welcome.tagline: "Her yerde çalışan yapay zekâ kodlama ortağınız — Anthropic, OpenAI, Ollama ve 32 sağlayıcı daha."
+wizard.welcome.kicker: "Hadi kurulumu yapalım."
+wizard.welcome.hint: "Devam etmek için Enter · Kurulumu atlamak için Esc"
+
+# Satır içi banner (stdin yedek yolu)
+wizard.banner.welcome: "⚒  Anvil v%{version}'a hoş geldiniz"
+wizard.banner.subtitle: "   Culpur Defense'ten yapay zekâ destekli kodlama asistanı"
+wizard.banner.lets_setup: "   Hadi kurulumu yapalım."
+
+# Adım başlıkları
+wizard.step_header: "Adım %{step}/%{total}: %{title}"
+wizard.step.vault_title: "Vault kurulumu (kimlik bilgisi şifreleme)"
+wizard.step.ollama_title: "Ollama (yerel yapay zekâ)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Sağlayıcı önceliği ve varsayılan model"
+wizard.step.tui_layout_title: "TUI düzeni"
+wizard.step.tui_prefs_title: "TUI tercihleri"
+
+# Dil adımı (Phase A6, task #645)
+wizard.language.title: "Dilinizi seçin"
+wizard.language.body: "Anvil TUI ve ilk çalıştırma sihirbazı bu dili kullanacaktır. Daha sonra /language veya /configure ile değiştirebilirsiniz."
+wizard.language.continue: "Devam"
+wizard.language.skip: "Atla"
+
+# Vault adımı
+wizard.vault.body_l1: "Anvil API anahtarlarınızı AES-256-GCM ile şifrelenmiş bir vault'ta saklar."
+wizard.vault.body_l2: "Şimdi bir ana parola belirlersiniz — hiçbir yerde saklanmaz."
+wizard.vault.body_l3: "Anvil'i her başlattığınızda bir kez girmeniz gerekir."
+wizard.vault.opt_setup: "[1] Şifreli vault kur (önerilen)"
+wizard.vault.opt_skip: "[s] Atla — API anahtarları credentials.json'da düz metin olarak saklanır"
+wizard.vault.skipping: "Vault kurulumu atlanıyor."
+wizard.vault.warn_plaintext: "Uyarı: API anahtarları düz metin olarak saklanacak."
+wizard.vault.tip_retry_setup: "Kimlik bilgilerinizi şifrelemek için daha sonra /vault setup çalıştırın."
+wizard.vault.already_initialized: "Vault zaten ~/.anvil/vault/ konumunda hazır"
+wizard.vault.unlocking: "Bu oturum için kilit açılıyor..."
+wizard.vault.prompt_master_password: "Ana parola: "
+wizard.vault.unlocked: "Vault kilidi açıldı."
+wizard.vault.not_yet_initialized: "Vault henüz hazırlanmamış — bu beklenmedik bir durum."
+wizard.vault.unlock_failed: "Kilit açma başarısız: %{reason}"
+wizard.vault.continue_no_vault: "Vault olmadan devam — anahtarlar düz metin olarak saklanacak."
+wizard.vault.prompt_set_password: "Ana parolayı belirleyin: "
+wizard.vault.prompt_confirm_password: "Ana parolayı doğrulayın: "
+wizard.vault.empty_password: "Parola boş olamaz. Tekrar deneyin."
+wizard.vault.password_mismatch: "Parolalar eşleşmiyor. Tekrar deneyin."
+wizard.vault.created_and_unlocked: "Vault oluşturuldu ve kilidi açıldı."
+wizard.vault.keys_encrypted_note: "Bu sihirbazda girilen API anahtarları şifrelenmiş olarak saklanacak."
+wizard.vault.created_session_lock_failed: "Vault oluşturuldu ancak oturum kilidi başarısız oldu."
+wizard.vault.keys_plaintext_this_run: "Anahtarlar bu çalıştırmada düz metin olarak saklanacak."
+wizard.vault.setup_failed: "Vault kurulumu başarısız: %{reason}"
+wizard.vault.continue_keys_plaintext: "Vault olmadan devam — anahtarlar düz metin olarak saklanır."
+
+# Ollama adımı
+wizard.ollama.body_l1: "Ollama, yapay zekâ modellerini makinenizde yerel olarak çalıştırır."
+wizard.ollama.body_l2: "Temel kullanım için API anahtarı gerekmez."
+wizard.ollama.opt_default: "[1] Ollama'ya bağlan (varsayılan: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Özel URL ile bağlan"
+wizard.ollama.opt_apikey: "[3] API anahtarı ile bağlan"
+wizard.ollama.opt_skip: "[s] Atla"
+wizard.ollama.testing_connection: "%{url} adresine bağlantı test ediliyor... "
+wizard.ollama.connected: "bağlandı"
+wizard.ollama.failed: "başarısız (%{reason})"
+wizard.ollama.available_models: "Kullanılabilir modeller:"
+wizard.ollama.start_hint: "Ollama atlanıyor — Ollama'nın çalıştığından emin olun: ollama serve"
+wizard.ollama.config_saved_retry: "Bağlantı başarısız. Yapılandırma kaydedildi; `anvil login ollama` ile tekrar deneyebilirsiniz."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API anahtarı: "
+wizard.ollama.could_not_verify_saving: "doğrulanamadı (%{reason}) — yine de kaydediliyor"
+wizard.ollama.skipping: "Ollama atlanıyor."
+
+# Anthropic adımı
+wizard.anthropic.body: "Anthropic, en yetenekli yapay zekâ asistanı olan Claude'u sunar."
+wizard.anthropic.opt_oauth: "[1] OAuth ile oturum aç (önerilen — tarayıcıyı açar)"
+wizard.anthropic.opt_apikey: "[2] API anahtarını manuel olarak gir"
+wizard.anthropic.opt_skip: "[s] Atla"
+wizard.anthropic.oauth_complete: "Anthropic OAuth tamamlandı."
+wizard.anthropic.oauth_failed: "OAuth başarısız: %{reason}"
+wizard.anthropic.retry_hint: "Daha sonra şu komutla tekrar deneyebilirsiniz: anvil login anthropic"
+wizard.anthropic.console_url: "Anahtarınızı alın: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API anahtarı (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Anahtar girilmedi, Anthropic atlanıyor."
+wizard.anthropic.validating_key: "Anahtar doğrulanıyor... "
+wizard.anthropic.valid: "geçerli"
+wizard.anthropic.could_not_verify: "doğrulanamadı — yine de kaydediliyor"
+wizard.anthropic.skipping: "Anthropic atlanıyor."
+
+# OpenAI adımı
+wizard.openai.body: "OpenAI, kodlama ve akıl yürütme için GPT modelleri sunar."
+wizard.openai.opt_apikey: "[1] API anahtarını gir"
+wizard.openai.opt_skip: "[s] Atla"
+wizard.openai.console_url: "Anahtarınızı alın: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API anahtarı (sk-...): "
+wizard.openai.no_key_skipping: "Anahtar girilmedi, OpenAI atlanıyor."
+wizard.openai.validating_key: "Anahtar doğrulanıyor... "
+wizard.openai.valid: "geçerli"
+wizard.openai.could_not_verify: "doğrulanamadı — yine de kaydediliyor"
+wizard.openai.skipping: "OpenAI atlanıyor."
+
+# xAI adımı
+wizard.xai.body: "xAI, Grok modellerini sunar."
+wizard.xai.opt_apikey: "[1] API anahtarını gir"
+wizard.xai.opt_skip: "[s] Atla"
+wizard.xai.console_url: "Anahtarınızı alın: https://console.x.ai"
+wizard.xai.prompt_api_key: "API anahtarı (xai-...): "
+wizard.xai.no_key_skipping: "Anahtar girilmedi, xAI atlanıyor."
+wizard.xai.saved: "xAI API anahtarı kaydedildi."
+wizard.xai.skipping: "xAI atlanıyor."
+
+# Bilinmeyen seçim yedeği
+wizard.unknown_choice_skipping: "Bilinmeyen seçim '%{choice}', %{provider} atlanıyor."
+
+# Sağlayıcı önceliği adımı
+wizard.priority.none_configured: "Yapılandırılmış sağlayıcı yok."
+wizard.priority.configure_later: "Sağlayıcıları daha sonra şu komutla yapılandırabilirsiniz: anvil login"
+wizard.priority.you_configured: "Yapılandırdıklarınız: %{providers}"
+wizard.priority.set_order: "Sağlayıcı önceliğinizi belirleyin (ilk = birincil, diğerleri = yedek):"
+wizard.priority.current_order: "Geçerli sıra:"
+wizard.priority.opt_keep: "[1] Bu sırayı koru"
+wizard.priority.opt_reorder: "[2] Yeniden sırala (sayıları gir: örn. \"2,1\")"
+wizard.priority.prompt_new_order: "Yeni sıra: "
+wizard.priority.could_not_parse: "Sıra ayrıştırılamadı, orijinal korunuyor."
+wizard.priority.unknown_keep: "Bilinmeyen seçim, orijinal sıra korunuyor."
+
+# Thinking modu anahtarı
+wizard.thinking.title: "Thinking modu etkinleştirilsin mi?"
+wizard.thinking.body_l1: "Bazı modeller (Qwen3, Claude, o3) genişletilmiş thinking/reasoning destekler."
+wizard.thinking.body_l2: "Etkinleştirildiğinde model yanıtlamadan önce akıl yürütme sürecini gösterir."
+wizard.thinking.opt_yes: "[1] Evet — thinking modunu etkinleştir (kodlama için önerilir)"
+wizard.thinking.opt_no: "[2] Hayır — yalnızca standart yanıtlar"
+wizard.thinking.enabled: "Thinking modu etkinleştirildi. /think ile istediğiniz zaman değiştirin"
+wizard.thinking.disabled: "Thinking modu kapalı. /think ile istediğiniz zaman değiştirin"
+
+# TUI düzeni adımı
+wizard.layout.opt_vertical: "[1] Dikey bölünmüş  (varsayılan)"
+wizard.layout.opt_classic: "[2] Klasik"
+wizard.layout.opt_threepane: "[3] Üç bölmeli"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Çalışma alanı sekmeleri gösterilsin mi? [1] Evet (varsayılan)  [2] Hayır"
+
+# TUI tercihleri adımı
+wizard.prefs.mouse_prompt: "Fare yakalama etkinleştirilsin mi? [1] Kapalı (varsayılan, önerilir)  [2] Açık"
+wizard.prefs.theme_prompt: "Tema? [1] Koyu (varsayılan)  [2] Açık  [3] Otomatik"
+wizard.prefs.permission_prompt: "Varsayılan izin modu? [1] ask (varsayılan)  [2] workspace-write  [3] danger-full-access"
+
+# Sihirbaz sorguları
+wizard.prompt.choice_default1: "Seçim [1]: "
+wizard.prompt.choice: "Seçim: "
+
+# Sihirbaz sonrası özet banner'ı
+wizard.summary.complete: "Kurulum tamamlandı!"
+wizard.summary.default_model: "Varsayılan model:  %{model}"
+wizard.summary.providers: "Sağlayıcılar:      %{providers}"
+wizard.summary.config_saved: "Config kaydedildi: %{path}"
+wizard.summary.migration: "Geçiş:             %{summary}"
+wizard.summary.run_anvil: "Kodlamaya başlamak için `anvil` çalıştırın."
+wizard.summary.type_help: "Tüm komutlar için `/help` yazın."
+
+# Sihirbaz uyarıları / hataları
+wizard.warn.altscreen_unavailable: "Not: alt-screen sihirbazı kullanılamıyor (%{reason})."
+wizard.warn.fallback_inline: "Satır içi / stdin sorgularına geri dönülüyor."
+wizard.warn.altscreen_modal: "Not: alt-screen kullanılamıyor (%{reason}); stdin sorgularına geri dönülüyor."
+wizard.warn.could_not_save_config: "Uyarı: yapılandırma kaydedilemedi: %{reason}"
+
+# Ollama yükleme modali (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Adım %{step}/%{total} — yerel yapay zekâ (Ollama)"
+wizard.ollama_modal.intro: "Anvil, çevrimdışı çalışan yerel bir modele sahip olmanız için Ollama'yı doğrudan yükleyip çalıştırabilir. Ollama'yı sizin için Anvil mi yönetsin?"
+wizard.ollama_modal.already_running: "Ollama zaten %{url} adresinde %{count} model ile çalışıyor:\n  %{models}\n\nMevcut daemon kullanılsın mı?"
+wizard.ollama_modal.already_setup_title: "Ollama zaten kurulu ✓"
+wizard.ollama_modal.resume_label: "Devam et — Anvil'in daha önce yüklediği Ollama'yı yeniden kullan"
+wizard.ollama_modal.use_existing_label: "Anvil'in tespit ettiği sistem Ollama'sını kullan"
+wizard.ollama_modal.install_label: "Ollama'yı şimdi yükle (Anvil indirir + yönetir) — önerilir"
+wizard.ollama_modal.title_local_ai: "Yerel yapay zekâ (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Ollama'yı kendim yöneteceğim"
+wizard.ollama_modal.choice_skip: "Atla — yerel yapay zekâ yok"
+wizard.ollama_modal.choice_later: "Belki sonra"
+wizard.ollama_modal.use_existing_title: "Mevcut Ollama'yı kullan"
+wizard.ollama_modal.use_existing_body: "Varsayılan Ollama URL: %{url}\nDaemon: %{status}\n\nFarklı bir URL gerekirse daha sonra /ollama setup kullanın."
+wizard.ollama_modal.status_reachable: "ulaşılabilir"
+wizard.ollama_modal.status_not_reachable: "ulaşılamıyor — mesaj göndermeden önce başlatın"
+wizard.ollama_modal.install_failed_title: "Yükleme başarısız"
+wizard.ollama_modal.install_failed_body: "Ollama yüklenemedi:\n  %{reason}\n\nDaha sonra /ollama setup üzerinden tekrar deneyin veya başka bir seçenek seçin."
+wizard.ollama_modal.already_installed_title: "Ollama ikilisi zaten yüklü ✓"
+wizard.ollama_modal.already_installed_body: "Önceki bir yüklemeden %{path} bulundu."
+
+# Ollama uygunluk etiketleri
+wizard.ollama_fit.recommended: "Önerilen"
+wizard.ollama_fit.fits: "Uyumlu"
+wizard.ollama_fit.tight: "Sınırda"
+wizard.ollama_fit.too_big: "Çok büyük — OOM olacak"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — en iyi genel kodlama (~4,7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — küçük + hızlı (~2,0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — 8 GB RAM ile çalışır (~1,0 GB)"
+
+# ─── TUI — modal etiketleri ───────────────────────────────────────────────
+tui.modal.permission_required: " İzin gerekli "
+tui.modal.edit_lines: "Satırları düzenle"
+tui.modal.edit_key_prompt: "%{key} düzenle:"
+tui.modal.files_changed: "Bu turda değişen dosyalar: +%{added} −%{removed} (tam birleşik diff için /diff çalıştırın)"
+
+# ─── Komutlar — voice / collab / docker / k8s / iac / deps ────────────────
+cmd.docker.usage: |
+  Kullanım:
+    /docker ps                   Çalışan konteynerleri listele
+    /docker logs <konteyner>     Konteyner günlüğünün son 50 satırını göster
+    /docker compose              docker-compose servislerini göster (varsa)
+    /docker build                Mevcut dizindeki Dockerfile'dan imaj oluştur
+cmd.docker.logs_usage: "Kullanım: /docker logs <konteyner>"
+cmd.docker.unknown_sub: "Bilinmeyen docker alt-komutu: %{sub}\nKullanım için `/docker help` çalıştırın."
+
+cmd.voice.start: |
+  Sesli girdi — yakında
+
+  Ses yakalama mikrofon erişimi ve bir konuşmadan-metne backend gerektirir.
+  Planlanan: /voice start  ->  mikrofon girişini yakala ve prompt olarak ekle.
+cmd.voice.stop: |
+  Sesli girdi — yakında
+
+  Durdurulacak etkin bir ses oturumu yok.
+cmd.voice.help: |
+  Sesli girdi (yakında)
+
+  Komutlar:
+    /voice start   Mikrofon girişini yakalamaya başla
+    /voice stop    Yakalamayı durdur ve gönder
+
+  Yerel bir konuşmadan-metne motoru gerektirir (örn. whisper.cpp).
+cmd.voice.unknown_sub: "Bilinmeyen /voice alt-komutu: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  İş birliği — yakında
+
+  Planlanan: /collab share  ->  paylaşılabilir bir oturum kimliği oluşturur.
+  Bu özellik gelecekteki bir sürüm için ayrılmıştır.
+cmd.collab.join: |
+  İş birliği — yakında
+
+  Kullanım: /collab join <session-id>
+  Bu özellik gelecekteki bir sürüm için ayrılmıştır.
+cmd.collab.help: |
+  İş birliği (yakında)
+
+  Komutlar:
+    /collab share          Bu oturumu paylaş (davet kimliği oluşturur)
+    /collab join <id>      Başka bir kullanıcının paylaşılan oturumuna katıl
+
+  Bir AnvilHub hesabı gerektirir. Kullanılabilirlik için changelog'u izleyin.
+cmd.collab.unknown_sub: "Bilinmeyen /collab alt-komutu: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Kullanım:
+    /k8s pods                   Geçerli namespace'teki pod'ları listele
+    /k8s logs <pod>             Pod günlüğünün son 50 satırını izle
+    /k8s apply <dosya>          kubectl ile bir manifest uygula
+    /k8s describe <kaynak>      Bir kaynağı betimle
+cmd.k8s.kubectl_missing: "PATH'te kubectl bulunamadı. Şuradan yükleyin: https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Kullanım: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Kullanım: /k8s apply <dosya>"
+cmd.k8s.describe_usage: "Kullanım: /k8s describe <kaynak>"
+cmd.k8s.unknown_sub: "Bilinmeyen /k8s alt-komutu: %{args}\nKullanım için `/k8s help` çalıştırın."
+
+cmd.iac.usage: |
+  Kullanım:
+    /iac plan       terraform/tofu plan çalıştır
+    /iac apply      terraform/tofu apply çalıştır
+    /iac validate   Yapılandırma dosyalarını doğrula
+    /iac drift      Altyapı drift'ini tespit et (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: TUI içi onay modali çözülemedi. Lütfen tekrar deneyin — veya CLI onay sorgusunu kullanmak için normal bir kabukta `anvil --print /iac apply` çalıştırın."
+cmd.iac.no_terraform: "PATH'te 'tofu' veya 'terraform' bulunamadı.\nOpenTofu'yu yükleyin: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Bu işlem altyapınıza değişiklik uygulayacak. Devam edilsin mi? (y/N) "
+cmd.iac.cancelled: "Apply iptal edildi."
+cmd.iac.unknown_sub: "Bilinmeyen /iac alt-komutu: %{sub}\nKullanım için `/iac help` çalıştırın."
+cmd.iac.no_binary_for_apply: "PATH'te terraform/tofu ikilisi bulunamadı. Apply işleminden önce OpenTofu'yu yükleyin."
+cmd.iac.confirm_body_with_plan: "Bu işlem altyapınıza değişiklik uygulayacak.\n\n%{plan}\n\nOnaylamadan önce plan'ı dikkatlice inceleyin."
+cmd.iac.confirm_body_generic: "Bu işlem altyapınıza değişiklik uygulayacak.\n\nOnaylamadan önce plan'ı dikkatlice inceleyin."
+
+cmd.deps.usage: |
+  Kullanım:
+    /deps tree           Bağımlılık ağacını göster
+    /deps outdated       Güncel olmayan bağımlılıkları göster
+    /deps audit          Bağımlılıkların güvenlik denetimi
+    /deps why <pkg>      Bir bağımlılığın neden dahil edildiğini açıkla
+cmd.deps.no_package_manager: "Tanınan bir paket yöneticisi bulunamadı."
+
+# Komutlar arasında yeniden kullanılan genel CLI etiketleri
+cli.no_pr_diff: "PR diff bulunamadı. gh'nin kurulu ve kimliği doğrulanmış olduğundan ve geçerli branch için bir PR'nin açık olduğundan emin olun."
