@@ -1,0 +1,517 @@
+# TUI header / footer
+footer.help: "Tab: lengkapkan  Enter: hantar  Ctrl+C: batalkan  Ctrl+D: keluar  /help: arahan"
+footer.configure: "↑↓: navigasi  Enter: pilih  Esc: kembali  Ctrl+C: keluar"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Status / session
+status.model: "Model"
+status.provider: "Pembekal"
+status.permission: "Mod kebenaran"
+status.session: "Sesi"
+status.messages: "Mesej"
+status.turns: "Pusingan"
+status.tokens_used: "Token digunakan"
+
+# Command descriptions (used in /help output)
+cmd.help.summary: "Tunjuk arahan slash yang tersedia"
+cmd.status.summary: "Tunjuk status sesi semasa"
+cmd.compact.summary: "Padatkan sejarah sesi tempatan"
+cmd.model.summary: "Tunjuk atau tukar model aktif"
+cmd.permissions.summary: "Tunjuk atau tukar mod kebenaran aktif"
+cmd.clear.summary: "Mulakan sesi tempatan baru"
+cmd.cost.summary: "Tunjuk penggunaan token kumulatif untuk sesi ini"
+cmd.provider.summary: "Tunjuk, tukar atau senaraikan pembekal dan model mereka"
+cmd.login.summary: "Log masuk atau perbaharui kelayakan pembekal"
+cmd.resume.summary: "Muatkan sesi yang disimpan ke dalam REPL"
+cmd.config.summary: "Periksa fail konfigurasi Anvil"
+cmd.memory.summary: "Periksa fail memori Anvil yang dimuatkan"
+cmd.init.summary: "Cipta ANVIL.md permulaan untuk repo ini"
+cmd.diff.summary: "Tunjuk git diff untuk perubahan semasa"
+cmd.version.summary: "Tunjuk versi CLI dan maklumat build"
+cmd.bughunter.summary: "Periksa kod untuk pepijat berkemungkinan"
+cmd.branch.summary: "Senaraikan, cipta atau tukar cabang git"
+cmd.worktree.summary: "Senaraikan, tambah, buang atau cantas git worktree"
+cmd.commit.summary: "Jana mesej commit dan cipta git commit"
+cmd.pr.summary: "Draf atau cipta pull request daripada perbualan"
+cmd.issue.summary: "Draf atau cipta isu GitHub daripada perbualan"
+cmd.hub.summary: "Layari dan pasang pakej dari pasaran AnvilHub"
+cmd.language.summary: "Tetapkan bahasa paparan (en, de, es, fr, ja, zh-CN, ru)"
+
+# Error messages
+error.unknown_command: "Arahan tidak diketahui: /%{name}"
+error.missing_argument: "Argumen yang diperlukan tiada untuk /%{cmd}"
+error.not_available_tui: "Arahan tidak tersedia dalam mod TUI."
+error.provider_not_found: "Pembekal tidak dijumpai: %{name}"
+error.hub_fetch_failed: "Gagal mendapatkan pakej dari AnvilHub: %{reason}"
+error.hub_install_failed: "Gagal memasang pakej '%{name}': %{reason}"
+error.hub_not_found: "Pakej tidak dijumpai: %{name}"
+error.invalid_language: "Bahasa tidak disokong '%{lang}'. Tersedia: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Gagal menyimpan konfigurasi: %{reason}"
+
+# Hub command messages
+hub.top_packages: "Pakej teratas di AnvilHub"
+hub.search_results: "Keputusan carian untuk \"%{query}\""
+hub.no_results: "Tiada pakej dijumpai."
+hub.installing: "Memasang %{name} %{version}..."
+hub.installed: "Dipasang %{name} %{version} ke %{path}"
+hub.downloads: "%{count} muat turun"
+hub.package_info: "Pakej: %{name} v%{version} oleh %{author}"
+hub.package_type: "Jenis: %{type}"
+hub.package_desc: "Penerangan: %{desc}"
+hub.usage_hint: |
+  Usage:
+    /hub                     Show top packages by category
+    /hub search <query>      Search all packages
+    /hub skills              Top skills
+    /hub plugins             Top plugins
+    /hub agents              Top agents
+    /hub themes              Top themes
+    /hub install <name>      Download and install a package
+    /hub info <name>         Show package details
+
+# Language command messages
+language.current: "Bahasa semasa: %{lang}"
+language.changed: "Bahasa ditetapkan kepada: %{lang}"
+language.available: "Bahasa tersedia: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Penggunaan: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure menu labels
+configure.title: "Konfigurasikan Anvil"
+configure.providers: "Pembekal"
+configure.models: "Model"
+configure.context: "Konteks"
+configure.search: "Carian"
+configure.permissions: "Kebenaran"
+configure.display: "Paparan"
+configure.integrations: "Integrasi"
+configure.language: "Bahasa"
+
+# Login/provider prompts
+login.prompt_provider: "Pilih pembekal untuk log masuk [anthropic/openai/ollama]: "
+login.success: "Log masuk berjaya untuk %{provider}."
+login.failed: "Log masuk gagal: %{reason}"
+login.enter_api_key: "Masukkan kunci API: "
+login.testing_connection: "Menguji sambungan ke %{host}..."
+login.connected: "Disambungkan"
+login.connection_failed: "Tidak dapat disambungkan"
+
+# ─── Wizard — first-run setup ─────────────────────────────────────────────
+# Welcome card (alt-screen entry point)
+wizard.welcome.title: "Selamat datang ke Anvil v%{version}"
+wizard.welcome.tagline: "Rakan kongsi pengekodan AI anda yang berjalan di mana sahaja — Anthropic, OpenAI, Ollama dan 32 pembekal lagi."
+wizard.welcome.kicker: "Mari kami sediakan anda."
+wizard.welcome.hint: "Tekan Enter untuk teruskan · Esc untuk langkau persediaan"
+
+# Inline banner (stdin fallback path)
+wizard.banner.welcome: "⚒  Selamat datang ke Anvil v%{version}"
+wizard.banner.subtitle: "   Pembantu pengekodan berkuasa AI dari Culpur Defense"
+wizard.banner.lets_setup: "   Mari kami sediakan anda."
+
+# Step headers
+wizard.step_header: "Step %{step} of %{total}: %{title}"
+wizard.step.vault_title: "Vault Setup (Credential Encryption)"
+wizard.step.ollama_title: "Ollama (Local AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Provider Priority & Default Model"
+wizard.step.tui_layout_title: "TUI Layout"
+wizard.step.tui_prefs_title: "TUI Preferences"
+
+# Language step (Phase A6, task #645)
+wizard.language.title: "Pilih bahasa anda"
+wizard.language.body: "TUI Anvil dan wizard larian pertama akan menggunakan bahasa ini. Anda boleh mengubahnya kemudian dengan /language atau dalam /configure."
+wizard.language.continue: "Teruskan"
+wizard.language.skip: "Langkau"
+
+# Vault step
+wizard.vault.body_l1: "Anvil stores your API keys in an AES-256-GCM encrypted vault."
+wizard.vault.body_l2: "You set a master password now — it is never stored anywhere."
+wizard.vault.body_l3: "You will need to enter it once each time you start Anvil."
+wizard.vault.opt_setup: "[1] Set up encrypted vault (recommended)"
+wizard.vault.opt_skip: "[s] Skip — API keys will be stored in plaintext credentials.json"
+wizard.vault.skipping: "Skipping vault setup."
+wizard.vault.warn_plaintext: "Warning: API keys will be stored in plaintext."
+wizard.vault.tip_retry_setup: "Run /vault setup later to encrypt your credentials."
+wizard.vault.already_initialized: "Vault already initialized at ~/.anvil/vault/"
+wizard.vault.unlocking: "Unlocking for this session..."
+wizard.vault.prompt_master_password: "Master password: "
+wizard.vault.unlocked: "Vault unlocked."
+wizard.vault.not_yet_initialized: "Vault not yet initialized — that is unexpected."
+wizard.vault.unlock_failed: "Unlock failed: %{reason}"
+wizard.vault.continue_no_vault: "Continuing without vault — keys will be stored in plaintext."
+wizard.vault.prompt_set_password: "Set master password: "
+wizard.vault.prompt_confirm_password: "Confirm master password: "
+wizard.vault.empty_password: "Password must not be empty. Try again."
+wizard.vault.password_mismatch: "Passwords do not match. Try again."
+wizard.vault.created_and_unlocked: "Vault created and unlocked."
+wizard.vault.keys_encrypted_note: "API keys entered in this wizard will be stored encrypted."
+wizard.vault.created_session_lock_failed: "Vault created but session lock failed."
+wizard.vault.keys_plaintext_this_run: "Keys will be stored in plaintext this run."
+wizard.vault.setup_failed: "Vault setup failed: %{reason}"
+wizard.vault.continue_keys_plaintext: "Continuing without vault — keys stored in plaintext."
+
+# Ollama step
+wizard.ollama.body_l1: "Ollama runs AI models locally on your machine."
+wizard.ollama.body_l2: "No API key required for basic use."
+wizard.ollama.opt_default: "[1] Connect to Ollama (default: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Connect with custom URL"
+wizard.ollama.opt_apikey: "[3] Connect with API key"
+wizard.ollama.opt_skip: "[s] Skip"
+wizard.ollama.testing_connection: "Testing connection to %{url}... "
+wizard.ollama.connected: "connected"
+wizard.ollama.failed: "failed (%{reason})"
+wizard.ollama.available_models: "Available models:"
+wizard.ollama.start_hint: "Skipping Ollama — make sure Ollama is running: ollama serve"
+wizard.ollama.config_saved_retry: "Connection failed. Configuration saved; you can retry with `anvil login ollama`."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "could not verify (%{reason}) — saving anyway"
+wizard.ollama.skipping: "Skipping Ollama."
+
+# Anthropic step
+wizard.anthropic.body: "Anthropic provides Claude — the most capable AI assistant."
+wizard.anthropic.opt_oauth: "[1] Login with OAuth (recommended — opens browser)"
+wizard.anthropic.opt_apikey: "[2] Enter API key manually"
+wizard.anthropic.opt_skip: "[s] Skip"
+wizard.anthropic.oauth_complete: "Anthropic OAuth complete."
+wizard.anthropic.oauth_failed: "OAuth failed: %{reason}"
+wizard.anthropic.retry_hint: "You can retry later with: anvil login anthropic"
+wizard.anthropic.console_url: "Get your key at: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "No key entered, skipping Anthropic."
+wizard.anthropic.validating_key: "Validating key... "
+wizard.anthropic.valid: "valid"
+wizard.anthropic.could_not_verify: "could not verify — saving anyway"
+wizard.anthropic.skipping: "Skipping Anthropic."
+
+# OpenAI step
+wizard.openai.body: "OpenAI provides GPT models for coding and reasoning."
+wizard.openai.opt_apikey: "[1] Enter API key"
+wizard.openai.opt_skip: "[s] Skip"
+wizard.openai.console_url: "Get your key at: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "No key entered, skipping OpenAI."
+wizard.openai.validating_key: "Validating key... "
+wizard.openai.valid: "valid"
+wizard.openai.could_not_verify: "could not verify — saving anyway"
+wizard.openai.skipping: "Skipping OpenAI."
+
+# xAI step
+wizard.xai.body: "xAI provides Grok models."
+wizard.xai.opt_apikey: "[1] Enter API key"
+wizard.xai.opt_skip: "[s] Skip"
+wizard.xai.console_url: "Get your key at: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "No key entered, skipping xAI."
+wizard.xai.saved: "xAI API key saved."
+wizard.xai.skipping: "Skipping xAI."
+
+# Unknown choice fallback
+wizard.unknown_choice_skipping: "Unknown choice '%{choice}', skipping %{provider}."
+
+# Provider priority step
+wizard.priority.none_configured: "No providers configured."
+wizard.priority.configure_later: "You can configure providers later with: anvil login"
+wizard.priority.you_configured: "You configured: %{providers}"
+wizard.priority.set_order: "Set your provider priority (first = primary, others = failover):"
+wizard.priority.current_order: "Current order:"
+wizard.priority.opt_keep: "[1] Keep this order"
+wizard.priority.opt_reorder: "[2] Reorder (enter numbers: e.g., \"2,1\")"
+wizard.priority.prompt_new_order: "New order: "
+wizard.priority.could_not_parse: "Could not parse order, keeping original."
+wizard.priority.unknown_keep: "Unknown choice, keeping original order."
+
+# Thinking mode toggle
+wizard.thinking.title: "Enable Thinking Mode?"
+wizard.thinking.body_l1: "Some models (Qwen3, Claude, o3) support extended thinking/reasoning."
+wizard.thinking.body_l2: "When enabled, the model shows its reasoning process before answering."
+wizard.thinking.opt_yes: "[1] Yes — enable thinking mode (recommended for coding)"
+wizard.thinking.opt_no: "[2] No  — standard responses only"
+wizard.thinking.enabled: "Thinking mode enabled. Toggle anytime with /think"
+wizard.thinking.disabled: "Thinking mode off. Toggle anytime with /think"
+
+# TUI layout step
+wizard.layout.opt_vertical: "[1] Vertical Split  (default)"
+wizard.layout.opt_classic: "[2] Classic"
+wizard.layout.opt_threepane: "[3] Three-Pane"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Show workspace tabs? [1] Yes (default)  [2] No"
+
+# TUI preferences step
+wizard.prefs.mouse_prompt: "Enable mouse capture? [1] Off (default, recommended)  [2] On"
+wizard.prefs.theme_prompt: "Theme? [1] Dark (default)  [2] Light  [3] Auto"
+wizard.prefs.permission_prompt: "Default permission mode? [1] ask (default)  [2] workspace-write  [3] danger-full-access"
+
+# Wizard prompts
+wizard.prompt.choice_default1: "Choice [1]: "
+wizard.prompt.choice: "Choice: "
+
+# Post-wizard summary banner
+wizard.summary.complete: "Setup complete!"
+wizard.summary.default_model: "Default model:  %{model}"
+wizard.summary.providers: "Providers:      %{providers}"
+wizard.summary.config_saved: "Config saved:   %{path}"
+wizard.summary.migration: "Migration:      %{summary}"
+wizard.summary.run_anvil: "Run `anvil` to start coding."
+wizard.summary.type_help: "Type `/help` for all commands."
+
+# Wizard warnings / errors
+wizard.warn.altscreen_unavailable: "Note: alt-screen wizard unavailable (%{reason})."
+wizard.warn.fallback_inline: "Falling back to inline / stdin prompts."
+wizard.warn.altscreen_modal: "Note: alt-screen unavailable (%{reason}); falling back to stdin prompts."
+wizard.warn.could_not_save_config: "Warning: could not save config: %{reason}"
+
+# Ollama install modal (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Step %{step} of %{total} — Local AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil can install + run Ollama directly so you have a local model that works offline. Want Anvil to manage Ollama for you?"
+wizard.ollama_modal.already_running: "Ollama is already running at %{url} with %{count} model(s):\n  %{models}\n\nUse this existing daemon?"
+wizard.ollama_modal.already_setup_title: "Ollama already set up ✓"
+wizard.ollama_modal.resume_label: "Resume — re-use the Ollama Anvil installed previously"
+wizard.ollama_modal.use_existing_label: "Use the system Ollama Anvil detected"
+wizard.ollama_modal.install_label: "Install Ollama now (Anvil downloads + manages it) — recommended"
+wizard.ollama_modal.title_local_ai: "Local AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "I'll handle Ollama myself"
+wizard.ollama_modal.choice_skip: "Skip — no local AI"
+wizard.ollama_modal.choice_later: "Maybe later"
+wizard.ollama_modal.use_existing_title: "Use existing Ollama"
+wizard.ollama_modal.use_existing_body: "Default Ollama URL: %{url}\nDaemon: %{status}\n\nUse /ollama setup later if you need a different URL."
+wizard.ollama_modal.status_reachable: "reachable"
+wizard.ollama_modal.status_not_reachable: "NOT reachable — start it before sending a message"
+wizard.ollama_modal.install_failed_title: "Install failed"
+wizard.ollama_modal.install_failed_body: "Could not install Ollama:\n  %{reason}\n\nRetry from /ollama setup later, or pick another option."
+wizard.ollama_modal.already_installed_title: "Ollama binary already installed ✓"
+wizard.ollama_modal.already_installed_body: "Found %{path} from a prior install."
+
+# Ollama fit labels
+wizard.ollama_fit.recommended: "Recommended"
+wizard.ollama_fit.fits: "Fits"
+wizard.ollama_fit.tight: "Tight"
+wizard.ollama_fit.too_big: "Too big — will OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — best general coding (~4.7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — small + fast (~2.0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — works on 8 GB RAM (~1.0 GB)"
+
+# ─── TUI — modal labels ───────────────────────────────────────────────────
+tui.modal.permission_required: " Kebenaran diperlukan "
+tui.modal.edit_lines: "Edit baris"
+tui.modal.edit_key_prompt: "Edit %{key}:"
+tui.modal.files_changed: "Fail diubah dalam pusingan ini: +%{added} −%{removed} (jalankan /diff untuk unified diff penuh)"
+
+# ─── Commands — voice / collab / docker / k8s / iac / deps ────────────────
+cmd.docker.usage: |
+  Usage:
+    /docker ps                   List running containers
+    /docker logs <container>     Show last 50 lines of container logs
+    /docker compose              Show docker-compose services (if present)
+    /docker build                Build image from Dockerfile in current directory
+cmd.docker.logs_usage: "Usage: /docker logs <container>"
+cmd.docker.unknown_sub: "Unknown docker sub-command: %{sub}\nRun `/docker help` for usage."
+
+cmd.voice.start: |
+  Voice input — coming soon
+
+  Voice capture requires microphone access and a speech-to-text backend.
+  Planned: /voice start  ->  capture mic input and inject as a prompt.
+cmd.voice.stop: |
+  Voice input — coming soon
+
+  No active voice session to stop.
+cmd.voice.help: |
+  Voice input (coming soon)
+
+  Commands:
+    /voice start   Begin capturing microphone input
+    /voice stop    Stop capturing and submit
+
+  Requires a local speech-to-text engine (e.g. whisper.cpp).
+cmd.voice.unknown_sub: "Unknown /voice sub-command: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Collaboration — coming soon
+
+  Planned: /collab share  ->  generate a shareable session ID.
+  This feature is reserved for a future release.
+cmd.collab.join: |
+  Collaboration — coming soon
+
+  Usage: /collab join <session-id>
+  This feature is reserved for a future release.
+cmd.collab.help: |
+  Collaboration (coming soon)
+
+  Commands:
+    /collab share          Share this session (generates an invite ID)
+    /collab join <id>      Join another user's shared session
+
+  Requires an AnvilHub account. Watch the changelog for availability.
+cmd.collab.unknown_sub: "Unknown /collab sub-command: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Usage:
+    /k8s pods                   List pods in current namespace
+    /k8s logs <pod>             Tail last 50 lines of pod logs
+    /k8s apply <file>           Apply a manifest with kubectl
+    /k8s describe <resource>    Describe a resource
+cmd.k8s.kubectl_missing: "kubectl not found in PATH. Install it from https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Usage: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Usage: /k8s apply <file>"
+cmd.k8s.describe_usage: "Usage: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Unknown /k8s sub-command: %{args}\nRun `/k8s help` for usage."
+
+cmd.iac.usage: |
+  Usage:
+    /iac plan       Run terraform/tofu plan
+    /iac apply      Run terraform/tofu apply
+    /iac validate   Validate configuration files
+    /iac drift      Detect infrastructure drift (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: in-TUI confirmation modal did not resolve. Please retry — or run `anvil --print /iac apply` from a regular shell to use the CLI confirmation prompt instead."
+cmd.iac.no_terraform: "Neither 'tofu' nor 'terraform' found in PATH.\nInstall OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "This will apply changes to your infrastructure. Continue? (y/N) "
+cmd.iac.cancelled: "Apply cancelled."
+cmd.iac.unknown_sub: "Unknown /iac sub-command: %{sub}\nRun `/iac help` for usage."
+cmd.iac.no_binary_for_apply: "No terraform/tofu binary found in PATH. Install OpenTofu before applying."
+cmd.iac.confirm_body_with_plan: "This will apply changes to your infrastructure.\n\n%{plan}\n\nReview the plan carefully before confirming."
+cmd.iac.confirm_body_generic: "This will apply changes to your infrastructure.\n\nReview the plan carefully before confirming."
+
+cmd.deps.usage: |
+  Usage:
+    /deps tree           Show dependency tree
+    /deps outdated       Show outdated dependencies
+    /deps audit          Security audit of dependencies
+    /deps why <pkg>      Explain why a dependency is included
+cmd.deps.no_package_manager: "No recognised package manager found."
+
+# Generic CLI labels reused across commands
+cli.no_pr_diff: "Tiada PR diff dijumpai. Pastikan gh dipasang, disahkan, dan PR terbuka untuk cabang semasa."
+
+# ─── TUI layouts — chrome strings (task #746) ─────────────────────────────
+# Strings rendered by the four layout renderers (classic, vertical_split,
+# three_pane, journal) plus the shared `common.rs` helpers. These are what
+# users see on EVERY frame, so they must follow rust_i18n::set_locale() as
+# soon as /language or the configure menu switches the locale.
+
+# Rail — left rail labels and section headers (vertical_split)
+tui.rail.sessions: "SESI"
+tui.rail.agents: "EJEN"
+tui.rail.agents_qualifier: "GLOBAL"
+tui.rail.status: "STATUS"
+tui.rail.status_qualifier: "SEMUA TAB"
+tui.rail.memory: "MEMORI"
+tui.rail.model: "MODEL"
+tui.rail.permissions: "KEBENARAN"
+tui.rail.context: "KONTEKS"
+tui.rail.keybinds: "KEKUNCI"
+tui.rail.build: "BUILD"
+tui.rail.none_active: "tiada aktif"
+tui.rail.deck_label: "DECK: %{mode}"
+tui.rail.on_tab: " pada %{name}"
+
+# Status — bottom status footer + STATUS rail block
+tui.status.tab_count_one: "1 tab"
+tui.status.tab_count_other: "%{count} tab"
+tui.status.perm_count_one: "1 kebenaran"
+tui.status.perm_count_other: "%{count} kebenaran"
+tui.status.running: "berjalan"
+tui.status.pending: "menunggu"
+tui.status.cost: "kos"
+tui.status.cost_included: "termasuk"
+tui.status.cost_subscription: "langganan"
+tui.status.thinking: "berfikir"
+tui.status.thinking_yes: "ya"
+tui.status.thinking_no: "tidak"
+tui.status.session_block: "sesi %{pct} · blok %{minutes}m"
+
+# Memory — 7-layer MEMORY block (rail + inline)
+tui.memory.working: "bekerja"
+tui.memory.working_val: "%{turns}p / %{tokens}tok"
+tui.memory.episodic: "episodik"
+tui.memory.episodic_sessions_one: "1 sesi"
+tui.memory.episodic_sessions_other: "%{count} sesi"
+tui.memory.semantic: "semantik"
+tui.memory.semantic_val: "%{c}c · %{a}a"
+tui.memory.procedural: "prosedural"
+tui.memory.procedural_val: "%{s}s · %{p}p"
+tui.memory.reflective: "reflektif"
+tui.memory.reflective_daily_one: "1 harian"
+tui.memory.reflective_daily_other: "%{count} harian"
+tui.memory.long_term: "jangka panjang"
+tui.memory.long_term_val_default: "L7/QMD"
+tui.memory.long_term_val_one: "L7/QMD (aktif · 1 arkib)"
+tui.memory.long_term_val_other: "L7/QMD (aktif · %{count} arkib)"
+tui.memory.permission: "kebenaran"
+tui.memory.permission_prior_one: "1 sebelumnya"
+tui.memory.permission_prior_other: "%{count} sebelumnya"
+tui.memory.qmd: "qmd"
+tui.memory.qmd_active_one: "aktif · 1 arkib"
+tui.memory.qmd_active_other: "aktif · %{count} arkib"
+tui.memory.qmd_latest: "qmd-terkini"
+tui.memory.qmd_latest_val: "%{sid} (%{days}h lalu)"
+
+# Banner — HISTORICAL VIEW, update available, autocompact warnings
+tui.banner.historical_view: "─── PANDANGAN BERSEJARAH  (Tekan End untuk kembali ke live) "
+tui.banner.update_available_with_version: " ⬆ kemas kini tersedia  v%{version}"
+tui.banner.update_available_raw: " ⬆ %{message}"
+
+# Tab strip — hint shown to the right of the tab bar
+tui.tab.hint: "F2/F3 tukar  Ctrl+T baru  Ctrl+W tutup  /help"
+
+# Agent panel — title, count rollups, empty state
+tui.agent.title: " Ejen (%{summary}) "
+tui.agent.running: "%{count} berjalan"
+tui.agent.completed: "%{count} selesai"
+tui.agent.failed: "%{count} gagal"
+
+# Tool / deck — no tool calls state, agent waiting
+tui.tool_card.no_tool_calls: "Tiada panggilan alat lagi."
+tui.deck.waiting: "Menunggu…"
+tui.deck.no_conversation: "Tiada perbualan lagi. Mula menaip di bawah."
+
+# Configure footer breadcrumb
+tui.configure.footer: "   ↑↓ Navigasi  Enter Pilih  Esc Kembali"
+
+# Footer queued indicator
+tui.footer.queued_count: "[%{count} dalam baris]"
+tui.footer.queued_preview: " • %{preview}"
+tui.footer.queued_more: " • +%{count} lagi"
+
+# Three-pane band headers + chrome
+tui.three_pane.focus_header: "─── FOKUS"
+tui.three_pane.log_header: "─── LOG"
+tui.three_pane.context_header: "─── KONTEKS"
+tui.three_pane.ctx_model: "  Model: "
+tui.three_pane.ctx_git: "  Git:   "
+tui.three_pane.ctx_ctx: "  CTX:   ["
+tui.three_pane.ctx_cost_local: "tempatan"
+tui.three_pane.ctx_cost_in_out: "in:%{input} out:%{output}"
+tui.three_pane.ctx_git_clean: "bersih"
+tui.three_pane.log_label_you: "  awak "
+tui.three_pane.log_label_ast: "  asi  "
+tui.three_pane.log_label_sys: "  sys  "
+tui.three_pane.keybinds: "  PageUp/PageDown skrol  ·  Ctrl+Tab tab  ·  Ctrl+R deck  ·  /quit keluar"
+
+# Journal layout chrome
+tui.journal.input_hint: " ▌ ctrl-k untuk palet arahan · ↑ sejarah · enter untuk hantar"
+tui.journal.thread_hint: "Ctrl+Tab kitar"
+tui.journal.thread_separator: " · "
+tui.journal.new_thread: " · +"
+tui.journal.header: " %{branch} · v%{version} · %{model}"
+tui.journal.you_label: "         awak "
+tui.journal.palette_query_prompt: " ❯ "
+tui.journal.palette_hint: " ↑↓ navigasi  Enter jalankan  Esc tutup"
+tui.journal.palette_active: "aktif"
+tui.journal.palette_background: "latar belakang"
+tui.journal.palette_recent: "prompt terkini"
+tui.journal.palette_switch_thread: "Tukar utas: %{name}"
+tui.journal.default_branch: "anvil"
+
+# Slash command palette presets (journal Ctrl-K)
+tui.palette.help: "tunjuk bantuan"
+tui.palette.clear: "kosongkan perbualan"
+tui.palette.model: "tukar model"
+tui.palette.layout: "tukar reka letak TUI"
+tui.palette.status: "status sesi"
+tui.palette.config: "konfigurasi"
+tui.palette.cost: "ringkasan kos token"
+tui.palette.exit: "keluar dari Anvil"

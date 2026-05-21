@@ -1,0 +1,517 @@
+# TUI header / footer
+footer.help: "Tab: সম্পূর্ণ  Enter: পাঠান  Ctrl+C: বাতিল  Ctrl+D: প্রস্থান  /help: কমান্ড"
+footer.configure: "↑↓: নেভিগেট  Enter: নির্বাচন  Esc: পিছনে  Ctrl+C: প্রস্থান"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Status / session
+status.model: "মডেল"
+status.provider: "প্রদানকারী"
+status.permission: "অনুমতি মোড"
+status.session: "সেশন"
+status.messages: "বার্তা"
+status.turns: "টার্ন"
+status.tokens_used: "ব্যবহৃত টোকেন"
+
+# Command descriptions (used in /help output)
+cmd.help.summary: "উপলব্ধ স্ল্যাশ কমান্ড দেখান"
+cmd.status.summary: "বর্তমান সেশন স্ট্যাটাস দেখান"
+cmd.compact.summary: "লোকাল সেশন ইতিহাস কম্প্যাক্ট করুন"
+cmd.model.summary: "সক্রিয় মডেল দেখান বা পরিবর্তন করুন"
+cmd.permissions.summary: "সক্রিয় অনুমতি মোড দেখান বা পরিবর্তন করুন"
+cmd.clear.summary: "একটি নতুন লোকাল সেশন শুরু করুন"
+cmd.cost.summary: "এই সেশনের জন্য সঞ্চিত টোকেন ব্যবহার দেখান"
+cmd.provider.summary: "প্রদানকারী এবং তাদের মডেল দেখান, পরিবর্তন করুন বা তালিকাভুক্ত করুন"
+cmd.login.summary: "লগইন করুন বা প্রদানকারীর শংসাপত্র নবায়ন করুন"
+cmd.resume.summary: "REPL-এ একটি সংরক্ষিত সেশন লোড করুন"
+cmd.config.summary: "Anvil কনফিগারেশন ফাইল পরিদর্শন করুন"
+cmd.memory.summary: "লোডকৃত Anvil মেমরি ফাইল পরিদর্শন করুন"
+cmd.init.summary: "এই রেপোর জন্য একটি প্রারম্ভিক ANVIL.md তৈরি করুন"
+cmd.diff.summary: "বর্তমান পরিবর্তনের জন্য git diff দেখান"
+cmd.version.summary: "CLI সংস্করণ এবং বিল্ড তথ্য দেখান"
+cmd.bughunter.summary: "সম্ভাব্য বাগের জন্য কোডবেস পরিদর্শন করুন"
+cmd.branch.summary: "git ব্রাঞ্চ তালিকাভুক্ত, তৈরি বা পরিবর্তন করুন"
+cmd.worktree.summary: "git worktree তালিকাভুক্ত, যোগ, অপসারণ বা প্রুন করুন"
+cmd.commit.summary: "একটি commit বার্তা তৈরি করুন এবং একটি git commit তৈরি করুন"
+cmd.pr.summary: "কথোপকথন থেকে একটি pull request খসড়া বা তৈরি করুন"
+cmd.issue.summary: "কথোপকথন থেকে একটি GitHub issue খসড়া বা তৈরি করুন"
+cmd.hub.summary: "AnvilHub মার্কেটপ্লেস থেকে প্যাকেজ ব্রাউজ এবং ইনস্টল করুন"
+cmd.language.summary: "প্রদর্শন ভাষা সেট করুন (en, de, es, fr, ja, zh-CN, ru)"
+
+# Error messages
+error.unknown_command: "অজানা কমান্ড: /%{name}"
+error.missing_argument: "/%{cmd}-এর জন্য প্রয়োজনীয় আর্গুমেন্ট অনুপস্থিত"
+error.not_available_tui: "কমান্ডটি TUI মোডে উপলব্ধ নয়।"
+error.provider_not_found: "প্রদানকারী পাওয়া যায়নি: %{name}"
+error.hub_fetch_failed: "AnvilHub থেকে প্যাকেজ আনতে ব্যর্থ: %{reason}"
+error.hub_install_failed: "'%{name}' প্যাকেজ ইনস্টল করতে ব্যর্থ: %{reason}"
+error.hub_not_found: "প্যাকেজ পাওয়া যায়নি: %{name}"
+error.invalid_language: "অসমর্থিত ভাষা '%{lang}'। উপলব্ধ: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "কনফিগারেশন সংরক্ষণে ব্যর্থ: %{reason}"
+
+# Hub command messages
+hub.top_packages: "AnvilHub-এ শীর্ষ প্যাকেজ"
+hub.search_results: "\"%{query}\"-এর জন্য অনুসন্ধান ফলাফল"
+hub.no_results: "কোনো প্যাকেজ পাওয়া যায়নি।"
+hub.installing: "%{name} %{version} ইনস্টল হচ্ছে..."
+hub.installed: "%{name} %{version} %{path}-এ ইনস্টল হয়েছে"
+hub.downloads: "%{count} ডাউনলোড"
+hub.package_info: "প্যাকেজ: %{name} v%{version} %{author} দ্বারা"
+hub.package_type: "ধরন: %{type}"
+hub.package_desc: "বিবরণ: %{desc}"
+hub.usage_hint: |
+  Usage:
+    /hub                     Show top packages by category
+    /hub search <query>      Search all packages
+    /hub skills              Top skills
+    /hub plugins             Top plugins
+    /hub agents              Top agents
+    /hub themes              Top themes
+    /hub install <name>      Download and install a package
+    /hub info <name>         Show package details
+
+# Language command messages
+language.current: "বর্তমান ভাষা: %{lang}"
+language.changed: "ভাষা সেট করা হয়েছে: %{lang}"
+language.available: "উপলব্ধ ভাষা: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "ব্যবহার: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure menu labels
+configure.title: "Anvil কনফিগার করুন"
+configure.providers: "প্রদানকারী"
+configure.models: "মডেল"
+configure.context: "প্রসঙ্গ"
+configure.search: "অনুসন্ধান"
+configure.permissions: "অনুমতি"
+configure.display: "প্রদর্শন"
+configure.integrations: "একীকরণ"
+configure.language: "ভাষা"
+
+# Login/provider prompts
+login.prompt_provider: "লগইনের জন্য প্রদানকারী নির্বাচন করুন [anthropic/openai/ollama]: "
+login.success: "%{provider}-এর জন্য সফল লগইন।"
+login.failed: "লগইন ব্যর্থ: %{reason}"
+login.enter_api_key: "API কী লিখুন: "
+login.testing_connection: "%{host}-এর সাথে সংযোগ পরীক্ষা করা হচ্ছে..."
+login.connected: "সংযুক্ত"
+login.connection_failed: "সংযোগ করা যায়নি"
+
+# ─── Wizard — first-run setup ─────────────────────────────────────────────
+# Welcome card (alt-screen entry point)
+wizard.welcome.title: "Anvil v%{version}-এ স্বাগতম"
+wizard.welcome.tagline: "আপনার AI কোডিং সহযোগী যা সর্বত্র চলে — Anthropic, OpenAI, Ollama এবং আরও 32 প্রদানকারী।"
+wizard.welcome.kicker: "আসুন আপনাকে সেটআপ করি।"
+wizard.welcome.hint: "চালিয়ে যেতে Enter চাপুন · সেটআপ এড়িয়ে যেতে Esc"
+
+# Inline banner (stdin fallback path)
+wizard.banner.welcome: "⚒  Anvil v%{version}-এ স্বাগতম"
+wizard.banner.subtitle: "   Culpur Defense-এর AI-চালিত কোডিং সহকারী"
+wizard.banner.lets_setup: "   আসুন আপনাকে সেটআপ করি।"
+
+# Step headers
+wizard.step_header: "Step %{step} of %{total}: %{title}"
+wizard.step.vault_title: "Vault Setup (Credential Encryption)"
+wizard.step.ollama_title: "Ollama (Local AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Provider Priority & Default Model"
+wizard.step.tui_layout_title: "TUI Layout"
+wizard.step.tui_prefs_title: "TUI Preferences"
+
+# Language step (Phase A6, task #645)
+wizard.language.title: "আপনার ভাষা নির্বাচন করুন"
+wizard.language.body: "Anvil-এর TUI এবং প্রথম-রান উইজার্ড এই ভাষা ব্যবহার করবে। আপনি পরে /language দিয়ে বা /configure-এ এটি পরিবর্তন করতে পারেন।"
+wizard.language.continue: "চালিয়ে যান"
+wizard.language.skip: "এড়িয়ে যান"
+
+# Vault step
+wizard.vault.body_l1: "Anvil stores your API keys in an AES-256-GCM encrypted vault."
+wizard.vault.body_l2: "You set a master password now — it is never stored anywhere."
+wizard.vault.body_l3: "You will need to enter it once each time you start Anvil."
+wizard.vault.opt_setup: "[1] Set up encrypted vault (recommended)"
+wizard.vault.opt_skip: "[s] Skip — API keys will be stored in plaintext credentials.json"
+wizard.vault.skipping: "Skipping vault setup."
+wizard.vault.warn_plaintext: "Warning: API keys will be stored in plaintext."
+wizard.vault.tip_retry_setup: "Run /vault setup later to encrypt your credentials."
+wizard.vault.already_initialized: "Vault already initialized at ~/.anvil/vault/"
+wizard.vault.unlocking: "Unlocking for this session..."
+wizard.vault.prompt_master_password: "Master password: "
+wizard.vault.unlocked: "Vault unlocked."
+wizard.vault.not_yet_initialized: "Vault not yet initialized — that is unexpected."
+wizard.vault.unlock_failed: "Unlock failed: %{reason}"
+wizard.vault.continue_no_vault: "Continuing without vault — keys will be stored in plaintext."
+wizard.vault.prompt_set_password: "Set master password: "
+wizard.vault.prompt_confirm_password: "Confirm master password: "
+wizard.vault.empty_password: "Password must not be empty. Try again."
+wizard.vault.password_mismatch: "Passwords do not match. Try again."
+wizard.vault.created_and_unlocked: "Vault created and unlocked."
+wizard.vault.keys_encrypted_note: "API keys entered in this wizard will be stored encrypted."
+wizard.vault.created_session_lock_failed: "Vault created but session lock failed."
+wizard.vault.keys_plaintext_this_run: "Keys will be stored in plaintext this run."
+wizard.vault.setup_failed: "Vault setup failed: %{reason}"
+wizard.vault.continue_keys_plaintext: "Continuing without vault — keys stored in plaintext."
+
+# Ollama step
+wizard.ollama.body_l1: "Ollama runs AI models locally on your machine."
+wizard.ollama.body_l2: "No API key required for basic use."
+wizard.ollama.opt_default: "[1] Connect to Ollama (default: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Connect with custom URL"
+wizard.ollama.opt_apikey: "[3] Connect with API key"
+wizard.ollama.opt_skip: "[s] Skip"
+wizard.ollama.testing_connection: "Testing connection to %{url}... "
+wizard.ollama.connected: "connected"
+wizard.ollama.failed: "failed (%{reason})"
+wizard.ollama.available_models: "Available models:"
+wizard.ollama.start_hint: "Skipping Ollama — make sure Ollama is running: ollama serve"
+wizard.ollama.config_saved_retry: "Connection failed. Configuration saved; you can retry with `anvil login ollama`."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "could not verify (%{reason}) — saving anyway"
+wizard.ollama.skipping: "Skipping Ollama."
+
+# Anthropic step
+wizard.anthropic.body: "Anthropic provides Claude — the most capable AI assistant."
+wizard.anthropic.opt_oauth: "[1] Login with OAuth (recommended — opens browser)"
+wizard.anthropic.opt_apikey: "[2] Enter API key manually"
+wizard.anthropic.opt_skip: "[s] Skip"
+wizard.anthropic.oauth_complete: "Anthropic OAuth complete."
+wizard.anthropic.oauth_failed: "OAuth failed: %{reason}"
+wizard.anthropic.retry_hint: "You can retry later with: anvil login anthropic"
+wizard.anthropic.console_url: "Get your key at: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "No key entered, skipping Anthropic."
+wizard.anthropic.validating_key: "Validating key... "
+wizard.anthropic.valid: "valid"
+wizard.anthropic.could_not_verify: "could not verify — saving anyway"
+wizard.anthropic.skipping: "Skipping Anthropic."
+
+# OpenAI step
+wizard.openai.body: "OpenAI provides GPT models for coding and reasoning."
+wizard.openai.opt_apikey: "[1] Enter API key"
+wizard.openai.opt_skip: "[s] Skip"
+wizard.openai.console_url: "Get your key at: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "No key entered, skipping OpenAI."
+wizard.openai.validating_key: "Validating key... "
+wizard.openai.valid: "valid"
+wizard.openai.could_not_verify: "could not verify — saving anyway"
+wizard.openai.skipping: "Skipping OpenAI."
+
+# xAI step
+wizard.xai.body: "xAI provides Grok models."
+wizard.xai.opt_apikey: "[1] Enter API key"
+wizard.xai.opt_skip: "[s] Skip"
+wizard.xai.console_url: "Get your key at: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "No key entered, skipping xAI."
+wizard.xai.saved: "xAI API key saved."
+wizard.xai.skipping: "Skipping xAI."
+
+# Unknown choice fallback
+wizard.unknown_choice_skipping: "Unknown choice '%{choice}', skipping %{provider}."
+
+# Provider priority step
+wizard.priority.none_configured: "No providers configured."
+wizard.priority.configure_later: "You can configure providers later with: anvil login"
+wizard.priority.you_configured: "You configured: %{providers}"
+wizard.priority.set_order: "Set your provider priority (first = primary, others = failover):"
+wizard.priority.current_order: "Current order:"
+wizard.priority.opt_keep: "[1] Keep this order"
+wizard.priority.opt_reorder: "[2] Reorder (enter numbers: e.g., \"2,1\")"
+wizard.priority.prompt_new_order: "New order: "
+wizard.priority.could_not_parse: "Could not parse order, keeping original."
+wizard.priority.unknown_keep: "Unknown choice, keeping original order."
+
+# Thinking mode toggle
+wizard.thinking.title: "Enable Thinking Mode?"
+wizard.thinking.body_l1: "Some models (Qwen3, Claude, o3) support extended thinking/reasoning."
+wizard.thinking.body_l2: "When enabled, the model shows its reasoning process before answering."
+wizard.thinking.opt_yes: "[1] Yes — enable thinking mode (recommended for coding)"
+wizard.thinking.opt_no: "[2] No  — standard responses only"
+wizard.thinking.enabled: "Thinking mode enabled. Toggle anytime with /think"
+wizard.thinking.disabled: "Thinking mode off. Toggle anytime with /think"
+
+# TUI layout step
+wizard.layout.opt_vertical: "[1] Vertical Split  (default)"
+wizard.layout.opt_classic: "[2] Classic"
+wizard.layout.opt_threepane: "[3] Three-Pane"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Show workspace tabs? [1] Yes (default)  [2] No"
+
+# TUI preferences step
+wizard.prefs.mouse_prompt: "Enable mouse capture? [1] Off (default, recommended)  [2] On"
+wizard.prefs.theme_prompt: "Theme? [1] Dark (default)  [2] Light  [3] Auto"
+wizard.prefs.permission_prompt: "Default permission mode? [1] ask (default)  [2] workspace-write  [3] danger-full-access"
+
+# Wizard prompts
+wizard.prompt.choice_default1: "Choice [1]: "
+wizard.prompt.choice: "Choice: "
+
+# Post-wizard summary banner
+wizard.summary.complete: "Setup complete!"
+wizard.summary.default_model: "Default model:  %{model}"
+wizard.summary.providers: "Providers:      %{providers}"
+wizard.summary.config_saved: "Config saved:   %{path}"
+wizard.summary.migration: "Migration:      %{summary}"
+wizard.summary.run_anvil: "Run `anvil` to start coding."
+wizard.summary.type_help: "Type `/help` for all commands."
+
+# Wizard warnings / errors
+wizard.warn.altscreen_unavailable: "Note: alt-screen wizard unavailable (%{reason})."
+wizard.warn.fallback_inline: "Falling back to inline / stdin prompts."
+wizard.warn.altscreen_modal: "Note: alt-screen unavailable (%{reason}); falling back to stdin prompts."
+wizard.warn.could_not_save_config: "Warning: could not save config: %{reason}"
+
+# Ollama install modal (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Step %{step} of %{total} — Local AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil can install + run Ollama directly so you have a local model that works offline. Want Anvil to manage Ollama for you?"
+wizard.ollama_modal.already_running: "Ollama is already running at %{url} with %{count} model(s):\n  %{models}\n\nUse this existing daemon?"
+wizard.ollama_modal.already_setup_title: "Ollama already set up ✓"
+wizard.ollama_modal.resume_label: "Resume — re-use the Ollama Anvil installed previously"
+wizard.ollama_modal.use_existing_label: "Use the system Ollama Anvil detected"
+wizard.ollama_modal.install_label: "Install Ollama now (Anvil downloads + manages it) — recommended"
+wizard.ollama_modal.title_local_ai: "Local AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "I'll handle Ollama myself"
+wizard.ollama_modal.choice_skip: "Skip — no local AI"
+wizard.ollama_modal.choice_later: "Maybe later"
+wizard.ollama_modal.use_existing_title: "Use existing Ollama"
+wizard.ollama_modal.use_existing_body: "Default Ollama URL: %{url}\nDaemon: %{status}\n\nUse /ollama setup later if you need a different URL."
+wizard.ollama_modal.status_reachable: "reachable"
+wizard.ollama_modal.status_not_reachable: "NOT reachable — start it before sending a message"
+wizard.ollama_modal.install_failed_title: "Install failed"
+wizard.ollama_modal.install_failed_body: "Could not install Ollama:\n  %{reason}\n\nRetry from /ollama setup later, or pick another option."
+wizard.ollama_modal.already_installed_title: "Ollama binary already installed ✓"
+wizard.ollama_modal.already_installed_body: "Found %{path} from a prior install."
+
+# Ollama fit labels
+wizard.ollama_fit.recommended: "Recommended"
+wizard.ollama_fit.fits: "Fits"
+wizard.ollama_fit.tight: "Tight"
+wizard.ollama_fit.too_big: "Too big — will OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — best general coding (~4.7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — small + fast (~2.0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — works on 8 GB RAM (~1.0 GB)"
+
+# ─── TUI — modal labels ───────────────────────────────────────────────────
+tui.modal.permission_required: " অনুমতি প্রয়োজন "
+tui.modal.edit_lines: "লাইন সম্পাদনা করুন"
+tui.modal.edit_key_prompt: "%{key} সম্পাদনা করুন:"
+tui.modal.files_changed: "এই টার্নে পরিবর্তিত ফাইল: +%{added} −%{removed} (সম্পূর্ণ unified diff-এর জন্য /diff চালান)"
+
+# ─── Commands — voice / collab / docker / k8s / iac / deps ────────────────
+cmd.docker.usage: |
+  Usage:
+    /docker ps                   List running containers
+    /docker logs <container>     Show last 50 lines of container logs
+    /docker compose              Show docker-compose services (if present)
+    /docker build                Build image from Dockerfile in current directory
+cmd.docker.logs_usage: "Usage: /docker logs <container>"
+cmd.docker.unknown_sub: "Unknown docker sub-command: %{sub}\nRun `/docker help` for usage."
+
+cmd.voice.start: |
+  Voice input — coming soon
+
+  Voice capture requires microphone access and a speech-to-text backend.
+  Planned: /voice start  ->  capture mic input and inject as a prompt.
+cmd.voice.stop: |
+  Voice input — coming soon
+
+  No active voice session to stop.
+cmd.voice.help: |
+  Voice input (coming soon)
+
+  Commands:
+    /voice start   Begin capturing microphone input
+    /voice stop    Stop capturing and submit
+
+  Requires a local speech-to-text engine (e.g. whisper.cpp).
+cmd.voice.unknown_sub: "Unknown /voice sub-command: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Collaboration — coming soon
+
+  Planned: /collab share  ->  generate a shareable session ID.
+  This feature is reserved for a future release.
+cmd.collab.join: |
+  Collaboration — coming soon
+
+  Usage: /collab join <session-id>
+  This feature is reserved for a future release.
+cmd.collab.help: |
+  Collaboration (coming soon)
+
+  Commands:
+    /collab share          Share this session (generates an invite ID)
+    /collab join <id>      Join another user's shared session
+
+  Requires an AnvilHub account. Watch the changelog for availability.
+cmd.collab.unknown_sub: "Unknown /collab sub-command: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Usage:
+    /k8s pods                   List pods in current namespace
+    /k8s logs <pod>             Tail last 50 lines of pod logs
+    /k8s apply <file>           Apply a manifest with kubectl
+    /k8s describe <resource>    Describe a resource
+cmd.k8s.kubectl_missing: "kubectl not found in PATH. Install it from https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Usage: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Usage: /k8s apply <file>"
+cmd.k8s.describe_usage: "Usage: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Unknown /k8s sub-command: %{args}\nRun `/k8s help` for usage."
+
+cmd.iac.usage: |
+  Usage:
+    /iac plan       Run terraform/tofu plan
+    /iac apply      Run terraform/tofu apply
+    /iac validate   Validate configuration files
+    /iac drift      Detect infrastructure drift (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: in-TUI confirmation modal did not resolve. Please retry — or run `anvil --print /iac apply` from a regular shell to use the CLI confirmation prompt instead."
+cmd.iac.no_terraform: "Neither 'tofu' nor 'terraform' found in PATH.\nInstall OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "This will apply changes to your infrastructure. Continue? (y/N) "
+cmd.iac.cancelled: "Apply cancelled."
+cmd.iac.unknown_sub: "Unknown /iac sub-command: %{sub}\nRun `/iac help` for usage."
+cmd.iac.no_binary_for_apply: "No terraform/tofu binary found in PATH. Install OpenTofu before applying."
+cmd.iac.confirm_body_with_plan: "This will apply changes to your infrastructure.\n\n%{plan}\n\nReview the plan carefully before confirming."
+cmd.iac.confirm_body_generic: "This will apply changes to your infrastructure.\n\nReview the plan carefully before confirming."
+
+cmd.deps.usage: |
+  Usage:
+    /deps tree           Show dependency tree
+    /deps outdated       Show outdated dependencies
+    /deps audit          Security audit of dependencies
+    /deps why <pkg>      Explain why a dependency is included
+cmd.deps.no_package_manager: "No recognised package manager found."
+
+# Generic CLI labels reused across commands
+cli.no_pr_diff: "কোনো PR diff পাওয়া যায়নি। নিশ্চিত করুন gh ইনস্টল করা, প্রমাণীকৃত এবং বর্তমান শাখার জন্য একটি PR খোলা আছে।"
+
+# ─── TUI layouts — chrome strings (task #746) ─────────────────────────────
+# Strings rendered by the four layout renderers (classic, vertical_split,
+# three_pane, journal) plus the shared `common.rs` helpers. These are what
+# users see on EVERY frame, so they must follow rust_i18n::set_locale() as
+# soon as /language or the configure menu switches the locale.
+
+# Rail — left rail labels and section headers (vertical_split)
+tui.rail.sessions: "সেশন"
+tui.rail.agents: "এজেন্ট"
+tui.rail.agents_qualifier: "গ্লোবাল"
+tui.rail.status: "স্ট্যাটাস"
+tui.rail.status_qualifier: "সব ট্যাব"
+tui.rail.memory: "মেমরি"
+tui.rail.model: "মডেল"
+tui.rail.permissions: "অনুমতি"
+tui.rail.context: "প্রসঙ্গ"
+tui.rail.keybinds: "কী"
+tui.rail.build: "BUILD"
+tui.rail.none_active: "কোনোটি সক্রিয় নয়"
+tui.rail.deck_label: "DECK: %{mode}"
+tui.rail.on_tab: " %{name}-এ"
+
+# Status — bottom status footer + STATUS rail block
+tui.status.tab_count_one: "১টি ট্যাব"
+tui.status.tab_count_other: "%{count}টি ট্যাব"
+tui.status.perm_count_one: "১টি অনুমতি"
+tui.status.perm_count_other: "%{count}টি অনুমতি"
+tui.status.running: "চলছে"
+tui.status.pending: "অপেক্ষারত"
+tui.status.cost: "খরচ"
+tui.status.cost_included: "অন্তর্ভুক্ত"
+tui.status.cost_subscription: "সাবস্ক্রিপশন"
+tui.status.thinking: "ভাবছে"
+tui.status.thinking_yes: "হ্যাঁ"
+tui.status.thinking_no: "না"
+tui.status.session_block: "সেশন %{pct} · ব্লক %{minutes}মি"
+
+# Memory — 7-layer MEMORY block (rail + inline)
+tui.memory.working: "কর্মরত"
+tui.memory.working_val: "%{turns}ট / %{tokens}tok"
+tui.memory.episodic: "পর্বমূলক"
+tui.memory.episodic_sessions_one: "১টি সেশন"
+tui.memory.episodic_sessions_other: "%{count}টি সেশন"
+tui.memory.semantic: "শব্দার্থিক"
+tui.memory.semantic_val: "%{c}c · %{a}a"
+tui.memory.procedural: "প্রক্রিয়াগত"
+tui.memory.procedural_val: "%{s}s · %{p}p"
+tui.memory.reflective: "প্রতিফলনমূলক"
+tui.memory.reflective_daily_one: "১টি দৈনিক"
+tui.memory.reflective_daily_other: "%{count}টি দৈনিক"
+tui.memory.long_term: "দীর্ঘমেয়াদী"
+tui.memory.long_term_val_default: "L7/QMD"
+tui.memory.long_term_val_one: "L7/QMD (সক্রিয় · ১টি আর্কাইভ)"
+tui.memory.long_term_val_other: "L7/QMD (সক্রিয় · %{count}টি আর্কাইভ)"
+tui.memory.permission: "অনুমতি"
+tui.memory.permission_prior_one: "১টি পূর্ববর্তী"
+tui.memory.permission_prior_other: "%{count}টি পূর্ববর্তী"
+tui.memory.qmd: "qmd"
+tui.memory.qmd_active_one: "সক্রিয় · ১টি আর্কাইভ"
+tui.memory.qmd_active_other: "সক্রিয় · %{count}টি আর্কাইভ"
+tui.memory.qmd_latest: "qmd-সর্বশেষ"
+tui.memory.qmd_latest_val: "%{sid} (%{days}দিন আগে)"
+
+# Banner — HISTORICAL VIEW, update available, autocompact warnings
+tui.banner.historical_view: "─── ঐতিহাসিক দৃশ্য  (লাইভে ফিরে যেতে End চাপুন) "
+tui.banner.update_available_with_version: " ⬆ আপডেট উপলব্ধ  v%{version}"
+tui.banner.update_available_raw: " ⬆ %{message}"
+
+# Tab strip — hint shown to the right of the tab bar
+tui.tab.hint: "F2/F3 পরিবর্তন  Ctrl+T নতুন  Ctrl+W বন্ধ  /help"
+
+# Agent panel — title, count rollups, empty state
+tui.agent.title: " এজেন্ট (%{summary}) "
+tui.agent.running: "%{count} চলছে"
+tui.agent.completed: "%{count} সম্পন্ন"
+tui.agent.failed: "%{count} ব্যর্থ"
+
+# Tool / deck — no tool calls state, agent waiting
+tui.tool_card.no_tool_calls: "এখনো কোনো টুল কল নেই।"
+tui.deck.waiting: "অপেক্ষা করছে…"
+tui.deck.no_conversation: "এখনো কোনো কথোপকথন নেই। নীচে টাইপ করা শুরু করুন।"
+
+# Configure footer breadcrumb
+tui.configure.footer: "   ↑↓ নেভিগেট  Enter নির্বাচন  Esc পিছনে"
+
+# Footer queued indicator
+tui.footer.queued_count: "[%{count} সারিতে]"
+tui.footer.queued_preview: " • %{preview}"
+tui.footer.queued_more: " • +%{count} আরো"
+
+# Three-pane band headers + chrome
+tui.three_pane.focus_header: "─── ফোকাস"
+tui.three_pane.log_header: "─── লগ"
+tui.three_pane.context_header: "─── প্রসঙ্গ"
+tui.three_pane.ctx_model: "  মডেল: "
+tui.three_pane.ctx_git: "  Git:   "
+tui.three_pane.ctx_ctx: "  CTX:   ["
+tui.three_pane.ctx_cost_local: "লোকাল"
+tui.three_pane.ctx_cost_in_out: "in:%{input} out:%{output}"
+tui.three_pane.ctx_git_clean: "পরিষ্কার"
+tui.three_pane.log_label_you: "  আপনি "
+tui.three_pane.log_label_ast: "  সহা  "
+tui.three_pane.log_label_sys: "  সিস "
+tui.three_pane.keybinds: "  PageUp/PageDown স্ক্রল  ·  Ctrl+Tab ট্যাব  ·  Ctrl+R deck  ·  /quit প্রস্থান"
+
+# Journal layout chrome
+tui.journal.input_hint: " ▌ কমান্ড প্যালেটের জন্য ctrl-k · ↑ ইতিহাস · পাঠাতে enter"
+tui.journal.thread_hint: "Ctrl+Tab চক্র"
+tui.journal.thread_separator: " · "
+tui.journal.new_thread: " · +"
+tui.journal.header: " %{branch} · v%{version} · %{model}"
+tui.journal.you_label: "         আপনি "
+tui.journal.palette_query_prompt: " ❯ "
+tui.journal.palette_hint: " ↑↓ নেভিগেট  Enter চালান  Esc বন্ধ"
+tui.journal.palette_active: "সক্রিয়"
+tui.journal.palette_background: "পটভূমি"
+tui.journal.palette_recent: "সাম্প্রতিক prompt"
+tui.journal.palette_switch_thread: "থ্রেড পরিবর্তন: %{name}"
+tui.journal.default_branch: "anvil"
+
+# Slash command palette presets (journal Ctrl-K)
+tui.palette.help: "সাহায্য দেখান"
+tui.palette.clear: "কথোপকথন পরিষ্কার করুন"
+tui.palette.model: "মডেল পরিবর্তন"
+tui.palette.layout: "TUI বিন্যাস পরিবর্তন"
+tui.palette.status: "সেশন স্ট্যাটাস"
+tui.palette.config: "কনফিগারেশন"
+tui.palette.cost: "টোকেন খরচ সারাংশ"
+tui.palette.exit: "Anvil থেকে প্রস্থান"
