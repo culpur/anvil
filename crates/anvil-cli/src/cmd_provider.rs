@@ -43,6 +43,7 @@ use commands::{
     format_agent_compose_empty_traits_usage, format_agent_compose_error,
     format_agent_compose_summary, format_traits_listing, AgentSubcommand,
 };
+use rust_i18n::t;
 use runtime::{format_package_detail, format_package_list, BlockingHubClient, pricing_for_model};
 
 use crate::{
@@ -299,13 +300,15 @@ impl LiveCli {
         match action {
             None | Some("") => {
                 // Show current provider and available providers
-                let mut out = format!("Current provider: {current_name}\n");
-                let _ = write!(out, "Current model: {}\n\n", self.model);
-                out.push_str("Available providers:\n");
+                let mut out = format!("{}\n", t!("slash.provider.current", name = current_name));
+                let _ = writeln!(out, "{}\n", t!("slash.provider.current_model", model = &self.model));
+                out.push_str(&t!("slash.provider.available_header"));
+                out.push('\n');
                 out.push_str("  anthropic  — Claude models (claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5)\n");
                 out.push_str("  openai     — GPT/o-series (gpt-5.4-mini, gpt-5, o3, o4-mini, …)\n");
                 out.push_str("  ollama     — Local models (llama3.2, mistral, qwen, gemma, etc.)\n\n");
-                out.push_str("Usage:\n");
+                out.push_str(&t!("slash.provider.usage_header"));
+                out.push('\n');
                 out.push_str("  /provider list        — List models for current provider\n");
                 out.push_str("  /provider anthropic   — Switch to Anthropic\n");
                 out.push_str("  /provider openai      — Switch to OpenAI\n");
@@ -318,7 +321,7 @@ impl LiveCli {
             }
             Some("list" | "ls" | "models") => {
                 // List models for current provider
-                let mut out = format!("Models for {current_name}:\n\n");
+                let mut out = format!("{}\n\n", t!("slash.provider.models_for", name = current_name));
                 match current_kind {
                     ProviderKind::AnvilApi => {
                         // Try live API query first
@@ -384,7 +387,9 @@ impl LiveCli {
                                     }
                             }
                             _ => {
-                                out.push_str("  (Ollama not running — start with `ollama serve`)\n");
+                                out.push_str("  ");
+                                out.push_str(&t!("slash.provider.ollama_not_running"));
+                                out.push('\n');
                             }
                         }
                     }
@@ -435,17 +440,17 @@ impl LiveCli {
                     "ollama" | "local" => ("llama3.2", "Ollama"),
                     "xai" | "grok" => ("grok", "xAI"),
                     other => {
-                        return format!("Unknown provider: {other}\nAvailable: anthropic, openai, gemini, ollama, xai");
+                        return format!(
+                            "{}\n{}",
+                            t!("slash.provider.unknown", name = other),
+                            t!("slash.provider.available_list"),
+                        );
                     }
                 };
 
                 match self.set_model(Some(new_model.to_string())) {
-                    Ok(_) => {
-                        format!("Switched to {name} ({new_model})")
-                    }
-                    Err(e) => {
-                        format!("Failed to switch provider: {e}")
-                    }
+                    Ok(_) => t!("slash.provider.switched_to", name = name, model = new_model).to_string(),
+                    Err(e) => t!("slash.provider.switch_failed", reason = e.to_string()).to_string(),
                 }
             }
         }

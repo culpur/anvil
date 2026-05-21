@@ -1834,3 +1834,313 @@ fn permission_prompt_late_resolve_after_tui_wins() {
         );
     }
 }
+
+// ─── Task #754: slash command output i18n regression gates ──────────────────
+//
+// `rust_i18n::set_locale` is a process-global atomic. The tests below must
+// serialise against every other test in this binary that asserts on
+// English chrome (which assumes locale=en). They run under their own
+// module-private Mutex; we restore locale to "en" on drop so a panic
+// can't leak the locale to subsequent tests.
+
+#[cfg(test)]
+mod slash_i18n_tests {
+    use super::*;
+    use super::super::utils::run_language_command_static;
+    use super::super::ollama_cmds::{format_models_table, format_running_models_table};
+
+    static SLASH_I18N_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct LocaleGuard;
+    impl Drop for LocaleGuard {
+        fn drop(&mut self) {
+            rust_i18n::set_locale("en");
+        }
+    }
+
+    fn guarded<F: FnOnce()>(f: F) {
+        let _g = SLASH_I18N_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _restore = LocaleGuard;
+        f();
+    }
+
+    #[test]
+    fn cost_report_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let report = format_cost_report(runtime::TokenUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+            });
+            // The Japanese translation MUST NOT contain the English label.
+            assert!(
+                !report.contains("Cost"),
+                "Japanese cost report leaked English label 'Cost': {report}"
+            );
+            assert!(
+                !report.contains("Input tokens"),
+                "Japanese cost report leaked English label 'Input tokens': {report}"
+            );
+            // Numbers + identifiers stay verbatim — assert the value still
+            // appears so we know the report didn't render an empty stub.
+            assert!(report.contains("10"), "value missing: {report}");
+        });
+    }
+
+    #[test]
+    fn status_report_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let report = format_status_report(
+                "sonnet",
+                StatusUsage {
+                    message_count: 7,
+                    turns: 3,
+                    latest: runtime::TokenUsage::default(),
+                    cumulative: runtime::TokenUsage::default(),
+                    estimated_tokens: 128,
+                },
+                "workspace-write",
+                &super::super::StatusContext {
+                    cwd: std::path::PathBuf::from("/tmp"),
+                    session_path: None,
+                    loaded_config_files: 1,
+                    discovered_config_files: 1,
+                    memory_file_count: 0,
+                    project_root: None,
+                    git_branch: None,
+                },
+            );
+            // The English header labels MUST NOT appear.
+            assert!(!report.contains("Session\n"), "leaked 'Session' label: {report}");
+            assert!(!report.contains("Workspace\n"), "leaked 'Workspace' label: {report}");
+            // Identifier (`sonnet`) is preserved verbatim by design.
+            assert!(report.contains("sonnet"), "value missing: {report}");
+        });
+    }
+
+    #[test]
+    fn model_report_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let report = format_model_report("opus", 5, 2);
+            assert!(!report.contains("Model\n"), "leaked English 'Model' header: {report}");
+            assert!(!report.contains("Routing"), "leaked English 'Routing' header: {report}");
+            assert!(report.contains("opus"), "value missing: {report}");
+        });
+    }
+
+    #[test]
+    fn model_switch_report_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let report = format_model_switch_report("sonnet", "opus", 9);
+            assert!(!report.contains("Model updated"), "leaked English: {report}");
+            assert!(!report.contains("Previous"), "leaked English 'Previous': {report}");
+            assert!(report.contains("opus"), "value missing: {report}");
+            assert!(report.contains("sonnet"), "previous value missing: {report}");
+        });
+    }
+
+    #[test]
+    fn language_command_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            // Pass an unsupported code so we hit the error branch
+            // without touching the on-disk config (would call set_locale
+            // back through save_language).
+            let output = run_language_command_static(Some("xx_INVALID"));
+            assert!(
+                !output.contains("Unsupported language"),
+                "leaked English: {output}"
+            );
+            // The invalid code must round-trip in the message.
+            assert!(output.contains("xx_INVALID"), "value missing: {output}");
+        });
+    }
+
+    #[test]
+    fn ollama_list_empty_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let s = format_models_table(&[]);
+            assert!(
+                !s.contains("No Ollama models installed"),
+                "leaked English: {s}"
+            );
+        });
+    }
+
+    #[test]
+    fn ollama_ps_empty_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let s = format_running_models_table(&[]);
+            assert!(
+                !s.contains("No Ollama models currently loaded"),
+                "leaked English: {s}"
+            );
+        });
+    }
+
+    #[test]
+    fn heal_report_translates_to_japanese() {
+        guarded(|| {
+            use crate::health::report::{ProbeReport, ProbeResult, Component};
+            rust_i18n::set_locale("ja");
+            let report = ProbeReport::new(
+                vec![ProbeResult::healthy(Component::Config, 5)],
+                5,
+            );
+            let s = report.render_cli();
+            assert!(
+                !s.contains("Anvil health check"),
+                "leaked English 'Anvil health check': {s}"
+            );
+            assert!(
+                !s.contains("All systems healthy"),
+                "leaked English verdict: {s}"
+            );
+        });
+    }
+
+    #[test]
+    fn help_report_translates_to_japanese() {
+        guarded(|| {
+            rust_i18n::set_locale("ja");
+            let s = render_repl_help();
+            assert!(
+                !s.contains("Interactive REPL"),
+                "leaked English 'Interactive REPL': {s}"
+            );
+            // The slash-command help block (render_slash_command_help) is
+            // appended verbatim from the commands crate — that block is
+            // covered by a separate task; here we just verify the REPL
+            // header has been translated.
+        });
+    }
+
+    #[test]
+    fn en_locale_preserves_english_assertions() {
+        // Sanity gate: when locale is "en" (default), the i18n wiring
+        // must produce the same English strings the unit tests above
+        // assert against — i.e. our keys+values match the legacy text.
+        guarded(|| {
+            rust_i18n::set_locale("en");
+            let cost = format_cost_report(runtime::TokenUsage {
+                input_tokens: 20,
+                output_tokens: 8,
+                cache_creation_input_tokens: 3,
+                cache_read_input_tokens: 1,
+            });
+            assert!(cost.contains("Cost"));
+            assert!(cost.contains("Input tokens     20"));
+            assert!(cost.contains("Total tokens     32"));
+        });
+    }
+
+    // ── Drift gate: every t!("slash.*") key referenced in handler code
+    //    exists in locales/en.yml. ───────────────────────────────────────
+    #[test]
+    fn every_slash_locale_key_referenced_exists_in_en_yml() {
+        // Read the en.yml file once.
+        let yml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../locales/en.yml");
+        let en_yml = std::fs::read_to_string(&yml_path)
+            .expect("locales/en.yml must be readable");
+        // Source roots we want to scan for t!("slash.*") references.
+        let roots = [
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        ];
+        let key_pat = regex_lite_slash_keys();
+        let mut referenced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for root in &roots {
+            walk_rust_files(root, &mut |path| {
+                if let Ok(body) = std::fs::read_to_string(path) {
+                    for key in key_pat(&body) {
+                        referenced.insert(key);
+                    }
+                }
+            });
+        }
+        let mut missing = Vec::new();
+        for key in &referenced {
+            // The match is "<key>:" (start of line, possibly with leading
+            // whitespace).  We test by looking for "\n<key>:" or starting
+            // at byte 0 with "<key>:".
+            let needle1 = format!("\n{key}:");
+            let needle2 = format!("{key}:");
+            if !en_yml.contains(&needle1) && !en_yml.starts_with(&needle2) {
+                missing.push(key.clone());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "t!(\"slash.*\") keys referenced in source but missing from \
+             locales/en.yml:\n{}",
+            missing.join("\n"),
+        );
+        // Sanity: we found a non-trivial number of keys (regression detector
+        // in case the scanner stops matching).
+        assert!(
+            referenced.len() >= 10,
+            "scan found suspiciously few slash.* keys ({}); \
+             check the regex pattern",
+            referenced.len(),
+        );
+    }
+
+    /// Tiny regex-free scanner that extracts `slash.<word.path>` keys from
+    /// `t!("slash.foo.bar"...)` invocations.  Avoids a regex dependency.
+    fn regex_lite_slash_keys() -> impl Fn(&str) -> Vec<String> {
+        |body: &str| {
+            let mut out = Vec::new();
+            let bytes = body.as_bytes();
+            let needle = b"t!(\"slash.";
+            let mut i = 0;
+            while i + needle.len() < bytes.len() {
+                if &bytes[i..i + needle.len()] == needle {
+                    let start = i + 3; // skip `t!(`
+                    let quote_start = start + 1; // after the opening `"`
+                    let mut j = quote_start;
+                    while j < bytes.len() && bytes[j] != b'"' {
+                        j += 1;
+                    }
+                    if j < bytes.len() {
+                        let key = &body[quote_start..j];
+                        if !key.is_empty() {
+                            out.push(key.to_string());
+                        }
+                    }
+                    i = j + 1;
+                } else {
+                    i += 1;
+                }
+            }
+            out
+        }
+    }
+
+    fn walk_rust_files<F: FnMut(&std::path::Path)>(root: &std::path::Path, visit: &mut F) {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk_rust_files(&path, visit);
+                } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    // Skip this tests.rs file — it contains example keys
+                    // inside comments ("slash.*", "slash.foo.bar") that
+                    // are scanner artifacts, not real references.
+                    if path.file_name().and_then(|s| s.to_str()) == Some("tests.rs") {
+                        continue;
+                    }
+                    visit(&path);
+                }
+            }
+        }
+    }
+}

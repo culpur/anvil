@@ -30,6 +30,7 @@ use api::{
     ModelMeta, ModelMetaError,
     ollama_tune::tuner::{tune, KvCacheType, OllamaOptions, Policy, Reasoning, TuneError, TuneResult, UserPolicy},
 };
+use rust_i18n::t;
 use runtime::ollama_tune::hw::{detect_cached, HardwareProfile, GpuKind};
 
 const GIB_F64: f64 = (1024 * 1024 * 1024) as f64;
@@ -206,7 +207,7 @@ fn valid_keys_block() -> String {
 
 fn cmd_option(args: &[&str], current_model: &str, config: &mut OllamaConfig) -> String {
     if current_model.is_empty() {
-        return "No current model selected. Set one with /model <name> first.".to_string();
+        return t!("slash.ollama.no_current_model").to_string();
     }
     match args.len() {
         0 => format!(
@@ -572,21 +573,22 @@ pub fn run_ollama_command_with<D: OllamaDaemon>(
         "ps" => cmd_ps(daemon),
         "show" => {
             if rest.is_empty() {
-                "Usage: /ollama show <model>".to_string()
+                t!("slash.ollama.usage_show").to_string()
             } else {
                 cmd_show(daemon, rest, config)
             }
         }
         "tune" => {
             if rest.is_empty() {
-                "Usage: /ollama tune <model>".to_string()
+                t!("slash.ollama.usage_tune").to_string()
             } else {
                 cmd_tune(daemon, rest, hw, policy)
             }
         }
         other => format!(
-            "Unknown /ollama sub-command: {other}\n\n{}",
-            usage()
+            "{}\n\n{}",
+            t!("slash.ollama.unknown_sub", sub = other),
+            usage(),
         ),
     }
 }
@@ -666,7 +668,11 @@ fn cmd_tune<D: OllamaDaemon>(daemon: &D, model: &str, hw: &HardwareProfile, poli
 #[must_use]
 pub fn format_models_table(models: &[OllamaModel]) -> String {
     if models.is_empty() {
-        return "No Ollama models installed.\n\nInstall one with `ollama pull <model>`.".to_string();
+        return format!(
+            "{}\n\n{}",
+            t!("slash.ollama.no_models_installed"),
+            t!("slash.ollama.install_hint"),
+        );
     }
 
     // Header + rows
@@ -710,7 +716,7 @@ pub fn format_models_table(models: &[OllamaModel]) -> String {
 #[must_use]
 pub fn format_running_models_table(running: &[RunningModel]) -> String {
     if running.is_empty() {
-        return "No Ollama models currently loaded.".to_string();
+        return t!("slash.ollama.no_models_running").to_string();
     }
     let mut rows: Vec<[String; 3]> = Vec::with_capacity(running.len() + 1);
     rows.push([

@@ -13,6 +13,7 @@ use runtime::{
     load_system_prompt, ContentBlock, MemoryManager, MessageRole, Session, Theme, ConfigLoader, ConfigSource, ProjectContext,
 };
 use commands::{render_slash_command_help, suggest_slash_commands};
+use rust_i18n::t;
 use crate::tui::AnvilTui;
 use crate::providers::suggest_repl_commands;
 use crate::{
@@ -56,17 +57,20 @@ pub fn should_use_color(tui_active: bool) -> bool {
 }
 
 pub(crate) fn render_repl_help() -> String {
+    // Two-space indent + 19-char wide label + space + body so the column
+    // alignment matches the legacy hard-coded layout exactly.  Translators
+    // may exceed 19 chars; the format!() pad is a *minimum*, not a clip.
+    let kv = |label: &str, body: &str| format!("  {label:<21}{body}");
     [
-        "Interactive REPL".to_string(),
-        "  Quick start          Ask a task in plain English or use one of the core commands below."
-            .to_string(),
-        "  Core commands        /help · /status · /model · /permissions · /compact".to_string(),
-        "  Exit                 /exit or /quit".to_string(),
-        "  Vim mode             /vim toggles modal editing".to_string(),
-        "  History              Up/Down recalls previous prompts".to_string(),
-        "  Completion           Tab cycles slash command matches".to_string(),
-        "  Cancel               Ctrl-C clears input (or exits on an empty prompt)".to_string(),
-        "  Multiline            Shift+Enter or Ctrl+J inserts a newline".to_string(),
+        t!("slash.help.title").to_string(),
+        kv(&t!("slash.help.quick_start"), &t!("slash.help.quick_start_body")),
+        kv(&t!("slash.help.core_commands"), &t!("slash.help.core_commands_body")),
+        kv(&t!("slash.help.exit"), &t!("slash.help.exit_body")),
+        kv(&t!("slash.help.vim"), &t!("slash.help.vim_body")),
+        kv(&t!("slash.help.history"), &t!("slash.help.history_body")),
+        kv(&t!("slash.help.completion"), &t!("slash.help.completion_body")),
+        kv(&t!("slash.help.cancel"), &t!("slash.help.cancel_body")),
+        kv(&t!("slash.help.multiline"), &t!("slash.help.multiline_body")),
         String::new(),
         render_slash_command_help(),
     ]
@@ -332,33 +336,34 @@ pub(crate) fn save_language(code: &str) -> std::io::Result<()> {
 }
 
 pub(crate) fn run_language_command_static(lang: Option<&str>) -> String {
+    let supported_list = SUPPORTED_LANGUAGES.join(", ");
     let Some(lang) = lang else {
         let current = current_language_code();
         return format!(
-            "Language: {current}\nAvailable: {}\nUsage: /language <code>",
-            SUPPORTED_LANGUAGES.join(", ")
+            "{}\n{}\n{}",
+            t!("slash.language.current", lang = current),
+            t!("slash.language.available", list = supported_list),
+            t!("slash.language.usage"),
         );
     };
 
     let lang = lang.trim();
     if lang.is_empty() {
         return format!(
-            "Language: {}\nAvailable: {}\nUsage: /language <code>",
-            current_language_code(),
-            SUPPORTED_LANGUAGES.join(", ")
+            "{}\n{}\n{}",
+            t!("slash.language.current", lang = current_language_code()),
+            t!("slash.language.available", list = supported_list),
+            t!("slash.language.usage"),
         );
     }
 
     if !SUPPORTED_LANGUAGES.contains(&lang) {
-        return format!(
-            "Unsupported language '{lang}'. Available: {}",
-            SUPPORTED_LANGUAGES.join(", ")
-        );
+        return t!("slash.language.unsupported", lang = lang, list = supported_list).to_string();
     }
 
     match save_language(lang) {
-        Ok(()) => format!("Language set to: {lang}"),
-        Err(e) => format!("Failed to save language setting: {e}"),
+        Ok(()) => t!("slash.language.set", lang = lang).to_string(),
+        Err(e) => t!("slash.language.save_failed", reason = e.to_string()).to_string(),
     }
 }
 
@@ -677,56 +682,88 @@ pub(crate) fn format_status_report(
     permission_mode: &str,
     context: &StatusContext,
 ) -> String {
+    let activity_value = t!(
+        "slash.status.activity_value",
+        messages = usage.message_count,
+        turns = usage.turns,
+    );
+    let tokens_value = t!(
+        "slash.status.tokens_value",
+        est = usage.estimated_tokens,
+        latest = usage.latest.total_tokens(),
+        total = usage.cumulative.total_tokens(),
+    );
+    let unknown = t!("slash.status.unknown_value").to_string();
+    let live_repl = t!("slash.status.live_repl_value").to_string();
+    let config_files_value = t!(
+        "slash.status.config_files_value",
+        loaded = context.loaded_config_files,
+        total = context.discovered_config_files,
+    );
     [
         format!(
-            "Session
-  Model            {model}
-  Permissions      {permission_mode}
-  Activity         {} messages · {} turns
-  Tokens           est {} · latest {} · total {}",
-            usage.message_count,
-            usage.turns,
-            usage.estimated_tokens,
-            usage.latest.total_tokens(),
-            usage.cumulative.total_tokens(),
+            "{header}
+  {l_model:<17}{model}
+  {l_perm:<17}{permission_mode}
+  {l_act:<17}{activity_value}
+  {l_tok:<17}{tokens_value}",
+            header = t!("slash.status.session_header"),
+            l_model = t!("slash.status.model_label"),
+            l_perm = t!("slash.status.permissions_label"),
+            l_act = t!("slash.status.activity_label"),
+            l_tok = t!("slash.status.tokens_label"),
         ),
         format!(
-            "Usage
-  Cumulative input {}
-  Cumulative output {}
-  Cache create     {}
-  Cache read       {}",
+            "{header}
+  {l_in:<17}{}
+  {l_out:<17}{}
+  {l_cc:<17}{}
+  {l_cr:<17}{}",
             usage.cumulative.input_tokens,
             usage.cumulative.output_tokens,
             usage.cumulative.cache_creation_input_tokens,
             usage.cumulative.cache_read_input_tokens,
+            header = t!("slash.status.usage_header"),
+            l_in = t!("slash.status.cumulative_input"),
+            l_out = t!("slash.status.cumulative_output"),
+            l_cc = t!("slash.status.cache_create"),
+            l_cr = t!("slash.status.cache_read"),
         ),
         format!(
-            "Workspace
-  Folder           {}
-  Project root     {}
-  Git branch       {}
-  Session file     {}
-  Config files     loaded {}/{}
-  Memory files     {}
+            "{header}
+  {l_folder:<17}{}
+  {l_root:<17}{}
+  {l_branch:<17}{}
+  {l_session:<17}{}
+  {l_cfg:<17}{config_files_value}
+  {l_mem:<17}{}
 
-Next
-  /help            Browse commands
-  /session list    Inspect saved sessions
-  /diff            Review current workspace changes",
+{next_header}
+  {n_help}
+  {n_session}
+  {n_diff}",
             context.cwd.display(),
             context
                 .project_root
                 .as_ref()
-                .map_or_else(|| "unknown".to_string(), |path| path.display().to_string()),
-            context.git_branch.as_deref().unwrap_or("unknown"),
+                .map_or_else(|| unknown.clone(), |path| path.display().to_string()),
+            context.git_branch.as_deref().map_or_else(|| unknown.clone(), str::to_string),
             context.session_path.as_ref().map_or_else(
-                || "live-repl".to_string(),
+                || live_repl.clone(),
                 |path| path.display().to_string()
             ),
-            context.loaded_config_files,
-            context.discovered_config_files,
             context.memory_file_count,
+            header = t!("slash.status.workspace_header"),
+            l_folder = t!("slash.status.folder_label"),
+            l_root = t!("slash.status.project_root"),
+            l_branch = t!("slash.status.git_branch"),
+            l_session = t!("slash.status.session_file"),
+            l_cfg = t!("slash.status.config_files"),
+            l_mem = t!("slash.status.memory_files"),
+            next_header = t!("slash.status.next_header"),
+            n_help = t!("slash.status.next_help"),
+            n_session = t!("slash.status.next_session_list"),
+            n_diff = t!("slash.status.next_diff"),
         ),
     ]
     .join(

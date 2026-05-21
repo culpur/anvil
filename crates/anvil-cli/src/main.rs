@@ -150,6 +150,7 @@ use runtime::{
     PermissionMode, PolicyCheckError, QmdClient, Session, TaskManager, TokenUsage, UsageTracker,
 };
 use crossterm::terminal;
+use rust_i18n::t;
 use serde_json::json;
 use tools::GlobalToolRegistry;
 use tui::{AnvilTui, ConfigureAction, InFlightInterruption, ReadResult, TuiEvent, TuiSender};
@@ -1716,28 +1717,43 @@ pub(crate) struct StatusUsage {
 
 fn format_model_report(model: &str, message_count: usize, turns: u32) -> String {
     let provider = provider_display_name(detect_provider_kind(model));
+    let session_value = t!(
+        "slash.status.activity_value",
+        messages = message_count,
+        turns = turns,
+    );
     format!(
-        "Model
-  Current          {model}
-  Provider         {provider}
-  Session          {message_count} messages · {turns} turns
+        "{title}
+  {l_cur:<17}{model}
+  {l_prov:<17}{provider}
+  {l_sess:<17}{session_value}
 
-Aliases (Anthropic)
+{aliases_anth}
   opus             claude-opus-4-6
   sonnet           claude-sonnet-4-6
   haiku            claude-haiku-4-5-20251213
 
-Aliases (xAI)
+{aliases_xai}
   grok             grok-3
   grok-mini        grok-3-mini
 
-Routing (auto-detected by model name prefix)
+{routing}
   gpt-*, o1, o3, o4   OpenAI  (set OPENAI_API_KEY)
   llama*, mistral*    Ollama  (set OLLAMA_HOST or use default http://localhost:11434)
 
-Next
-  /model           Show the current model
-  /model <name>    Switch models for this REPL session"
+{next}
+  {n_show}
+  {n_switch}",
+        title = t!("slash.model.title"),
+        l_cur = t!("slash.model.current"),
+        l_prov = t!("slash.model.provider"),
+        l_sess = t!("slash.model.session"),
+        aliases_anth = t!("slash.model.aliases_anthropic"),
+        aliases_xai = t!("slash.model.aliases_xai"),
+        routing = t!("slash.model.routing"),
+        next = t!("slash.model.next"),
+        n_show = t!("slash.model.next_show"),
+        n_switch = t!("slash.model.next_switch"),
     )
 }
 
@@ -1747,17 +1763,25 @@ fn format_model_switch_report(previous: &str, next: &str, message_count: usize) 
     // next response. Claude Code shipped a similar warning in v2.1.108 —
     // it's a real footgun on long sessions where the user didn't realize
     // they just paid to re-tokenize everything. Surface it explicitly.
+    let preserved_value = t!("slash.model.preserved_messages", count = message_count);
     let mut report = format!(
-        "Model updated
-  Previous         {previous}
-  Current          {next}
-  Preserved        {message_count} messages
-  Tip              Existing conversation context stayed attached"
+        "{updated}
+  {l_prev:<17}{previous}
+  {l_cur:<17}{next}
+  {l_pre:<17}{preserved_value}
+  {l_tip:<17}{tip_body}",
+        updated = t!("slash.model.updated"),
+        l_prev = t!("slash.model.previous"),
+        l_cur = t!("slash.model.current"),
+        l_pre = t!("slash.model.preserved"),
+        l_tip = t!("slash.model.tip_label"),
+        tip_body = t!("slash.model.context_preserved"),
     );
     if message_count > 0 {
-        report.push_str(
-            "\n  Warning          Next response re-reads full history uncached (new model/provider)",
-        );
+        let warning_label = t!("slash.model.warning_label").to_string();
+        let warning_body = t!("slash.model.uncached_warning").to_string();
+        report.push('\n');
+        report.push_str(&format!("  {warning_label:<17}{warning_body}"));
     }
     report
 }
@@ -1824,21 +1848,30 @@ fn format_permissions_switch_report(previous: &str, next: &str) -> String {
 
 fn format_cost_report(usage: TokenUsage) -> String {
     format!(
-        "Cost
-  Input tokens     {}
-  Output tokens    {}
-  Cache create     {}
-  Cache read       {}
-  Total tokens     {}
+        "{title}
+  {l_in:<17}{in_v}
+  {l_out:<17}{out_v}
+  {l_cc:<17}{cc_v}
+  {l_cr:<17}{cr_v}
+  {l_total:<17}{total_v}
 
-Next
-  /status          See session + workspace context
-  /compact         Trim local history if the session is getting large",
-        usage.input_tokens,
-        usage.output_tokens,
-        usage.cache_creation_input_tokens,
-        usage.cache_read_input_tokens,
-        usage.total_tokens(),
+{next_header}
+  {n_status}
+  {n_compact}",
+        title = t!("slash.cost.title"),
+        l_in = t!("slash.cost.input_tokens"),
+        l_out = t!("slash.cost.output_tokens"),
+        l_cc = t!("slash.cost.cache_create"),
+        l_cr = t!("slash.cost.cache_read"),
+        l_total = t!("slash.cost.total_tokens"),
+        in_v = usage.input_tokens,
+        out_v = usage.output_tokens,
+        cc_v = usage.cache_creation_input_tokens,
+        cr_v = usage.cache_read_input_tokens,
+        total_v = usage.total_tokens(),
+        next_header = t!("slash.status.next_header"),
+        n_status = t!("slash.cost.next_status"),
+        n_compact = t!("slash.cost.next_compact"),
     )
 }
 
@@ -2049,7 +2082,7 @@ fn run_resume_command(
                 return Ok(ResumeCommandOutcome {
                     session: session.clone(),
                     message: Some(
-                        "clear: confirmation required; rerun with /clear --confirm".to_string(),
+                        t!("slash.clear.confirm_required").to_string(),
                     ),
                 });
             }
@@ -2057,10 +2090,10 @@ fn run_resume_command(
             cleared.save_to_path(session_path)?;
             Ok(ResumeCommandOutcome {
                 session: cleared,
-                message: Some(format!(
-                    "Cleared resumed session file {}.",
-                    session_path.display()
-                )),
+                message: Some(
+                    t!("slash.clear.resume_cleared", path = session_path.display().to_string())
+                        .to_string(),
+                ),
             })
         }
         SlashCommand::Rewind { target, summarize } => {
@@ -4623,9 +4656,9 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                 if matches!(trimmed, "/exit" | "/quit") {
                     let drained = cli.drain_all_in_flight_workers();
                     if drained > 0 {
-                        tui.push_system(format!(
-                            "Drained {drained} in-flight turn(s) before exit."
-                        ));
+                        tui.push_system(
+                            t!("slash.quit.drained_workers", count = drained).to_string(),
+                        );
                     }
                     cli.persist_session()?;
                     daily_exit_lines = cli.record_daily();
@@ -6574,7 +6607,9 @@ impl LiveCli {
                         }
                     }
                     Err(err) => {
-                        tui.push_system(format!("Model switch failed: {err}"));
+                        tui.push_system(
+                            t!("slash.model.switch_failed", reason = err.to_string()).to_string(),
+                        );
                     }
                 }
                 return Ok(false);
@@ -6925,7 +6960,15 @@ impl LiveCli {
             }
             SlashCommand::Cost => {
                 let c = self.active_runtime().usage().cumulative_usage();
-                (format!("Tokens: ↑{} ↓{} (total: {})", c.input_tokens, c.output_tokens, c.input_tokens + c.output_tokens), false)
+                (
+                    t!(
+                        "slash.cost.tokens_summary",
+                        input = c.input_tokens,
+                        output = c.output_tokens,
+                        total = c.input_tokens + c.output_tokens,
+                    ).to_string(),
+                    false,
+                )
             }
             SlashCommand::Version => {
                 (format!("Anvil CLI v{VERSION}\nBuild: {BUILD_TARGET} / {GIT_SHA}"), false)
@@ -7152,9 +7195,9 @@ impl LiveCli {
                     // Build a richer summary that pairs the canonical
                     // report with the workspace-clear flag.
                     let banner = if all_tabs {
-                        "Workspace cleared (all tabs)."
+                        t!("slash.clear.workspace_cleared_all_tabs").to_string()
                     } else {
-                        "Session cleared."
+                        t!("slash.clear.session_cleared").to_string()
                     };
                     (format!("{banner}\n{report}"), true)
                 } else {

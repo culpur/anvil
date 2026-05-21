@@ -318,8 +318,10 @@ impl ProbeReport {
     /// this is allowed to use plain strings (no TUI active in `--check`).
     #[must_use]
     pub fn render_cli(&self) -> String {
+        use rust_i18n::t;
         let mut out = String::new();
-        out.push_str("Anvil health check\n");
+        out.push_str(&t!("slash.heal.title"));
+        out.push('\n');
         out.push_str(&"─".repeat(60));
         out.push('\n');
         for probe in &self.probes {
@@ -343,15 +345,13 @@ impl ProbeReport {
         out.push_str(&"─".repeat(60));
         out.push('\n');
         let severity = self.severity();
-        match severity {
-            Severity::Green => out.push_str("  \x1b[1;32mAll systems healthy.\x1b[0m\n"),
-            Severity::Drift => out.push_str("  \x1b[1;33mDrift detected — repair recommended.\x1b[0m\n"),
-            Severity::Breakage => out.push_str("  \x1b[1;31mBreakage detected — repair required.\x1b[0m\n"),
-        }
-        out.push_str(&format!(
-            "  Sweep took {}ms.\n",
-            self.total_elapsed_ms
-        ));
+        let line = match severity {
+            Severity::Green => format!("  \x1b[1;32m{}\x1b[0m\n", t!("slash.heal.all_healthy")),
+            Severity::Drift => format!("  \x1b[1;33m{}\x1b[0m\n", t!("slash.heal.drift_detected")),
+            Severity::Breakage => format!("  \x1b[1;31m{}\x1b[0m\n", t!("slash.heal.breakage_detected")),
+        };
+        out.push_str(&line);
+        out.push_str(&format!("  {}\n", t!("slash.heal.sweep_took", ms = self.total_elapsed_ms)));
         out
     }
 }
