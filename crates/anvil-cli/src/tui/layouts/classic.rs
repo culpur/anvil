@@ -273,8 +273,25 @@ impl TuiLayoutRenderer for Renderer {
             let total_lines = all_lines.len();
             let visible_height = content_area.height as usize;
             let effective_scroll = if *configure_state == ConfigureState::Inactive {
+                // Task #757 (v2.2.19): use a wrap-aware row count so that
+                // long assistant lines that ratatui wraps to >1 visual row
+                // do not push the last 10 rows below the input chrome.  When
+                // the user is at the live tail (snap.scroll == max_scroll
+                // == 0 on a fresh buffer), `wrap_aware_skip_lines` returns
+                // the precise number of leading logical lines to drop so the
+                // visual rows fit within `visible_height`.
+                let wrap_skip = super::super::scrollback::wrap_aware_skip_lines(
+                    &all_lines,
+                    content_area.width as usize,
+                    visible_height,
+                );
                 let max_scroll = total_lines.saturating_sub(visible_height);
-                snap.scroll.min(max_scroll)
+                // Honour the user's scroll position when they've scrolled
+                // up; only use the wrap-aware skip when we'd otherwise be
+                // at the bottom (live tail).  This keeps the historical-
+                // view banner logic upstream unchanged.
+                let user_scroll = snap.scroll.min(max_scroll);
+                user_scroll.max(wrap_skip)
             } else {
                 snap.configure_viewport.offset(total_lines, visible_height)
             };

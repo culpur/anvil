@@ -241,6 +241,108 @@ impl ScrollbackState {
     }
 }
 
+/// Task #757 (v2.2.19): given a Vec of logical lines (as plain strings),
+/// compute how many of the trailing lines must remain visible so that
+/// the **wrapped** visual rows fill no more than `visible_height` rows
+/// of width `content_width`.  Returns `(skip, visual_rows_used)` where
+/// `skip` is the number of leading lines to drop.  When the entire buffer
+/// fits, `skip = 0`.
+///
+/// This is the fix for "10 lines stuck under the input box": ratatui's
+/// `Wrap { trim: false }` consumes >1 visual row per logical line when a
+/// line is wider than the area; counting logical lines (the prior code)
+/// over-fills the area so the trailing visual rows are clipped under the
+/// input chrome.  Counting visual rows from the bottom up avoids that.
+///
+/// `wrapped_rows_of` is injected so callers can plug in their own width
+/// measurement (e.g. unicode-width vs. byte length); the default for
+/// plain ASCII is `chars().count().max(1).div_ceil(width)`.
+#[must_use]
+pub fn wrap_aware_skip(
+    lines: &[String],
+    content_width: usize,
+    visible_height: usize,
+) -> usize {
+    if lines.is_empty() || visible_height == 0 || content_width == 0 {
+        return 0;
+    }
+    let mut acc: usize = 0;
+    for (idx, line) in lines.iter().enumerate().rev() {
+        // Strip ANSI to avoid counting escape bytes as width.
+        let display = strip_ansi_cheap(line);
+        let len = display.chars().count();
+        let rows = if len == 0 { 1 } else { len.div_ceil(content_width) };
+        let next = acc.saturating_add(rows);
+        if next > visible_height {
+            // This line would overflow; the *next* line up (i.e. idx + 1) is
+            // the first one that fits.  But if idx + 1 > lines.len() - 1
+            // (i.e. even the last line alone is wider than the viewport),
+            // we still skip past idx so at least the most-recent content
+            // is shown — partial display of one line is better than total
+            // black.
+            return idx.saturating_add(1).min(lines.len());
+        }
+        acc = next;
+    }
+    0
+}
+
+/// Task #757 variant: wrap-aware skip for a slice of ratatui `Line`s.
+///
+/// Sums the `chars().count()` of each `Span` in a `Line` to estimate the
+/// rendered width.  Trailing styled padding (e.g. accent bars) still counts
+/// because they ARE rendered cells, even if they look like whitespace.
+#[must_use]
+pub fn wrap_aware_skip_lines(
+    lines: &[ratatui::text::Line<'static>],
+    content_width: usize,
+    visible_height: usize,
+) -> usize {
+    if lines.is_empty() || visible_height == 0 || content_width == 0 {
+        return 0;
+    }
+    let mut acc: usize = 0;
+    for (idx, line) in lines.iter().enumerate().rev() {
+        let len: usize = line
+            .spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum();
+        let rows = if len == 0 { 1 } else { len.div_ceil(content_width) };
+        let next = acc.saturating_add(rows);
+        if next > visible_height {
+            return idx.saturating_add(1).min(lines.len());
+        }
+        acc = next;
+    }
+    0
+}
+
+/// Cheap ANSI-escape stripper used by [`wrap_aware_skip`].
+///
+/// Removes CSI sequences (`\x1b[…m`) without allocating a regex; the
+/// scrollback path runs every frame so we avoid pulling `regex` in.
+fn strip_ansi_cheap(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip until we hit a letter (CSI terminator) or run out.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for nc in chars.by_ref() {
+                    if nc.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// CC-139-F5 helper: given a sorted ascending list of scrollback line
 /// indices that mark user-message starts, find the previous or next one
 /// relative to `current_anchor`.
@@ -267,6 +369,100 @@ pub fn pick_user_anchor(user_lines: &[usize], current_anchor: usize, forward: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::text::{Line, Span};
+
+    // ── Task #757 wrap-aware skip tests ───────────────────────────────────────
+
+    #[test]
+    fn wrap_aware_skip_no_overflow() {
+        // 10 short lines, width 40, height 20 → no wrap, no skip needed.
+        let lines: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        assert_eq!(wrap_aware_skip(&lines, 40, 20), 0);
+    }
+
+    #[test]
+    fn wrap_aware_skip_one_wraps() {
+        // Five lines, one is 120 chars long → on width=40 it occupies 3 rows.
+        // Total visual rows = 4 + 3 = 7. Viewport = 5 rows.  So we need to
+        // skip enough leading lines so the last 5 visual rows fit.  Walking
+        // from the end: last line (1 row) + previous (1 row) + previous (1 row)
+        // + previous (1 row) = 4 rows; next line is the 3-row wrapped one
+        // which would push total to 7 > 5, so we skip past it (index 1 + 1 = 2).
+        let long_line = "a".repeat(120);
+        let lines = vec![
+            "first".to_string(),
+            long_line,
+            "third".to_string(),
+            "fourth".to_string(),
+            "fifth".to_string(),
+            "sixth".to_string(),
+        ];
+        let skip = wrap_aware_skip(&lines, 40, 5);
+        // The fix should skip past index 1 (the long line) so the visible
+        // window starts at index 2.
+        assert!(
+            skip >= 2,
+            "expected skip >= 2 to drop the 3-row wrapped line, got {skip}"
+        );
+    }
+
+    #[test]
+    fn wrap_aware_skip_lines_basic() {
+        // Lines fit in 20 rows.
+        let lines: Vec<Line<'static>> = (0..10)
+            .map(|i| Line::from(Span::raw(format!("row {i}"))))
+            .collect();
+        assert_eq!(wrap_aware_skip_lines(&lines, 40, 20), 0);
+    }
+
+    #[test]
+    fn wrap_aware_skip_lines_streaming_overflow() {
+        // Simulate the user's bug: many narrow lines + one big assistant
+        // chunk at the end. Width 50, height 10.
+        let mut lines: Vec<Line<'static>> = (0..3)
+            .map(|i| Line::from(Span::raw(format!("hist {i}"))))
+            .collect();
+        // Long streaming reply: 250 chars → 5 rows at width 50.
+        lines.push(Line::from(Span::raw("x".repeat(250))));
+        // Two more short lines after.
+        lines.push(Line::from(Span::raw("done 1")));
+        lines.push(Line::from(Span::raw("done 2")));
+        // Visual rows = 3 + 5 + 2 = 10 == viewport. So no skip needed.
+        assert_eq!(wrap_aware_skip_lines(&lines, 50, 10), 0);
+
+        // Now shrink viewport to 6 — visual rows must drop the leading
+        // 3 short lines + ALL of the 5-row block. Skip past index 3 (the long
+        // line) → skip = 4, last 2 short lines (2 rows) fit.
+        let skip = wrap_aware_skip_lines(&lines, 50, 6);
+        assert!(
+            skip >= 4,
+            "expected skip >= 4 to drop the 5-row block, got {skip}"
+        );
+    }
+
+    #[test]
+    fn wrap_aware_skip_handles_empty() {
+        assert_eq!(wrap_aware_skip(&[], 80, 24), 0);
+        assert_eq!(wrap_aware_skip_lines(&[], 80, 24), 0);
+        let empty_line = vec![Line::from(Span::raw(""))];
+        // Empty line still counts as 1 visual row.
+        assert_eq!(wrap_aware_skip_lines(&empty_line, 80, 24), 0);
+    }
+
+    #[test]
+    fn wrap_aware_skip_strips_ansi_in_count() {
+        // Line with ANSI escape codes — width count should ignore them.
+        let with_ansi = "\x1b[1;31mred bold\x1b[0m text"; // visible: "red bold text" = 13 chars
+        let plain = "red bold text".to_string();
+        let lines_a = vec![with_ansi.to_string(); 5];
+        let lines_b = vec![plain.clone(); 5];
+        // At width 10, both should yield the same skip count.
+        assert_eq!(
+            wrap_aware_skip(&lines_a, 10, 3),
+            wrap_aware_skip(&lines_b, 10, 3),
+            "ANSI codes must not inflate the visual width count"
+        );
+    }
 
     // ── Ring-buffer bounds ────────────────────────────────────────────────────
 

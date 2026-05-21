@@ -887,8 +887,17 @@ fn render_deck(
         let total_lines = all_lines.len();
         let visible_height = content_area.height as usize;
         let effective_scroll = if *configure_state == ConfigureState::Inactive {
+            // Task #757 (v2.2.19): wrap-aware skip prevents the streaming
+            // assistant's wrapped visual rows from being clipped under the
+            // input chrome.  See classic.rs for the full explanation.
+            let wrap_skip = super::super::scrollback::wrap_aware_skip_lines(
+                &all_lines,
+                content_area.width as usize,
+                visible_height,
+            );
             let max_scroll = total_lines.saturating_sub(visible_height);
-            snap.scroll.min(max_scroll)
+            let user_scroll = snap.scroll.min(max_scroll);
+            user_scroll.max(wrap_skip)
         } else {
             snap.configure_viewport.offset(total_lines, visible_height)
         };
