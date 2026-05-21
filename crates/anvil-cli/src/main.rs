@@ -1913,6 +1913,12 @@ fn resume_session(session_path: &Path, commands: &[String]) {
                     .unwrap_or("session")
                     .to_string()
             });
+        // Task #762: run startup hooks (vault unlock + OAuth refresh +
+        // Phase 0.5 self-heal) BEFORE entering the REPL so resumed
+        // sessions don't hit "saved OAuth token is expired" on their
+        // first turn.
+        run_startup_hooks(false);
+
         let cli_result = LiveCli::new(model, true, None, default_permission_mode())
             .and_then(|mut cli| {
                 cli.resume_from_session(session, resolved_id_for_cli, session_path.to_path_buf())?;
@@ -2667,6 +2673,11 @@ fn run_continue() -> Result<(), Box<dyn std::error::Error>> {
         message_count,
     );
 
+    // Task #762: run startup hooks (vault unlock + OAuth refresh + Phase
+    // 0.5 self-heal) BEFORE entering the REPL so resumed sessions don't
+    // hit "saved OAuth token is expired" on their first turn.
+    run_startup_hooks(false);
+
     if io::stdout().is_terminal() {
         run_repl_tui(cli)
     } else {
@@ -3376,6 +3387,51 @@ fn run_health_probe_in_alt_screen(
     }
 }
 
+/// Run the three startup hooks every REPL entry needs (#762).
+///
+/// All three were inlined inside `run_repl` originally, which meant
+/// `run_continue` and `--resume` entered the REPL skipping vault unlock,
+/// Phase 0.5 self-heal, AND — most importantly — the OAuth token
+/// validate-and-migrate path that #595/#597 wired up. A user who runs
+/// `anvil --resume <id>` after the in-TUI keep-alive ticker hasn't been
+/// running for a while sees `auth error: saved OAuth token is expired;
+/// runtime OAuth config is missing` and exits to the shell.
+///
+/// `wizard_vault_unlocked` is `true` only on the first-run path where the
+/// wizard already prompted for the master password; `--resume` and
+/// `--continue` always pass `false`.
+fn run_startup_hooks(wizard_vault_unlocked: bool) {
+    // Phase 0.5 — self-healing health check (#667, v2.2.18).
+    //
+    // Runs ONLY when the user has an existing install (config.json exists)
+    // and hasn't asked us to skip via --no-heal / ANVIL_SKIP_HEAL.  Fresh
+    // installs go through the wizard above; in that case we don't probe
+    // (nothing to heal yet).
+    if io::stdout().is_terminal()
+        && anvil_config_json_exists()
+        && env::var("ANVIL_SKIP_HEAL").is_err()
+    {
+        run_phase_0_5_health_check();
+    }
+
+    // Unlock the vault (or offer migration) once before the REPL starts.
+    //
+    // Task #643: when the wizard's Step 1 already set up + unlocked the
+    // vault, skip the startup unlock path entirely so the user does not
+    // see a second password prompt (zero-seam wizard → TUI handoff).
+    if !wizard_vault_unlocked {
+        startup_vault_init();
+    }
+
+    // Task #595: validate saved Anthropic OAuth credentials before
+    // entering the REPL so the user gets a clear actionable banner
+    // BEFORE they hit 401 on their first prompt. Also attempts a
+    // one-shot migration of half-broken credentials (empty scopes /
+    // missing expires_at) and refreshes near-expiry tokens so resumed
+    // sessions don't error out on stale OAuth.
+    validate_and_migrate_oauth_credentials_at_startup();
+}
+
 fn run_repl(
     model: String,
     allowed_tools: Option<AllowedToolSet>,
@@ -3409,39 +3465,10 @@ fn run_repl(
         (model, false)
     };
 
-    // Phase 0.5 — self-healing health check (#667, v2.2.18).
-    //
-    // Runs ONLY when the user has an existing install (config.json exists)
-    // and hasn't asked us to skip via --no-heal / ANVIL_SKIP_HEAL.  Fresh
-    // installs go through the wizard above; in that case we don't probe
-    // (nothing to heal yet).
-    if io::stdout().is_terminal()
-        && anvil_config_json_exists()
-        && env::var("ANVIL_SKIP_HEAL").is_err()
-    {
-        run_phase_0_5_health_check();
-    }
-
-    // Unlock the vault (or offer migration) once before the REPL starts.
-    //
-    // Task #643: when the wizard's Step 1 already set up + unlocked the
-    // vault, skip the startup unlock path entirely so the user does
-    // not see a second password prompt (zero-seam wizard → TUI
-    // handoff).  When the wizard did NOT run (returning user) we still
-    // go through `startup_vault_init` — Case B in #643 turns the
-    // inline rpassword loop there into an alt-screen PasswordModal so
-    // the prompt is itself flicker-free.
-    if !wizard_vault_unlocked {
-        startup_vault_init();
-    }
-
-    // Task #595: validate saved Anthropic OAuth credentials before entering
-    // the REPL so the user gets a clear actionable banner BEFORE they hit
-    // 401 on their first prompt.  Also attempts a one-shot migration of
-    // half-broken credentials (empty scopes / missing expires_at) so users
-    // with the v2.2.15/v2.2.16 broken credentials.json don't have to
-    // re-OAuth.
-    validate_and_migrate_oauth_credentials_at_startup();
+    // Task #762: three startup hooks run before EVERY REPL entry point
+    // (run_repl, run_continue, --resume).  Extracted into a shared helper
+    // so resumed sessions don't fall through with expired OAuth tokens.
+    run_startup_hooks(wizard_vault_unlocked);
 
     // Enforce the admin requirements policy (requirements.toml) before
     // entering the REPL.  A violation is a hard error: print it to stderr
