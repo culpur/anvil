@@ -4907,6 +4907,7 @@ pub(super) fn render_configure_menu(
             // entry, label = native name.  Order matches the constant
             // so the index from the enter-handler indexes both lists.
             const NATIVE_NAMES: &[(&str, &str)] = &[
+                // Tier 1
                 ("en", "English"),
                 ("es", "Español"),
                 ("zh-CN", "简体中文"),
@@ -4915,6 +4916,17 @@ pub(super) fn render_configure_menu(
                 ("ru", "Русский"),
                 ("ja", "日本語"),
                 ("de", "Deutsch"),
+                // Tier 2 (Arc G — task #710)
+                ("ko", "한국어"),
+                ("it", "Italiano"),
+                ("tr", "Türkçe"),
+                ("vi", "Tiếng Việt"),
+                ("pl", "Polski"),
+                ("id", "Bahasa Indonesia"),
+                ("nl", "Nederlands"),
+                ("sv", "Svenska"),
+                ("nb", "Norsk Bokmål"),
+                ("uk", "Українська"),
             ];
             for (i, (code, label)) in NATIVE_NAMES.iter().enumerate() {
                 let marker = if data.language == *code { " (current)" } else { "" };

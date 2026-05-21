@@ -1064,6 +1064,7 @@ where
     // table in lock-step with `utils::SUPPORTED_LANGUAGES` (drift gate
     // in tests).
     const NATIVE_NAMES: &[(&str, &str)] = &[
+        // Tier 1
         ("en", "English"),
         ("es", "Español"),
         ("zh-CN", "简体中文"),
@@ -1072,6 +1073,17 @@ where
         ("ru", "Русский"),
         ("ja", "日本語"),
         ("de", "Deutsch"),
+        // Tier 2 (Arc G — task #710)
+        ("ko", "한국어"),
+        ("it", "Italiano"),
+        ("tr", "Türkçe"),
+        ("vi", "Tiếng Việt"),
+        ("pl", "Polski"),
+        ("id", "Bahasa Indonesia"),
+        ("nl", "Nederlands"),
+        ("sv", "Svenska"),
+        ("nb", "Norsk Bokmål"),
+        ("uk", "Українська"),
     ];
 
     // Render the step banner (title + body explanation).
