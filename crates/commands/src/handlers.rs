@@ -3158,6 +3158,17 @@ fn memory_prune(arg: &str) -> String {
         // the non-dry-run path is intentionally a pointer (`/file-cache prune`
         // and `/cmd-cache prune` already exist for the real deletion path).
         "cache" => memory_prune_cache(dry_run),
+        // Task #732 — Layer 2 episodic prune with trash-bin safety net.
+        // Dry-run is the default; actual file moves require `--confirm`.
+        // Strip the leading `episodic` token before delegating so the
+        // episodic flag parser sees only flags (`--ttl <days>`, etc.).
+        "episodic" => {
+            let rest = arg
+                .strip_prefix("episodic")
+                .map(str::trim)
+                .unwrap_or("");
+            handle_memory_prune_episodic(rest)
+        }
         "" => {
             if dry_run {
                 memory_prune_legacy_dry_run()
@@ -3167,7 +3178,7 @@ fn memory_prune(arg: &str) -> String {
         }
         other => format!(
             "Unknown /memory prune target: {other}\n\
-             Usage: /memory prune [cache] [--dry-run]"
+             Usage: /memory prune [cache|episodic] [--dry-run]"
         ),
     }
 }
