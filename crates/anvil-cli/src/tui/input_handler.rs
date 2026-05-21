@@ -12,6 +12,7 @@ use super::AnvilTui;
 use super::ReadResult;
 use super::helpers::{next_char_boundary, prev_char_boundary};
 use super::redraw::DirtyRegions;
+use super::spinner_pump::classify_terminal_event;
 use super::state::CompletionPopup;
 use super::widgets::{check_clipboard_for_image, has_further_completions, update_completions};
 
@@ -230,7 +231,23 @@ impl AnvilTui {
                         }
                     }
                 }
-                _ => {}
+                // Task #716 (CC v2.1.145 parity): Resize / FocusGained /
+                // FocusLost arrive on the same crossterm queue as Key/
+                // Paste/Mouse. Without this arm they fell through to
+                // `_ => {}` and never woke the redraw queue — the
+                // spinner / elapsed-time looked frozen until the user
+                // pressed a key. Route them to the structural-redraw
+                // reason so commit_pending_redraw fires a full repaint
+                // on the soft path (no \x1b[2J strobe — see
+                // feedback-tui-flash-anti-pattern.md).
+                other => {
+                    if classify_terminal_event(&other).is_some() {
+                        self.redraw.request(DirtyRegions::ALL);
+                        self.request_redraw_reason(
+                            super::RedrawReason::TerminalStructural,
+                        );
+                    }
+                }
             }
         }
 

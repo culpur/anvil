@@ -33,6 +33,7 @@ pub(super) mod state;
 pub(super) mod widgets;
 pub(super) mod input_handler;
 pub(super) mod paste;
+pub(super) mod spinner_pump;
 
 // ─── Public re-exports ────────────────────────────────────────────────────────
 
@@ -381,6 +382,16 @@ pub enum RedrawReason {
     /// the soft `draw()` path per task #629; if you need a hard clear, use
     /// `TabSwitch` or `InlineOpReturn` explicitly.
     Other,
+    /// Task #716 (CC v2.1.145 parity): the terminal emitted a structural
+    /// event that ratatui doesn't auto-handle — `Resize`, `FocusGained`, or
+    /// `FocusLost`. Before #716 these arrived on the crossterm queue, were
+    /// silently consumed by the catch-all match arm, and never woke the
+    /// redraw queue — so the spinner and elapsed-time clock looked frozen
+    /// until the user pressed a key. Mapped to `DirtyRegions::ALL` (a
+    /// resize invalidates every cell anyway) but takes the SOFT redraw
+    /// path so we don't strobe Gnome Terminal with `\x1b[2J` writes per
+    /// the flash anti-pattern.
+    TerminalStructural,
 }
 
 /// One clickable region on the tab bar.
@@ -1253,6 +1264,10 @@ impl AnvilTui {
                 Some(RedrawReason::KeyEvent) => redraw::DirtyRegions::INPUT,
                 Some(RedrawReason::TextDeltaBatch) => redraw::DirtyRegions::SCROLLBACK,
                 Some(RedrawReason::Spinner) => redraw::DirtyRegions::SCROLLBACK,
+                // Task #716: terminal-structural events (resize, focus
+                // gain/loss) require a full repaint but stay on the soft
+                // path so they don't trigger an ANSI clear strobe.
+                Some(RedrawReason::TerminalStructural) => redraw::DirtyRegions::ALL,
                 // Task #629: `Other` and `None` reach this arm now (they
                 // used to take the hard path). They get SCROLLBACK instead
                 // of ALL so the layout renderers don't paint the
@@ -2528,7 +2543,20 @@ impl AnvilTui {
                         self.burst_tracker.reset();
                         paste::handle_paste(self, text);
                     }
-                    _ => {}
+                    // Task #716: Resize / FocusGained / FocusLost wake the
+                    // redraw queue independently of input events so the
+                    // spinner / elapsed-time don't freeze (CC v2.1.145
+                    // parity). The spinner's frame advance is timer-driven
+                    // (see SPINNER_TICK_INTERVAL below) — this arm only
+                    // ensures the next commit actually repaints.
+                    other => {
+                        if spinner_pump::classify_terminal_event(&other).is_some() {
+                            self.redraw.request(redraw::DirtyRegions::ALL);
+                            self.request_redraw_reason(
+                                RedrawReason::TerminalStructural,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -2755,7 +2783,20 @@ impl AnvilTui {
                         self.request_redraw_reason(RedrawReason::KeyEvent);
                         self.commit_pending_redraw()?;
                     }
-                    _ => {}
+                    // Task #716: same structural-event wake as the other
+                    // two wait loops — Resize / FocusGained / FocusLost
+                    // schedule a soft full-pane redraw so the spinner
+                    // and elapsed-time line refresh without waiting on a
+                    // keypress.
+                    other => {
+                        if spinner_pump::classify_terminal_event(&other).is_some() {
+                            self.redraw.request(redraw::DirtyRegions::ALL);
+                            self.request_redraw_reason(
+                                RedrawReason::TerminalStructural,
+                            );
+                            self.commit_pending_redraw()?;
+                        }
+                    }
                 }
             }
 
