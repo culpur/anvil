@@ -2645,4 +2645,109 @@ printf 'pwsh:%s' "$1"
         );
         assert_eq!(policy.active_mode(), PermissionMode::DangerFullAccess);
     }
+
+    // ── #724: /branch history recovery post-EnterWorktree ───────────────
+    //
+    // CC parity (v2.1.144-B10). After EnterWorktree mutates the process
+    // CWD, any command that resolves session storage as
+    // `<cwd>/.anvil/sessions/` would point at the (empty) worktree's
+    // sessions directory rather than the parent tree's — surfacing as
+    // "No conversation to branch" when /branch tries to fork the active
+    // conversation.
+    //
+    // The fix captures `original_sessions_dir` and `original_dir` on the
+    // WorktreeState at enter time. The test simulates the create-session
+    // → EnterWorktree → /branch flow:
+    //   1. Build a fake parent workspace with a real git repo + a
+    //      sessions/<id>.json file containing a non-empty conversation.
+    //   2. cd into the parent + call run_enter_worktree.
+    //   3. Assert worktree_ops::original_sessions_dir() resolves back to
+    //      the parent tree, so /branch can load the recorded history.
+    //   4. Load the session JSON from that path and confirm it carries
+    //      the messages we wrote in step 1.
+    #[test]
+    #[serial]
+    fn enter_worktree_preserves_session_origin_for_branch() {
+        use std::process::Command;
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Skip if git is not available — the worktree code shells out.
+        let git_ok = Command::new("git").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        if !git_ok {
+            eprintln!("[skip] git not available; #724 worktree test cannot run");
+            return;
+        }
+
+        let parent = temp_path("worktree-branch-parent");
+        fs::create_dir_all(&parent).expect("mkdir parent");
+        let original_cwd = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&parent).expect("cd parent");
+
+        // Initialise a minimal git repo (required by `git worktree add`).
+        let init = Command::new("git").args(["init", "--quiet", "--initial-branch=main"]).current_dir(&parent).output().expect("git init");
+        assert!(init.status.success(), "git init failed: {}", String::from_utf8_lossy(&init.stderr));
+        for (k, v) in [("user.name", "Anvil Test"), ("user.email", "test@anvil.local")] {
+            let _ = Command::new("git").args(["config", k, v]).current_dir(&parent).output();
+        }
+        fs::write(parent.join("README.md"), "init\n").expect("write README");
+        let _ = Command::new("git").args(["add", "README.md"]).current_dir(&parent).output();
+        let commit = Command::new("git").args(["commit", "--quiet", "-m", "init"]).current_dir(&parent).output().expect("git commit");
+        assert!(commit.status.success(), "git commit failed: {}", String::from_utf8_lossy(&commit.stderr));
+
+        // Step 1: simulate a session-with-history written by the parent tree.
+        let sessions_dir = parent.join(".anvil").join("sessions");
+        fs::create_dir_all(&sessions_dir).expect("mkdir sessions");
+        let session_path = sessions_dir.join("session-fixture.json");
+        let session_json = serde_json::json!({
+            "id": "session-fixture",
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+            ]
+        });
+        fs::write(&session_path, session_json.to_string()).expect("write session");
+
+        // Step 2: enter the worktree (CWD switches into the new branch).
+        let enter_json = execute_tool(
+            "EnterWorktree",
+            &json!({ "branch": "test-branch-task-724" }),
+        )
+        .expect("EnterWorktree should succeed");
+        let enter_value: serde_json::Value = serde_json::from_str(&enter_json).expect("json");
+        assert_eq!(enter_value["status"], "entered_worktree");
+        let new_cwd = std::env::current_dir().expect("cwd after enter");
+        assert_ne!(new_cwd, parent, "cwd should have moved into worktree");
+
+        // Step 3: the marker is recoverable post-switch.
+        let recovered = super::worktree_ops::original_sessions_dir()
+            .expect("original_sessions_dir must be Some inside a worktree");
+        assert_eq!(
+            recovered.canonicalize().ok(),
+            sessions_dir.canonicalize().ok(),
+            "/branch must resolve session storage against the ORIGINAL tree, not the worktree"
+        );
+
+        // Step 4: load the session from that path and assert non-empty history.
+        let loaded = fs::read_to_string(recovered.join("session-fixture.json"))
+            .expect("session file must be readable via recovered marker");
+        let loaded_value: serde_json::Value =
+            serde_json::from_str(&loaded).expect("session json must parse");
+        let messages = loaded_value["messages"].as_array().expect("messages array");
+        assert!(
+            messages.len() >= 2,
+            "/branch loaded an empty/truncated conversation post-worktree"
+        );
+
+        // Tear down: exit + delete worktree, restore CWD.
+        let _ = execute_tool("ExitWorktree", &json!({ "cleanup": true }));
+        assert!(
+            super::worktree_ops::original_sessions_dir().is_none(),
+            "ExitWorktree must clear the original-sessions-dir marker"
+        );
+
+        std::env::set_current_dir(&original_cwd).expect("restore cwd");
+        let _ = fs::remove_dir_all(parent);
+    }
 }
