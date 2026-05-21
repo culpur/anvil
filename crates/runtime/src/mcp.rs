@@ -200,6 +200,180 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&decoded).into_owned()
 }
 
+// ─── Task #725: MCP image fallback for unsupported MIME types ───────────────
+//
+// CC parity (v2.1.144-B17). When an MCP server returns image content with an
+// unsupported MIME (SVG, BMP, TIFF, AVIF, etc.) the conversation previously
+// aborted or silently dropped the block. This module disk-binds the raw bytes
+// and synthesizes a Text replacement that points at the saved file, so the
+// model gets a coherent context even for exotic MIMEs.
+//
+// The decision (passthrough vs disk-bind) is split out as a pure helper so
+// the caller in `anvil-cli` can log via `crate::tui::log_warning` without
+// pulling the TUI crate into runtime.
+
+/// Image MIME types that Anvil currently inlines through the provider's
+/// native image-block path. Everything else falls through to the disk-bind
+/// fallback in `fallback_unsupported_image_content`.
+///
+/// Source: Anthropic Messages API image content acceptance.
+pub const MCP_SUPPORTED_IMAGE_MIMES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+];
+
+/// Returns `true` iff the MIME string is one Anvil can inline directly into
+/// the conversation as an image content block. Case-insensitive on the MIME
+/// type; whitespace-tolerant.
+#[must_use]
+pub fn is_supported_image_mime(mime: &str) -> bool {
+    let trimmed = mime.trim().to_ascii_lowercase();
+    MCP_SUPPORTED_IMAGE_MIMES
+        .iter()
+        .any(|known| *known == trimmed)
+}
+
+/// Outcome of routing an unsupported MCP image MIME through the disk-bind
+/// fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpImageFallback {
+    /// On-disk path where the raw bytes now live. Caller embeds this in the
+    /// synthesized Text content block.
+    pub saved_path: std::path::PathBuf,
+    /// Human-readable Text content that replaces the broken Image block.
+    /// Designed to survive the round-trip into the model's tool-result
+    /// channel.
+    pub replacement_text: String,
+    /// Warning string the caller should pass to `crate::tui::log_warning`
+    /// (or stderr in headless mode). Already includes the MIME and path.
+    pub warning: String,
+}
+
+/// Decide the file extension for a saved MCP image fallback. Best-effort
+/// derivation from the MIME's subtype; falls back to `bin` so something
+/// always writes.
+#[must_use]
+pub fn mcp_image_fallback_extension(mime: &str) -> &'static str {
+    let lower = mime.trim().to_ascii_lowercase();
+    match lower.as_str() {
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        "image/avif" => "avif",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
+        _ => {
+            // Last-resort: pull the trailing token after the last "/" or "+",
+            // strip the "x-" prefix, and constrain to short ascii letters/digits.
+            let subtype = lower
+                .rsplit_once('/')
+                .map(|(_, st)| st)
+                .unwrap_or("bin")
+                .rsplit_once('+')
+                .map(|(_, st)| st)
+                .unwrap_or_else(|| {
+                    lower
+                        .rsplit_once('/')
+                        .map(|(_, st)| st)
+                        .unwrap_or("bin")
+                });
+            // Limit to safe characters; if anything weird slipped through,
+            // settle for "bin".
+            if !subtype.is_empty()
+                && subtype.len() <= 6
+                && subtype
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric())
+            {
+                // Leak intentionally: the set of MIME subtypes we'd accept is
+                // small enough this is fine. Most callers actually hit one of
+                // the explicit arms above. Tests pin the common cases.
+                Box::leak(subtype.to_string().into_boxed_str())
+            } else {
+                "bin"
+            }
+        }
+    }
+}
+
+/// Compute the default disk-bind root for MCP image fallbacks.
+///
+/// Returns `~/.anvil/mcp-images/` if HOME resolves cleanly and the parent
+/// `~/.anvil/` is writable; otherwise falls back to
+/// `std::env::temp_dir().join("anvil-mcp-images")`.
+pub fn mcp_image_fallback_root() -> std::path::PathBuf {
+    if let Some(home) = dirs_next::home_dir() {
+        let anvil_dir = home.join(".anvil");
+        let target = anvil_dir.join("mcp-images");
+        // Probe parent writability by trying to create the chain. If it
+        // succeeds we're good; if it fails we fall through to the temp dir.
+        if std::fs::create_dir_all(&target).is_ok() {
+            return target;
+        }
+    }
+    std::env::temp_dir().join("anvil-mcp-images")
+}
+
+/// Disk-bind the raw bytes for an unsupported MCP image MIME and return the
+/// synthesized Text replacement + warning.
+///
+/// The file is written at `<root>/<sha256-of-bytes>.<ext>`. Repeated calls
+/// for the same bytes return the same path (content-addressed; cheap idempotency).
+///
+/// Returns `Err` only when the filesystem refuses to write at all (root +
+/// fallback temp dir both fail). MIME / payload validation is the caller's
+/// responsibility; this function happily disk-binds any bytes you hand it.
+pub fn disk_bind_unsupported_image(
+    mime: &str,
+    raw_bytes: &[u8],
+    root_override: Option<&std::path::Path>,
+) -> std::io::Result<McpImageFallback> {
+    use sha2::{Digest, Sha256};
+
+    let root = match root_override {
+        Some(p) => p.to_path_buf(),
+        None => mcp_image_fallback_root(),
+    };
+    std::fs::create_dir_all(&root)?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(raw_bytes);
+    let digest = hasher.finalize();
+    let hex: String = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+
+    let ext = mcp_image_fallback_extension(mime);
+    let filename = format!("{hex}.{ext}");
+    let saved_path = root.join(&filename);
+
+    // Write idempotently — skip if the content-addressed file already exists.
+    if !saved_path.exists() {
+        std::fs::write(&saved_path, raw_bytes)?;
+    }
+
+    let replacement_text = format!(
+        "[image: {mime} ({} bytes) saved to {}]",
+        raw_bytes.len(),
+        saved_path.display()
+    );
+    let warning = format!(
+        "MCP image MIME `{mime}` is unsupported inline; saved {} bytes to {} (Text block substituted)",
+        raw_bytes.len(),
+        saved_path.display()
+    );
+
+    Ok(McpImageFallback {
+        saved_path,
+        replacement_text,
+        warning,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -299,5 +473,129 @@ mod tests {
             scoped_mcp_config_hash(&user),
             scoped_mcp_config_hash(&changed)
         );
+    }
+
+    // ── Task #725: MCP image fallback for unsupported MIME types ──────────────
+
+    use super::{
+        disk_bind_unsupported_image, is_supported_image_mime, mcp_image_fallback_extension,
+        MCP_SUPPORTED_IMAGE_MIMES,
+    };
+
+    #[test]
+    fn supported_mimes_pass_through() {
+        // All four supported MIMEs return true regardless of case + trim.
+        assert!(is_supported_image_mime("image/png"));
+        assert!(is_supported_image_mime("image/jpeg"));
+        assert!(is_supported_image_mime("image/gif"));
+        assert!(is_supported_image_mime("image/webp"));
+        assert!(is_supported_image_mime("  image/PNG  "));
+        // Spot-check the allowlist constant.
+        assert_eq!(MCP_SUPPORTED_IMAGE_MIMES.len(), 4);
+    }
+
+    #[test]
+    fn unsupported_mimes_rejected() {
+        // The MIMEs the CC parity audit explicitly calls out as broken.
+        assert!(!is_supported_image_mime("image/svg+xml"));
+        assert!(!is_supported_image_mime("image/bmp"));
+        assert!(!is_supported_image_mime("image/tiff"));
+        assert!(!is_supported_image_mime("image/avif"));
+        // Empty / nonsense MIMEs fail closed.
+        assert!(!is_supported_image_mime(""));
+        assert!(!is_supported_image_mime("text/plain"));
+    }
+
+    #[test]
+    fn fallback_extension_handles_common_unsupported_mimes() {
+        assert_eq!(mcp_image_fallback_extension("image/svg+xml"), "svg");
+        assert_eq!(mcp_image_fallback_extension("image/bmp"), "bmp");
+        assert_eq!(mcp_image_fallback_extension("image/tiff"), "tiff");
+        assert_eq!(mcp_image_fallback_extension("image/avif"), "avif");
+        assert_eq!(mcp_image_fallback_extension("image/heic"), "heic");
+        // Empty MIME falls back to "bin".
+        assert_eq!(mcp_image_fallback_extension(""), "bin");
+    }
+
+    /// Task #725 (CC v2.1.144-B17 parity) headline contract: when an MCP tool
+    /// returns image/svg+xml content, `disk_bind_unsupported_image`:
+    ///   (a) produces a Text-block replacement that references the saved path,
+    ///   (b) the file exists on disk at the expected path,
+    ///   (c) no error propagates to the caller.
+    #[test]
+    fn svg_image_is_disk_bound_and_returns_text_replacement() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "anvil-mcp-image-svg-test-{}",
+            std::process::id()
+        ));
+        // Clean slate.
+        let _ = std::fs::remove_dir_all(&tmp_root);
+
+        let svg_bytes = b"<svg xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10'/></svg>";
+
+        let fallback = disk_bind_unsupported_image("image/svg+xml", svg_bytes, Some(&tmp_root))
+            .expect("disk-bind must not propagate an error on a writable temp dir");
+
+        // (a) Replacement text is a Text block that references the saved path.
+        assert!(
+            fallback.replacement_text.contains("image/svg+xml"),
+            "replacement text must name the MIME: {}",
+            fallback.replacement_text
+        );
+        assert!(
+            fallback.replacement_text.contains(&fallback.saved_path.to_string_lossy().to_string()),
+            "replacement text must reference the saved path"
+        );
+
+        // (b) File exists on disk.
+        assert!(
+            fallback.saved_path.exists(),
+            "saved file must exist at {}",
+            fallback.saved_path.display()
+        );
+        let read_back = std::fs::read(&fallback.saved_path).expect("read back");
+        assert_eq!(read_back, svg_bytes, "saved bytes must round-trip");
+
+        // (b.1) File extension is `.svg` (not `.bin`).
+        assert_eq!(
+            fallback.saved_path.extension().and_then(|s| s.to_str()),
+            Some("svg")
+        );
+
+        // (c) The warning string is non-empty so the caller has something to
+        // pass to tui::log_warning. We don't assert exact text — only that it
+        // mentions the MIME and the path.
+        assert!(fallback.warning.contains("image/svg+xml"));
+        assert!(fallback.warning.contains(&fallback.saved_path.to_string_lossy().to_string()));
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    /// Identical bytes return the identical path on re-call (content-addressed).
+    /// This guards against an FD/disk leak if an MCP server emits the same
+    /// unsupported image repeatedly across turns.
+    #[test]
+    fn disk_bind_is_content_addressed_and_idempotent() {
+        let tmp_root = std::env::temp_dir().join(format!(
+            "anvil-mcp-image-idempotent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp_root);
+
+        let bytes = b"<svg/>";
+        let first = disk_bind_unsupported_image("image/svg+xml", bytes, Some(&tmp_root))
+            .expect("first disk-bind");
+        let second = disk_bind_unsupported_image("image/svg+xml", bytes, Some(&tmp_root))
+            .expect("second disk-bind");
+
+        assert_eq!(first.saved_path, second.saved_path);
+        // Only one file in the dir.
+        let entries: Vec<_> = std::fs::read_dir(&tmp_root)
+            .expect("read tmp_root")
+            .collect();
+        assert_eq!(entries.len(), 1, "idempotent disk-bind must produce one file");
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
     }
 }

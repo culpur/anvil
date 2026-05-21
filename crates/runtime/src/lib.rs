@@ -117,6 +117,9 @@ pub use hooks::{
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
     scoped_mcp_config_hash, unwrap_ccr_proxy_url,
+    // Task #725: MCP image fallback for unsupported MIME types.
+    disk_bind_unsupported_image, is_supported_image_mime, mcp_image_fallback_extension,
+    mcp_image_fallback_root, McpImageFallback, MCP_SUPPORTED_IMAGE_MIMES,
 };
 pub use mcp_client::{
     McpManagedProxyTransport, McpClientAuth, McpClientBootstrap, McpClientTransport,

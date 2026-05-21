@@ -1904,6 +1904,51 @@ impl CliToolExecutor {
                         .get("text")
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
+                } else if c.kind == "image" {
+                    // Task #725 (CC v2.1.144-B17 parity): when an MCP image
+                    // block carries an unsupported MIME (SVG / BMP / TIFF /
+                    // AVIF / ...) inlining would break the conversation. Disk-
+                    // bind the raw bytes to `~/.anvil/mcp-images/<sha256>.<ext>`
+                    // (or the temp dir if HOME is read-only) and replace the
+                    // block with a Text reference. Supported MIMEs (png/jpeg/
+                    // gif/webp) fall through to the existing JSON serialization
+                    // so the provider's native image-block path can pick them
+                    // up downstream.
+                    let mime = c
+                        .data
+                        .get("mimeType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if runtime::is_supported_image_mime(mime) {
+                        return serde_json::to_string(&c.data).ok();
+                    }
+                    let b64 = c
+                        .data
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    use base64::Engine as _;
+                    let raw = match base64::engine::general_purpose::STANDARD.decode(b64) {
+                        Ok(bytes) => bytes,
+                        Err(_) => {
+                            // Last-resort: keep the JSON payload so the model
+                            // still sees something rather than a hole.
+                            return serde_json::to_string(&c.data).ok();
+                        }
+                    };
+                    match runtime::disk_bind_unsupported_image(mime, &raw, None) {
+                        Ok(fallback) => {
+                            // Background log path; never println — TUI safety.
+                            crate::tui::log_warning(&fallback.warning);
+                            Some(fallback.replacement_text)
+                        }
+                        Err(err) => {
+                            crate::tui::log_warning(&format!(
+                                "MCP image fallback failed for MIME `{mime}`: {err}"
+                            ));
+                            serde_json::to_string(&c.data).ok()
+                        }
+                    }
                 } else {
                     serde_json::to_string(&c.data).ok()
                 }
