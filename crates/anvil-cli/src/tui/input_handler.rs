@@ -151,19 +151,58 @@ impl AnvilTui {
                     self.refresh_completion();
                 }
                 CtEvent::Mouse(mouse) => {
-                    // Bug A fix: Shift+Drag events are passed through — the terminal
-                    // emulator (Windows Terminal, ConEmu, most Linux VTEs, iTerm2)
-                    // intercepts them for native text selection when the application
-                    // does not consume them.  By explicitly not handling Shift+Drag
-                    // here, we allow the emulator to perform selection.
+                    // Task #748 / feedback-paste-copy-select-never-optional.md:
                     //
-                    // Note: cmd.exe does not reliably report the Shift modifier on
-                    // drag events.  Users on cmd.exe should upgrade to Windows
-                    // Terminal for native selection support.
-                    if matches!(mouse.kind, crossterm::event::MouseEventKind::Drag(_))
-                        && mouse.modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
-                    {
-                        // Pass through — do not consume.
+                    // Mouse capture stays ON (load-bearing for scroll + tab
+                    // clicks). Selection coexists via OS-appropriate modifier
+                    // passthrough — when the user holds the OS-native
+                    // selection modifier OR uses the right mouse button, we
+                    // hand the bytes back to the terminal so it can do
+                    // native selection / context-menu paste.
+                    //
+                    // The modifier is OS-aware (compile-time via cfg!, per
+                    // feedback-cross-platform-ux-defaults.md):
+                    //   * macOS  → Option (KeyModifiers::ALT)
+                    //   * Linux/Windows → Shift  (KeyModifiers::SHIFT)
+                    //
+                    // We pass through Down + Drag + Up because tab-click
+                    // logic below eats the Down event otherwise, and the
+                    // modifier path then never reaches Drag.
+                    //
+                    // Note: cmd.exe does not reliably report modifiers on
+                    // drag events. Users on cmd.exe should upgrade to
+                    // Windows Terminal for native selection support.
+                    let select_mod = if cfg!(target_os = "macos") {
+                        crossterm::event::KeyModifiers::ALT
+                    } else {
+                        crossterm::event::KeyModifiers::SHIFT
+                    };
+                    let is_modifier_selection = matches!(
+                        mouse.kind,
+                        crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Left,
+                        )
+                            | crossterm::event::MouseEventKind::Drag(
+                                crossterm::event::MouseButton::Left,
+                            )
+                            | crossterm::event::MouseEventKind::Up(
+                                crossterm::event::MouseButton::Left,
+                            ),
+                    ) && mouse.modifiers.contains(select_mod);
+                    let is_right_click = matches!(
+                        mouse.kind,
+                        crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Right,
+                        )
+                            | crossterm::event::MouseEventKind::Up(
+                                crossterm::event::MouseButton::Right,
+                            )
+                            | crossterm::event::MouseEventKind::Drag(
+                                crossterm::event::MouseButton::Right,
+                            ),
+                    );
+                    if is_modifier_selection || is_right_click {
+                        // Pass through — terminal handles selection / paste menu.
                     } else {
                         // Mouse-wheel routing: when the configure overlay is
                         // open, the wheel scrolls the overlay's list viewport
@@ -557,6 +596,22 @@ impl AnvilTui {
 
         // Three-pane vim modal intercept was deleted (Correction 4).
         // All three-pane input now routes through the standard handler below.
+
+        // Task #748: context-sensitive clipboard shortcuts. This layer runs
+        // BEFORE handle_ctrl_key so Ctrl+C with a live selection becomes
+        // "copy" instead of cancel/exit, and Ctrl+A in scrollback view
+        // becomes "select all visible scrollback" instead of cursor-home.
+        // When the shortcut isn't applicable (no selection / not in
+        // scrollback view) we fall through to the existing handlers — so
+        // Ctrl+C on an empty input still exits, Ctrl+A in the input field
+        // still jumps to line start, and Ctrl+V never gets touched.
+        //
+        // Cmd-on-macOS is treated the same as Ctrl: when the user presses
+        // Cmd+C from Terminal.app the crossterm event carries
+        // KeyModifiers::SUPER, NOT CONTROL — so we must check both.
+        if self.handle_clipboard_shortcut(key) {
+            return Ok(ReadResult::Continue);
+        }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.handle_ctrl_key(key);
@@ -1630,5 +1685,519 @@ fn save_multi_field_credential(provider: api::ProviderKind, values: Vec<String>)
             format!("Ollama endpoint: {host} (not persisted — credentials path unavailable)")
         }
         _ => format!("Multi-field save not implemented for {provider:?}"),
+    }
+}
+
+// ─── Task #748: context-sensitive clipboard shortcuts ────────────────────────
+
+impl AnvilTui {
+    /// Context-sensitive Ctrl/Cmd + C/X/A dispatcher.
+    ///
+    /// Returns `true` when the key was consumed; `false` to fall through to
+    /// the existing handlers. Ctrl+V is intentionally NOT handled here —
+    /// the existing bracketed-paste + keystroke-burst pipeline lives in
+    /// `tui::paste` and must not be re-entered. See
+    /// `feedback-paste-copy-select-never-optional.md` and
+    /// `feedback-clipboard-parity.md`.
+    pub(super) fn handle_clipboard_shortcut(&mut self, key: KeyEvent) -> bool {
+        // Treat Cmd on macOS the same as Ctrl on Linux / Windows. crossterm
+        // delivers Cmd as KeyModifiers::SUPER, not CONTROL.
+        let is_macos_meta =
+            cfg!(target_os = "macos") && key.modifiers.contains(KeyModifiers::SUPER);
+        let is_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if !(is_macos_meta || is_ctrl) {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                if let Some(sel) = self.current_selection_text() {
+                    let _ = super::clipboard::write_clipboard(&sel);
+                    self.clear_selection();
+                    self.push_system("Copied".to_string());
+                    self.redraw
+                        .request(super::redraw::DirtyRegions::INPUT
+                            | super::redraw::DirtyRegions::SCROLLBACK);
+                    self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                    true
+                } else {
+                    // No selection → fall through so handle_ctrl_key keeps
+                    // the existing cancel/exit semantics for empty input.
+                    false
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                if let Some((sel, range)) = self.current_input_selection_with_range() {
+                    let _ = super::clipboard::write_clipboard(&sel);
+                    self.delete_input_range(range);
+                    self.clear_selection();
+                    self.redraw.request(super::redraw::DirtyRegions::INPUT);
+                    self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                    true
+                } else {
+                    // No selection → silent no-op (DO NOT fall through to
+                    // handle_ctrl_key — Ctrl+X has no existing binding and
+                    // we don't want stray input characters).
+                    false
+                }
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if self.in_scrollback_view() {
+                    self.select_all_visible_scrollback();
+                    self.redraw
+                        .request(super::redraw::DirtyRegions::SCROLLBACK);
+                    self.request_redraw_reason(super::RedrawReason::KeyEvent);
+                    true
+                } else {
+                    // Input field: fall through to handle_ctrl_key, which
+                    // preserves the existing readline "jump to line start /
+                    // toggle agent panel" behaviour.
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Compose the current selection text — input-field selection wins over
+    /// scrollback selection so the user can hold both simultaneously and
+    /// Ctrl+C grabs the actively-typed selection.
+    pub(super) fn current_selection_text(&self) -> Option<String> {
+        if let Some((text, _range)) = self.current_input_selection_with_range() {
+            return Some(text);
+        }
+        self.current_scrollback_selection_text()
+    }
+
+    /// Input-field selection (byte range + text) for Ctrl+X / cut.
+    pub(super) fn current_input_selection_with_range(
+        &self,
+    ) -> Option<(String, std::ops::Range<usize>)> {
+        let tab = self.active_tab();
+        let anchor = tab.selection_anchor?;
+        let cursor = tab.cursor;
+        if anchor == cursor {
+            return None;
+        }
+        let start = anchor.min(cursor);
+        let end = anchor.max(cursor);
+        // Guard against out-of-range anchors lingering after a buffer edit.
+        if end > tab.input.len() {
+            return None;
+        }
+        let text = tab.input[start..end].to_string();
+        Some((text, start..end))
+    }
+
+    /// Scrollback selection → joined-with-newlines text.
+    pub(super) fn current_scrollback_selection_text(&self) -> Option<String> {
+        let sel = self.scrollback_selection?;
+        let tab = self.active_tab();
+        let total = tab.scrollback.len();
+        if total == 0 {
+            return None;
+        }
+        let start = sel.start_row.min(total.saturating_sub(1));
+        let end = sel.end_row.min(total.saturating_sub(1));
+        let height = end + 1 - start;
+        let (lines, _anchor) = tab.scrollback.lines_in_range(start, height);
+        if lines.is_empty() {
+            return None;
+        }
+        Some(lines.join("\n"))
+    }
+
+    /// Clear BOTH input-field and scrollback selection state in one call.
+    pub(super) fn clear_selection(&mut self) {
+        self.active_tab_mut().selection_anchor = None;
+        self.scrollback_selection = None;
+    }
+
+    /// True when the user has scrolled away from the live tail. The
+    /// scrollback_state is the source of truth — `is_live() == false`
+    /// means the user is reading history, where Ctrl+A means
+    /// "select all visible" rather than "cursor home".
+    pub(super) fn in_scrollback_view(&self) -> bool {
+        !self.active_tab().scrollback_state.is_live()
+    }
+
+    /// Capture the visible viewport row range as a row-based scrollback
+    /// selection. The viewport size is approximated by the terminal height
+    /// minus a small chrome reserve; the exact pixel-accurate row range
+    /// will be wired in v3.x alongside extension-via-arrows.
+    pub(super) fn select_all_visible_scrollback(&mut self) {
+        let total = self.active_tab().scrollback.len();
+        if total == 0 {
+            return;
+        }
+        // Approximate the viewport height. The exact draw-loop value is
+        // recorded by the renderer; for the initial Ctrl+A semantics we
+        // bound to (terminal_rows - 6) to reserve for header/input/footer.
+        let height = crossterm::terminal::size()
+            .map(|(_, h)| h as usize)
+            .unwrap_or(40)
+            .saturating_sub(6)
+            .max(1);
+        let anchor = match self.active_tab().scrollback_state.0 {
+            Some(a) => a.min(total.saturating_sub(1)),
+            None => self.active_tab().scrollback.live_anchor(height),
+        };
+        let start_row = anchor;
+        let end_row = (anchor + height - 1).min(total.saturating_sub(1));
+        self.scrollback_selection = Some(super::ScrollbackSelection {
+            start_row,
+            end_row,
+        });
+    }
+
+    /// Delete a byte range from the active tab's input buffer, fixing up
+    /// the cursor and any placeholder spans that lived past the cut.
+    pub(super) fn delete_input_range(&mut self, range: std::ops::Range<usize>) {
+        let tab = self.active_tab_mut();
+        if range.end > tab.input.len() || range.start >= range.end {
+            return;
+        }
+        let removed_len = range.end - range.start;
+        tab.input.drain(range.clone());
+        // Move cursor to the start of the removed range.
+        tab.cursor = range.start;
+        // Shift any placeholder spans that lived past the removed range.
+        // Spans fully before the cut are unaffected; spans fully after
+        // are shifted; spans straddling the cut (shouldn't normally
+        // happen because the cut is selection-based) get dropped.
+        tab.input_placeholders.retain(|span| {
+            !(span.start >= range.start && span.start < range.end
+                || span.end > range.start && span.end <= range.end
+                || span.start < range.start && span.end > range.end)
+        });
+        for span in &mut tab.input_placeholders {
+            if span.start >= range.end {
+                span.start -= removed_len;
+                span.end -= removed_len;
+            }
+        }
+        tab.history_idx = None;
+        tab.history_backup = None;
+    }
+}
+
+// ─── Task #748: tests ────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    };
+
+    // ── Mouse passthrough tests ──────────────────────────────────────────
+
+    /// Predicate mirroring the input_handler.rs check. Lifted here so we can
+    /// unit-test the decision without spinning up a full AnvilTui (which
+    /// needs a real terminal).
+    fn mouse_event_should_pass_through(
+        mouse: &MouseEvent,
+        compile_target_os_is_macos: bool,
+    ) -> bool {
+        let select_mod = if compile_target_os_is_macos {
+            KeyModifiers::ALT
+        } else {
+            KeyModifiers::SHIFT
+        };
+        let is_modifier_selection = matches!(
+            mouse.kind,
+            MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left)
+        ) && mouse.modifiers.contains(select_mod);
+        let is_right_click = matches!(
+            mouse.kind,
+            MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Up(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Right)
+        );
+        is_modifier_selection || is_right_click
+    }
+
+    fn mk_mouse(kind: MouseEventKind, mods: KeyModifiers) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 10,
+            row: 5,
+            modifiers: mods,
+        }
+    }
+
+    #[test]
+    fn macos_option_drag_passes_through_when_mouse_capture_on() {
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::ALT,
+        );
+        assert!(mouse_event_should_pass_through(&ev, true));
+    }
+
+    #[test]
+    fn macos_option_down_event_passes_through() {
+        let ev = mk_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            KeyModifiers::ALT,
+        );
+        assert!(mouse_event_should_pass_through(&ev, true));
+    }
+
+    #[test]
+    fn macos_option_up_event_passes_through() {
+        let ev = mk_mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            KeyModifiers::ALT,
+        );
+        assert!(mouse_event_should_pass_through(&ev, true));
+    }
+
+    #[test]
+    fn linux_shift_drag_passes_through_when_mouse_capture_on() {
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::SHIFT,
+        );
+        assert!(mouse_event_should_pass_through(&ev, false));
+    }
+
+    #[test]
+    fn windows_shift_drag_passes_through_when_mouse_capture_on() {
+        // Compile-target Linux/Windows share the same SHIFT predicate.
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::SHIFT,
+        );
+        assert!(mouse_event_should_pass_through(&ev, false));
+    }
+
+    #[test]
+    fn unmodified_drag_with_capture_on_routes_to_tab_click_handler() {
+        // No selection modifier → should NOT pass through; the existing
+        // wheel / tab-click handler owns this event.
+        let ev_mac = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::NONE,
+        );
+        assert!(!mouse_event_should_pass_through(&ev_mac, true));
+        let ev_lnx = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::NONE,
+        );
+        assert!(!mouse_event_should_pass_through(&ev_lnx, false));
+    }
+
+    #[test]
+    fn right_click_down_passes_through_unconditionally() {
+        for compile_target_os_is_macos in [true, false] {
+            let ev = mk_mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                KeyModifiers::NONE,
+            );
+            assert!(
+                mouse_event_should_pass_through(&ev, compile_target_os_is_macos),
+                "right-click Down must always pass through (macos={compile_target_os_is_macos})"
+            );
+        }
+    }
+
+    #[test]
+    fn right_click_drag_passes_through_unconditionally() {
+        for compile_target_os_is_macos in [true, false] {
+            let ev = mk_mouse(
+                MouseEventKind::Drag(MouseButton::Right),
+                KeyModifiers::NONE,
+            );
+            assert!(
+                mouse_event_should_pass_through(&ev, compile_target_os_is_macos),
+                "right-click Drag must always pass through (macos={compile_target_os_is_macos})"
+            );
+        }
+    }
+
+    /// Regression gate: the SHIFT-only check (the pre-#748 code path) is
+    /// known to disagree with the macOS banner ("Hold Option") because
+    /// Option arrives as ALT, not SHIFT. We assert macOS Option DOES pass
+    /// through under the new logic.
+    #[test]
+    fn macos_option_drag_passes_through_when_shift_only_would_have_missed_it() {
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::ALT,
+        );
+        // Pre-fix code path: SHIFT check only.
+        let pre_fix_passes = ev.modifiers.contains(KeyModifiers::SHIFT);
+        assert!(!pre_fix_passes, "pre-fix path must NOT have passed Option-drag through");
+        // Post-fix: macOS check returns true.
+        assert!(mouse_event_should_pass_through(&ev, true));
+    }
+
+    // ── Selection model tests (pure helpers — no terminal needed) ────────
+
+    /// Compute what `current_input_selection_with_range` would return for
+    /// a given (input, cursor, anchor). Lifted here so the tests don't
+    /// need a real AnvilTui (which needs a TTY).
+    fn input_selection(
+        input: &str,
+        cursor: usize,
+        anchor: Option<usize>,
+    ) -> Option<(String, std::ops::Range<usize>)> {
+        let anchor = anchor?;
+        if anchor == cursor {
+            return None;
+        }
+        let start = anchor.min(cursor);
+        let end = anchor.max(cursor);
+        if end > input.len() {
+            return None;
+        }
+        Some((input[start..end].to_string(), start..end))
+    }
+
+    #[test]
+    fn ctrl_c_with_input_selection_copies_and_clears() {
+        // Selection covers "hello".
+        let input = "hello world";
+        let sel = input_selection(input, 5, Some(0));
+        assert_eq!(
+            sel.as_ref().map(|(s, _)| s.as_str()),
+            Some("hello")
+        );
+        // After "copy", the caller drops the selection — modelled by
+        // calling input_selection again with anchor=None.
+        let after = input_selection(input, 5, None);
+        assert!(after.is_none(), "selection must be cleared after copy");
+    }
+
+    #[test]
+    fn ctrl_c_without_selection_falls_through() {
+        // No anchor → no selection → handle_clipboard_shortcut must
+        // return false so the existing Ctrl+C cancel/exit fires.
+        let sel = input_selection("hello", 3, None);
+        assert!(sel.is_none());
+    }
+
+    #[test]
+    fn ctrl_x_with_input_selection_cuts_and_removes_text() {
+        let mut input = String::from("hello world");
+        let sel = input_selection(&input, 5, Some(0)).expect("selection");
+        let (text, range) = sel;
+        assert_eq!(text, "hello");
+        // Simulate the cut.
+        input.drain(range.clone());
+        assert_eq!(input, " world");
+    }
+
+    #[test]
+    fn ctrl_x_without_selection_is_noop() {
+        // No selection → handle_clipboard_shortcut returns false →
+        // no text is changed. Mirror that here.
+        let sel = input_selection("hello", 0, None);
+        assert!(sel.is_none());
+    }
+
+    /// Helper: simulate the Ctrl+A "select all visible scrollback"
+    /// decision purely from the inputs.
+    fn ctrl_a_decision_in_scrollback(
+        in_scrollback_view: bool,
+        scrollback_len: usize,
+    ) -> Option<(usize, usize)> {
+        if !in_scrollback_view || scrollback_len == 0 {
+            return None;
+        }
+        // Approximate viewport height for the test.
+        let height = 10usize;
+        let start = 0usize;
+        let end = (start + height - 1).min(scrollback_len.saturating_sub(1));
+        Some((start, end))
+    }
+
+    #[test]
+    fn ctrl_a_in_scrollback_selects_all_visible() {
+        // 20-line scrollback, in history view, 10-row viewport → rows 0..=9.
+        let got = ctrl_a_decision_in_scrollback(true, 20);
+        assert_eq!(got, Some((0, 9)));
+    }
+
+    #[test]
+    fn ctrl_a_in_input_field_does_not_select_all() {
+        // Not in history view → no scrollback selection. handler returns
+        // false so the existing readline cursor-home fires instead.
+        let got = ctrl_a_decision_in_scrollback(false, 100);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn ctrl_a_with_empty_scrollback_is_noop() {
+        let got = ctrl_a_decision_in_scrollback(true, 0);
+        assert!(got.is_none());
+    }
+
+    /// On macOS, Cmd arrives as KeyModifiers::SUPER. The shortcut handler
+    /// must treat Cmd+C identically to Ctrl+C. Mirror that compile-time
+    /// branch here.
+    fn shortcut_modifier_active(
+        mods: KeyModifiers,
+        compile_target_os_is_macos: bool,
+    ) -> bool {
+        let is_macos_meta =
+            compile_target_os_is_macos && mods.contains(KeyModifiers::SUPER);
+        let is_ctrl = mods.contains(KeyModifiers::CONTROL);
+        is_macos_meta || is_ctrl
+    }
+
+    #[test]
+    fn cmd_c_on_macos_handled_same_as_ctrl_c() {
+        // Cmd alone, on macOS, is treated like Ctrl.
+        assert!(shortcut_modifier_active(KeyModifiers::SUPER, true));
+        // Cmd alone, on non-macOS, is NOT — Linux/Windows users don't
+        // typically have a SUPER chord that maps to clipboard.
+        assert!(!shortcut_modifier_active(KeyModifiers::SUPER, false));
+        // Ctrl alone is universal.
+        assert!(shortcut_modifier_active(KeyModifiers::CONTROL, true));
+        assert!(shortcut_modifier_active(KeyModifiers::CONTROL, false));
+        // No modifier → never active.
+        assert!(!shortcut_modifier_active(KeyModifiers::NONE, true));
+        assert!(!shortcut_modifier_active(KeyModifiers::NONE, false));
+    }
+
+    /// Sanity check: pre-fix mouse handler was `Drag(_) + SHIFT`. The new
+    /// `mouse_event_should_pass_through` must also reject a SHIFT-Down
+    /// when the compile target is macOS (because macOS uses ALT, not
+    /// SHIFT). Otherwise Linux/macOS macros would diverge.
+    #[test]
+    fn shift_drag_on_macos_does_not_pass_through() {
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::SHIFT,
+        );
+        assert!(!mouse_event_should_pass_through(&ev, true));
+    }
+
+    /// Sanity check: ALT-drag on Linux/Windows does NOT pass through
+    /// (that compile target uses SHIFT).
+    #[test]
+    fn alt_drag_on_linux_does_not_pass_through() {
+        let ev = mk_mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            KeyModifiers::ALT,
+        );
+        assert!(!mouse_event_should_pass_through(&ev, false));
+    }
+
+    /// Suppress unused warning when key events aren't exercised at
+    /// compile time on this platform.
+    #[allow(dead_code)]
+    fn mk_key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: mods,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
     }
 }

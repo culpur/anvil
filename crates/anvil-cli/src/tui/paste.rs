@@ -788,6 +788,20 @@ impl OsKind {
             Self::Windows => "Ctrl+C",
         }
     }
+
+    /// Task #748: keyboard-chord prefix used by the second banner line
+    /// (and the in-TUI clipboard shortcut handler). Cmd on macOS, Ctrl
+    /// everywhere else. This is separate from `copy_shortcut` because
+    /// the second-line shortcuts (Cmd+A select-all, Cmd+X cut, Cmd+V
+    /// paste) all use the OS meta-prefix uniformly — Linux's Ctrl+Shift+C
+    /// is a special case for the standalone copy chord.
+    #[must_use]
+    pub fn meta_prefix(self) -> &'static str {
+        match self {
+            Self::Macos => "Cmd",
+            Self::Linux | Self::Windows => "Ctrl",
+        }
+    }
 }
 
 /// Status-line hint shown at TUI startup, telling the user how to select
@@ -812,7 +826,10 @@ impl OsKind {
 /// `vertical_split.rs::render_separator`).
 #[must_use]
 pub fn mouse_selection_hint(mouse_enabled: bool, os: OsKind, is_vertical_split: bool) -> String {
-    if mouse_enabled {
+    // Task #748: the banner now shows TWO lines so users see both the
+    // selection method (line 1) AND the keyboard clipboard shortcuts
+    // (line 2). See feedback-paste-copy-select-never-optional.md.
+    let line_one = if mouse_enabled {
         match os {
             OsKind::Macos => "Hold Option and drag to select text".to_string(),
             OsKind::Linux | OsKind::Windows => {
@@ -826,7 +843,12 @@ pub fn mouse_selection_hint(mouse_enabled: bool, os: OsKind, is_vertical_split: 
         )
     } else {
         format!("Drag to select text  \u{2022}  {} to copy", os.copy_shortcut())
-    }
+    };
+    let meta = os.meta_prefix();
+    let line_two = format!(
+        "{meta}+A select all  \u{2022}  {meta}+C copy  \u{2022}  {meta}+X cut  \u{2022}  {meta}+V paste",
+    );
+    format!("{line_one}\n{line_two}")
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -1070,6 +1092,10 @@ mod tests {
         let hint = mouse_selection_hint(false, OsKind::Macos, false);
         assert!(hint.contains("Drag to select text"), "got {hint:?}");
         assert!(hint.contains("Cmd+C to copy"), "got {hint:?}");
+        // Task #748: second-line keyboard shortcuts must be present.
+        assert!(hint.contains("Cmd+A select all"), "got {hint:?}");
+        assert!(hint.contains("Cmd+V paste"), "got {hint:?}");
+        assert!(hint.contains('\n'), "two-line format expected, got {hint:?}");
     }
 
     #[test]
@@ -1079,14 +1105,23 @@ mod tests {
         let mac = mouse_selection_hint(true, OsKind::Macos, false);
         assert!(mac.contains("Option"), "got {mac:?}");
         assert!(mac.contains("drag to select text"), "got {mac:?}");
+        // Task #748: line 2 keyboard shortcuts.
+        assert!(mac.contains("Cmd+A select all"), "got {mac:?}");
+        assert!(mac.contains("Cmd+C copy"), "got {mac:?}");
+        assert!(mac.contains("Cmd+X cut"), "got {mac:?}");
+        assert!(mac.contains("Cmd+V paste"), "got {mac:?}");
         let mac_vs = mouse_selection_hint(true, OsKind::Macos, true);
         assert_eq!(mac, mac_vs, "vertical-split must not change mouse-ON hint");
         let linux = mouse_selection_hint(true, OsKind::Linux, false);
         assert!(linux.contains("Shift"), "got {linux:?}");
         assert!(linux.contains("drag to select text"), "got {linux:?}");
+        assert!(linux.contains("Ctrl+A select all"), "got {linux:?}");
+        assert!(linux.contains("Ctrl+V paste"), "got {linux:?}");
         let windows = mouse_selection_hint(true, OsKind::Windows, false);
         assert!(windows.contains("Shift"), "got {windows:?}");
         assert!(windows.contains("drag to select text"), "got {windows:?}");
+        assert!(windows.contains("Ctrl+A select all"), "got {windows:?}");
+        assert!(windows.contains("Ctrl+V paste"), "got {windows:?}");
     }
 
     /// Task #623: OS-aware copy hint, macOS branch.
@@ -1103,6 +1138,10 @@ mod tests {
             !hint.contains("Ctrl+Shift+C"),
             "macOS hint should not say Ctrl+Shift+C, got {hint:?}"
         );
+        // Task #748: second-line shortcuts use Cmd prefix on macOS.
+        assert!(hint.contains("Cmd+A select all"), "got {hint:?}");
+        assert!(hint.contains("Cmd+X cut"), "got {hint:?}");
+        assert!(hint.contains("Cmd+V paste"), "got {hint:?}");
     }
 
     /// Task #623: OS-aware copy hint, Linux/BSD branch.
@@ -1122,6 +1161,16 @@ mod tests {
             !hint.contains("Cmd+C"),
             "Linux hint should not say Cmd+C, got {hint:?}"
         );
+        // Task #748: second-line shortcuts use Ctrl prefix on Linux.
+        // Note: line 1 still says `Ctrl+Shift+C to copy` for the
+        // native-selection chord; line 2 uses bare `Ctrl+C` for the
+        // in-app keyboard handler (which writes to OSC 52 directly,
+        // so SIGINT collision is moot — SIGINT is the cancel/exit
+        // fallback when no selection exists).
+        assert!(hint.contains("Ctrl+A select all"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+C copy"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+X cut"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+V paste"), "got {hint:?}");
     }
 
     /// Task #623: OS-aware copy hint, Windows branch.
@@ -1144,6 +1193,11 @@ mod tests {
             !hint.contains("Ctrl+Shift+C"),
             "Windows hint should not say Ctrl+Shift+C, got {hint:?}"
         );
+        // Task #748: second-line shortcuts use Ctrl prefix on Windows.
+        assert!(hint.contains("Ctrl+A select all"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+C copy"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+X cut"), "got {hint:?}");
+        assert!(hint.contains("Ctrl+V paste"), "got {hint:?}");
     }
 
     /// Task #625 (v2.2.14 Phase 1): in vertical-split with mouse capture
@@ -1167,6 +1221,8 @@ mod tests {
             mac.contains("Cmd+C to copy"),
             "vertical-split macOS hint must preserve Task #623 copy chord; got {mac:?}"
         );
+        // Task #748: second-line keyboard shortcuts persist into vertical-split.
+        assert!(mac.contains("Cmd+A select all"), "got {mac:?}");
         // Linux path.
         let linux = mouse_selection_hint(false, OsKind::Linux, true);
         assert!(
@@ -1177,6 +1233,7 @@ mod tests {
             linux.contains("Ctrl+Shift+C to copy"),
             "vertical-split Linux hint must preserve Task #623 copy chord; got {linux:?}"
         );
+        assert!(linux.contains("Ctrl+A select all"), "got {linux:?}");
         // Windows path.
         let windows = mouse_selection_hint(false, OsKind::Windows, true);
         assert!(
@@ -1187,6 +1244,7 @@ mod tests {
             windows.contains("Ctrl+C to copy"),
             "vertical-split Windows hint must preserve Task #623 copy chord; got {windows:?}"
         );
+        assert!(windows.contains("Ctrl+A select all"), "got {windows:?}");
     }
 
     /// Task #625: classic / non-vertical-split layouts MUST keep the
@@ -1201,9 +1259,20 @@ mod tests {
             !hint.contains("within conversation"),
             "classic hint must not scope to conversation; got {hint:?}"
         );
+        // Task #748: the banner is now TWO lines — line 1 is the
+        // selection chord (verbatim Task #623 / #625 contract), line 2
+        // is the new keyboard-shortcut row.
+        let meta = OsKind::Macos.meta_prefix();
+        let expected_line_one = format!(
+            "Drag to select text  \u{2022}  {} to copy",
+            OsKind::Macos.copy_shortcut(),
+        );
+        let expected_line_two = format!(
+            "{meta}+A select all  \u{2022}  {meta}+C copy  \u{2022}  {meta}+X cut  \u{2022}  {meta}+V paste",
+        );
+        let expected = format!("{expected_line_one}\n{expected_line_two}");
         assert_eq!(
-            hint,
-            format!("Drag to select text  \u{2022}  {} to copy", OsKind::Macos.copy_shortcut()),
+            hint, expected,
             "classic hint must match the verbatim brief; got {hint:?}"
         );
     }

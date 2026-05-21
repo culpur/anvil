@@ -698,6 +698,13 @@ pub(crate) struct Tab {
     /// runtime gets the image / document attached to the next turn.
     pub pending_paste_blocks: Vec<runtime::ContentBlock>,
     pub cursor: usize,
+    /// Task #748: input-field selection anchor. When `Some(anchor)`, the
+    /// selected byte range in `input` is `[min(cursor, anchor),
+    /// max(cursor, anchor))`. The anchor is set on the FIRST modifier-held
+    /// motion (Shift+arrow, etc.) and cleared by any unshifted cursor
+    /// movement. The TUI renderer reverses the style for the selected
+    /// range; `handle_clipboard_shortcut` reads this for Ctrl+C / Ctrl+X.
+    pub selection_anchor: Option<usize>,
     pub history: Vec<String>,
     pub history_idx: Option<usize>,
     pub history_backup: Option<String>,
@@ -797,6 +804,7 @@ impl Tab {
             input_placeholders: Vec::new(),
             pending_paste_blocks: Vec::new(),
             cursor: 0,
+            selection_anchor: None,
             history: Vec::new(),
             history_idx: None,
             history_backup: None,

@@ -33,6 +33,7 @@ pub(super) mod state;
 pub(super) mod widgets;
 pub(super) mod input_handler;
 pub(super) mod paste;
+pub(super) mod clipboard;
 pub(super) mod spinner_pump;
 
 // ─── Public re-exports ────────────────────────────────────────────────────────
@@ -347,6 +348,32 @@ pub struct AnvilTui {
     /// TURN_REDRAW_INTERVAL`, which lets a future runtime knob raise the
     /// interval without ever firing twice for the same window.
     pub(super) last_self_heal_at: u64,
+
+    // ── Task #748: scrollback selection (Ctrl+A / Cmd+A in history view) ─────
+
+    /// Optional selection over the scrollback viewport.
+    ///
+    /// Set when the user presses Ctrl+A / Cmd+A while in HISTORICAL VIEW
+    /// (`scrollback_state.is_live() == false`). The current implementation
+    /// captures the visible viewport row range as start_row..=end_row;
+    /// extending the selection with arrow keys / hjkl to per-column
+    /// granularity is a v3.x followup (see task #748 report).
+    ///
+    /// The scrollback widget reads this field and reverses the Style on
+    /// the selected rows; `current_selection_text` walks the rows to
+    /// build the clipboard string.
+    pub(super) scrollback_selection: Option<ScrollbackSelection>,
+}
+
+/// Task #748: scrollback selection range. Currently row-based ("select
+/// all visible scrollback"); future v3.x work will add per-column
+/// extension via arrows / hjkl.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollbackSelection {
+    /// First selected row index in the scrollback buffer (inclusive).
+    pub start_row: usize,
+    /// Last selected row index in the scrollback buffer (inclusive).
+    pub end_row: usize,
 }
 
 /// Task #718: number of TurnDone events between automatic full-redraw
@@ -833,6 +860,8 @@ impl AnvilTui {
                 // turns; sessions shorter than that never pay any cost.
                 turn_counter: 0,
                 last_self_heal_at: 0,
+                // Task #748: scrollback selection starts unset.
+                scrollback_selection: None,
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),

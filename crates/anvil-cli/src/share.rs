@@ -213,6 +213,7 @@ mod tests {
             input_placeholders: Vec::new(),
             pending_paste_blocks: Vec::new(),
             cursor: 0,
+            selection_anchor: None,
             history: Vec::new(),
             history_idx: None,
             history_backup: None,
