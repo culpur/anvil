@@ -329,6 +329,44 @@ pub struct AnvilTui {
     /// the user's eye, not session-specific state — switching tabs should
     /// preserve which rail section the user was looking at.
     pub(super) rail_focus: RailFocus,
+
+    // ── Task #718: glyph-corruption self-heal (CC v2.1.144-B3 parity) ─────────
+
+    /// Monotonic count of TurnDone events observed by the TUI since startup.
+    /// In sessions with 1000+ turns the ratatui back-buffer can accumulate
+    /// stale cells (orphan glyphs, garbled chars) that the cell-diff renderer
+    /// won't repaint on its own. Once the counter crosses
+    /// `TURN_REDRAW_INTERVAL` we route a `TerminalStructural` redraw through
+    /// the SOFT path — `DirtyRegions::ALL` repaints every cell, but no
+    /// `\x1b[2J` clear escape is written (flash anti-pattern, see
+    /// `feedback-tui-flash-anti-pattern.md`). Brute-force, cheap, no cost on
+    /// short sessions.
+    pub(super) turn_counter: u64,
+    /// The last `turn_counter` value at which a periodic self-heal redraw was
+    /// fired. The schedule check is `turn_counter - last_self_heal_at >=
+    /// TURN_REDRAW_INTERVAL`, which lets a future runtime knob raise the
+    /// interval without ever firing twice for the same window.
+    pub(super) last_self_heal_at: u64,
+}
+
+/// Task #718: number of TurnDone events between automatic full-redraw
+/// self-heals. Tuned at 100 turns — small enough to clear glyph corruption
+/// within minutes on a busy session, large enough that even on a
+/// thousand-turn marathon the user only sees ~10 forced repaints. Each
+/// repaint goes through the SOFT path (`DirtyRegions::ALL` without an ANSI
+/// erase) so there's no perceptible flash.
+pub(super) const TURN_REDRAW_INTERVAL: u64 = 100;
+
+/// Task #718: pure scheduling predicate for the glyph-corruption self-heal.
+///
+/// Returns `true` iff `turn_counter - last_self_heal_at >= interval`, using
+/// saturating arithmetic to stay correct across the unlikely u64-wraparound
+/// boundary. Extracted into a free function so the headless test suite can
+/// exercise the schedule without instantiating a real `AnvilTui` (which
+/// requires a TTY). The `apply_tagged_event` hook above is the only caller.
+#[inline]
+pub(super) fn should_self_heal_now(turn_counter: u64, last_self_heal_at: u64, interval: u64) -> bool {
+    turn_counter.saturating_sub(last_self_heal_at) >= interval
 }
 
 /// Which left-rail section currently owns the navigation focus.
@@ -790,6 +828,11 @@ impl AnvilTui {
                 // Task #634: rail focus starts on the conversation deck so
                 // the cursor lives in the input box on startup.
                 rail_focus: RailFocus::default(),
+                // Task #718: glyph-corruption self-heal counters start at 0.
+                // First self-heal fires after the first TURN_REDRAW_INTERVAL
+                // turns; sessions shorter than that never pay any cost.
+                turn_counter: 0,
+                last_self_heal_at: 0,
             },
             // tab_id=1 matches Tab::new(1, "main", ...) constructed above.
             TuiSender::new(tx, 1),
@@ -2196,6 +2239,22 @@ impl AnvilTui {
             }
             TuiEvent::TurnDone => {
                 self.relay_forward(runtime::relay::RelayMessage::TurnDone { tab_id });
+                // Task #718: tick the TurnDone counter and, every
+                // TURN_REDRAW_INTERVAL turns, queue a TerminalStructural
+                // redraw to self-heal any stale cells that ratatui's
+                // cell-diff renderer skipped over. SOFT path → DirtyRegions::ALL
+                // without an ANSI erase (no flash). Gated by `tui_session_active`
+                // so headless / detached paths don't pay any cost.
+                self.turn_counter = self.turn_counter.saturating_add(1);
+                if should_self_heal_now(
+                    self.turn_counter,
+                    self.last_self_heal_at,
+                    TURN_REDRAW_INTERVAL,
+                ) {
+                    self.last_self_heal_at = self.turn_counter;
+                    self.redraw.request(redraw::DirtyRegions::ALL);
+                    self.request_redraw_reason(RedrawReason::TerminalStructural);
+                }
                 // T4-K: snapshot diff totals BEFORE refresh so we can detect
                 // whether this turn actually changed any tracked files. If
                 // it did, surface a brief inline summary so the user sees
@@ -5365,6 +5424,125 @@ fn query_ollama_context_size(model: &str) -> Option<u32> {
 
 // init_ollama_model_cache and check_clipboard_for_image are re-exported
 // from widgets (see pub use widgets::{...} at the top of this file).
+
+// ─── Task #718: long-session glyph self-heal tests ──────────────────────────
+//
+// AnvilTui::new() can't be instantiated under cargo test (TTY required), so
+// the schedule is split into a pure helper (`should_self_heal_now`) plus a
+// driver loop that simulates the `apply_tagged_event(TurnDone)` mutation
+// against a `RedrawScheduler`. The tests pin two contracts the CC-parity
+// audit calls out (TASK-B / CC v2.1.144-B3):
+//   1. After 150 simulated TurnDone events the scheduler must have seen at
+//      least one `DirtyRegions::ALL` request (proving the threshold-driven
+//      full repaint fires in long sessions).
+//   2. The self-heal must NOT fire on every turn — short sessions (<100
+//      turns) pay zero redraw cost.
+#[cfg(test)]
+mod task_718_glyph_self_heal_tests {
+    use super::redraw::{DirtyRegions, RedrawScheduler};
+    use super::{should_self_heal_now, TURN_REDRAW_INTERVAL};
+
+    /// Pure-schedule check at the threshold boundary.
+    #[test]
+    fn predicate_fires_exactly_at_interval_boundary() {
+        // 99 turns since last heal: not yet.
+        assert!(!should_self_heal_now(99, 0, TURN_REDRAW_INTERVAL));
+        // 100 turns since last heal: fire.
+        assert!(should_self_heal_now(100, 0, TURN_REDRAW_INTERVAL));
+        // 100 turns later: fire again.
+        assert!(should_self_heal_now(200, 100, TURN_REDRAW_INTERVAL));
+        // 99 turns after last heal at 100: not yet.
+        assert!(!should_self_heal_now(199, 100, TURN_REDRAW_INTERVAL));
+    }
+
+    /// Saturating arithmetic guards the (theoretical) u64-wrap edge case.
+    #[test]
+    fn predicate_is_saturating() {
+        // last_self_heal_at > turn_counter (shouldn't happen, but guard).
+        assert!(!should_self_heal_now(50, 100, TURN_REDRAW_INTERVAL));
+    }
+
+    /// Drive 150 simulated TurnDone events through the same logic
+    /// `apply_tagged_event` runs and assert at least one full-redraw fired.
+    ///
+    /// This mirrors `AnvilTui::apply_tagged_event(TuiEvent::TurnDone)` but
+    /// without the relay-forward / diff-snapshot paths that pull in a real
+    /// `Tab` vector. The redraw scheduler + counters are stand-alone so the
+    /// CC parity contract can be locked here.
+    #[test]
+    fn simulates_150_turns_and_triggers_at_least_one_full_redraw() {
+        let mut sched = RedrawScheduler::new();
+        let mut turn_counter: u64 = 0;
+        let mut last_self_heal_at: u64 = 0;
+        let mut full_redraw_requests: usize = 0;
+
+        for _ in 0..150 {
+            // Mirror `apply_tagged_event(TurnDone)`:
+            turn_counter = turn_counter.saturating_add(1);
+            if should_self_heal_now(turn_counter, last_self_heal_at, TURN_REDRAW_INTERVAL) {
+                last_self_heal_at = turn_counter;
+                sched.request(DirtyRegions::ALL);
+                full_redraw_requests += 1;
+            }
+        }
+
+        assert!(
+            full_redraw_requests >= 1,
+            "150 turns must trigger at least one DirtyRegions::ALL self-heal \
+             (got {full_redraw_requests})"
+        );
+        // And the scheduler must currently observe the ALL request.
+        assert!(
+            sched.peek_dirty().contains(DirtyRegions::ALL),
+            "scheduler must hold the DirtyRegions::ALL request from the final self-heal window"
+        );
+    }
+
+    /// Short session (<100 turns) → zero self-heal redraws. No cost on the
+    /// common case.
+    #[test]
+    fn short_session_under_threshold_never_fires() {
+        let mut turn_counter: u64 = 0;
+        let mut last_self_heal_at: u64 = 0;
+        let mut full_redraw_requests: usize = 0;
+
+        // Only TURN_REDRAW_INTERVAL - 1 turns.
+        for _ in 0..(TURN_REDRAW_INTERVAL - 1) {
+            turn_counter = turn_counter.saturating_add(1);
+            if should_self_heal_now(turn_counter, last_self_heal_at, TURN_REDRAW_INTERVAL) {
+                last_self_heal_at = turn_counter;
+                full_redraw_requests += 1;
+            }
+        }
+
+        assert_eq!(
+            full_redraw_requests, 0,
+            "short sessions under the threshold must NOT fire any self-heal"
+        );
+    }
+
+    /// 1000-turn marathon fires exactly 10 self-heals — proves the schedule
+    /// is bounded (not "every frame" / not "every turn after the first").
+    #[test]
+    fn marathon_fires_bounded_number_of_self_heals() {
+        let mut turn_counter: u64 = 0;
+        let mut last_self_heal_at: u64 = 0;
+        let mut full_redraw_requests: usize = 0;
+
+        for _ in 0..1000 {
+            turn_counter = turn_counter.saturating_add(1);
+            if should_self_heal_now(turn_counter, last_self_heal_at, TURN_REDRAW_INTERVAL) {
+                last_self_heal_at = turn_counter;
+                full_redraw_requests += 1;
+            }
+        }
+
+        assert_eq!(
+            full_redraw_requests, 10,
+            "1000 turns at interval=100 must produce exactly 10 self-heals"
+        );
+    }
+}
 
 // ─── BUG-2 + BUG-3 redraw tests ──────────────────────────────────────────────
 //
