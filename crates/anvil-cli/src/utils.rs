@@ -290,8 +290,10 @@ pub(crate) fn send_desktop_notification(title: &str, message: &str) -> String {
 ///
 /// Order matches the i18n migration plan's Tier-1 ordering — wizard +
 /// configure pickers display in this order.
-pub(crate) const SUPPORTED_LANGUAGES: &[&str] =
-    &["en", "es", "zh-CN", "fr", "pt-BR", "ru", "ja", "de"];
+pub(crate) const SUPPORTED_LANGUAGES: &[&str] = &[
+    "en", "es", "zh-CN", "fr", "pt-BR", "ru", "ja", "de", "ko", "it", "tr", "vi", "pl", "id", "nl",
+    "sv", "nb", "uk",
+];
 
 /// Persist `language: <code>` to `~/.anvil/config.json`, preserving all
 /// other keys, and apply it to the live `rust_i18n` locale.

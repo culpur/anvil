@@ -1,0 +1,387 @@
+# Заголовок / нижній колонтитул TUI
+footer.help: "Tab: автодоповнення  Enter: надіслати  Ctrl+C: скасувати  Ctrl+D: вихід  /help: команди"
+footer.configure: "↑↓: навігація  Enter: вибрати  Esc: назад  Ctrl+C: вихід"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Статус / сесія
+status.model: "Модель"
+status.provider: "Провайдер"
+status.permission: "Режим дозволів"
+status.session: "Сесія"
+status.messages: "Повідомлень"
+status.turns: "Ходів"
+status.tokens_used: "Використано токенів"
+
+# Описи команд (використовуються у виведенні /help)
+cmd.help.summary: "Показати доступні slash-команди"
+cmd.status.summary: "Показати статус поточної сесії"
+cmd.compact.summary: "Стиснути локальну історію сесії"
+cmd.model.summary: "Показати або змінити активну модель"
+cmd.permissions.summary: "Показати або змінити активний режим дозволів"
+cmd.clear.summary: "Розпочати нову локальну сесію"
+cmd.cost.summary: "Показати кумулятивне використання токенів за цю сесію"
+cmd.provider.summary: "Показати, змінити або перелічити провайдерів та їхні моделі"
+cmd.login.summary: "Увійти або оновити облікові дані для провайдера"
+cmd.resume.summary: "Завантажити збережену сесію до REPL"
+cmd.config.summary: "Переглянути файли конфігурації Anvil або об'єднані секції"
+cmd.memory.summary: "Переглянути завантажені файли пам'яті інструкцій Anvil"
+cmd.init.summary: "Створити початковий ANVIL.md для цього репозиторію"
+cmd.diff.summary: "Показати git diff для поточних змін у workspace"
+cmd.version.summary: "Показати версію CLI та інформацію про build"
+cmd.bughunter.summary: "Перевірити кодову базу на ймовірні баги"
+cmd.branch.summary: "Перелічити, створити або перемкнути git-бранчі"
+cmd.worktree.summary: "Перелічити, додати, видалити або очистити git-worktrees"
+cmd.commit.summary: "Згенерувати повідомлення коміту та створити git-коміт"
+cmd.pr.summary: "Скласти чернетку або створити pull request з розмови"
+cmd.issue.summary: "Скласти чернетку або створити GitHub issue з розмови"
+cmd.hub.summary: "Переглядати та встановлювати пакети з маркетплейсу AnvilHub"
+cmd.language.summary: "Встановити мову відображення (en, de, es, fr, ja, zh-CN, ru)"
+
+# Повідомлення про помилки
+error.unknown_command: "Невідома команда: /%{name}"
+error.missing_argument: "Відсутній обов'язковий аргумент для /%{cmd}"
+error.not_available_tui: "Команда недоступна в режимі TUI."
+error.provider_not_found: "Провайдера не знайдено: %{name}"
+error.hub_fetch_failed: "Не вдалося отримати пакети з AnvilHub: %{reason}"
+error.hub_install_failed: "Не вдалося встановити пакет '%{name}': %{reason}"
+error.hub_not_found: "Пакет не знайдено: %{name}"
+error.invalid_language: "Непідтримувана мова '%{lang}'. Доступні: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Не вдалося зберегти конфігурацію: %{reason}"
+
+# Повідомлення команди Hub
+hub.top_packages: "Найкращі пакети на AnvilHub"
+hub.search_results: "Результати пошуку для \"%{query}\""
+hub.no_results: "Пакетів не знайдено."
+hub.installing: "Встановлення %{name} %{version}..."
+hub.installed: "Встановлено %{name} %{version} до %{path}"
+hub.downloads: "%{count} завантажень"
+hub.package_info: "Пакет: %{name} v%{version} від %{author}"
+hub.package_type: "Тип: %{type}"
+hub.package_desc: "Опис: %{desc}"
+hub.usage_hint: |
+  Використання:
+    /hub                     Показати найкращі пакети за категорією
+    /hub search <запит>      Шукати у всіх пакетах
+    /hub skills              Найкращі skills
+    /hub plugins             Найкращі plugins
+    /hub agents              Найкращі agents
+    /hub themes              Найкращі теми
+    /hub install <ім'я>      Завантажити та встановити пакет
+    /hub info <ім'я>         Показати деталі пакета
+
+# Повідомлення команди Language
+language.current: "Поточна мова: %{lang}"
+language.changed: "Мову встановлено: %{lang}"
+language.available: "Доступні мови: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Використання: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Мітки меню Configure
+configure.title: "Налаштування Anvil"
+configure.providers: "Провайдери"
+configure.models: "Моделі"
+configure.context: "Контекст"
+configure.search: "Пошук"
+configure.permissions: "Дозволи"
+configure.display: "Відображення"
+configure.integrations: "Інтеграції"
+configure.language: "Мова"
+
+# Запити входу / провайдера
+login.prompt_provider: "Виберіть провайдера для входу [anthropic/openai/ollama]: "
+login.success: "Вхід успішний для %{provider}."
+login.failed: "Вхід не вдався: %{reason}"
+login.enter_api_key: "Введіть API key: "
+login.testing_connection: "Тестування з'єднання з %{host}..."
+login.connected: "З'єднано"
+login.connection_failed: "Не вдалося з'єднатися"
+
+# ─── Wizard — налаштування при першому запуску ────────────────────────────
+# Картка вітання (вхід alt-screen)
+wizard.welcome.title: "Ласкаво просимо до Anvil v%{version}"
+wizard.welcome.tagline: "Ваш AI-партнер для кодування, що працює будь-де — Anthropic, OpenAI, Ollama та ще 32 провайдери."
+wizard.welcome.kicker: "Налаштуймо все."
+wizard.welcome.hint: "Натисніть Enter, щоб продовжити · Esc, щоб пропустити налаштування"
+
+# Вбудований банер (резервний шлях stdin)
+wizard.banner.welcome: "⚒  Ласкаво просимо до Anvil v%{version}"
+wizard.banner.subtitle: "   AI-помічник для кодування від Culpur Defense"
+wizard.banner.lets_setup: "   Налаштуймо все."
+
+# Заголовки кроків
+wizard.step_header: "Крок %{step} з %{total}: %{title}"
+wizard.step.vault_title: "Налаштування vault (шифрування облікових даних)"
+wizard.step.ollama_title: "Ollama (локальний AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Пріоритет провайдерів і модель за замовчуванням"
+wizard.step.tui_layout_title: "Розкладка TUI"
+wizard.step.tui_prefs_title: "Налаштування TUI"
+
+# Крок вибору мови (Phase A6, task #645)
+wizard.language.title: "Виберіть вашу мову"
+wizard.language.body: "TUI Anvil та wizard при першому запуску використовуватимуть цю мову. Ви зможете змінити її пізніше через /language або в /configure."
+wizard.language.continue: "Продовжити"
+wizard.language.skip: "Пропустити"
+
+# Крок vault
+wizard.vault.body_l1: "Anvil зберігає ваші API keys у vault, зашифрованому AES-256-GCM."
+wizard.vault.body_l2: "Ви встановлюєте головний пароль зараз — він ніде не зберігається."
+wizard.vault.body_l3: "Вам потрібно буде вводити його щоразу при запуску Anvil."
+wizard.vault.opt_setup: "[1] Налаштувати зашифрований vault (рекомендовано)"
+wizard.vault.opt_skip: "[s] Пропустити — API keys будуть збережені у відкритому вигляді в credentials.json"
+wizard.vault.skipping: "Пропуск налаштування vault."
+wizard.vault.warn_plaintext: "Попередження: API keys будуть збережені у відкритому вигляді."
+wizard.vault.tip_retry_setup: "Запустіть /vault setup пізніше, щоб зашифрувати ваші облікові дані."
+wizard.vault.already_initialized: "Vault вже ініціалізовано в ~/.anvil/vault/"
+wizard.vault.unlocking: "Розблокування для цієї сесії..."
+wizard.vault.prompt_master_password: "Головний пароль: "
+wizard.vault.unlocked: "Vault розблоковано."
+wizard.vault.not_yet_initialized: "Vault ще не ініціалізовано — це неочікувано."
+wizard.vault.unlock_failed: "Розблокування не вдалося: %{reason}"
+wizard.vault.continue_no_vault: "Продовження без vault — keys будуть збережені у відкритому вигляді."
+wizard.vault.prompt_set_password: "Встановити головний пароль: "
+wizard.vault.prompt_confirm_password: "Підтвердіть головний пароль: "
+wizard.vault.empty_password: "Пароль не може бути порожнім. Спробуйте ще раз."
+wizard.vault.password_mismatch: "Паролі не збігаються. Спробуйте ще раз."
+wizard.vault.created_and_unlocked: "Vault створено та розблоковано."
+wizard.vault.keys_encrypted_note: "API keys, введені в цьому wizard, будуть збережені зашифрованими."
+wizard.vault.created_session_lock_failed: "Vault створено, але блокування сесії не вдалося."
+wizard.vault.keys_plaintext_this_run: "Keys будуть збережені у відкритому вигляді під час цього запуску."
+wizard.vault.setup_failed: "Налаштування vault не вдалося: %{reason}"
+wizard.vault.continue_keys_plaintext: "Продовження без vault — keys збережено у відкритому вигляді."
+
+# Крок Ollama
+wizard.ollama.body_l1: "Ollama запускає AI-моделі локально на вашій машині."
+wizard.ollama.body_l2: "Для базового використання API key не потрібен."
+wizard.ollama.opt_default: "[1] Підключитися до Ollama (за замовчуванням: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Підключитися за власною URL"
+wizard.ollama.opt_apikey: "[3] Підключитися з API key"
+wizard.ollama.opt_skip: "[s] Пропустити"
+wizard.ollama.testing_connection: "Тестування з'єднання з %{url}... "
+wizard.ollama.connected: "з'єднано"
+wizard.ollama.failed: "не вдалося (%{reason})"
+wizard.ollama.available_models: "Доступні моделі:"
+wizard.ollama.start_hint: "Пропуск Ollama — переконайтеся, що Ollama запущено: ollama serve"
+wizard.ollama.config_saved_retry: "З'єднання не вдалося. Конфігурацію збережено; можете спробувати ще раз через `anvil login ollama`."
+wizard.ollama.prompt_url: "URL Ollama [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "не вдалося перевірити (%{reason}) — все одно зберігаємо"
+wizard.ollama.skipping: "Пропуск Ollama."
+
+# Крок Anthropic
+wizard.anthropic.body: "Anthropic надає Claude — найздібніший AI-помічник."
+wizard.anthropic.opt_oauth: "[1] Увійти через OAuth (рекомендовано — відкриває браузер)"
+wizard.anthropic.opt_apikey: "[2] Ввести API key вручну"
+wizard.anthropic.opt_skip: "[s] Пропустити"
+wizard.anthropic.oauth_complete: "OAuth Anthropic завершено."
+wizard.anthropic.oauth_failed: "OAuth не вдався: %{reason}"
+wizard.anthropic.retry_hint: "Ви можете спробувати ще раз пізніше через: anvil login anthropic"
+wizard.anthropic.console_url: "Отримайте свій key на: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Key не введено, пропуск Anthropic."
+wizard.anthropic.validating_key: "Перевірка key... "
+wizard.anthropic.valid: "дійсний"
+wizard.anthropic.could_not_verify: "не вдалося перевірити — все одно зберігаємо"
+wizard.anthropic.skipping: "Пропуск Anthropic."
+
+# Крок OpenAI
+wizard.openai.body: "OpenAI надає моделі GPT для кодування та міркувань."
+wizard.openai.opt_apikey: "[1] Ввести API key"
+wizard.openai.opt_skip: "[s] Пропустити"
+wizard.openai.console_url: "Отримайте свій key на: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "Key не введено, пропуск OpenAI."
+wizard.openai.validating_key: "Перевірка key... "
+wizard.openai.valid: "дійсний"
+wizard.openai.could_not_verify: "не вдалося перевірити — все одно зберігаємо"
+wizard.openai.skipping: "Пропуск OpenAI."
+
+# Крок xAI
+wizard.xai.body: "xAI надає моделі Grok."
+wizard.xai.opt_apikey: "[1] Ввести API key"
+wizard.xai.opt_skip: "[s] Пропустити"
+wizard.xai.console_url: "Отримайте свій key на: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "Key не введено, пропуск xAI."
+wizard.xai.saved: "xAI API key збережено."
+wizard.xai.skipping: "Пропуск xAI."
+
+# Резерв для невідомого вибору
+wizard.unknown_choice_skipping: "Невідомий вибір '%{choice}', пропуск %{provider}."
+
+# Крок пріоритету провайдерів
+wizard.priority.none_configured: "Жодного провайдера не налаштовано."
+wizard.priority.configure_later: "Ви можете налаштувати провайдерів пізніше через: anvil login"
+wizard.priority.you_configured: "Ви налаштували: %{providers}"
+wizard.priority.set_order: "Встановіть пріоритет провайдерів (перший = основний, інші = резервні):"
+wizard.priority.current_order: "Поточний порядок:"
+wizard.priority.opt_keep: "[1] Зберегти цей порядок"
+wizard.priority.opt_reorder: "[2] Переупорядкувати (введіть числа: напр. \"2,1\")"
+wizard.priority.prompt_new_order: "Новий порядок: "
+wizard.priority.could_not_parse: "Не вдалося розпізнати порядок, залишаємо початковий."
+wizard.priority.unknown_keep: "Невідомий вибір, залишаємо початковий порядок."
+
+# Перемикач режиму Thinking
+wizard.thinking.title: "Увімкнути режим Thinking?"
+wizard.thinking.body_l1: "Деякі моделі (Qwen3, Claude, o3) підтримують розширений thinking/reasoning."
+wizard.thinking.body_l2: "Коли увімкнено, модель показує процес міркування перед відповіддю."
+wizard.thinking.opt_yes: "[1] Так — увімкнути режим thinking (рекомендовано для кодування)"
+wizard.thinking.opt_no: "[2] Ні — лише стандартні відповіді"
+wizard.thinking.enabled: "Режим thinking увімкнено. Перемикайте будь-коли через /think"
+wizard.thinking.disabled: "Режим thinking вимкнено. Перемикайте будь-коли через /think"
+
+# Крок розкладки TUI
+wizard.layout.opt_vertical: "[1] Вертикальний поділ  (за замовчуванням)"
+wizard.layout.opt_classic: "[2] Класичний"
+wizard.layout.opt_threepane: "[3] Три панелі"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Показати вкладки workspace? [1] Так (за замовчуванням)  [2] Ні"
+
+# Крок налаштувань TUI
+wizard.prefs.mouse_prompt: "Увімкнути захоплення миші? [1] Вимк. (за замовчуванням, рекомендовано)  [2] Увімк."
+wizard.prefs.theme_prompt: "Тема? [1] Темна (за замовчуванням)  [2] Світла  [3] Авто"
+wizard.prefs.permission_prompt: "Режим дозволів за замовчуванням? [1] ask (за замовчуванням)  [2] workspace-write  [3] danger-full-access"
+
+# Запити wizard
+wizard.prompt.choice_default1: "Вибір [1]: "
+wizard.prompt.choice: "Вибір: "
+
+# Підсумковий банер після wizard
+wizard.summary.complete: "Налаштування завершено!"
+wizard.summary.default_model: "Модель за замовчуванням: %{model}"
+wizard.summary.providers: "Провайдери:             %{providers}"
+wizard.summary.config_saved: "Конфіг збережено:       %{path}"
+wizard.summary.migration: "Міграція:               %{summary}"
+wizard.summary.run_anvil: "Запустіть `anvil`, щоб почати кодувати."
+wizard.summary.type_help: "Введіть `/help` для всіх команд."
+
+# Попередження / помилки wizard
+wizard.warn.altscreen_unavailable: "Примітка: wizard alt-screen недоступний (%{reason})."
+wizard.warn.fallback_inline: "Повернення до вбудованих / stdin запитів."
+wizard.warn.altscreen_modal: "Примітка: alt-screen недоступний (%{reason}); повернення до stdin-запитів."
+wizard.warn.could_not_save_config: "Попередження: не вдалося зберегти конфігурацію: %{reason}"
+
+# Модальне вікно встановлення Ollama (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Крок %{step} з %{total} — Локальний AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil може встановити та запустити Ollama безпосередньо, щоб у вас була локальна модель, що працює офлайн. Хочете, щоб Anvil керував Ollama для вас?"
+wizard.ollama_modal.already_running: "Ollama вже запущено на %{url} з %{count} модел(л)ями:\n  %{models}\n\nВикористати цей наявний daemon?"
+wizard.ollama_modal.already_setup_title: "Ollama вже налаштовано ✓"
+wizard.ollama_modal.resume_label: "Продовжити — використати Ollama, встановлений Anvil раніше"
+wizard.ollama_modal.use_existing_label: "Використати системний Ollama, виявлений Anvil"
+wizard.ollama_modal.install_label: "Встановити Ollama зараз (Anvil завантажить + керуватиме) — рекомендовано"
+wizard.ollama_modal.title_local_ai: "Локальний AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Я керуватиму Ollama самостійно"
+wizard.ollama_modal.choice_skip: "Пропустити — без локального AI"
+wizard.ollama_modal.choice_later: "Можливо, пізніше"
+wizard.ollama_modal.use_existing_title: "Використати наявний Ollama"
+wizard.ollama_modal.use_existing_body: "URL Ollama за замовчуванням: %{url}\nDaemon: %{status}\n\nВикористайте /ollama setup пізніше, якщо потрібна інша URL."
+wizard.ollama_modal.status_reachable: "доступний"
+wizard.ollama_modal.status_not_reachable: "НЕдоступний — запустіть його перед надсиланням повідомлення"
+wizard.ollama_modal.install_failed_title: "Встановлення не вдалося"
+wizard.ollama_modal.install_failed_body: "Не вдалося встановити Ollama:\n  %{reason}\n\nСпробуйте знову через /ollama setup пізніше або виберіть інший варіант."
+wizard.ollama_modal.already_installed_title: "Бінарник Ollama вже встановлено ✓"
+wizard.ollama_modal.already_installed_body: "Знайдено %{path} з попереднього встановлення."
+
+# Мітки відповідності Ollama
+wizard.ollama_fit.recommended: "Рекомендовано"
+wizard.ollama_fit.fits: "Підходить"
+wizard.ollama_fit.tight: "Впритул"
+wizard.ollama_fit.too_big: "Завелика — призведе до OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — найкраще загальне кодування (~4,7 ГБ)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — мала + швидка (~2,0 ГБ)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — працює на 8 ГБ RAM (~1,0 ГБ)"
+
+# ─── TUI — мітки модальних вікон ──────────────────────────────────────────
+tui.modal.permission_required: " Потрібен дозвіл "
+tui.modal.edit_lines: "Редагувати рядки"
+tui.modal.edit_key_prompt: "Редагувати %{key}:"
+tui.modal.files_changed: "Файлів змінено за цей хід: +%{added} −%{removed} (запустіть /diff для повного unified diff)"
+
+# ─── Команди — voice / collab / docker / k8s / iac / deps ─────────────────
+cmd.docker.usage: |
+  Використання:
+    /docker ps                   Перелічити запущені контейнери
+    /docker logs <container>     Показати останні 50 рядків логів контейнера
+    /docker compose              Показати сервіси docker-compose (якщо є)
+    /docker build                Зібрати image з Dockerfile у поточній директорії
+cmd.docker.logs_usage: "Використання: /docker logs <container>"
+cmd.docker.unknown_sub: "Невідома підкоманда docker: %{sub}\nЗапустіть `/docker help` для довідки."
+
+cmd.voice.start: |
+  Голосове введення — скоро
+
+  Захоплення голосу потребує доступу до мікрофона та backend speech-to-text.
+  Заплановано: /voice start  ->  захопити вхід з мікрофона та вставити як prompt.
+cmd.voice.stop: |
+  Голосове введення — скоро
+
+  Немає активної голосової сесії для зупинки.
+cmd.voice.help: |
+  Голосове введення (скоро)
+
+  Команди:
+    /voice start   Почати захоплення введення з мікрофона
+    /voice stop    Зупинити захоплення та надіслати
+
+  Потребує локального двигуна speech-to-text (напр. whisper.cpp).
+cmd.voice.unknown_sub: "Невідома підкоманда /voice: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Співпраця — скоро
+
+  Заплановано: /collab share  ->  згенерувати ID сесії, яким можна поділитися.
+  Цю функцію зарезервовано для майбутньої версії.
+cmd.collab.join: |
+  Співпраця — скоро
+
+  Використання: /collab join <session-id>
+  Цю функцію зарезервовано для майбутньої версії.
+cmd.collab.help: |
+  Співпраця (скоро)
+
+  Команди:
+    /collab share          Поділитися цією сесією (генерує ID запрошення)
+    /collab join <id>      Приєднатися до спільної сесії іншого користувача
+
+  Потребує облікового запису AnvilHub. Стежте за changelog щодо доступності.
+cmd.collab.unknown_sub: "Невідома підкоманда /collab: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Використання:
+    /k8s pods                   Перелічити pods у поточному namespace
+    /k8s logs <pod>             Показати останні 50 рядків логів pod
+    /k8s apply <file>           Застосувати manifest через kubectl
+    /k8s describe <resource>    Описати resource
+cmd.k8s.kubectl_missing: "kubectl не знайдено в PATH. Встановіть з https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Використання: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Використання: /k8s apply <file>"
+cmd.k8s.describe_usage: "Використання: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Невідома підкоманда /k8s: %{args}\nЗапустіть `/k8s help` для довідки."
+
+cmd.iac.usage: |
+  Використання:
+    /iac plan       Запустити terraform/tofu plan
+    /iac apply      Запустити terraform/tofu apply
+    /iac validate   Перевірити файли конфігурації
+    /iac drift      Виявити drift інфраструктури (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: модальне вікно підтвердження в TUI не розв'язалося. Спробуйте ще раз — або запустіть `anvil --print /iac apply` зі звичайної оболонки, щоб скористатися підтвердженням CLI."
+cmd.iac.no_terraform: "Ні 'tofu', ні 'terraform' не знайдено в PATH.\nВстановіть OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Це застосує зміни до вашої інфраструктури. Продовжити? (y/N) "
+cmd.iac.cancelled: "Apply скасовано."
+cmd.iac.unknown_sub: "Невідома підкоманда /iac: %{sub}\nЗапустіть `/iac help` для довідки."
+cmd.iac.no_binary_for_apply: "Бінарник terraform/tofu не знайдено в PATH. Встановіть OpenTofu перед apply."
+cmd.iac.confirm_body_with_plan: "Це застосує зміни до вашої інфраструктури.\n\n%{plan}\n\nУважно перегляньте plan перед підтвердженням."
+cmd.iac.confirm_body_generic: "Це застосує зміни до вашої інфраструктури.\n\nУважно перегляньте plan перед підтвердженням."
+
+cmd.deps.usage: |
+  Використання:
+    /deps tree           Показати дерево залежностей
+    /deps outdated       Показати застарілі залежності
+    /deps audit          Аудит безпеки залежностей
+    /deps why <pkg>      Пояснити, чому залежність включено
+cmd.deps.no_package_manager: "Не знайдено жодного розпізнаного менеджера пакетів."
+
+# Загальні мітки CLI, що використовуються повторно між командами
+cli.no_pr_diff: "PR diff не знайдено. Переконайтеся, що gh встановлено, автентифіковано, і що для поточного бранчу відкрито PR."

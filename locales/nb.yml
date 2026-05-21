@@ -1,0 +1,387 @@
+# TUI-topptekst / bunntekst
+footer.help: "Tab: fullfør  Enter: send  Ctrl+C: avbryt  Ctrl+D: avslutt  /help: kommandoer"
+footer.configure: "↑↓: naviger  Enter: velg  Esc: tilbake  Ctrl+C: avslutt"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Status / økt
+status.model: "Modell"
+status.provider: "Provider"
+status.permission: "Tillatelsesmodus"
+status.session: "Økt"
+status.messages: "Meldinger"
+status.turns: "Runder"
+status.tokens_used: "Brukte token"
+
+# Kommandobeskrivelser (brukt i /help-utdata)
+cmd.help.summary: "Vis tilgjengelige slash-kommandoer"
+cmd.status.summary: "Vis status for gjeldende økt"
+cmd.compact.summary: "Komprimer lokal økthistorikk"
+cmd.model.summary: "Vis eller bytt aktiv modell"
+cmd.permissions.summary: "Vis eller bytt aktiv tillatelsesmodus"
+cmd.clear.summary: "Start en ny lokal økt"
+cmd.cost.summary: "Vis kumulativ tokenbruk for denne økten"
+cmd.provider.summary: "Vis, bytt eller list opp providere og deres modeller"
+cmd.login.summary: "Logg inn eller oppdater legitimasjon for en provider"
+cmd.resume.summary: "Last en lagret økt inn i REPL"
+cmd.config.summary: "Inspiser Anvils konfigurasjonsfiler eller sammenslåtte seksjoner"
+cmd.memory.summary: "Inspiser lastede Anvil-instruksjonsminnefiler"
+cmd.init.summary: "Opprett en start-ANVIL.md for denne repoen"
+cmd.diff.summary: "Vis git diff for gjeldende workspace-endringer"
+cmd.version.summary: "Vis CLI-versjon og build-informasjon"
+cmd.bughunter.summary: "Inspiser kodebasen for sannsynlige bugs"
+cmd.branch.summary: "List, opprett eller bytt git-brancher"
+cmd.worktree.summary: "List, legg til, fjern eller rydd git-worktrees"
+cmd.commit.summary: "Generer en commit-melding og opprett en git-commit"
+cmd.pr.summary: "Lag utkast eller opprett en pull request fra samtalen"
+cmd.issue.summary: "Lag utkast eller opprett en GitHub-issue fra samtalen"
+cmd.hub.summary: "Bla gjennom og installer pakker fra AnvilHub-marketplace"
+cmd.language.summary: "Sett visningsspråk (en, de, es, fr, ja, zh-CN, ru)"
+
+# Feilmeldinger
+error.unknown_command: "Ukjent kommando: /%{name}"
+error.missing_argument: "Obligatorisk argument mangler for /%{cmd}"
+error.not_available_tui: "Kommandoen er ikke tilgjengelig i TUI-modus."
+error.provider_not_found: "Provider ikke funnet: %{name}"
+error.hub_fetch_failed: "Kunne ikke hente pakker fra AnvilHub: %{reason}"
+error.hub_install_failed: "Installasjon av pakken '%{name}' mislyktes: %{reason}"
+error.hub_not_found: "Pakke ikke funnet: %{name}"
+error.invalid_language: "Språket støttes ikke '%{lang}'. Tilgjengelige: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Kunne ikke lagre konfigurasjonen: %{reason}"
+
+# Hub-kommandomeldinger
+hub.top_packages: "Topp-pakker på AnvilHub"
+hub.search_results: "Søkeresultater for \"%{query}\""
+hub.no_results: "Ingen pakker funnet."
+hub.installing: "Installerer %{name} %{version}..."
+hub.installed: "Installerte %{name} %{version} til %{path}"
+hub.downloads: "%{count} nedlastinger"
+hub.package_info: "Pakke: %{name} v%{version} av %{author}"
+hub.package_type: "Type: %{type}"
+hub.package_desc: "Beskrivelse: %{desc}"
+hub.usage_hint: |
+  Bruk:
+    /hub                     Vis topp-pakker etter kategori
+    /hub search <spørring>   Søk i alle pakker
+    /hub skills              Topp-skills
+    /hub plugins             Topp-plugins
+    /hub agents              Topp-agents
+    /hub themes              Topp-temaer
+    /hub install <navn>      Last ned og installer en pakke
+    /hub info <navn>         Vis pakkedetaljer
+
+# Language-kommandomeldinger
+language.current: "Gjeldende språk: %{lang}"
+language.changed: "Språk satt til: %{lang}"
+language.available: "Tilgjengelige språk: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Bruk: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure-menyetiketter
+configure.title: "Konfigurer Anvil"
+configure.providers: "Providere"
+configure.models: "Modeller"
+configure.context: "Kontekst"
+configure.search: "Søk"
+configure.permissions: "Tillatelser"
+configure.display: "Visning"
+configure.integrations: "Integrasjoner"
+configure.language: "Språk"
+
+# Login/provider-prompter
+login.prompt_provider: "Velg provider å logge inn på [anthropic/openai/ollama]: "
+login.success: "Innlogging vellykket for %{provider}."
+login.failed: "Innlogging mislyktes: %{reason}"
+login.enter_api_key: "Skriv inn API key: "
+login.testing_connection: "Tester tilkobling til %{host}..."
+login.connected: "Tilkoblet"
+login.connection_failed: "Kunne ikke koble til"
+
+# ─── Wizard — førstegangsoppsett ──────────────────────────────────────────
+# Velkomstkort (alt-screen-inngang)
+wizard.welcome.title: "Velkommen til Anvil v%{version}"
+wizard.welcome.tagline: "Din AI-kodepartner som kjører overalt — Anthropic, OpenAI, Ollama og 32 andre providere."
+wizard.welcome.kicker: "La oss sette opp."
+wizard.welcome.hint: "Trykk Enter for å fortsette · Esc for å hoppe over oppsettet"
+
+# Inline-banner (stdin-reservevei)
+wizard.banner.welcome: "⚒  Velkommen til Anvil v%{version}"
+wizard.banner.subtitle: "   AI-drevet kodeassistent fra Culpur Defense"
+wizard.banner.lets_setup: "   La oss sette opp."
+
+# Trinntitler
+wizard.step_header: "Trinn %{step} av %{total}: %{title}"
+wizard.step.vault_title: "Vault-oppsett (kryptering av legitimasjon)"
+wizard.step.ollama_title: "Ollama (lokal AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Providerprioritet & standardmodell"
+wizard.step.tui_layout_title: "TUI-oppsett"
+wizard.step.tui_prefs_title: "TUI-preferanser"
+
+# Språktrinn (Phase A6, task #645)
+wizard.language.title: "Velg språket ditt"
+wizard.language.body: "Anvils TUI og førstegangs-wizard vil bruke dette språket. Du kan endre det senere med /language eller i /configure."
+wizard.language.continue: "Fortsett"
+wizard.language.skip: "Hopp over"
+
+# Vault-trinn
+wizard.vault.body_l1: "Anvil lagrer API-keysene dine i en AES-256-GCM-kryptert vault."
+wizard.vault.body_l2: "Du setter et hovedpassord nå — det lagres aldri noe sted."
+wizard.vault.body_l3: "Du må skrive det inn én gang hver gang du starter Anvil."
+wizard.vault.opt_setup: "[1] Sett opp kryptert vault (anbefales)"
+wizard.vault.opt_skip: "[s] Hopp over — API keys lagres som klartekst i credentials.json"
+wizard.vault.skipping: "Hopper over vault-oppsett."
+wizard.vault.warn_plaintext: "Advarsel: API keys vil bli lagret som klartekst."
+wizard.vault.tip_retry_setup: "Kjør /vault setup senere for å kryptere legitimasjonen din."
+wizard.vault.already_initialized: "Vault er allerede initialisert på ~/.anvil/vault/"
+wizard.vault.unlocking: "Låser opp for denne økten..."
+wizard.vault.prompt_master_password: "Hovedpassord: "
+wizard.vault.unlocked: "Vault låst opp."
+wizard.vault.not_yet_initialized: "Vault er ikke initialisert ennå — dette er uventet."
+wizard.vault.unlock_failed: "Opplåsing mislyktes: %{reason}"
+wizard.vault.continue_no_vault: "Fortsetter uten vault — keys vil bli lagret som klartekst."
+wizard.vault.prompt_set_password: "Sett hovedpassord: "
+wizard.vault.prompt_confirm_password: "Bekreft hovedpassord: "
+wizard.vault.empty_password: "Passordet kan ikke være tomt. Prøv igjen."
+wizard.vault.password_mismatch: "Passordene stemmer ikke. Prøv igjen."
+wizard.vault.created_and_unlocked: "Vault opprettet og låst opp."
+wizard.vault.keys_encrypted_note: "API keys som angis i denne wizarden vil bli lagret kryptert."
+wizard.vault.created_session_lock_failed: "Vault opprettet, men øktlås mislyktes."
+wizard.vault.keys_plaintext_this_run: "Keys vil bli lagret som klartekst i denne kjøringen."
+wizard.vault.setup_failed: "Vault-oppsett mislyktes: %{reason}"
+wizard.vault.continue_keys_plaintext: "Fortsetter uten vault — keys lagret som klartekst."
+
+# Ollama-trinn
+wizard.ollama.body_l1: "Ollama kjører AI-modeller lokalt på maskinen din."
+wizard.ollama.body_l2: "Ingen API key kreves for grunnleggende bruk."
+wizard.ollama.opt_default: "[1] Koble til Ollama (standard: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Koble til med egendefinert URL"
+wizard.ollama.opt_apikey: "[3] Koble til med API key"
+wizard.ollama.opt_skip: "[s] Hopp over"
+wizard.ollama.testing_connection: "Tester tilkobling til %{url}... "
+wizard.ollama.connected: "tilkoblet"
+wizard.ollama.failed: "mislyktes (%{reason})"
+wizard.ollama.available_models: "Tilgjengelige modeller:"
+wizard.ollama.start_hint: "Hopper over Ollama — pass på at Ollama kjører: ollama serve"
+wizard.ollama.config_saved_retry: "Tilkobling mislyktes. Konfigurasjon lagret; du kan prøve igjen med `anvil login ollama`."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "kunne ikke verifisere (%{reason}) — lagrer likevel"
+wizard.ollama.skipping: "Hopper over Ollama."
+
+# Anthropic-trinn
+wizard.anthropic.body: "Anthropic leverer Claude — den dyktigste AI-assistenten."
+wizard.anthropic.opt_oauth: "[1] Logg inn med OAuth (anbefalt — åpner nettleser)"
+wizard.anthropic.opt_apikey: "[2] Skriv inn API key manuelt"
+wizard.anthropic.opt_skip: "[s] Hopp over"
+wizard.anthropic.oauth_complete: "Anthropic OAuth fullført."
+wizard.anthropic.oauth_failed: "OAuth mislyktes: %{reason}"
+wizard.anthropic.retry_hint: "Du kan prøve igjen senere med: anvil login anthropic"
+wizard.anthropic.console_url: "Hent din key på: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Ingen key angitt, hopper over Anthropic."
+wizard.anthropic.validating_key: "Validerer key... "
+wizard.anthropic.valid: "gyldig"
+wizard.anthropic.could_not_verify: "kunne ikke verifisere — lagrer likevel"
+wizard.anthropic.skipping: "Hopper over Anthropic."
+
+# OpenAI-trinn
+wizard.openai.body: "OpenAI leverer GPT-modeller for koding og resonnering."
+wizard.openai.opt_apikey: "[1] Skriv inn API key"
+wizard.openai.opt_skip: "[s] Hopp over"
+wizard.openai.console_url: "Hent din key på: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "Ingen key angitt, hopper over OpenAI."
+wizard.openai.validating_key: "Validerer key... "
+wizard.openai.valid: "gyldig"
+wizard.openai.could_not_verify: "kunne ikke verifisere — lagrer likevel"
+wizard.openai.skipping: "Hopper over OpenAI."
+
+# xAI-trinn
+wizard.xai.body: "xAI leverer Grok-modeller."
+wizard.xai.opt_apikey: "[1] Skriv inn API key"
+wizard.xai.opt_skip: "[s] Hopp over"
+wizard.xai.console_url: "Hent din key på: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "Ingen key angitt, hopper over xAI."
+wizard.xai.saved: "xAI API key lagret."
+wizard.xai.skipping: "Hopper over xAI."
+
+# Reservevalg for ukjent valg
+wizard.unknown_choice_skipping: "Ukjent valg '%{choice}', hopper over %{provider}."
+
+# Providerprioritet-trinn
+wizard.priority.none_configured: "Ingen providere konfigurert."
+wizard.priority.configure_later: "Du kan konfigurere providere senere med: anvil login"
+wizard.priority.you_configured: "Du konfigurerte: %{providers}"
+wizard.priority.set_order: "Angi din providerprioritet (først = primær, andre = failover):"
+wizard.priority.current_order: "Gjeldende rekkefølge:"
+wizard.priority.opt_keep: "[1] Behold denne rekkefølgen"
+wizard.priority.opt_reorder: "[2] Endre rekkefølge (skriv inn tall: f.eks. \"2,1\")"
+wizard.priority.prompt_new_order: "Ny rekkefølge: "
+wizard.priority.could_not_parse: "Kunne ikke tolke rekkefølgen, beholder originalen."
+wizard.priority.unknown_keep: "Ukjent valg, beholder opprinnelig rekkefølge."
+
+# Thinking-modus bryter
+wizard.thinking.title: "Aktivere Thinking-modus?"
+wizard.thinking.body_l1: "Noen modeller (Qwen3, Claude, o3) støtter utvidet thinking/reasoning."
+wizard.thinking.body_l2: "Når aktivert viser modellen resonnementsprosessen sin før svaret."
+wizard.thinking.opt_yes: "[1] Ja — aktiver thinking-modus (anbefales for koding)"
+wizard.thinking.opt_no: "[2] Nei — kun standardresponser"
+wizard.thinking.enabled: "Thinking-modus aktivert. Slå av/på når som helst med /think"
+wizard.thinking.disabled: "Thinking-modus av. Slå av/på når som helst med /think"
+
+# TUI-oppsett-trinn
+wizard.layout.opt_vertical: "[1] Vertikal splitt  (standard)"
+wizard.layout.opt_classic: "[2] Klassisk"
+wizard.layout.opt_threepane: "[3] Tre paneler"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Vise workspace-faner? [1] Ja (standard)  [2] Nei"
+
+# TUI-preferansetrinn
+wizard.prefs.mouse_prompt: "Aktivere musfangst? [1] Av (standard, anbefalt)  [2] På"
+wizard.prefs.theme_prompt: "Tema? [1] Mørkt (standard)  [2] Lyst  [3] Auto"
+wizard.prefs.permission_prompt: "Standard tillatelsesmodus? [1] ask (standard)  [2] workspace-write  [3] danger-full-access"
+
+# Wizard-prompter
+wizard.prompt.choice_default1: "Valg [1]: "
+wizard.prompt.choice: "Valg: "
+
+# Oppsummeringsbanner etter wizard
+wizard.summary.complete: "Oppsett fullført!"
+wizard.summary.default_model: "Standardmodell: %{model}"
+wizard.summary.providers: "Providere:      %{providers}"
+wizard.summary.config_saved: "Config lagret:  %{path}"
+wizard.summary.migration: "Migrering:      %{summary}"
+wizard.summary.run_anvil: "Kjør `anvil` for å begynne å kode."
+wizard.summary.type_help: "Skriv `/help` for alle kommandoer."
+
+# Wizard-advarsler / feil
+wizard.warn.altscreen_unavailable: "Merk: alt-screen-wizard er ikke tilgjengelig (%{reason})."
+wizard.warn.fallback_inline: "Faller tilbake til inline / stdin-prompter."
+wizard.warn.altscreen_modal: "Merk: alt-screen er ikke tilgjengelig (%{reason}); faller tilbake til stdin-prompter."
+wizard.warn.could_not_save_config: "Advarsel: kunne ikke lagre konfigurasjonen: %{reason}"
+
+# Ollama-installasjonsmodal (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Trinn %{step} av %{total} — Lokal AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil kan installere + kjøre Ollama direkte slik at du har en lokal modell som fungerer offline. Vil du at Anvil skal håndtere Ollama for deg?"
+wizard.ollama_modal.already_running: "Ollama kjører allerede på %{url} med %{count} modell(er):\n  %{models}\n\nBruke denne eksisterende daemonen?"
+wizard.ollama_modal.already_setup_title: "Ollama er allerede satt opp ✓"
+wizard.ollama_modal.resume_label: "Gjenoppta — gjenbruk Ollama som Anvil installerte tidligere"
+wizard.ollama_modal.use_existing_label: "Bruk system-Ollama som Anvil oppdaget"
+wizard.ollama_modal.install_label: "Installer Ollama nå (Anvil laster ned + håndterer) — anbefales"
+wizard.ollama_modal.title_local_ai: "Lokal AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Jeg håndterer Ollama selv"
+wizard.ollama_modal.choice_skip: "Hopp over — ingen lokal AI"
+wizard.ollama_modal.choice_later: "Kanskje senere"
+wizard.ollama_modal.use_existing_title: "Bruk eksisterende Ollama"
+wizard.ollama_modal.use_existing_body: "Standard Ollama URL: %{url}\nDaemon: %{status}\n\nBruk /ollama setup senere hvis du trenger en annen URL."
+wizard.ollama_modal.status_reachable: "tilgjengelig"
+wizard.ollama_modal.status_not_reachable: "IKKE tilgjengelig — start den før du sender en melding"
+wizard.ollama_modal.install_failed_title: "Installasjon mislyktes"
+wizard.ollama_modal.install_failed_body: "Kunne ikke installere Ollama:\n  %{reason}\n\nPrøv igjen fra /ollama setup senere, eller velg et annet alternativ."
+wizard.ollama_modal.already_installed_title: "Ollama-binær allerede installert ✓"
+wizard.ollama_modal.already_installed_body: "Fant %{path} fra en tidligere installasjon."
+
+# Ollama-passformetiketter
+wizard.ollama_fit.recommended: "Anbefalt"
+wizard.ollama_fit.fits: "Passer"
+wizard.ollama_fit.tight: "Trangt"
+wizard.ollama_fit.too_big: "For stor — vil få OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — beste generelle koding (~4,7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — liten + rask (~2,0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — fungerer på 8 GB RAM (~1,0 GB)"
+
+# ─── TUI — modaletiketter ─────────────────────────────────────────────────
+tui.modal.permission_required: " Tillatelse kreves "
+tui.modal.edit_lines: "Rediger linjer"
+tui.modal.edit_key_prompt: "Rediger %{key}:"
+tui.modal.files_changed: "Filer endret denne runden: +%{added} −%{removed} (kjør /diff for full unified diff)"
+
+# ─── Kommandoer — voice / collab / docker / k8s / iac / deps ──────────────
+cmd.docker.usage: |
+  Bruk:
+    /docker ps                   List kjørende containere
+    /docker logs <container>     Vis siste 50 linjer av containerlogger
+    /docker compose              Vis docker-compose-tjenester (hvis tilstede)
+    /docker build                Bygg image fra Dockerfile i gjeldende katalog
+cmd.docker.logs_usage: "Bruk: /docker logs <container>"
+cmd.docker.unknown_sub: "Ukjent docker-underkommando: %{sub}\nKjør `/docker help` for bruk."
+
+cmd.voice.start: |
+  Stemmeinput — kommer snart
+
+  Stemmeopptak krever mikrofontilgang og en speech-to-text-backend.
+  Planlagt: /voice start  ->  fang mikrofoninput og injiser som prompt.
+cmd.voice.stop: |
+  Stemmeinput — kommer snart
+
+  Ingen aktiv stemmesesjon å stoppe.
+cmd.voice.help: |
+  Stemmeinput (kommer snart)
+
+  Kommandoer:
+    /voice start   Begynn å fange mikrofoninput
+    /voice stop    Stopp opptak og send
+
+  Krever en lokal speech-to-text-motor (f.eks. whisper.cpp).
+cmd.voice.unknown_sub: "Ukjent /voice-underkommando: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Samarbeid — kommer snart
+
+  Planlagt: /collab share  ->  generer en delbar sesjons-ID.
+  Denne funksjonen er reservert for en fremtidig release.
+cmd.collab.join: |
+  Samarbeid — kommer snart
+
+  Bruk: /collab join <session-id>
+  Denne funksjonen er reservert for en fremtidig release.
+cmd.collab.help: |
+  Samarbeid (kommer snart)
+
+  Kommandoer:
+    /collab share          Del denne sesjonen (genererer en invitasjons-ID)
+    /collab join <id>      Bli med i en annen brukers delte sesjon
+
+  Krever en AnvilHub-konto. Følg med i changelogen for tilgjengelighet.
+cmd.collab.unknown_sub: "Ukjent /collab-underkommando: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Bruk:
+    /k8s pods                   List pods i gjeldende namespace
+    /k8s logs <pod>             Tail siste 50 linjer av pod-logger
+    /k8s apply <file>           Anvend et manifest med kubectl
+    /k8s describe <resource>    Beskriv en resource
+cmd.k8s.kubectl_missing: "kubectl ikke funnet i PATH. Installer fra https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Bruk: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Bruk: /k8s apply <file>"
+cmd.k8s.describe_usage: "Bruk: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Ukjent /k8s-underkommando: %{args}\nKjør `/k8s help` for bruk."
+
+cmd.iac.usage: |
+  Bruk:
+    /iac plan       Kjør terraform/tofu plan
+    /iac apply      Kjør terraform/tofu apply
+    /iac validate   Valider konfigurasjonsfiler
+    /iac drift      Oppdag infrastrukturdrift (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: bekreftelsesmodalen i TUI ble ikke løst. Prøv igjen — eller kjør `anvil --print /iac apply` fra et vanlig skall for å bruke CLI-bekreftelsesprompten i stedet."
+cmd.iac.no_terraform: "Verken 'tofu' eller 'terraform' funnet i PATH.\nInstaller OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Dette vil anvende endringer på infrastrukturen din. Fortsette? (y/N) "
+cmd.iac.cancelled: "Apply avbrutt."
+cmd.iac.unknown_sub: "Ukjent /iac-underkommando: %{sub}\nKjør `/iac help` for bruk."
+cmd.iac.no_binary_for_apply: "Ingen terraform/tofu-binær funnet i PATH. Installer OpenTofu før apply."
+cmd.iac.confirm_body_with_plan: "Dette vil anvende endringer på infrastrukturen din.\n\n%{plan}\n\nGå nøye gjennom planen før du bekrefter."
+cmd.iac.confirm_body_generic: "Dette vil anvende endringer på infrastrukturen din.\n\nGå nøye gjennom planen før du bekrefter."
+
+cmd.deps.usage: |
+  Bruk:
+    /deps tree           Vis avhengighetstre
+    /deps outdated       Vis utdaterte avhengigheter
+    /deps audit          Sikkerhetsrevisjon av avhengigheter
+    /deps why <pkg>      Forklar hvorfor en avhengighet er inkludert
+cmd.deps.no_package_manager: "Ingen gjenkjent pakkebehandler funnet."
+
+# Generiske CLI-etiketter gjenbrukt på tvers av kommandoer
+cli.no_pr_diff: "Ingen PR-diff funnet. Sørg for at gh er installert, autentisert, og at en PR er åpen for gjeldende branch."

@@ -1,0 +1,387 @@
+# TUI header / voettekst
+footer.help: "Tab: aanvullen  Enter: verzenden  Ctrl+C: annuleren  Ctrl+D: afsluiten  /help: commando's"
+footer.configure: "↑↓: navigeren  Enter: selecteren  Esc: terug  Ctrl+C: afsluiten"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Status / sessie
+status.model: "Model"
+status.provider: "Provider"
+status.permission: "Permissiemodus"
+status.session: "Sessie"
+status.messages: "Berichten"
+status.turns: "Beurten"
+status.tokens_used: "Tokens gebruikt"
+
+# Commando-beschrijvingen (gebruikt in /help-uitvoer)
+cmd.help.summary: "Beschikbare slash-commando's tonen"
+cmd.status.summary: "Status van huidige sessie tonen"
+cmd.compact.summary: "Lokale sessiegeschiedenis comprimeren"
+cmd.model.summary: "Het actieve model tonen of wijzigen"
+cmd.permissions.summary: "De actieve permissiemodus tonen of wijzigen"
+cmd.clear.summary: "Een nieuwe lokale sessie starten"
+cmd.cost.summary: "Cumulatief tokengebruik voor deze sessie tonen"
+cmd.provider.summary: "Providers en hun modellen tonen, wijzigen of opsommen"
+cmd.login.summary: "Inloggen of credentials vernieuwen voor een provider"
+cmd.resume.summary: "Een opgeslagen sessie in de REPL laden"
+cmd.config.summary: "Anvil-configuratiebestanden of samengevoegde secties inspecteren"
+cmd.memory.summary: "Geladen Anvil-instructiegeheugenbestanden inspecteren"
+cmd.init.summary: "Een initiële ANVIL.md voor deze repo aanmaken"
+cmd.diff.summary: "Git diff voor de huidige workspace-wijzigingen tonen"
+cmd.version.summary: "CLI-versie en build-informatie tonen"
+cmd.bughunter.summary: "De codebase doorzoeken op waarschijnlijke bugs"
+cmd.branch.summary: "Git-branches opsommen, aanmaken of wisselen"
+cmd.worktree.summary: "Git-worktrees opsommen, toevoegen, verwijderen of opschonen"
+cmd.commit.summary: "Een commit-bericht genereren en een git-commit aanmaken"
+cmd.pr.summary: "Een pull request opstellen of aanmaken vanuit het gesprek"
+cmd.issue.summary: "Een GitHub-issue opstellen of aanmaken vanuit het gesprek"
+cmd.hub.summary: "Pakketten op de AnvilHub-marketplace doorbladeren en installeren"
+cmd.language.summary: "Weergavetaal instellen (en, de, es, fr, ja, zh-CN, ru)"
+
+# Foutmeldingen
+error.unknown_command: "Onbekend commando: /%{name}"
+error.missing_argument: "Verplicht argument ontbreekt voor /%{cmd}"
+error.not_available_tui: "Commando niet beschikbaar in TUI-modus."
+error.provider_not_found: "Provider niet gevonden: %{name}"
+error.hub_fetch_failed: "Kon pakketten niet ophalen van AnvilHub: %{reason}"
+error.hub_install_failed: "Installatie van pakket '%{name}' mislukt: %{reason}"
+error.hub_not_found: "Pakket niet gevonden: %{name}"
+error.invalid_language: "Niet-ondersteunde taal '%{lang}'. Beschikbaar: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Kon configuratie niet opslaan: %{reason}"
+
+# Hub-commando berichten
+hub.top_packages: "Topcategorieën op AnvilHub"
+hub.search_results: "Zoekresultaten voor \"%{query}\""
+hub.no_results: "Geen pakketten gevonden."
+hub.installing: "Bezig met installeren van %{name} %{version}..."
+hub.installed: "%{name} %{version} geïnstalleerd in %{path}"
+hub.downloads: "%{count} downloads"
+hub.package_info: "Pakket: %{name} v%{version} door %{author}"
+hub.package_type: "Type: %{type}"
+hub.package_desc: "Beschrijving: %{desc}"
+hub.usage_hint: |
+  Gebruik:
+    /hub                     Toon toppakketten per categorie
+    /hub search <query>      Zoek in alle pakketten
+    /hub skills              Top-skills
+    /hub plugins             Top-plugins
+    /hub agents              Top-agents
+    /hub themes              Top-thema's
+    /hub install <naam>      Een pakket downloaden en installeren
+    /hub info <naam>         Pakketdetails tonen
+
+# Language-commando berichten
+language.current: "Huidige taal: %{lang}"
+language.changed: "Taal ingesteld op: %{lang}"
+language.available: "Beschikbare talen: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Gebruik: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Configure-menulabels
+configure.title: "Anvil configureren"
+configure.providers: "Providers"
+configure.models: "Modellen"
+configure.context: "Context"
+configure.search: "Zoeken"
+configure.permissions: "Permissies"
+configure.display: "Weergave"
+configure.integrations: "Integraties"
+configure.language: "Taal"
+
+# Login/provider-prompts
+login.prompt_provider: "Kies provider om in te loggen [anthropic/openai/ollama]: "
+login.success: "Inloggen geslaagd voor %{provider}."
+login.failed: "Inloggen mislukt: %{reason}"
+login.enter_api_key: "API key invoeren: "
+login.testing_connection: "Verbinding met %{host} wordt getest..."
+login.connected: "Verbonden"
+login.connection_failed: "Kon geen verbinding maken"
+
+# ─── Wizard — eerste-keer setup ────────────────────────────────────────────
+# Welkomstkaart (alt-screen ingang)
+wizard.welcome.title: "Welkom bij Anvil v%{version}"
+wizard.welcome.tagline: "Je AI-codingpartner die overal werkt — Anthropic, OpenAI, Ollama, en 32 andere providers."
+wizard.welcome.kicker: "We gaan je instellen."
+wizard.welcome.hint: "Druk op Enter om door te gaan · Esc om setup over te slaan"
+
+# Inline-banner (stdin-fallbackpad)
+wizard.banner.welcome: "⚒  Welkom bij Anvil v%{version}"
+wizard.banner.subtitle: "   AI-aangedreven codingassistent van Culpur Defense"
+wizard.banner.lets_setup: "   We gaan je instellen."
+
+# Stapkoppen
+wizard.step_header: "Stap %{step} van %{total}: %{title}"
+wizard.step.vault_title: "Vault-setup (credential-versleuteling)"
+wizard.step.ollama_title: "Ollama (lokale AI)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Provider-prioriteit & standaardmodel"
+wizard.step.tui_layout_title: "TUI-indeling"
+wizard.step.tui_prefs_title: "TUI-voorkeuren"
+
+# Taalstap (Phase A6, task #645)
+wizard.language.title: "Selecteer je taal"
+wizard.language.body: "De TUI van Anvil en de eerste-keer-wizard gebruiken deze taal. Je kunt deze later wijzigen met /language of in /configure."
+wizard.language.continue: "Doorgaan"
+wizard.language.skip: "Overslaan"
+
+# Vault-stap
+wizard.vault.body_l1: "Anvil bewaart je API keys in een met AES-256-GCM versleutelde vault."
+wizard.vault.body_l2: "Je stelt nu een masterwachtwoord in — het wordt nergens opgeslagen."
+wizard.vault.body_l3: "Je moet het één keer invoeren bij elke start van Anvil."
+wizard.vault.opt_setup: "[1] Versleutelde vault instellen (aanbevolen)"
+wizard.vault.opt_skip: "[s] Overslaan — API keys worden in platte tekst opgeslagen in credentials.json"
+wizard.vault.skipping: "Vault-setup wordt overgeslagen."
+wizard.vault.warn_plaintext: "Waarschuwing: API keys worden in platte tekst opgeslagen."
+wizard.vault.tip_retry_setup: "Voer later /vault setup uit om je credentials te versleutelen."
+wizard.vault.already_initialized: "Vault is al geïnitialiseerd in ~/.anvil/vault/"
+wizard.vault.unlocking: "Ontgrendelen voor deze sessie..."
+wizard.vault.prompt_master_password: "Masterwachtwoord: "
+wizard.vault.unlocked: "Vault ontgrendeld."
+wizard.vault.not_yet_initialized: "Vault is nog niet geïnitialiseerd — dat is onverwacht."
+wizard.vault.unlock_failed: "Ontgrendelen mislukt: %{reason}"
+wizard.vault.continue_no_vault: "Doorgaan zonder vault — keys worden in platte tekst opgeslagen."
+wizard.vault.prompt_set_password: "Stel masterwachtwoord in: "
+wizard.vault.prompt_confirm_password: "Bevestig masterwachtwoord: "
+wizard.vault.empty_password: "Wachtwoord mag niet leeg zijn. Probeer opnieuw."
+wizard.vault.password_mismatch: "Wachtwoorden komen niet overeen. Probeer opnieuw."
+wizard.vault.created_and_unlocked: "Vault aangemaakt en ontgrendeld."
+wizard.vault.keys_encrypted_note: "API keys die in deze wizard worden ingevoerd, worden versleuteld opgeslagen."
+wizard.vault.created_session_lock_failed: "Vault aangemaakt maar sessievergrendeling mislukt."
+wizard.vault.keys_plaintext_this_run: "Keys worden bij deze uitvoering in platte tekst opgeslagen."
+wizard.vault.setup_failed: "Vault-setup mislukt: %{reason}"
+wizard.vault.continue_keys_plaintext: "Doorgaan zonder vault — keys in platte tekst opgeslagen."
+
+# Ollama-stap
+wizard.ollama.body_l1: "Ollama draait AI-modellen lokaal op je machine."
+wizard.ollama.body_l2: "Voor basisgebruik is geen API key vereist."
+wizard.ollama.opt_default: "[1] Verbinden met Ollama (standaard: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Verbinden met aangepaste URL"
+wizard.ollama.opt_apikey: "[3] Verbinden met API key"
+wizard.ollama.opt_skip: "[s] Overslaan"
+wizard.ollama.testing_connection: "Verbinding met %{url} testen... "
+wizard.ollama.connected: "verbonden"
+wizard.ollama.failed: "mislukt (%{reason})"
+wizard.ollama.available_models: "Beschikbare modellen:"
+wizard.ollama.start_hint: "Ollama overslaan — zorg dat Ollama draait: ollama serve"
+wizard.ollama.config_saved_retry: "Verbinding mislukt. Configuratie opgeslagen; je kunt opnieuw proberen met `anvil login ollama`."
+wizard.ollama.prompt_url: "Ollama URL [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "kon niet verifiëren (%{reason}) — wordt toch opgeslagen"
+wizard.ollama.skipping: "Ollama wordt overgeslagen."
+
+# Anthropic-stap
+wizard.anthropic.body: "Anthropic levert Claude — de meest capabele AI-assistent."
+wizard.anthropic.opt_oauth: "[1] Inloggen met OAuth (aanbevolen — opent browser)"
+wizard.anthropic.opt_apikey: "[2] API key handmatig invoeren"
+wizard.anthropic.opt_skip: "[s] Overslaan"
+wizard.anthropic.oauth_complete: "Anthropic OAuth voltooid."
+wizard.anthropic.oauth_failed: "OAuth mislukt: %{reason}"
+wizard.anthropic.retry_hint: "Je kunt later opnieuw proberen met: anvil login anthropic"
+wizard.anthropic.console_url: "Haal je key op: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Geen key ingevoerd, Anthropic wordt overgeslagen."
+wizard.anthropic.validating_key: "Key valideren... "
+wizard.anthropic.valid: "geldig"
+wizard.anthropic.could_not_verify: "kon niet verifiëren — wordt toch opgeslagen"
+wizard.anthropic.skipping: "Anthropic wordt overgeslagen."
+
+# OpenAI-stap
+wizard.openai.body: "OpenAI levert GPT-modellen voor coding en redeneren."
+wizard.openai.opt_apikey: "[1] API key invoeren"
+wizard.openai.opt_skip: "[s] Overslaan"
+wizard.openai.console_url: "Haal je key op: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "Geen key ingevoerd, OpenAI wordt overgeslagen."
+wizard.openai.validating_key: "Key valideren... "
+wizard.openai.valid: "geldig"
+wizard.openai.could_not_verify: "kon niet verifiëren — wordt toch opgeslagen"
+wizard.openai.skipping: "OpenAI wordt overgeslagen."
+
+# xAI-stap
+wizard.xai.body: "xAI levert Grok-modellen."
+wizard.xai.opt_apikey: "[1] API key invoeren"
+wizard.xai.opt_skip: "[s] Overslaan"
+wizard.xai.console_url: "Haal je key op: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "Geen key ingevoerd, xAI wordt overgeslagen."
+wizard.xai.saved: "xAI API key opgeslagen."
+wizard.xai.skipping: "xAI wordt overgeslagen."
+
+# Fallback voor onbekende keuze
+wizard.unknown_choice_skipping: "Onbekende keuze '%{choice}', %{provider} wordt overgeslagen."
+
+# Provider-prioriteit stap
+wizard.priority.none_configured: "Geen providers geconfigureerd."
+wizard.priority.configure_later: "Je kunt providers later configureren met: anvil login"
+wizard.priority.you_configured: "Je hebt geconfigureerd: %{providers}"
+wizard.priority.set_order: "Stel je providervolgorde in (eerste = primair, andere = failover):"
+wizard.priority.current_order: "Huidige volgorde:"
+wizard.priority.opt_keep: "[1] Deze volgorde behouden"
+wizard.priority.opt_reorder: "[2] Opnieuw ordenen (geef nummers op: bijv. \"2,1\")"
+wizard.priority.prompt_new_order: "Nieuwe volgorde: "
+wizard.priority.could_not_parse: "Kon volgorde niet verwerken, originele behouden."
+wizard.priority.unknown_keep: "Onbekende keuze, originele volgorde behouden."
+
+# Thinking-modus schakelaar
+wizard.thinking.title: "Thinking-modus inschakelen?"
+wizard.thinking.body_l1: "Sommige modellen (Qwen3, Claude, o3) ondersteunen uitgebreid thinking/reasoning."
+wizard.thinking.body_l2: "Wanneer ingeschakeld, toont het model zijn redenering vóór het antwoord."
+wizard.thinking.opt_yes: "[1] Ja — thinking-modus inschakelen (aanbevolen voor coding)"
+wizard.thinking.opt_no: "[2] Nee — alleen standaardantwoorden"
+wizard.thinking.enabled: "Thinking-modus ingeschakeld. Op elk moment omschakelen met /think"
+wizard.thinking.disabled: "Thinking-modus uit. Op elk moment omschakelen met /think"
+
+# TUI-indelingsstap
+wizard.layout.opt_vertical: "[1] Verticale split  (standaard)"
+wizard.layout.opt_classic: "[2] Klassiek"
+wizard.layout.opt_threepane: "[3] Drie panelen"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Workspace-tabs tonen? [1] Ja (standaard)  [2] Nee"
+
+# TUI-voorkeuren stap
+wizard.prefs.mouse_prompt: "Muiscapture inschakelen? [1] Uit (standaard, aanbevolen)  [2] Aan"
+wizard.prefs.theme_prompt: "Thema? [1] Donker (standaard)  [2] Licht  [3] Auto"
+wizard.prefs.permission_prompt: "Standaard permissiemodus? [1] ask (standaard)  [2] workspace-write  [3] danger-full-access"
+
+# Wizard-prompts
+wizard.prompt.choice_default1: "Keuze [1]: "
+wizard.prompt.choice: "Keuze: "
+
+# Post-wizard samenvattingsbanner
+wizard.summary.complete: "Setup voltooid!"
+wizard.summary.default_model: "Standaardmodel:  %{model}"
+wizard.summary.providers: "Providers:       %{providers}"
+wizard.summary.config_saved: "Config opgeslagen: %{path}"
+wizard.summary.migration: "Migratie:        %{summary}"
+wizard.summary.run_anvil: "Voer `anvil` uit om te beginnen met coderen."
+wizard.summary.type_help: "Typ `/help` voor alle commando's."
+
+# Wizard-waarschuwingen / fouten
+wizard.warn.altscreen_unavailable: "Opmerking: alt-screen wizard niet beschikbaar (%{reason})."
+wizard.warn.fallback_inline: "Terugvallen op inline / stdin prompts."
+wizard.warn.altscreen_modal: "Opmerking: alt-screen niet beschikbaar (%{reason}); terugvallen op stdin prompts."
+wizard.warn.could_not_save_config: "Waarschuwing: kon configuratie niet opslaan: %{reason}"
+
+# Ollama installatiemodal (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Stap %{step} van %{total} — Lokale AI (Ollama)"
+wizard.ollama_modal.intro: "Anvil kan Ollama direct installeren + draaien zodat je een lokaal model hebt dat offline werkt. Wil je dat Anvil Ollama voor je beheert?"
+wizard.ollama_modal.already_running: "Ollama draait al op %{url} met %{count} model(len):\n  %{models}\n\nDeze bestaande daemon gebruiken?"
+wizard.ollama_modal.already_setup_title: "Ollama is al ingesteld ✓"
+wizard.ollama_modal.resume_label: "Hervatten — gebruik de Ollama die Anvil eerder heeft geïnstalleerd"
+wizard.ollama_modal.use_existing_label: "Gebruik de systeem-Ollama die Anvil heeft gedetecteerd"
+wizard.ollama_modal.install_label: "Ollama nu installeren (Anvil downloadt + beheert) — aanbevolen"
+wizard.ollama_modal.title_local_ai: "Lokale AI (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Ik regel Ollama zelf"
+wizard.ollama_modal.choice_skip: "Overslaan — geen lokale AI"
+wizard.ollama_modal.choice_later: "Misschien later"
+wizard.ollama_modal.use_existing_title: "Bestaande Ollama gebruiken"
+wizard.ollama_modal.use_existing_body: "Standaard Ollama URL: %{url}\nDaemon: %{status}\n\nGebruik /ollama setup later als je een andere URL nodig hebt."
+wizard.ollama_modal.status_reachable: "bereikbaar"
+wizard.ollama_modal.status_not_reachable: "NIET bereikbaar — start het voordat je een bericht verstuurt"
+wizard.ollama_modal.install_failed_title: "Installatie mislukt"
+wizard.ollama_modal.install_failed_body: "Kon Ollama niet installeren:\n  %{reason}\n\nProbeer later opnieuw vanuit /ollama setup of kies een andere optie."
+wizard.ollama_modal.already_installed_title: "Ollama-binary al geïnstalleerd ✓"
+wizard.ollama_modal.already_installed_body: "%{path} gevonden uit een eerdere installatie."
+
+# Ollama fit-labels
+wizard.ollama_fit.recommended: "Aanbevolen"
+wizard.ollama_fit.fits: "Past"
+wizard.ollama_fit.tight: "Krap"
+wizard.ollama_fit.too_big: "Te groot — gaat OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — beste algemene coding (~4,7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — klein + snel (~2,0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — werkt op 8 GB RAM (~1,0 GB)"
+
+# ─── TUI — modale labels ──────────────────────────────────────────────────
+tui.modal.permission_required: " Permissie vereist "
+tui.modal.edit_lines: "Regels bewerken"
+tui.modal.edit_key_prompt: "Bewerk %{key}:"
+tui.modal.files_changed: "Gewijzigde bestanden deze beurt: +%{added} −%{removed} (voer /diff uit voor volledige unified diff)"
+
+# ─── Commando's — voice / collab / docker / k8s / iac / deps ──────────────
+cmd.docker.usage: |
+  Gebruik:
+    /docker ps                   Lijst draaiende containers
+    /docker logs <container>     Toon laatste 50 regels van containerlogs
+    /docker compose              Toon docker-compose services (indien aanwezig)
+    /docker build                Bouw image vanuit Dockerfile in huidige directory
+cmd.docker.logs_usage: "Gebruik: /docker logs <container>"
+cmd.docker.unknown_sub: "Onbekend docker-subcommando: %{sub}\nVoer `/docker help` uit voor gebruik."
+
+cmd.voice.start: |
+  Spraakinvoer — binnenkort beschikbaar
+
+  Spraakopname vereist microfoontoegang en een speech-to-text backend.
+  Gepland: /voice start  ->  microfooninvoer opnemen en als prompt injecteren.
+cmd.voice.stop: |
+  Spraakinvoer — binnenkort beschikbaar
+
+  Geen actieve spraaksessie om te stoppen.
+cmd.voice.help: |
+  Spraakinvoer (binnenkort beschikbaar)
+
+  Commando's:
+    /voice start   Begin met opnemen van microfooninvoer
+    /voice stop    Stop opname en verzend
+
+  Vereist een lokale speech-to-text engine (bijv. whisper.cpp).
+cmd.voice.unknown_sub: "Onbekend /voice-subcommando: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Samenwerken — binnenkort beschikbaar
+
+  Gepland: /collab share  ->  een deelbare sessie-ID genereren.
+  Deze functie is gereserveerd voor een toekomstige release.
+cmd.collab.join: |
+  Samenwerken — binnenkort beschikbaar
+
+  Gebruik: /collab join <session-id>
+  Deze functie is gereserveerd voor een toekomstige release.
+cmd.collab.help: |
+  Samenwerken (binnenkort beschikbaar)
+
+  Commando's:
+    /collab share          Deel deze sessie (genereert een uitnodigings-ID)
+    /collab join <id>      Sluit aan bij de gedeelde sessie van een andere gebruiker
+
+  Vereist een AnvilHub-account. Houd de changelog in de gaten voor beschikbaarheid.
+cmd.collab.unknown_sub: "Onbekend /collab-subcommando: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Gebruik:
+    /k8s pods                   Lijst pods in huidige namespace
+    /k8s logs <pod>             Tail laatste 50 regels van pod-logs
+    /k8s apply <file>           Pas een manifest toe met kubectl
+    /k8s describe <resource>    Beschrijf een resource
+cmd.k8s.kubectl_missing: "kubectl niet gevonden in PATH. Installeer het via https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Gebruik: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Gebruik: /k8s apply <file>"
+cmd.k8s.describe_usage: "Gebruik: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Onbekend /k8s-subcommando: %{args}\nVoer `/k8s help` uit voor gebruik."
+
+cmd.iac.usage: |
+  Gebruik:
+    /iac plan       Voer terraform/tofu plan uit
+    /iac apply      Voer terraform/tofu apply uit
+    /iac validate   Valideer configuratiebestanden
+    /iac drift      Detecteer infrastructuur-drift (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: bevestigingsmodal in TUI is niet opgelost. Probeer opnieuw — of voer `anvil --print /iac apply` uit vanuit een gewone shell om de CLI-bevestigingsprompt te gebruiken."
+cmd.iac.no_terraform: "Noch 'tofu' noch 'terraform' gevonden in PATH.\nInstalleer OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Hiermee worden wijzigingen op je infrastructuur toegepast. Doorgaan? (y/N) "
+cmd.iac.cancelled: "Apply geannuleerd."
+cmd.iac.unknown_sub: "Onbekend /iac-subcommando: %{sub}\nVoer `/iac help` uit voor gebruik."
+cmd.iac.no_binary_for_apply: "Geen terraform/tofu binary gevonden in PATH. Installeer OpenTofu voordat je apply uitvoert."
+cmd.iac.confirm_body_with_plan: "Hiermee worden wijzigingen op je infrastructuur toegepast.\n\n%{plan}\n\nBekijk het plan zorgvuldig voordat je bevestigt."
+cmd.iac.confirm_body_generic: "Hiermee worden wijzigingen op je infrastructuur toegepast.\n\nBekijk het plan zorgvuldig voordat je bevestigt."
+
+cmd.deps.usage: |
+  Gebruik:
+    /deps tree           Toon afhankelijkheidsboom
+    /deps outdated       Toon verouderde afhankelijkheden
+    /deps audit          Beveiligingsaudit van afhankelijkheden
+    /deps why <pkg>      Leg uit waarom een afhankelijkheid wordt opgenomen
+cmd.deps.no_package_manager: "Geen herkende package manager gevonden."
+
+# Generieke CLI-labels die over commando's worden hergebruikt
+cli.no_pr_diff: "Geen PR-diff gevonden. Zorg dat gh is geïnstalleerd, geauthenticeerd, en dat er een PR openstaat voor de huidige branch."
