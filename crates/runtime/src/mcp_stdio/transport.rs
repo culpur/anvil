@@ -11,9 +11,10 @@ use crate::mcp_client::{McpClientBootstrap, McpClientTransport, McpStdioTranspor
 
 use super::jsonrpc::{JsonRpcId, JsonRpcRequest, JsonRpcResponse};
 use super::types::{
-    McpInitializeParams, McpInitializeResult, McpListResourcesParams, McpListResourcesResult,
-    McpListToolsParams, McpListToolsResult, McpReadResourceParams, McpReadResourceResult,
-    McpToolCallParams, McpToolCallResult,
+    McpInitializeParams, McpInitializeResult, McpListPromptsParams, McpListPromptsResult,
+    McpListResourceTemplatesParams, McpListResourceTemplatesResult, McpListResourcesParams,
+    McpListResourcesResult, McpListToolsParams, McpListToolsResult, McpReadResourceParams,
+    McpReadResourceResult, McpToolCallParams, McpToolCallResult,
 };
 
 #[derive(Debug)]
@@ -225,6 +226,26 @@ impl McpStdioProcess {
         params: McpReadResourceParams,
     ) -> io::Result<JsonRpcResponse<McpReadResourceResult>> {
         self.request(id, "resources/read", Some(params)).await
+    }
+
+    /// Task #715: paginated `resources/templates/list`. The server responds
+    /// with a `next_cursor` field; callers MUST loop until exhausted.
+    pub async fn list_resource_templates(
+        &mut self,
+        id: JsonRpcId,
+        params: Option<McpListResourceTemplatesParams>,
+    ) -> io::Result<JsonRpcResponse<McpListResourceTemplatesResult>> {
+        self.request(id, "resources/templates/list", params).await
+    }
+
+    /// Task #715: paginated `prompts/list`. Same cursor protocol as the rest
+    /// of the MCP list operations.
+    pub async fn list_prompts(
+        &mut self,
+        id: JsonRpcId,
+        params: Option<McpListPromptsParams>,
+    ) -> io::Result<JsonRpcResponse<McpListPromptsResult>> {
+        self.request(id, "prompts/list", params).await
     }
 
     pub async fn terminate(&mut self) -> io::Result<()> {

@@ -10,9 +10,10 @@ use crate::mcp_client::McpClientBootstrap;
 use super::jsonrpc::{JsonRpcError, JsonRpcId, JsonRpcResponse};
 use super::transport::{spawn_mcp_stdio_process, McpStdioProcess};
 use super::types::{
-    McpInitializeClientInfo, McpInitializeParams, McpListResourcesParams, McpListToolsParams,
-    McpReadResourceParams, McpReadResourceResult, McpResource, McpTool, McpToolCallParams,
-    McpToolCallResult,
+    advance_pagination_cursor, McpInitializeClientInfo, McpInitializeParams, McpListPromptsParams,
+    McpListResourceTemplatesParams, McpListResourcesParams, McpListToolsParams,
+    McpReadResourceParams, McpReadResourceResult, McpPrompt, McpResource, McpResourceTemplate,
+    McpTool, McpToolCallParams, McpToolCallResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,8 +249,11 @@ impl McpServerManager {
                     });
                 }
 
-                match result.next_cursor {
-                    Some(next_cursor) => cursor = Some(next_cursor),
+                // Task #715: empty-string cursors are spec-equivalent to
+                // "no more pages" — guard against the server returning
+                // `Some("")` (would loop forever otherwise).
+                match advance_pagination_cursor(result.next_cursor) {
+                    Some(next) => cursor = Some(next),
                     None => break,
                 }
             }
@@ -345,13 +349,134 @@ impl McpServerManager {
 
             resources.extend(result.resources);
 
-            match result.next_cursor {
-                Some(next_cursor) => cursor = Some(next_cursor),
+            // Task #715: same empty-string guard as tools/list.
+            match advance_pagination_cursor(result.next_cursor) {
+                Some(next) => cursor = Some(next),
                 None => break,
             }
         }
 
         Ok(resources)
+    }
+
+    /// Task #715 (CC v2.1.146 parity): paginated `resources/templates/list`.
+    /// Fetches all pages until the server stops returning a non-empty
+    /// `nextCursor`. Tools, resources, templates, and prompts each have their
+    /// own pagination cursor — they do NOT share state across list ops.
+    pub async fn list_resource_templates(
+        &mut self,
+        server_name: &str,
+    ) -> Result<Vec<McpResourceTemplate>, McpServerManagerError> {
+        self.ensure_server_ready(server_name).await?;
+        let mut templates = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let request_id = self.take_request_id();
+            let response = {
+                let server = self.server_mut(server_name)?;
+                let process = server.process.as_mut().ok_or_else(|| {
+                    McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "resources/templates/list",
+                        details: "server process missing after initialization".to_string(),
+                    }
+                })?;
+                process
+                    .list_resource_templates(
+                        request_id,
+                        Some(McpListResourceTemplatesParams {
+                            cursor: cursor.clone(),
+                        }),
+                    )
+                    .await?
+            };
+
+            if let Some(error) = response.error {
+                return Err(McpServerManagerError::JsonRpc {
+                    server_name: server_name.to_string(),
+                    method: "resources/templates/list",
+                    error,
+                });
+            }
+
+            let result =
+                response
+                    .result
+                    .ok_or_else(|| McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "resources/templates/list",
+                        details: "missing result payload".to_string(),
+                    })?;
+
+            templates.extend(result.resource_templates);
+
+            match advance_pagination_cursor(result.next_cursor) {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        Ok(templates)
+    }
+
+    /// Task #715 (CC v2.1.144/146 parity): paginated `prompts/list`. Same
+    /// cursor protocol as tools / resources / templates.
+    pub async fn list_prompts(
+        &mut self,
+        server_name: &str,
+    ) -> Result<Vec<McpPrompt>, McpServerManagerError> {
+        self.ensure_server_ready(server_name).await?;
+        let mut prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let request_id = self.take_request_id();
+            let response = {
+                let server = self.server_mut(server_name)?;
+                let process = server.process.as_mut().ok_or_else(|| {
+                    McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "prompts/list",
+                        details: "server process missing after initialization".to_string(),
+                    }
+                })?;
+                process
+                    .list_prompts(
+                        request_id,
+                        Some(McpListPromptsParams {
+                            cursor: cursor.clone(),
+                        }),
+                    )
+                    .await?
+            };
+
+            if let Some(error) = response.error {
+                return Err(McpServerManagerError::JsonRpc {
+                    server_name: server_name.to_string(),
+                    method: "prompts/list",
+                    error,
+                });
+            }
+
+            let result =
+                response
+                    .result
+                    .ok_or_else(|| McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "prompts/list",
+                        details: "missing result payload".to_string(),
+                    })?;
+
+            prompts.extend(result.prompts);
+
+            match advance_pagination_cursor(result.next_cursor) {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+
+        Ok(prompts)
     }
 
     pub async fn read_resource(

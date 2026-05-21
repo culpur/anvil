@@ -9,10 +9,12 @@ pub use server_manager::{
 };
 pub use transport::{spawn_mcp_stdio_process, McpStdioProcess};
 pub use types::{
-    McpInitializeClientInfo, McpInitializeParams, McpInitializeResult, McpInitializeServerInfo,
-    McpListResourcesParams, McpListResourcesResult, McpListToolsParams, McpListToolsResult,
-    McpReadResourceParams, McpReadResourceResult, McpResource, McpResourceContents, McpTool,
-    McpToolCallContent, McpToolCallParams, McpToolCallResult,
+    advance_pagination_cursor, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
+    McpInitializeServerInfo, McpListPromptsParams, McpListPromptsResult,
+    McpListResourceTemplatesParams, McpListResourceTemplatesResult, McpListResourcesParams,
+    McpListResourcesResult, McpListToolsParams, McpListToolsResult, McpPrompt, McpPromptArgument,
+    McpReadResourceParams, McpReadResourceResult, McpResource, McpResourceContents,
+    McpResourceTemplate, McpTool, McpToolCallContent, McpToolCallParams, McpToolCallResult,
 };
 
 #[cfg(test)]
@@ -1014,6 +1016,286 @@ mod tests {
 
             cleanup_script(&script_path);
         });
+    }
+
+    // ── Task #715: MCP pagination regression tests ──────────────────────────
+    //
+    // CC v2.1.144 (tools/list) and v2.1.146 (resources/list,
+    // resources/templates/list, prompts/list) shipped a fix where servers
+    // returning a `nextCursor` were having pages beyond the first dropped on
+    // the floor. Anvil already had cursor-aware loops for tools/list and
+    // resources/list but two gaps remained:
+    //   1. An empty-string cursor (`Some("")`) was not recognised as
+    //      "no more pages" — the loop would re-request page 1 forever.
+    //   2. resources/templates/list and prompts/list had no list handler at
+    //      all (no transport method, no server-manager method).
+    // The tests below pin both fixes.
+
+    fn write_paginated_mcp_server_script() -> PathBuf {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("temp dir");
+        let script_path = root.join("paginated-mcp-server.py");
+        let script = [
+            "#!/usr/bin/env python3",
+            "import json, sys",
+            "",
+            "def read_message():",
+            "    header = b''",
+            r"    while not header.endswith(b'\r\n\r\n'):",
+            "        chunk = sys.stdin.buffer.read(1)",
+            "        if not chunk:",
+            "            return None",
+            "        header += chunk",
+            "    length = 0",
+            r"    for line in header.decode().split('\r\n'):",
+            r"        if line.lower().startswith('content-length:'):",
+            r"            length = int(line.split(':', 1)[1].strip())",
+            "    payload = sys.stdin.buffer.read(length)",
+            "    return json.loads(payload.decode())",
+            "",
+            "def send_message(message):",
+            "    payload = json.dumps(message).encode()",
+            r"    sys.stdout.buffer.write(f'Content-Length: {len(payload)}\r\n\r\n'.encode() + payload)",
+            "    sys.stdout.buffer.flush()",
+            "",
+            "# Pagination scheme:",
+            "#   tools/list  : page 1 -> 2 tools + nextCursor='page2'",
+            "#                 page 2 -> 2 tools + no cursor (final).",
+            "#   resources/templates/list : 1 template/page + nextCursor='page2'",
+            "#                              page 2 -> 1 template + no cursor.",
+            "#   prompts/list : page 1 -> 1 prompt + nextCursor='page2'",
+            "#                  page 2 -> 1 prompt + nextCursor='' (empty,",
+            "#                  spec-equivalent to no-more; v2.2.18 task #715).",
+            "while True:",
+            "    request = read_message()",
+            "    if request is None:",
+            "        break",
+            "    method = request['method']",
+            "    params = request.get('params') or {}",
+            "    if method == 'initialize':",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': {",
+            "                'protocolVersion': params.get('protocolVersion', '2025-03-26'),",
+            "                'capabilities': {'tools': {}, 'resources': {}, 'prompts': {}},",
+            "                'serverInfo': {'name': 'paginated-mcp', 'version': '1.0.0'}",
+            "            }",
+            "        })",
+            "    elif method == 'tools/list':",
+            "        cursor = params.get('cursor')",
+            "        if cursor is None:",
+            "            tools = [",
+            "                {'name': 'alpha', 'inputSchema': {'type': 'object'}},",
+            "                {'name': 'bravo', 'inputSchema': {'type': 'object'}},",
+            "            ]",
+            "            next_cursor = 'page2'",
+            "        elif cursor == 'page2':",
+            "            tools = [",
+            "                {'name': 'charlie', 'inputSchema': {'type': 'object'}},",
+            "                {'name': 'delta', 'inputSchema': {'type': 'object'}},",
+            "            ]",
+            "            next_cursor = None",
+            "        else:",
+            "            tools = []",
+            "            next_cursor = None",
+            "        result = {'tools': tools}",
+            "        if next_cursor is not None:",
+            "            result['nextCursor'] = next_cursor",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': result,",
+            "        })",
+            "    elif method == 'resources/templates/list':",
+            "        cursor = params.get('cursor')",
+            "        if cursor is None:",
+            "            templates = [{'uriTemplate': 'file://logs/{date}.log', 'name': 'log'}]",
+            "            next_cursor = 'page2'",
+            "        else:",
+            "            templates = [{'uriTemplate': 'file://reports/{kind}.txt', 'name': 'report'}]",
+            "            next_cursor = None",
+            "        result = {'resourceTemplates': templates}",
+            "        if next_cursor is not None:",
+            "            result['nextCursor'] = next_cursor",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': result,",
+            "        })",
+            "    elif method == 'prompts/list':",
+            "        cursor = params.get('cursor')",
+            "        if cursor is None:",
+            "            prompts = [{'name': 'summarise'}]",
+            "            next_cursor = 'page2'",
+            "        else:",
+            "            # Task #715: an empty-string cursor MUST terminate the loop.",
+            "            prompts = [{'name': 'translate'}]",
+            "            next_cursor = ''",
+            "        result = {'prompts': prompts}",
+            "        if next_cursor is not None:",
+            "            result['nextCursor'] = next_cursor",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': result,",
+            "        })",
+            "    else:",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'error': {'code': -32601, 'message': f'unknown method: {method}'},",
+            "        })",
+            "",
+        ]
+        .join("\n");
+        fs::write(&script_path, script).expect("write script");
+        let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).expect("chmod");
+        script_path
+    }
+
+    fn paginated_server_config(script_path: &Path) -> ScopedMcpServerConfig {
+        ScopedMcpServerConfig {
+            scope: ConfigSource::Local,
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: python_command(),
+                args: vec![script_path.to_string_lossy().into_owned()],
+                env: BTreeMap::new(),
+                always_load: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn manager_discover_tools_concatenates_all_paginated_pages() {
+        // Spec: an MCP server that splits its tools across two
+        // `tools/list` responses (page 1 returns `nextCursor: "page2"`,
+        // page 2 returns no cursor) MUST surface ALL four tools to the
+        // registry. Before task #715 only page 1 was consumed.
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_paginated_mcp_server_script();
+            let servers = BTreeMap::from([(
+                "paginated".to_string(),
+                paginated_server_config(&script_path),
+            )]);
+            let mut manager = McpServerManager::from_servers(&servers);
+
+            let tools = manager.discover_tools().await.expect("discover tools");
+            let names: Vec<String> = tools.iter().map(|t| t.raw_name.clone()).collect();
+
+            assert_eq!(
+                names,
+                vec![
+                    "alpha".to_string(),
+                    "bravo".to_string(),
+                    "charlie".to_string(),
+                    "delta".to_string(),
+                ],
+                "all four tools across both pages must be discovered"
+            );
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn manager_list_resource_templates_paginates_until_cursor_exhausted() {
+        // Spec: `resources/templates/list` (added in task #715) follows
+        // the same cursor protocol as tools/list. Two pages, one
+        // template each, must concatenate.
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_paginated_mcp_server_script();
+            let servers = BTreeMap::from([(
+                "paginated".to_string(),
+                paginated_server_config(&script_path),
+            )]);
+            let mut manager = McpServerManager::from_servers(&servers);
+
+            let templates = manager
+                .list_resource_templates("paginated")
+                .await
+                .expect("list templates");
+            let uris: Vec<String> = templates
+                .iter()
+                .map(|t| t.uri_template.clone())
+                .collect();
+
+            assert_eq!(
+                uris,
+                vec![
+                    "file://logs/{date}.log".to_string(),
+                    "file://reports/{kind}.txt".to_string(),
+                ],
+                "templates from both pages must be returned"
+            );
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn manager_list_prompts_terminates_on_empty_string_cursor() {
+        // Spec: per MCP spec a server may signal "no more pages" by
+        // returning `nextCursor: ""` instead of omitting the field.
+        // Before task #715 the loop only broke on `None` and would
+        // re-request page 2 forever. This test ensures BOTH the empty
+        // cursor terminates AND that both prompts (page 1 + page 2)
+        // are returned.
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_paginated_mcp_server_script();
+            let servers = BTreeMap::from([(
+                "paginated".to_string(),
+                paginated_server_config(&script_path),
+            )]);
+            let mut manager = McpServerManager::from_servers(&servers);
+
+            let prompts = manager.list_prompts("paginated").await.expect("list prompts");
+            let names: Vec<String> = prompts.iter().map(|p| p.name.clone()).collect();
+
+            assert_eq!(
+                names,
+                vec!["summarise".to_string(), "translate".to_string()],
+                "both prompts must be returned and the empty-string cursor MUST terminate"
+            );
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn advance_pagination_cursor_treats_empty_and_whitespace_as_exhausted() {
+        use super::advance_pagination_cursor;
+        assert_eq!(advance_pagination_cursor(None), None);
+        assert_eq!(advance_pagination_cursor(Some(String::new())), None);
+        assert_eq!(advance_pagination_cursor(Some("   ".to_string())), None);
+        assert_eq!(
+            advance_pagination_cursor(Some("page2".to_string())),
+            Some("page2".to_string())
+        );
+        // Non-empty cursors with surrounding whitespace pass through
+        // unchanged (we don't trim mid-cursor — that would corrupt opaque
+        // tokens).
+        assert_eq!(
+            advance_pagination_cursor(Some("  page2".to_string())),
+            Some("  page2".to_string())
+        );
     }
 
     // CC-DRIFT-B8 contract test: empty-string values inside MCP tool

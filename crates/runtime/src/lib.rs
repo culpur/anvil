@@ -122,11 +122,13 @@ pub use mcp_client::{
     McpRemoteTransport, McpSdkTransport, McpStdioTransport,
 };
 pub use mcp_stdio::{
-    spawn_mcp_stdio_process, JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-    ManagedMcpTool, McpInitializeClientInfo, McpInitializeParams, McpInitializeResult,
-    McpInitializeServerInfo, McpListResourcesParams, McpListResourcesResult, McpListToolsParams,
-    McpListToolsResult, McpReadResourceParams, McpReadResourceResult, McpResource,
-    McpResourceContents, McpServerManager, McpServerManagerError, McpStdioProcess, McpTool,
+    advance_pagination_cursor, spawn_mcp_stdio_process, JsonRpcError, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, ManagedMcpTool, McpInitializeClientInfo, McpInitializeParams,
+    McpInitializeResult, McpInitializeServerInfo, McpListPromptsParams, McpListPromptsResult,
+    McpListResourceTemplatesParams, McpListResourceTemplatesResult, McpListResourcesParams,
+    McpListResourcesResult, McpListToolsParams, McpListToolsResult, McpPrompt, McpPromptArgument,
+    McpReadResourceParams, McpReadResourceResult, McpResource, McpResourceContents,
+    McpResourceTemplate, McpServerManager, McpServerManagerError, McpStdioProcess, McpTool,
     McpToolCallContent, McpToolCallParams, McpToolCallResult, UnsupportedMcpServer,
 };
 pub use oauth::{
