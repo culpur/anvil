@@ -455,6 +455,23 @@ fn render_cli_error(problem: &str) -> String {
     lines.join("\n")
 }
 
+/// Parse `--turns N` / `--turns=N` out of the consolidate-subcommand
+/// tail for `/reflect consolidate` (task #735).  Returns `None` when no
+/// flag is present so the consolidation helper falls back to
+/// `DEFAULT_CONSOLIDATE_WINDOW`.
+fn parse_reflect_turns_tail(rest: &str) -> Option<usize> {
+    let mut tokens = rest.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        if tok == "--turns" {
+            return tokens.next().and_then(|n| n.parse::<usize>().ok());
+        }
+        if let Some(v) = tok.strip_prefix("--turns=") {
+            return v.parse::<usize>().ok();
+        }
+    }
+    None
+}
+
 /// Phase A5 (task #645) — apply the runtime locale at the very top of
 /// `run()`, before `parse_args` and before any `t!()` call site.
 ///
@@ -7717,7 +7734,23 @@ impl LiveCli {
                             out
                         }
                     }
-                    Some(other) => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad]."),
+                    Some(c) if c.starts_with("consolidate") => {
+                        // task #735 — Layer 6 reflective consolidation.
+                        // Strip the leading "consolidate" verb so we
+                        // forward only the flag tail to the parser.
+                        let tail = c.strip_prefix("consolidate").unwrap_or("").trim();
+                        let turns = parse_reflect_turns_tail(tail);
+                        let detector = ts.detector().clone();
+                        let session_snapshot = rt.session().clone();
+                        let store = runtime::daily::DailyStore::new();
+                        commands::handlers::handle_reflect_consolidate(
+                            &session_snapshot,
+                            &store,
+                            Some(&detector),
+                            turns,
+                        )
+                    }
+                    Some(other) => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad|consolidate [--turns N]]."),
                 };
                 (msg, false)
             }

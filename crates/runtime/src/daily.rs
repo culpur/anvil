@@ -209,6 +209,30 @@ impl DailyStore {
         open
     }
 
+    /// Append a free-form markdown block to today's human-readable daily
+    /// log at `~/.anvil/daily/<date>.md`.  The `tag` is written as an HTML
+    /// comment (`<!-- tag: <tag> -->`) and as a `# tag: <tag>` line so
+    /// both machine-grep and visual inspection can locate tagged blocks.
+    ///
+    /// Task #735 (Layer 6 reflective consolidation): used by `/reflect`
+    /// to write the reflection recap with `tag = "reflection"` so the
+    /// next day's summary reader can fold reflections back in.
+    pub fn append_to_today(&self, content: &str, tag: &str) -> std::io::Result<()> {
+        fs::create_dir_all(&self.dir)?;
+        let path = self.dir.join(format!("{}.md", today_date()));
+        let mut existing = fs::read_to_string(&path).unwrap_or_default();
+        if !existing.is_empty() && !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        let block = format!(
+            "\n<!-- tag: {tag} -->\n# tag: {tag}\n{content}\n",
+            tag = tag,
+            content = content.trim_end_matches('\n'),
+        );
+        existing.push_str(&block);
+        fs::write(&path, existing)
+    }
+
     /// Return the last `days` daily summaries (most recent first).
     #[must_use]
     pub fn recent(&self, days: usize) -> Vec<DailySummary> {
@@ -668,6 +692,45 @@ mod tests {
 
         let (_completed, open) = extract_tasks(&messages);
         assert_eq!(open.len(), 1, "should have 1 open task");
+    }
+
+    // ── append_to_today (Layer 6 reflective consolidation, task #735) ────────
+
+    #[test]
+    fn append_to_today_writes_tag_header_and_body() {
+        let (store, dir) = temp_store();
+        store
+            .append_to_today("## hello\nbody line\n", "reflection")
+            .expect("append must succeed");
+
+        let today = today_date();
+        let path = dir.path().join(format!("{today}.md"));
+        let body = fs::read_to_string(&path).expect("md file written");
+        assert!(body.contains("<!-- tag: reflection -->"), "html-comment tag missing in:\n{body}");
+        assert!(body.contains("# tag: reflection"), "human tag missing in:\n{body}");
+        assert!(body.contains("## hello"), "body missing in:\n{body}");
+    }
+
+    #[test]
+    fn append_to_today_appends_multiple_blocks() {
+        let (store, dir) = temp_store();
+        store
+            .append_to_today("first", "reflection")
+            .expect("first append");
+        store
+            .append_to_today("second", "reflection")
+            .expect("second append");
+
+        let today = today_date();
+        let body = fs::read_to_string(dir.path().join(format!("{today}.md")))
+            .expect("md file");
+        assert!(body.contains("first"));
+        assert!(body.contains("second"));
+        assert_eq!(
+            body.matches("# tag: reflection").count(),
+            2,
+            "two tagged blocks expected, got:\n{body}"
+        );
     }
 
     // ── Recent list ───────────────────────────────────────────────────────────

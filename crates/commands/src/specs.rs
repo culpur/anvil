@@ -2121,11 +2121,13 @@ crate `skill_chain_exec` module for the full schema and binding grammar.",
     SlashCommandSpec {
         name: "reflect",
         aliases: &[],
-        summary: "Show reflection loop status - failed attempts, stuck patterns, scratchpad",
-        argument_hint: Some("[status|window|scratchpad]"),
+        summary: "Show reflection loop status or run a consolidation pass (#735, L6)",
+        argument_hint: Some("[status|window|scratchpad|consolidate [--turns N]]"),
         resume_supported: false,
         category: SlashCommandCategory::Automation,
-        detailed_help: "/reflect - Inspect the autonomous reflection loop state (v2.2.17)",
+        detailed_help: "/reflect - Inspect the autonomous reflection loop state OR run \
+                        `/reflect consolidate` to scan recent turns + write a pattern \
+                        recap to today's daily log (task #735, Memory Cohesion Layer 6).",
         subcommands: crate::subcommands::REFLECT_SUBCOMMANDS,
         tui_available: true,
         web_available: true,

@@ -650,11 +650,22 @@ pub fn handle_slash_command(
         }
         SlashCommand::Reflect { action } => {
             runtime::reflection::otel_user_invoked();
-            let message = match action.as_deref() {
-                None | Some("status") => "/reflect - reflection status requires an active session. Run `anvil` to inspect live TurnState. Subcommands: /reflect window, /reflect scratchpad.".to_string(),
-                Some("window") => "/reflect window - requires an active session. Run `anvil` and re-issue /reflect window to dump the last 20 tool events.".to_string(),
-                Some("scratchpad") => "/reflect scratchpad - requires an active session. Run `anvil` and re-issue /reflect scratchpad to list this turn's failed attempts.".to_string(),
-                Some(other) => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad]."),
+            let action_str = action.as_deref().unwrap_or("").trim();
+            let (verb, rest) = split_action(action_str);
+            let message = match verb {
+                "" | "status" => "/reflect - reflection status requires an active session. Run `anvil` to inspect live TurnState. Subcommands: /reflect window, /reflect scratchpad, /reflect consolidate [--turns N].".to_string(),
+                "window" => "/reflect window - requires an active session. Run `anvil` and re-issue /reflect window to dump the last 20 tool events.".to_string(),
+                "scratchpad" => "/reflect scratchpad - requires an active session. Run `anvil` and re-issue /reflect scratchpad to list this turn's failed attempts.".to_string(),
+                "consolidate" => {
+                    // Headless path: scan the loaded session (no live
+                    // detector available) and write the recap to today's
+                    // daily log.  The TUI path supplies the live detector
+                    // so strategy-switch findings can fire.
+                    let turns = parse_reflect_turns(rest);
+                    let store = runtime::daily::DailyStore::new();
+                    handle_reflect_consolidate(session, &store, None, turns)
+                }
+                other => format!("/reflect: unknown subcommand `{other}`. Try /reflect [status|window|scratchpad|consolidate [--turns N]]."),
             };
             Some(SlashCommandResult { message, session: session.clone() })
         }
@@ -4980,6 +4991,67 @@ fn rewind_message_preview(message: &runtime::ConversationMessage) -> String {
     }
 }
 
+// ─── /reflect helpers (task #735, Memory Cohesion Layer 6) ───────────────
+
+/// Split a `Reflect.action` payload into the verb (first token) and the
+/// trailing argument string.  `""` for both sides when `payload` is empty.
+fn split_action(payload: &str) -> (&str, &str) {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return ("", "");
+    }
+    match trimmed.find(char::is_whitespace) {
+        Some(idx) => (&trimmed[..idx], trimmed[idx..].trim()),
+        None => (trimmed, ""),
+    }
+}
+
+/// Parse `--turns N` out of the consolidate arg tail.  Falls back to
+/// `None` (meaning "use the default window") on any parse error so the
+/// caller never errors on bad CLI input — the recap just uses the
+/// default window.
+fn parse_reflect_turns(rest: &str) -> Option<usize> {
+    let mut tokens = rest.split_whitespace();
+    while let Some(tok) = tokens.next() {
+        if tok == "--turns" {
+            return tokens.next().and_then(|n| n.parse::<usize>().ok());
+        }
+        if let Some(v) = tok.strip_prefix("--turns=") {
+            return v.parse::<usize>().ok();
+        }
+    }
+    None
+}
+
+/// Run a reflective consolidation pass on `session` and append the recap
+/// to today's daily log via `store`.  Returns the rendered markdown
+/// suitable for the TUI / REPL to display verbatim.
+///
+/// `detector` is optional — when supplied, strategy-switch findings can
+/// fire.  The headless slash path passes `None`; the live TUI path
+/// passes a borrow of the active `ConversationRuntime`'s detector.
+#[must_use]
+pub fn handle_reflect_consolidate(
+    session: &Session,
+    store: &runtime::daily::DailyStore,
+    detector: Option<&runtime::reflection::StuckDetector>,
+    turns: Option<usize>,
+) -> String {
+    use runtime::reflection::{consolidate_session, DEFAULT_CONSOLIDATE_WINDOW, RECAP_TAG};
+
+    let window = turns.unwrap_or(DEFAULT_CONSOLIDATE_WINDOW);
+    let date = runtime::daily::today_date();
+    let recap = consolidate_session(&session.messages, detector, window, &date);
+    let body = recap.render_markdown();
+
+    let footer = match store.append_to_today(&body, RECAP_TAG) {
+        Ok(()) => String::new(),
+        Err(e) => format!("\n[warn] could not append reflection to daily log: {e}\n"),
+    };
+
+    format!("{body}{footer}")
+}
+
 #[cfg(test)]
 mod memory_tests {
     use super::*;
@@ -6665,6 +6737,158 @@ mod memory_tests {
         assert!(
             r.contains("episodic") && (r.contains("dry-run") || r.contains("0 candidate")),
             "router must hand off to episodic handler; got: {r}"
+        );
+    }
+}
+
+// ─── /reflect consolidation tests (task #735, Memory Cohesion Layer 6) ──
+
+#[cfg(test)]
+mod reflect_tests {
+    use super::*;
+    use runtime::{ContentBlock, ConversationMessage, MessageRole, Session};
+
+    fn tool_result_msg(tool: &str, is_error: bool) -> ConversationMessage {
+        ConversationMessage {
+            role: MessageRole::Tool,
+            blocks: vec![ContentBlock::ToolResult {
+                tool_use_id: "id".to_owned(),
+                tool_name: tool.to_owned(),
+                output: if is_error { "boom" } else { "ok" }.to_owned(),
+                is_error,
+            }],
+            usage: None,
+        }
+    }
+
+    fn temp_store() -> (runtime::daily::DailyStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = runtime::daily::DailyStore::with_dir(dir.path().to_path_buf());
+        (store, dir)
+    }
+
+    #[test]
+    fn reflect_emits_repeated_failure_pattern() {
+        let session = Session {
+            version: 1,
+            messages: vec![
+                tool_result_msg("Bash", true),
+                tool_result_msg("Bash", true),
+                tool_result_msg("Bash", true),
+            ],
+        };
+        let (store, _dir) = temp_store();
+        let out = handle_reflect_consolidate(&session, &store, None, Some(20));
+        assert!(
+            out.contains("repeated failure on Bash"),
+            "expected repeated-failure recap, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn reflect_emits_stable_usage_pattern() {
+        let session = Session {
+            version: 1,
+            messages: (0..5).map(|_| tool_result_msg("Read", false)).collect(),
+        };
+        let (store, _dir) = temp_store();
+        let out = handle_reflect_consolidate(&session, &store, None, Some(20));
+        assert!(
+            out.contains("stable usage of Read"),
+            "expected stable-usage recap, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn reflect_strategy_switch_detected_via_detector_signal() {
+        use runtime::reflection::{StuckDetector, ToolEvent};
+        let mut det = StuckDetector::with_defaults();
+        det.begin_turn();
+        for _ in 0..3 {
+            det.observe(ToolEvent::new("Bash", "x", Some("E".into()), None));
+        }
+        let session = Session { version: 1, messages: vec![] };
+        let (store, _dir) = temp_store();
+        let out = handle_reflect_consolidate(&session, &store, Some(&det), Some(20));
+        assert!(
+            out.contains("strategy switch fired"),
+            "expected strategy-switch finding when detector has last_fired, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn reflect_appends_to_daily_with_reflection_tag() {
+        let session = Session {
+            version: 1,
+            messages: vec![
+                tool_result_msg("Bash", true),
+                tool_result_msg("Bash", true),
+                tool_result_msg("Bash", true),
+            ],
+        };
+        let (store, dir) = temp_store();
+        let _ = handle_reflect_consolidate(&session, &store, None, Some(20));
+
+        let today = runtime::daily::today_date();
+        let path = dir.path().join(format!("{today}.md"));
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("daily log not written at {}: {e}", path.display()));
+        assert!(
+            body.contains("# tag: reflection"),
+            "daily log must contain reflection tag, got:\n{body}"
+        );
+        assert!(
+            body.contains("## Reflection -"),
+            "daily log must contain reflection header, got:\n{body}"
+        );
+        assert!(
+            body.contains("repeated failure on Bash"),
+            "daily log must contain the recap body, got:\n{body}"
+        );
+    }
+
+    #[test]
+    fn reflect_with_empty_history_returns_no_findings_message() {
+        let session = Session { version: 1, messages: vec![] };
+        let (store, _dir) = temp_store();
+        let out = handle_reflect_consolidate(&session, &store, None, Some(20));
+        assert!(
+            out.contains("No patterns yet"),
+            "expected no-findings message on empty session, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn parse_reflect_turns_handles_both_forms() {
+        assert_eq!(parse_reflect_turns("--turns 30"), Some(30));
+        assert_eq!(parse_reflect_turns("--turns=42"), Some(42));
+        assert_eq!(parse_reflect_turns("--turns abc"), None);
+        assert_eq!(parse_reflect_turns(""), None);
+    }
+
+    #[test]
+    fn split_action_splits_verb_and_rest() {
+        assert_eq!(split_action("consolidate --turns 30"), ("consolidate", "--turns 30"));
+        assert_eq!(split_action("status"), ("status", ""));
+        assert_eq!(split_action("  "), ("", ""));
+    }
+
+    #[test]
+    fn reflect_handler_routes_consolidate_subcommand() {
+        // Dispatch a `/reflect consolidate` SlashCommand through the
+        // public handler and assert it routes to the consolidation
+        // helper (recap header in the output).
+        let session = Session { version: 1, messages: vec![] };
+        let result = handle_slash_command(
+            "/reflect consolidate",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("/reflect must produce a result");
+        assert!(
+            result.message.contains("## Reflection -"),
+            "consolidate route must emit a markdown recap, got:\n{}",
+            result.message
         );
     }
 }

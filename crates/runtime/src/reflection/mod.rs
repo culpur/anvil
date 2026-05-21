@@ -6,10 +6,15 @@
 //! autonomy axis away from the LLM (no automatic retry; we just inject a
 //! system-reminder).
 
+pub mod consolidate;
 pub mod scratchpad;
 pub mod strategy;
 pub mod stuck_detector;
 
+pub use consolidate::{
+    consolidate_session, reflect_daemon_tick, Finding, ReflectionRecap,
+    DEFAULT_CONSOLIDATE_WINDOW, RECAP_TAG, REPEATED_FAILURE_THRESHOLD, STABLE_USAGE_THRESHOLD,
+};
 pub use scratchpad::{FailedAttempt, Scratchpad, SCRATCHPAD_CAPACITY};
 pub use strategy::{summarize_failed_attempts, wrap_as_system_reminder};
 pub use stuck_detector::{

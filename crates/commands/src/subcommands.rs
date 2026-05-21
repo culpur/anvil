@@ -743,6 +743,13 @@ pub const REFLECT_SUBCOMMANDS: &[SubcommandSpec] = &[
         args: &[],
         subcommands: &[],
     },
+    // task #735 — Memory Cohesion Layer 6 reflective consolidation.
+    SubcommandSpec {
+        name: "consolidate",
+        summary: "Scan recent turns, emit pattern recap, append to today's daily log",
+        args: &[ArgSpec::FreeText { hint: "[--turns <N>]" }],
+        subcommands: &[],
+    },
 ];
 
 pub const SKILL_SUBCOMMANDS: &[SubcommandSpec] = &[
