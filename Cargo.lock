@@ -4670,6 +4670,7 @@ name = "tools"
 version = "2.2.18"
 dependencies = [
  "api",
+ "base64",
  "dirs-next",
  "plugins",
  "reqwest",
