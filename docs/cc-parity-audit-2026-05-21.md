@@ -315,3 +315,21 @@ Top 10 by severity/relevance to Anvil parity (partial list; full list shows 50+ 
 ---
 
 *Audit by QA agent. Source code not modified. Community issues triage includes 50+ open issues; top 10 shown.*
+
+---
+
+## Appendix: File-path corrections (from implementing agents)
+
+After parallel agents (`acf0439a` P0, `aff1ecc2` P1, `af2250df` P2, `a6ec2efc` P1+P2 secondary) shipped the 15 FILE-AS-TASK items, the following audit-doc paths needed correction. Recording them here for future audits:
+
+- **TASK-C / TASK-K (MCP pagination)**: audit pointed at `crates/runtime/src/mcp_client.rs`, but real list-fetching is in `crates/runtime/src/mcp_stdio/{transport.rs, server_manager.rs, types.rs}`. `mcp_client.rs` is only config-bootstrap.
+- **TASK-D (mime-mismatch)**: audit said `crates/tools/src/file_ops.rs:40-60`. Real `read_file` dispatch is at `crates/runtime/src/file_ops.rs::read_file`; `crates/tools/src/file_ops.rs` is the tool surface only.
+- **TASK-E (/branch post-EnterWorktree)**: audit said `crates/anvil-cli/src/commands/branch.rs` — that file does NOT exist. Anvil's `/branch` is the git operation in `crates/commands/src/git.rs::handle_branch_slash_command`. CC's conversation-fork `/branch` is satisfied by Anvil's `/fork` (#344 done v2.2.12). Snapshot infra at `crates/tools/src/worktree_ops.rs` was the real Anvil-side work.
+- **TASK-H (Bash env bypass)**: audit said `crates/tools/src/bash.rs`. Real matcher is `crates/runtime/src/auto_mode.rs::AutoModeConfig::matches_hard_deny`; bash exec is in `crates/runtime/src/bash.rs`.
+- **TASK-I (spinner freeze)**: audit said `crates/anvil-cli/src/tui/` (generic). Real dispatch sites: `tui/input_handler.rs:131-235`, `tui/mod.rs:2527-2548` (`wait_for_turn_end`), `tui/mod.rs:2699-2787` (`wait_for_turn_end_for_tab`). New helper lives at `tui/spinner_pump.rs`.
+- **TASK-J (skill fork loop)**: audit said `crates/plugins/src/runner.rs` — that file did NOT exist. The agent created it for the first time.
+- **TASK-M (/rename theme reset)**: audit said `crates/anvil-cli/src/theme.rs` — that file does NOT exist. Theme is `crates/runtime/src/theme.rs`. Rename handler is in `crates/anvil-cli/src/main.rs` (~line 9043) using `session_meta::set_session_name`.
+- **TASK-N (resume model)**: audit said `crates/anvil-cli/src/session.rs`. That file exists but is metadata-only; persistent model field is in `crates/anvil-cli/src/session_meta.rs` (sidecar). Resume dispatch in `main.rs::resume_session`.
+- **TASK-O (worktree MCP config)**: audit said `crates/tools/src/worktree_ops.rs` + generic MCP resolution. Real MCP config resolution is `runtime::ConfigLoader::default_for(cwd).load().feature_config().mcp()` at `crates/runtime/src/config/mcp.rs` + `crates/runtime/src/config/mod.rs`. Snapshot infra landed correctly at `worktree_ops.rs`.
+
+Lesson for future audits: when auditing from memory, the actual file paths often disagree with intuition. Always `rg` / `find` to verify before filing as a "you'll find it at" hint.
