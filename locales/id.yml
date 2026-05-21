@@ -1,0 +1,387 @@
+# Header / footer TUI
+footer.help: "Tab: lengkapi  Enter: kirim  Ctrl+C: batal  Ctrl+D: keluar  /help: perintah"
+footer.configure: "↑↓: navigasi  Enter: pilih  Esc: kembali  Ctrl+C: keluar"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Status / sesi
+status.model: "Model"
+status.provider: "Provider"
+status.permission: "Mode izin"
+status.session: "Sesi"
+status.messages: "Pesan"
+status.turns: "Giliran"
+status.tokens_used: "Token terpakai"
+
+# Deskripsi perintah (digunakan pada keluaran /help)
+cmd.help.summary: "Tampilkan perintah slash yang tersedia"
+cmd.status.summary: "Tampilkan status sesi saat ini"
+cmd.compact.summary: "Padatkan riwayat sesi lokal"
+cmd.model.summary: "Tampilkan atau ganti model aktif"
+cmd.permissions.summary: "Tampilkan atau ganti mode izin aktif"
+cmd.clear.summary: "Mulai sesi lokal baru"
+cmd.cost.summary: "Tampilkan total penggunaan token untuk sesi ini"
+cmd.provider.summary: "Tampilkan, ganti, atau daftar provider beserta model-nya"
+cmd.login.summary: "Login atau perbarui kredensial untuk sebuah provider"
+cmd.resume.summary: "Muat sesi tersimpan ke dalam REPL"
+cmd.config.summary: "Periksa berkas konfigurasi Anvil atau bagian yang digabung"
+cmd.memory.summary: "Periksa berkas memori instruksi Anvil yang dimuat"
+cmd.init.summary: "Buat berkas ANVIL.md awal untuk repo ini"
+cmd.diff.summary: "Tampilkan git diff untuk perubahan pada workspace saat ini"
+cmd.version.summary: "Tampilkan versi CLI dan informasi build"
+cmd.bughunter.summary: "Periksa kode untuk kemungkinan bug"
+cmd.branch.summary: "Daftar, buat, atau pindah branch git"
+cmd.worktree.summary: "Daftar, tambah, hapus, atau bersihkan worktree git"
+cmd.commit.summary: "Buat pesan commit dan buat commit git"
+cmd.pr.summary: "Susun draf atau buat pull request dari percakapan"
+cmd.issue.summary: "Susun draf atau buat issue GitHub dari percakapan"
+cmd.hub.summary: "Telusuri dan instal paket dari marketplace AnvilHub"
+cmd.language.summary: "Atur bahasa tampilan (en, de, es, fr, ja, zh-CN, ru)"
+
+# Pesan kesalahan
+error.unknown_command: "Perintah tidak dikenal: /%{name}"
+error.missing_argument: "Argumen wajib hilang untuk /%{cmd}"
+error.not_available_tui: "Perintah tidak tersedia dalam mode TUI."
+error.provider_not_found: "Provider tidak ditemukan: %{name}"
+error.hub_fetch_failed: "Gagal mengambil paket dari AnvilHub: %{reason}"
+error.hub_install_failed: "Gagal menginstal paket '%{name}': %{reason}"
+error.hub_not_found: "Paket tidak ditemukan: %{name}"
+error.invalid_language: "Bahasa tidak didukung '%{lang}'. Tersedia: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Gagal menyimpan konfigurasi: %{reason}"
+
+# Pesan perintah Hub
+hub.top_packages: "Paket teratas di AnvilHub"
+hub.search_results: "Hasil pencarian untuk \"%{query}\""
+hub.no_results: "Tidak ada paket ditemukan."
+hub.installing: "Menginstal %{name} %{version}..."
+hub.installed: "Berhasil menginstal %{name} %{version} ke %{path}"
+hub.downloads: "%{count} unduhan"
+hub.package_info: "Paket: %{name} v%{version} oleh %{author}"
+hub.package_type: "Jenis: %{type}"
+hub.package_desc: "Deskripsi: %{desc}"
+hub.usage_hint: |
+  Penggunaan:
+    /hub                     Tampilkan paket teratas berdasarkan kategori
+    /hub search <kueri>      Cari semua paket
+    /hub skills              Skill teratas
+    /hub plugins             Plugin teratas
+    /hub agents              Agent teratas
+    /hub themes              Tema teratas
+    /hub install <nama>      Unduh dan instal sebuah paket
+    /hub info <nama>         Tampilkan detail paket
+
+# Pesan perintah Language
+language.current: "Bahasa saat ini: %{lang}"
+language.changed: "Bahasa diatur ke: %{lang}"
+language.available: "Bahasa tersedia: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Penggunaan: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Label menu Configure
+configure.title: "Konfigurasi Anvil"
+configure.providers: "Provider"
+configure.models: "Model"
+configure.context: "Konteks"
+configure.search: "Pencarian"
+configure.permissions: "Izin"
+configure.display: "Tampilan"
+configure.integrations: "Integrasi"
+configure.language: "Bahasa"
+
+# Prompt login / provider
+login.prompt_provider: "Pilih provider untuk login [anthropic/openai/ollama]: "
+login.success: "Login berhasil untuk %{provider}."
+login.failed: "Login gagal: %{reason}"
+login.enter_api_key: "Masukkan API key: "
+login.testing_connection: "Menguji koneksi ke %{host}..."
+login.connected: "Terhubung"
+login.connection_failed: "Tidak dapat terhubung"
+
+# ─── Wizard — penyiapan awal ──────────────────────────────────────────────
+# Kartu sambutan (titik masuk alt-screen)
+wizard.welcome.title: "Selamat datang di Anvil v%{version}"
+wizard.welcome.tagline: "Mitra koding AI Anda yang berjalan di mana saja — Anthropic, OpenAI, Ollama, dan 32 provider lainnya."
+wizard.welcome.kicker: "Mari kita siapkan."
+wizard.welcome.hint: "Tekan Enter untuk melanjutkan · Esc untuk melewati penyiapan"
+
+# Banner inline (jalur fallback stdin)
+wizard.banner.welcome: "⚒  Selamat datang di Anvil v%{version}"
+wizard.banner.subtitle: "   Asisten Koding bertenaga AI dari Culpur Defense"
+wizard.banner.lets_setup: "   Mari kita siapkan."
+
+# Judul langkah
+wizard.step_header: "Langkah %{step} dari %{total}: %{title}"
+wizard.step.vault_title: "Penyiapan Vault (enkripsi kredensial)"
+wizard.step.ollama_title: "Ollama (AI lokal)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Prioritas provider & model default"
+wizard.step.tui_layout_title: "Tata Letak TUI"
+wizard.step.tui_prefs_title: "Preferensi TUI"
+
+# Langkah bahasa (Phase A6, task #645)
+wizard.language.title: "Pilih bahasa Anda"
+wizard.language.body: "TUI Anvil dan wizard penyiapan awal akan menggunakan bahasa ini. Anda dapat mengubahnya nanti dengan /language atau di /configure."
+wizard.language.continue: "Lanjutkan"
+wizard.language.skip: "Lewati"
+
+# Langkah vault
+wizard.vault.body_l1: "Anvil menyimpan API key Anda dalam vault terenkripsi AES-256-GCM."
+wizard.vault.body_l2: "Anda mengatur kata sandi master sekarang — kata sandi ini tidak pernah disimpan di mana pun."
+wizard.vault.body_l3: "Anda perlu memasukkannya sekali setiap kali memulai Anvil."
+wizard.vault.opt_setup: "[1] Siapkan vault terenkripsi (disarankan)"
+wizard.vault.opt_skip: "[s] Lewati — API key akan disimpan sebagai teks polos di credentials.json"
+wizard.vault.skipping: "Melewati penyiapan vault."
+wizard.vault.warn_plaintext: "Peringatan: API key akan disimpan sebagai teks polos."
+wizard.vault.tip_retry_setup: "Jalankan /vault setup nanti untuk mengenkripsi kredensial Anda."
+wizard.vault.already_initialized: "Vault sudah diinisialisasi di ~/.anvil/vault/"
+wizard.vault.unlocking: "Membuka kunci untuk sesi ini..."
+wizard.vault.prompt_master_password: "Kata sandi master: "
+wizard.vault.unlocked: "Vault terbuka."
+wizard.vault.not_yet_initialized: "Vault belum diinisialisasi — hasil tidak terduga."
+wizard.vault.unlock_failed: "Pembukaan kunci gagal: %{reason}"
+wizard.vault.continue_no_vault: "Melanjutkan tanpa vault — key akan disimpan sebagai teks polos."
+wizard.vault.prompt_set_password: "Atur kata sandi master: "
+wizard.vault.prompt_confirm_password: "Konfirmasi kata sandi master: "
+wizard.vault.empty_password: "Kata sandi tidak boleh kosong. Coba lagi."
+wizard.vault.password_mismatch: "Kata sandi tidak cocok. Coba lagi."
+wizard.vault.created_and_unlocked: "Vault dibuat dan dibuka."
+wizard.vault.keys_encrypted_note: "API key yang dimasukkan di wizard ini akan disimpan terenkripsi."
+wizard.vault.created_session_lock_failed: "Vault dibuat tetapi penguncian sesi gagal."
+wizard.vault.keys_plaintext_this_run: "Key akan disimpan sebagai teks polos pada eksekusi ini."
+wizard.vault.setup_failed: "Penyiapan vault gagal: %{reason}"
+wizard.vault.continue_keys_plaintext: "Melanjutkan tanpa vault — key disimpan sebagai teks polos."
+
+# Langkah Ollama
+wizard.ollama.body_l1: "Ollama menjalankan model AI secara lokal di mesin Anda."
+wizard.ollama.body_l2: "Tidak diperlukan API key untuk penggunaan dasar."
+wizard.ollama.opt_default: "[1] Hubungkan ke Ollama (default: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Hubungkan dengan URL kustom"
+wizard.ollama.opt_apikey: "[3] Hubungkan dengan API key"
+wizard.ollama.opt_skip: "[s] Lewati"
+wizard.ollama.testing_connection: "Menguji koneksi ke %{url}... "
+wizard.ollama.connected: "terhubung"
+wizard.ollama.failed: "gagal (%{reason})"
+wizard.ollama.available_models: "Model tersedia:"
+wizard.ollama.start_hint: "Melewati Ollama — pastikan Ollama berjalan: ollama serve"
+wizard.ollama.config_saved_retry: "Koneksi gagal. Konfigurasi tersimpan; Anda dapat mencoba lagi dengan `anvil login ollama`."
+wizard.ollama.prompt_url: "URL Ollama [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "API key: "
+wizard.ollama.could_not_verify_saving: "tidak dapat memverifikasi (%{reason}) — tetap menyimpan"
+wizard.ollama.skipping: "Melewati Ollama."
+
+# Langkah Anthropic
+wizard.anthropic.body: "Anthropic menyediakan Claude — asisten AI yang paling mampu."
+wizard.anthropic.opt_oauth: "[1] Login dengan OAuth (disarankan — membuka browser)"
+wizard.anthropic.opt_apikey: "[2] Masukkan API key secara manual"
+wizard.anthropic.opt_skip: "[s] Lewati"
+wizard.anthropic.oauth_complete: "OAuth Anthropic selesai."
+wizard.anthropic.oauth_failed: "OAuth gagal: %{reason}"
+wizard.anthropic.retry_hint: "Anda dapat mencoba lagi nanti dengan: anvil login anthropic"
+wizard.anthropic.console_url: "Dapatkan key Anda di: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "API key (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Tidak ada key dimasukkan, melewati Anthropic."
+wizard.anthropic.validating_key: "Memvalidasi key... "
+wizard.anthropic.valid: "valid"
+wizard.anthropic.could_not_verify: "tidak dapat memverifikasi — tetap menyimpan"
+wizard.anthropic.skipping: "Melewati Anthropic."
+
+# Langkah OpenAI
+wizard.openai.body: "OpenAI menyediakan model GPT untuk koding dan penalaran."
+wizard.openai.opt_apikey: "[1] Masukkan API key"
+wizard.openai.opt_skip: "[s] Lewati"
+wizard.openai.console_url: "Dapatkan key Anda di: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "API key (sk-...): "
+wizard.openai.no_key_skipping: "Tidak ada key dimasukkan, melewati OpenAI."
+wizard.openai.validating_key: "Memvalidasi key... "
+wizard.openai.valid: "valid"
+wizard.openai.could_not_verify: "tidak dapat memverifikasi — tetap menyimpan"
+wizard.openai.skipping: "Melewati OpenAI."
+
+# Langkah xAI
+wizard.xai.body: "xAI menyediakan model Grok."
+wizard.xai.opt_apikey: "[1] Masukkan API key"
+wizard.xai.opt_skip: "[s] Lewati"
+wizard.xai.console_url: "Dapatkan key Anda di: https://console.x.ai"
+wizard.xai.prompt_api_key: "API key (xai-...): "
+wizard.xai.no_key_skipping: "Tidak ada key dimasukkan, melewati xAI."
+wizard.xai.saved: "API key xAI tersimpan."
+wizard.xai.skipping: "Melewati xAI."
+
+# Fallback pilihan tidak dikenal
+wizard.unknown_choice_skipping: "Pilihan tidak dikenal '%{choice}', melewati %{provider}."
+
+# Langkah prioritas provider
+wizard.priority.none_configured: "Tidak ada provider yang dikonfigurasi."
+wizard.priority.configure_later: "Anda dapat mengonfigurasi provider nanti dengan: anvil login"
+wizard.priority.you_configured: "Anda mengonfigurasi: %{providers}"
+wizard.priority.set_order: "Atur prioritas provider (pertama = utama, lainnya = failover):"
+wizard.priority.current_order: "Urutan saat ini:"
+wizard.priority.opt_keep: "[1] Pertahankan urutan ini"
+wizard.priority.opt_reorder: "[2] Susun ulang (masukkan angka: mis. \"2,1\")"
+wizard.priority.prompt_new_order: "Urutan baru: "
+wizard.priority.could_not_parse: "Tidak dapat mengurai urutan, mempertahankan yang asli."
+wizard.priority.unknown_keep: "Pilihan tidak dikenal, mempertahankan urutan asli."
+
+# Sakelar mode Thinking
+wizard.thinking.title: "Aktifkan mode Thinking?"
+wizard.thinking.body_l1: "Beberapa model (Qwen3, Claude, o3) mendukung thinking/reasoning yang diperluas."
+wizard.thinking.body_l2: "Saat diaktifkan, model menampilkan proses penalarannya sebelum menjawab."
+wizard.thinking.opt_yes: "[1] Ya — aktifkan mode thinking (disarankan untuk koding)"
+wizard.thinking.opt_no: "[2] Tidak — hanya respons standar"
+wizard.thinking.enabled: "Mode thinking aktif. Aktifkan/nonaktifkan kapan saja dengan /think"
+wizard.thinking.disabled: "Mode thinking nonaktif. Aktifkan/nonaktifkan kapan saja dengan /think"
+
+# Langkah tata letak TUI
+wizard.layout.opt_vertical: "[1] Pembagi Vertikal  (default)"
+wizard.layout.opt_classic: "[2] Klasik"
+wizard.layout.opt_threepane: "[3] Tiga Panel"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Tampilkan tab workspace? [1] Ya (default)  [2] Tidak"
+
+# Langkah preferensi TUI
+wizard.prefs.mouse_prompt: "Aktifkan penangkapan mouse? [1] Off (default, disarankan)  [2] On"
+wizard.prefs.theme_prompt: "Tema? [1] Gelap (default)  [2] Terang  [3] Otomatis"
+wizard.prefs.permission_prompt: "Mode izin default? [1] ask (default)  [2] workspace-write  [3] danger-full-access"
+
+# Prompt wizard
+wizard.prompt.choice_default1: "Pilihan [1]: "
+wizard.prompt.choice: "Pilihan: "
+
+# Banner ringkasan pasca-wizard
+wizard.summary.complete: "Penyiapan selesai!"
+wizard.summary.default_model: "Model default:    %{model}"
+wizard.summary.providers: "Provider:         %{providers}"
+wizard.summary.config_saved: "Konfig disimpan:  %{path}"
+wizard.summary.migration: "Migrasi:          %{summary}"
+wizard.summary.run_anvil: "Jalankan `anvil` untuk mulai koding."
+wizard.summary.type_help: "Ketik `/help` untuk semua perintah."
+
+# Peringatan / kesalahan wizard
+wizard.warn.altscreen_unavailable: "Catatan: wizard alt-screen tidak tersedia (%{reason})."
+wizard.warn.fallback_inline: "Kembali ke prompt inline / stdin."
+wizard.warn.altscreen_modal: "Catatan: alt-screen tidak tersedia (%{reason}); kembali ke prompt stdin."
+wizard.warn.could_not_save_config: "Peringatan: tidak dapat menyimpan konfigurasi: %{reason}"
+
+# Modal instalasi Ollama (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Langkah %{step} dari %{total} — AI lokal (Ollama)"
+wizard.ollama_modal.intro: "Anvil dapat menginstal + menjalankan Ollama secara langsung sehingga Anda memiliki model lokal yang berfungsi offline. Ingin Anvil mengelola Ollama untuk Anda?"
+wizard.ollama_modal.already_running: "Ollama sudah berjalan di %{url} dengan %{count} model:\n  %{models}\n\nGunakan daemon yang sudah ada ini?"
+wizard.ollama_modal.already_setup_title: "Ollama sudah disiapkan ✓"
+wizard.ollama_modal.resume_label: "Lanjutkan — gunakan kembali Ollama yang dipasang Anvil sebelumnya"
+wizard.ollama_modal.use_existing_label: "Gunakan Ollama sistem yang dideteksi Anvil"
+wizard.ollama_modal.install_label: "Instal Ollama sekarang (Anvil mengunduh + mengelola) — disarankan"
+wizard.ollama_modal.title_local_ai: "AI lokal (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Saya akan mengelola Ollama sendiri"
+wizard.ollama_modal.choice_skip: "Lewati — tanpa AI lokal"
+wizard.ollama_modal.choice_later: "Mungkin nanti"
+wizard.ollama_modal.use_existing_title: "Gunakan Ollama yang sudah ada"
+wizard.ollama_modal.use_existing_body: "URL Ollama default: %{url}\nDaemon: %{status}\n\nGunakan /ollama setup nanti jika Anda memerlukan URL berbeda."
+wizard.ollama_modal.status_reachable: "dapat dijangkau"
+wizard.ollama_modal.status_not_reachable: "TIDAK dapat dijangkau — jalankan dulu sebelum mengirim pesan"
+wizard.ollama_modal.install_failed_title: "Instalasi gagal"
+wizard.ollama_modal.install_failed_body: "Tidak dapat menginstal Ollama:\n  %{reason}\n\nCoba lagi dari /ollama setup nanti, atau pilih opsi lain."
+wizard.ollama_modal.already_installed_title: "Biner Ollama sudah terinstal ✓"
+wizard.ollama_modal.already_installed_body: "Menemukan %{path} dari instalasi sebelumnya."
+
+# Label kesesuaian Ollama
+wizard.ollama_fit.recommended: "Disarankan"
+wizard.ollama_fit.fits: "Sesuai"
+wizard.ollama_fit.tight: "Sempit"
+wizard.ollama_fit.too_big: "Terlalu besar — akan OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — koding umum terbaik (~4,7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — kecil + cepat (~2,0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — bekerja di RAM 8 GB (~1,0 GB)"
+
+# ─── TUI — label modal ────────────────────────────────────────────────────
+tui.modal.permission_required: " Izin Diperlukan "
+tui.modal.edit_lines: "Sunting Baris"
+tui.modal.edit_key_prompt: "Sunting %{key}:"
+tui.modal.files_changed: "Berkas yang berubah pada giliran ini: +%{added} −%{removed} (jalankan /diff untuk diff terpadu lengkap)"
+
+# ─── Perintah — voice / collab / docker / k8s / iac / deps ────────────────
+cmd.docker.usage: |
+  Penggunaan:
+    /docker ps                   Daftar container yang berjalan
+    /docker logs <container>     Tampilkan 50 baris terakhir log container
+    /docker compose              Tampilkan layanan docker-compose (jika ada)
+    /docker build                Bangun image dari Dockerfile di direktori saat ini
+cmd.docker.logs_usage: "Penggunaan: /docker logs <container>"
+cmd.docker.unknown_sub: "Sub-perintah docker tidak dikenal: %{sub}\nJalankan `/docker help` untuk panduan."
+
+cmd.voice.start: |
+  Input suara — segera hadir
+
+  Penangkapan suara memerlukan akses mikrofon dan backend speech-to-text.
+  Rencana: /voice start  ->  tangkap input mikrofon dan suntikkan sebagai prompt.
+cmd.voice.stop: |
+  Input suara — segera hadir
+
+  Tidak ada sesi suara aktif untuk dihentikan.
+cmd.voice.help: |
+  Input suara (segera hadir)
+
+  Perintah:
+    /voice start   Mulai menangkap input dari mikrofon
+    /voice stop    Hentikan penangkapan dan kirim
+
+  Memerlukan mesin speech-to-text lokal (mis. whisper.cpp).
+cmd.voice.unknown_sub: "Sub-perintah /voice tidak dikenal: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Kolaborasi — segera hadir
+
+  Rencana: /collab share  ->  buat ID sesi yang dapat dibagikan.
+  Fitur ini disediakan untuk rilis mendatang.
+cmd.collab.join: |
+  Kolaborasi — segera hadir
+
+  Penggunaan: /collab join <session-id>
+  Fitur ini disediakan untuk rilis mendatang.
+cmd.collab.help: |
+  Kolaborasi (segera hadir)
+
+  Perintah:
+    /collab share          Bagikan sesi ini (membuat ID undangan)
+    /collab join <id>      Gabung dengan sesi terbagi pengguna lain
+
+  Memerlukan akun AnvilHub. Pantau changelog untuk ketersediaan.
+cmd.collab.unknown_sub: "Sub-perintah /collab tidak dikenal: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Penggunaan:
+    /k8s pods                   Daftar pod di namespace saat ini
+    /k8s logs <pod>             Tampilkan 50 baris terakhir log pod
+    /k8s apply <file>           Terapkan manifest dengan kubectl
+    /k8s describe <resource>    Deskripsikan sebuah resource
+cmd.k8s.kubectl_missing: "kubectl tidak ditemukan di PATH. Instal dari https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Penggunaan: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Penggunaan: /k8s apply <file>"
+cmd.k8s.describe_usage: "Penggunaan: /k8s describe <resource>"
+cmd.k8s.unknown_sub: "Sub-perintah /k8s tidak dikenal: %{args}\nJalankan `/k8s help` untuk panduan."
+
+cmd.iac.usage: |
+  Penggunaan:
+    /iac plan       Jalankan terraform/tofu plan
+    /iac apply      Jalankan terraform/tofu apply
+    /iac validate   Validasi berkas konfigurasi
+    /iac drift      Deteksi drift infrastruktur (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: modal konfirmasi dalam TUI tidak terselesaikan. Silakan coba lagi — atau jalankan `anvil --print /iac apply` dari shell biasa untuk menggunakan prompt konfirmasi CLI."
+cmd.iac.no_terraform: "Baik 'tofu' maupun 'terraform' tidak ditemukan di PATH.\nInstal OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Tindakan ini akan menerapkan perubahan pada infrastruktur Anda. Lanjutkan? (y/N) "
+cmd.iac.cancelled: "Apply dibatalkan."
+cmd.iac.unknown_sub: "Sub-perintah /iac tidak dikenal: %{sub}\nJalankan `/iac help` untuk panduan."
+cmd.iac.no_binary_for_apply: "Biner terraform/tofu tidak ditemukan di PATH. Instal OpenTofu sebelum menerapkan."
+cmd.iac.confirm_body_with_plan: "Tindakan ini akan menerapkan perubahan pada infrastruktur Anda.\n\n%{plan}\n\nTinjau plan dengan saksama sebelum mengonfirmasi."
+cmd.iac.confirm_body_generic: "Tindakan ini akan menerapkan perubahan pada infrastruktur Anda.\n\nTinjau plan dengan saksama sebelum mengonfirmasi."
+
+cmd.deps.usage: |
+  Penggunaan:
+    /deps tree           Tampilkan pohon dependensi
+    /deps outdated       Tampilkan dependensi yang usang
+    /deps audit          Audit keamanan dependensi
+    /deps why <pkg>      Jelaskan mengapa sebuah dependensi disertakan
+cmd.deps.no_package_manager: "Tidak ditemukan pengelola paket yang dikenali."
+
+# Label CLI generik yang digunakan kembali antar perintah
+cli.no_pr_diff: "Tidak ada diff PR ditemukan. Pastikan gh terinstal, terautentikasi, dan ada PR yang terbuka untuk branch saat ini."

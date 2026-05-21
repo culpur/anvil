@@ -1,0 +1,387 @@
+# Đầu trang / chân trang TUI
+footer.help: "Tab: hoàn tất  Enter: gửi  Ctrl+C: huỷ  Ctrl+D: thoát  /help: lệnh"
+footer.configure: "↑↓: di chuyển  Enter: chọn  Esc: quay lại  Ctrl+C: thoát"
+header.title: "Anvil"
+header.version: "v%{version}"
+
+# Trạng thái / phiên
+status.model: "Mô hình"
+status.provider: "Nhà cung cấp"
+status.permission: "Chế độ quyền"
+status.session: "Phiên"
+status.messages: "Tin nhắn"
+status.turns: "Lượt"
+status.tokens_used: "Token đã dùng"
+
+# Mô tả lệnh (dùng trong đầu ra của /help)
+cmd.help.summary: "Hiển thị các lệnh slash khả dụng"
+cmd.status.summary: "Hiển thị trạng thái phiên hiện tại"
+cmd.compact.summary: "Nén lịch sử phiên cục bộ"
+cmd.model.summary: "Hiển thị hoặc đổi mô hình đang hoạt động"
+cmd.permissions.summary: "Hiển thị hoặc đổi chế độ quyền đang hoạt động"
+cmd.clear.summary: "Bắt đầu một phiên cục bộ mới"
+cmd.cost.summary: "Hiển thị mức sử dụng token tích luỹ cho phiên này"
+cmd.provider.summary: "Hiển thị, chuyển hoặc liệt kê các nhà cung cấp và mô hình của họ"
+cmd.login.summary: "Đăng nhập hoặc làm mới thông tin đăng nhập của một nhà cung cấp"
+cmd.resume.summary: "Tải một phiên đã lưu vào REPL"
+cmd.config.summary: "Kiểm tra các tệp cấu hình Anvil hoặc các phần đã hợp nhất"
+cmd.memory.summary: "Kiểm tra các tệp bộ nhớ chỉ dẫn Anvil đã được tải"
+cmd.init.summary: "Tạo ANVIL.md khởi đầu cho repo này"
+cmd.diff.summary: "Hiển thị git diff cho các thay đổi hiện tại trong workspace"
+cmd.version.summary: "Hiển thị phiên bản CLI và thông tin build"
+cmd.bughunter.summary: "Quét codebase tìm các lỗi có thể có"
+cmd.branch.summary: "Liệt kê, tạo hoặc chuyển nhánh git"
+cmd.worktree.summary: "Liệt kê, thêm, xoá hoặc dọn dẹp worktree git"
+cmd.commit.summary: "Tạo thông điệp commit và thực hiện commit git"
+cmd.pr.summary: "Soạn hoặc tạo pull request từ cuộc trò chuyện"
+cmd.issue.summary: "Soạn hoặc tạo issue GitHub từ cuộc trò chuyện"
+cmd.hub.summary: "Duyệt và cài đặt gói từ marketplace AnvilHub"
+cmd.language.summary: "Đặt ngôn ngữ hiển thị (en, de, es, fr, ja, zh-CN, ru)"
+
+# Thông báo lỗi
+error.unknown_command: "Lệnh không xác định: /%{name}"
+error.missing_argument: "Thiếu đối số bắt buộc cho /%{cmd}"
+error.not_available_tui: "Lệnh không khả dụng ở chế độ TUI."
+error.provider_not_found: "Không tìm thấy nhà cung cấp: %{name}"
+error.hub_fetch_failed: "Không thể tải gói từ AnvilHub: %{reason}"
+error.hub_install_failed: "Không cài đặt được gói '%{name}': %{reason}"
+error.hub_not_found: "Không tìm thấy gói: %{name}"
+error.invalid_language: "Ngôn ngữ không được hỗ trợ '%{lang}'. Khả dụng: en, de, es, fr, ja, zh-CN, ru"
+error.config_save_failed: "Không lưu được cấu hình: %{reason}"
+
+# Thông báo lệnh Hub
+hub.top_packages: "Gói hàng đầu trên AnvilHub"
+hub.search_results: "Kết quả tìm kiếm cho \"%{query}\""
+hub.no_results: "Không tìm thấy gói nào."
+hub.installing: "Đang cài đặt %{name} %{version}..."
+hub.installed: "Đã cài đặt %{name} %{version} vào %{path}"
+hub.downloads: "%{count} lượt tải"
+hub.package_info: "Gói: %{name} v%{version} bởi %{author}"
+hub.package_type: "Loại: %{type}"
+hub.package_desc: "Mô tả: %{desc}"
+hub.usage_hint: |
+  Cách dùng:
+    /hub                     Hiển thị các gói hàng đầu theo danh mục
+    /hub search <truy vấn>   Tìm kiếm trong tất cả các gói
+    /hub skills              Skill hàng đầu
+    /hub plugins             Plugin hàng đầu
+    /hub agents              Agent hàng đầu
+    /hub themes              Theme hàng đầu
+    /hub install <tên>       Tải về và cài đặt một gói
+    /hub info <tên>          Hiển thị chi tiết gói
+
+# Thông báo lệnh Language
+language.current: "Ngôn ngữ hiện tại: %{lang}"
+language.changed: "Đã đặt ngôn ngữ: %{lang}"
+language.available: "Ngôn ngữ khả dụng: en, de, es, fr, ja, zh-CN, ru"
+language.usage: "Cách dùng: /language [en|de|es|fr|ja|zh-CN|ru]"
+
+# Nhãn menu Configure
+configure.title: "Cấu hình Anvil"
+configure.providers: "Nhà cung cấp"
+configure.models: "Mô hình"
+configure.context: "Bối cảnh"
+configure.search: "Tìm kiếm"
+configure.permissions: "Quyền"
+configure.display: "Hiển thị"
+configure.integrations: "Tích hợp"
+configure.language: "Ngôn ngữ"
+
+# Lời nhắc đăng nhập / nhà cung cấp
+login.prompt_provider: "Chọn nhà cung cấp để đăng nhập [anthropic/openai/ollama]: "
+login.success: "Đăng nhập %{provider} thành công."
+login.failed: "Đăng nhập thất bại: %{reason}"
+login.enter_api_key: "Nhập khoá API: "
+login.testing_connection: "Đang kiểm tra kết nối tới %{host}..."
+login.connected: "Đã kết nối"
+login.connection_failed: "Không thể kết nối"
+
+# ─── Wizard — thiết lập lần đầu ───────────────────────────────────────────
+# Thẻ chào mừng (điểm vào alt-screen)
+wizard.welcome.title: "Chào mừng đến với Anvil v%{version}"
+wizard.welcome.tagline: "Đối tác lập trình AI của bạn chạy mọi nơi — Anthropic, OpenAI, Ollama và 32 nhà cung cấp khác."
+wizard.welcome.kicker: "Hãy thiết lập nào."
+wizard.welcome.hint: "Nhấn Enter để tiếp tục · Esc để bỏ qua thiết lập"
+
+# Biểu ngữ nội dòng (đường dự phòng stdin)
+wizard.banner.welcome: "⚒  Chào mừng đến với Anvil v%{version}"
+wizard.banner.subtitle: "   Trợ lý lập trình hỗ trợ AI của Culpur Defense"
+wizard.banner.lets_setup: "   Hãy thiết lập nào."
+
+# Tiêu đề bước
+wizard.step_header: "Bước %{step}/%{total}: %{title}"
+wizard.step.vault_title: "Thiết lập Vault (mã hoá thông tin đăng nhập)"
+wizard.step.ollama_title: "Ollama (AI cục bộ)"
+wizard.step.anthropic_title: "Anthropic (Claude)"
+wizard.step.openai_title: "OpenAI (ChatGPT)"
+wizard.step.xai_title: "xAI (Grok)"
+wizard.step.priority_title: "Ưu tiên nhà cung cấp & mô hình mặc định"
+wizard.step.tui_layout_title: "Bố cục TUI"
+wizard.step.tui_prefs_title: "Tuỳ chọn TUI"
+
+# Bước ngôn ngữ (Phase A6, task #645)
+wizard.language.title: "Chọn ngôn ngữ của bạn"
+wizard.language.body: "TUI của Anvil và wizard chạy lần đầu sẽ sử dụng ngôn ngữ này. Bạn có thể đổi sau bằng /language hoặc trong /configure."
+wizard.language.continue: "Tiếp tục"
+wizard.language.skip: "Bỏ qua"
+
+# Bước Vault
+wizard.vault.body_l1: "Anvil lưu các khoá API của bạn trong vault được mã hoá AES-256-GCM."
+wizard.vault.body_l2: "Bạn đặt mật khẩu chính bây giờ — nó không được lưu ở đâu cả."
+wizard.vault.body_l3: "Bạn sẽ phải nhập một lần mỗi khi khởi động Anvil."
+wizard.vault.opt_setup: "[1] Thiết lập vault mã hoá (khuyến nghị)"
+wizard.vault.opt_skip: "[s] Bỏ qua — các khoá API sẽ được lưu dạng văn bản thuần trong credentials.json"
+wizard.vault.skipping: "Bỏ qua thiết lập vault."
+wizard.vault.warn_plaintext: "Cảnh báo: các khoá API sẽ được lưu dạng văn bản thuần."
+wizard.vault.tip_retry_setup: "Chạy /vault setup sau để mã hoá thông tin đăng nhập của bạn."
+wizard.vault.already_initialized: "Vault đã được khởi tạo tại ~/.anvil/vault/"
+wizard.vault.unlocking: "Đang mở khoá cho phiên này..."
+wizard.vault.prompt_master_password: "Mật khẩu chính: "
+wizard.vault.unlocked: "Đã mở khoá vault."
+wizard.vault.not_yet_initialized: "Vault chưa được khởi tạo — điều này không như mong đợi."
+wizard.vault.unlock_failed: "Mở khoá thất bại: %{reason}"
+wizard.vault.continue_no_vault: "Tiếp tục không có vault — các khoá sẽ được lưu dạng văn bản thuần."
+wizard.vault.prompt_set_password: "Đặt mật khẩu chính: "
+wizard.vault.prompt_confirm_password: "Xác nhận mật khẩu chính: "
+wizard.vault.empty_password: "Mật khẩu không được để trống. Hãy thử lại."
+wizard.vault.password_mismatch: "Mật khẩu không khớp. Hãy thử lại."
+wizard.vault.created_and_unlocked: "Vault đã được tạo và mở khoá."
+wizard.vault.keys_encrypted_note: "Các khoá API được nhập trong wizard này sẽ được lưu dưới dạng mã hoá."
+wizard.vault.created_session_lock_failed: "Vault được tạo nhưng khoá phiên thất bại."
+wizard.vault.keys_plaintext_this_run: "Các khoá sẽ được lưu dạng văn bản thuần trong lần chạy này."
+wizard.vault.setup_failed: "Thiết lập vault thất bại: %{reason}"
+wizard.vault.continue_keys_plaintext: "Tiếp tục không có vault — các khoá được lưu dạng văn bản thuần."
+
+# Bước Ollama
+wizard.ollama.body_l1: "Ollama chạy các mô hình AI cục bộ trên máy của bạn."
+wizard.ollama.body_l2: "Sử dụng cơ bản không yêu cầu khoá API."
+wizard.ollama.opt_default: "[1] Kết nối với Ollama (mặc định: http://localhost:11434)"
+wizard.ollama.opt_custom: "[2] Kết nối với URL tuỳ chỉnh"
+wizard.ollama.opt_apikey: "[3] Kết nối bằng khoá API"
+wizard.ollama.opt_skip: "[s] Bỏ qua"
+wizard.ollama.testing_connection: "Đang kiểm tra kết nối tới %{url}... "
+wizard.ollama.connected: "đã kết nối"
+wizard.ollama.failed: "thất bại (%{reason})"
+wizard.ollama.available_models: "Mô hình khả dụng:"
+wizard.ollama.start_hint: "Bỏ qua Ollama — hãy đảm bảo Ollama đang chạy: ollama serve"
+wizard.ollama.config_saved_retry: "Kết nối thất bại. Đã lưu cấu hình; bạn có thể thử lại bằng `anvil login ollama`."
+wizard.ollama.prompt_url: "URL Ollama [http://localhost:11434]: "
+wizard.ollama.prompt_api_key: "Khoá API: "
+wizard.ollama.could_not_verify_saving: "không thể xác minh (%{reason}) — vẫn lưu"
+wizard.ollama.skipping: "Bỏ qua Ollama."
+
+# Bước Anthropic
+wizard.anthropic.body: "Anthropic cung cấp Claude — trợ lý AI có năng lực nhất."
+wizard.anthropic.opt_oauth: "[1] Đăng nhập bằng OAuth (khuyến nghị — mở trình duyệt)"
+wizard.anthropic.opt_apikey: "[2] Nhập khoá API thủ công"
+wizard.anthropic.opt_skip: "[s] Bỏ qua"
+wizard.anthropic.oauth_complete: "OAuth Anthropic đã hoàn tất."
+wizard.anthropic.oauth_failed: "OAuth thất bại: %{reason}"
+wizard.anthropic.retry_hint: "Bạn có thể thử lại sau bằng: anvil login anthropic"
+wizard.anthropic.console_url: "Lấy khoá của bạn tại: https://console.anthropic.com/settings/keys"
+wizard.anthropic.prompt_api_key: "Khoá API (sk-ant-...): "
+wizard.anthropic.no_key_skipping: "Không nhập khoá, bỏ qua Anthropic."
+wizard.anthropic.validating_key: "Đang xác thực khoá... "
+wizard.anthropic.valid: "hợp lệ"
+wizard.anthropic.could_not_verify: "không thể xác minh — vẫn lưu"
+wizard.anthropic.skipping: "Bỏ qua Anthropic."
+
+# Bước OpenAI
+wizard.openai.body: "OpenAI cung cấp các mô hình GPT cho lập trình và suy luận."
+wizard.openai.opt_apikey: "[1] Nhập khoá API"
+wizard.openai.opt_skip: "[s] Bỏ qua"
+wizard.openai.console_url: "Lấy khoá của bạn tại: https://platform.openai.com/api-keys"
+wizard.openai.prompt_api_key: "Khoá API (sk-...): "
+wizard.openai.no_key_skipping: "Không nhập khoá, bỏ qua OpenAI."
+wizard.openai.validating_key: "Đang xác thực khoá... "
+wizard.openai.valid: "hợp lệ"
+wizard.openai.could_not_verify: "không thể xác minh — vẫn lưu"
+wizard.openai.skipping: "Bỏ qua OpenAI."
+
+# Bước xAI
+wizard.xai.body: "xAI cung cấp các mô hình Grok."
+wizard.xai.opt_apikey: "[1] Nhập khoá API"
+wizard.xai.opt_skip: "[s] Bỏ qua"
+wizard.xai.console_url: "Lấy khoá của bạn tại: https://console.x.ai"
+wizard.xai.prompt_api_key: "Khoá API (xai-...): "
+wizard.xai.no_key_skipping: "Không nhập khoá, bỏ qua xAI."
+wizard.xai.saved: "Đã lưu khoá API xAI."
+wizard.xai.skipping: "Bỏ qua xAI."
+
+# Dự phòng cho lựa chọn không xác định
+wizard.unknown_choice_skipping: "Lựa chọn không xác định '%{choice}', bỏ qua %{provider}."
+
+# Bước ưu tiên nhà cung cấp
+wizard.priority.none_configured: "Chưa cấu hình nhà cung cấp nào."
+wizard.priority.configure_later: "Bạn có thể cấu hình các nhà cung cấp sau bằng: anvil login"
+wizard.priority.you_configured: "Bạn đã cấu hình: %{providers}"
+wizard.priority.set_order: "Đặt ưu tiên nhà cung cấp (đầu tiên = chính, các nhà cung cấp khác = dự phòng):"
+wizard.priority.current_order: "Thứ tự hiện tại:"
+wizard.priority.opt_keep: "[1] Giữ thứ tự này"
+wizard.priority.opt_reorder: "[2] Sắp xếp lại (nhập các số: ví dụ \"2,1\")"
+wizard.priority.prompt_new_order: "Thứ tự mới: "
+wizard.priority.could_not_parse: "Không phân tích được thứ tự, giữ nguyên ban đầu."
+wizard.priority.unknown_keep: "Lựa chọn không xác định, giữ nguyên thứ tự ban đầu."
+
+# Bật/tắt chế độ Thinking
+wizard.thinking.title: "Bật chế độ Thinking?"
+wizard.thinking.body_l1: "Một số mô hình (Qwen3, Claude, o3) hỗ trợ thinking/reasoning mở rộng."
+wizard.thinking.body_l2: "Khi bật, mô hình sẽ thể hiện quá trình suy luận trước khi trả lời."
+wizard.thinking.opt_yes: "[1] Có — bật chế độ thinking (khuyến nghị cho lập trình)"
+wizard.thinking.opt_no: "[2] Không — chỉ phản hồi tiêu chuẩn"
+wizard.thinking.enabled: "Đã bật chế độ thinking. Bật/tắt bất cứ lúc nào bằng /think"
+wizard.thinking.disabled: "Chế độ thinking đã tắt. Bật/tắt bất cứ lúc nào bằng /think"
+
+# Bước bố cục TUI
+wizard.layout.opt_vertical: "[1] Chia dọc  (mặc định)"
+wizard.layout.opt_classic: "[2] Cổ điển"
+wizard.layout.opt_threepane: "[3] Ba khung"
+wizard.layout.opt_journal: "[4] Journal"
+wizard.layout.show_tabs_prompt: "Hiển thị tab workspace? [1] Có (mặc định)  [2] Không"
+
+# Bước tuỳ chọn TUI
+wizard.prefs.mouse_prompt: "Bật bắt chuột? [1] Tắt (mặc định, khuyến nghị)  [2] Bật"
+wizard.prefs.theme_prompt: "Theme? [1] Tối (mặc định)  [2] Sáng  [3] Tự động"
+wizard.prefs.permission_prompt: "Chế độ quyền mặc định? [1] ask (mặc định)  [2] workspace-write  [3] danger-full-access"
+
+# Lời nhắc wizard
+wizard.prompt.choice_default1: "Lựa chọn [1]: "
+wizard.prompt.choice: "Lựa chọn: "
+
+# Biểu ngữ tổng kết sau wizard
+wizard.summary.complete: "Thiết lập hoàn tất!"
+wizard.summary.default_model: "Mô hình mặc định: %{model}"
+wizard.summary.providers: "Nhà cung cấp:    %{providers}"
+wizard.summary.config_saved: "Đã lưu config:   %{path}"
+wizard.summary.migration: "Di trú:          %{summary}"
+wizard.summary.run_anvil: "Chạy `anvil` để bắt đầu lập trình."
+wizard.summary.type_help: "Gõ `/help` để xem tất cả các lệnh."
+
+# Cảnh báo / lỗi wizard
+wizard.warn.altscreen_unavailable: "Lưu ý: wizard alt-screen không khả dụng (%{reason})."
+wizard.warn.fallback_inline: "Quay về lời nhắc inline / stdin."
+wizard.warn.altscreen_modal: "Lưu ý: alt-screen không khả dụng (%{reason}); quay về lời nhắc stdin."
+wizard.warn.could_not_save_config: "Cảnh báo: không lưu được cấu hình: %{reason}"
+
+# Modal cài đặt Ollama (wizard_ollama.rs)
+wizard.ollama_modal.step_header: "Bước %{step}/%{total} — AI cục bộ (Ollama)"
+wizard.ollama_modal.intro: "Anvil có thể trực tiếp cài đặt và chạy Ollama để bạn có một mô hình cục bộ hoạt động ngoại tuyến. Bạn có muốn Anvil quản lý Ollama cho mình không?"
+wizard.ollama_modal.already_running: "Ollama đã đang chạy tại %{url} với %{count} mô hình:\n  %{models}\n\nDùng daemon hiện có này?"
+wizard.ollama_modal.already_setup_title: "Ollama đã được thiết lập ✓"
+wizard.ollama_modal.resume_label: "Tiếp tục — tái sử dụng Ollama mà Anvil đã cài trước đó"
+wizard.ollama_modal.use_existing_label: "Dùng Ollama hệ thống mà Anvil đã phát hiện"
+wizard.ollama_modal.install_label: "Cài Ollama ngay (Anvil tải xuống + quản lý) — khuyến nghị"
+wizard.ollama_modal.title_local_ai: "AI cục bộ (Ollama)"
+wizard.ollama_modal.choice_self_manage: "Tôi sẽ tự quản lý Ollama"
+wizard.ollama_modal.choice_skip: "Bỏ qua — không có AI cục bộ"
+wizard.ollama_modal.choice_later: "Có thể sau"
+wizard.ollama_modal.use_existing_title: "Dùng Ollama hiện có"
+wizard.ollama_modal.use_existing_body: "URL Ollama mặc định: %{url}\nDaemon: %{status}\n\nDùng /ollama setup sau nếu bạn cần một URL khác."
+wizard.ollama_modal.status_reachable: "có thể truy cập"
+wizard.ollama_modal.status_not_reachable: "KHÔNG truy cập được — hãy khởi động trước khi gửi tin nhắn"
+wizard.ollama_modal.install_failed_title: "Cài đặt thất bại"
+wizard.ollama_modal.install_failed_body: "Không thể cài Ollama:\n  %{reason}\n\nThử lại từ /ollama setup sau, hoặc chọn lựa chọn khác."
+wizard.ollama_modal.already_installed_title: "Tệp nhị phân Ollama đã được cài ✓"
+wizard.ollama_modal.already_installed_body: "Đã tìm thấy %{path} từ lần cài trước."
+
+# Nhãn mức độ phù hợp Ollama
+wizard.ollama_fit.recommended: "Khuyến nghị"
+wizard.ollama_fit.fits: "Phù hợp"
+wizard.ollama_fit.tight: "Vừa khít"
+wizard.ollama_fit.too_big: "Quá lớn — sẽ OOM"
+wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — lập trình tổng quát tốt nhất (~4,7 GB)"
+wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — nhỏ + nhanh (~2,0 GB)"
+wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — chạy được trên 8 GB RAM (~1,0 GB)"
+
+# ─── TUI — nhãn modal ─────────────────────────────────────────────────────
+tui.modal.permission_required: " Yêu cầu quyền "
+tui.modal.edit_lines: "Chỉnh sửa các dòng"
+tui.modal.edit_key_prompt: "Chỉnh sửa %{key}:"
+tui.modal.files_changed: "Tệp thay đổi lượt này: +%{added} −%{removed} (chạy /diff để xem unified diff đầy đủ)"
+
+# ─── Lệnh — voice / collab / docker / k8s / iac / deps ────────────────────
+cmd.docker.usage: |
+  Cách dùng:
+    /docker ps                   Liệt kê các container đang chạy
+    /docker logs <container>     Hiển thị 50 dòng cuối của log container
+    /docker compose              Hiển thị các service docker-compose (nếu có)
+    /docker build                Build image từ Dockerfile trong thư mục hiện tại
+cmd.docker.logs_usage: "Cách dùng: /docker logs <container>"
+cmd.docker.unknown_sub: "Sub-command docker không xác định: %{sub}\nChạy `/docker help` để xem cách dùng."
+
+cmd.voice.start: |
+  Đầu vào bằng giọng nói — sắp ra mắt
+
+  Bắt giọng nói yêu cầu truy cập micrô và backend speech-to-text.
+  Dự kiến: /voice start  ->  bắt đầu vào từ micrô và đưa vào dưới dạng prompt.
+cmd.voice.stop: |
+  Đầu vào bằng giọng nói — sắp ra mắt
+
+  Không có phiên giọng nói nào để dừng.
+cmd.voice.help: |
+  Đầu vào bằng giọng nói (sắp ra mắt)
+
+  Lệnh:
+    /voice start   Bắt đầu thu micrô
+    /voice stop    Dừng thu và gửi
+
+  Yêu cầu một engine speech-to-text cục bộ (ví dụ whisper.cpp).
+cmd.voice.unknown_sub: "Sub-command /voice không xác định: %{sub}\n  /voice start | /voice stop"
+
+cmd.collab.share: |
+  Cộng tác — sắp ra mắt
+
+  Dự kiến: /collab share  ->  tạo ID phiên có thể chia sẻ.
+  Tính năng này được dành riêng cho một bản phát hành tương lai.
+cmd.collab.join: |
+  Cộng tác — sắp ra mắt
+
+  Cách dùng: /collab join <session-id>
+  Tính năng này được dành riêng cho một bản phát hành tương lai.
+cmd.collab.help: |
+  Cộng tác (sắp ra mắt)
+
+  Lệnh:
+    /collab share          Chia sẻ phiên này (tạo ID mời)
+    /collab join <id>      Tham gia phiên chia sẻ của người dùng khác
+
+  Yêu cầu tài khoản AnvilHub. Theo dõi changelog để biết khi nào khả dụng.
+cmd.collab.unknown_sub: "Sub-command /collab không xác định: %{sub}\n  /collab share | /collab join <id>"
+
+cmd.k8s.usage: |
+  Cách dùng:
+    /k8s pods                   Liệt kê pod trong namespace hiện tại
+    /k8s logs <pod>             Theo dõi 50 dòng cuối của log pod
+    /k8s apply <tệp>            Áp dụng manifest bằng kubectl
+    /k8s describe <tài nguyên>  Mô tả một tài nguyên
+cmd.k8s.kubectl_missing: "Không tìm thấy kubectl trong PATH. Cài đặt từ https://kubernetes.io/docs/tasks/tools/"
+cmd.k8s.logs_usage: "Cách dùng: /k8s logs <pod>"
+cmd.k8s.apply_usage: "Cách dùng: /k8s apply <tệp>"
+cmd.k8s.describe_usage: "Cách dùng: /k8s describe <tài nguyên>"
+cmd.k8s.unknown_sub: "Sub-command /k8s không xác định: %{args}\nChạy `/k8s help` để xem cách dùng."
+
+cmd.iac.usage: |
+  Cách dùng:
+    /iac plan       Chạy terraform/tofu plan
+    /iac apply      Chạy terraform/tofu apply
+    /iac validate   Xác thực các tệp cấu hình
+    /iac drift      Phát hiện drift hạ tầng (plan -refresh-only)
+cmd.iac.tui_modal_required: "/iac apply: modal xác nhận trong TUI không hoàn tất. Vui lòng thử lại — hoặc chạy `anvil --print /iac apply` từ một shell thường để dùng prompt xác nhận CLI."
+cmd.iac.no_terraform: "Không tìm thấy 'tofu' hoặc 'terraform' trong PATH.\nCài OpenTofu: https://opentofu.org/docs/intro/install/"
+cmd.iac.confirm_prompt: "Hành động này sẽ áp dụng thay đổi lên hạ tầng của bạn. Tiếp tục? (y/N) "
+cmd.iac.cancelled: "Đã huỷ apply."
+cmd.iac.unknown_sub: "Sub-command /iac không xác định: %{sub}\nChạy `/iac help` để xem cách dùng."
+cmd.iac.no_binary_for_apply: "Không tìm thấy tệp nhị phân terraform/tofu trong PATH. Cài OpenTofu trước khi apply."
+cmd.iac.confirm_body_with_plan: "Hành động này sẽ áp dụng thay đổi lên hạ tầng của bạn.\n\n%{plan}\n\nXem kỹ plan trước khi xác nhận."
+cmd.iac.confirm_body_generic: "Hành động này sẽ áp dụng thay đổi lên hạ tầng của bạn.\n\nXem kỹ plan trước khi xác nhận."
+
+cmd.deps.usage: |
+  Cách dùng:
+    /deps tree           Hiển thị cây phụ thuộc
+    /deps outdated       Hiển thị các phụ thuộc lỗi thời
+    /deps audit          Kiểm tra bảo mật của các phụ thuộc
+    /deps why <pkg>      Giải thích vì sao một phụ thuộc được đưa vào
+cmd.deps.no_package_manager: "Không tìm thấy trình quản lý gói nào được nhận dạng."
+
+# Nhãn CLI chung được tái sử dụng giữa các lệnh
+cli.no_pr_diff: "Không tìm thấy PR diff. Hãy đảm bảo gh đã cài đặt, đã xác thực và có một PR đang mở cho nhánh hiện tại."
