@@ -1880,17 +1880,51 @@ fn resume_session(session_path: &Path, commands: &[String]) {
         .and_then(session_meta::get_session_model);
 
     if commands.is_empty() {
-        match persisted_model.as_deref() {
-            Some(model) => println!(
+        // Task #760: open the TUI REPL with the resumed session. Pre-#760
+        // this just printed the restore banner and exited — load-only mode
+        // is now selectable via the `--print` family of flags. Users who
+        // type `anvil --resume <id>` expect to land back in the REPL, not
+        // the shell prompt.
+        let message_count = session.messages.len();
+        let restore_msg = match persisted_model.as_deref() {
+            Some(model) => format!(
                 "Restored session from {} ({} messages) · model {model}",
                 session_path.display(),
-                session.messages.len(),
+                message_count,
             ),
-            None => println!(
+            None => format!(
                 "Restored session from {} ({} messages).",
                 session_path.display(),
-                session.messages.len()
+                message_count,
             ),
+        };
+        eprintln!("{restore_msg}");
+
+        // Use the persisted model when available (matches `--continue`
+        // behaviour in `run_continue` — task #429/#721 prevents Ollama
+        // sessions from being mis-routed onto Anthropic).
+        let model = persisted_model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+        let resolved_id_for_cli = resolved_id
+            .clone()
+            .unwrap_or_else(|| {
+                session_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("session")
+                    .to_string()
+            });
+        let cli_result = LiveCli::new(model, true, None, default_permission_mode())
+            .and_then(|mut cli| {
+                cli.resume_from_session(session, resolved_id_for_cli, session_path.to_path_buf())?;
+                if io::stdout().is_terminal() {
+                    run_repl_tui(cli)
+                } else {
+                    run_repl_plain(cli)
+                }
+            });
+        if let Err(error) = cli_result {
+            eprintln!("failed to enter REPL: {error}");
+            std::process::exit(1);
         }
         return;
     }
