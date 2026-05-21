@@ -473,6 +473,55 @@ fn parse_reflect_turns_tail(rest: &str) -> Option<usize> {
     None
 }
 
+/// Scan `args` for `--lang <code>` or `--lang=<code>` and return the value.
+///
+/// We deliberately rescan from argv here rather than relying on `parse_args`
+/// because the locale resolver runs before `parse_args` so the wizard
+/// banner (which renders prior to any sub-command dispatch) sees the
+/// localized strings.
+fn parse_cli_lang_flag(args: &[String]) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == "--lang" {
+            if let Some(v) = iter.next() {
+                return Some(v.clone());
+            }
+            return None;
+        }
+        if let Some(rest) = a.strip_prefix("--lang=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Pure helper that returns the resolved locale string without touching
+/// `rust_i18n`.  Split out so it can be exercised by tests without
+/// mutating global state.
+///
+/// Precedence (highest to lowest):
+///   1. Explicit `--lang <code>` (or `--lang=<code>`) on the command line.
+///   2. Persisted `~/.anvil/config.json::language` IF `setup_completed = true`.
+///   3. System locale via `LC_ALL` / `LC_MESSAGES` / `LANG`.
+///   4. `"en"` fallback.
+fn resolve_startup_locale(args: &[String]) -> String {
+    if let Some(lang) = parse_cli_lang_flag(args)
+        && utils::SUPPORTED_LANGUAGES.contains(&lang.as_str())
+    {
+        return lang;
+    }
+    if utils::config_setup_completed() {
+        let saved = utils::current_language_code();
+        if utils::SUPPORTED_LANGUAGES.contains(&saved.as_str()) {
+            return saved;
+        }
+    }
+    if let Some(detected) = utils::detect_system_locale() {
+        return detected;
+    }
+    "en".to_string()
+}
+
 /// Manpage rendered at build time by `build.rs` (clap_mangen + `man/anvil.1.tail`).
 /// Surfaced at runtime through the hidden `--gen-man` flag, which writes this
 /// content to stdout so `scripts/release.sh` can regenerate `man/anvil.1`
@@ -482,25 +531,22 @@ fn parse_reflect_turns_tail(rest: &str) -> Option<usize> {
 /// lockstep with the CLI surface description in `build_cli_spec.rs`.
 pub(crate) const GENERATED_MANPAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/anvil.1"));
 
-/// Phase A5 (task #645) — apply the runtime locale at the very top of
-/// `run()`, before `parse_args` and before any `t!()` call site.
+/// Apply the runtime locale at the very top of `run()`, before
+/// `parse_args` and before any `t!()` call site (tasks #645 + #750).
 ///
 /// Consumes `--lang <code>` / `--lang=<code>` from the argument list:
 ///   * Returns the args with both flag-form variants stripped so they
 ///     do not leak into the prompt-fallback path or the resume-commands
 ///     list.
-///   * Calls `rust_i18n::set_locale(&code)` when the code is in
-///     [`utils::SUPPORTED_LANGUAGES`].  This is per-invocation only —
-///     the value is NOT persisted to `~/.anvil/config.json` (use
-///     `/language <code>` for that).
+///   * Calls `rust_i18n::set_locale(&code)` with the resolved locale
+///     using the precedence ladder in `resolve_startup_locale`:
+///     CLI flag → persisted config (if setup_completed) → system $LANG
+///     → "en" fallback.
 ///   * Prints `Unsupported language: <code>. Available: <list>` to
-///     stderr and exits with code 2 when the code is unsupported —
-///     before any other startup work, so the user sees the message
-///     even from the bare `anvil --lang xx` invocation that would
-///     otherwise enter the wizard.
-///
-/// When no `--lang` flag is present, falls back to the persisted
-/// `language` field from `~/.anvil/config.json` (default `"en"`).
+///     stderr and exits with code 2 when an explicit `--lang` flag
+///     names an unsupported code — before any other startup work, so
+///     the user sees the message even from a bare `anvil --lang xx`
+///     invocation that would otherwise enter the wizard.
 fn apply_startup_locale(
     args: Vec<String>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -524,11 +570,9 @@ fn apply_startup_locale(
         }
     }
 
-    if let Some(code) = explicit_lang {
+    if let Some(code) = explicit_lang.as_deref() {
         let trimmed = code.trim();
-        if utils::SUPPORTED_LANGUAGES.contains(&trimmed) {
-            rust_i18n::set_locale(trimmed);
-        } else {
+        if !utils::SUPPORTED_LANGUAGES.contains(&trimmed) {
             // Pre-TUI stderr: alt-screen is not yet active, no other
             // user-visible output has run.  The print-discipline rule
             // (feedback-tui-stdout-anti-pattern) explicitly allows
@@ -542,16 +586,179 @@ fn apply_startup_locale(
             }
             std::process::exit(2);
         }
-    } else {
-        // Fall back to the persisted language code (defaults to "en").
-        // rust-i18n picks its own guess otherwise, so this call is
-        // load-bearing — without it the wizard renders in the user's
-        // OS locale instead of the one /language wrote.
-        let code = utils::current_language_code();
-        rust_i18n::set_locale(&code);
     }
 
+    // Resolver picks from the stripped flag, persisted config, system
+    // locale, or "en". When `explicit_lang` is set above, the resolver
+    // sees `--lang <code>` (we synthesize a tiny argv) so its precedence
+    // ladder remains the single source of truth.
+    let resolver_args: Vec<String> = match explicit_lang {
+        Some(code) => vec!["--lang".to_string(), code],
+        None => Vec::new(),
+    };
+    let resolved = resolve_startup_locale(&resolver_args);
+    rust_i18n::set_locale(&resolved);
+
     Ok(filtered)
+}
+
+#[cfg(test)]
+mod startup_locale_tests {
+    //! Precedence-layer tests for `apply_startup_locale` (task #750).
+    //!
+    //! `utils::tests` exercises `detect_system_locale` in isolation; this
+    //! module exercises the resolver wiring (`resolve_startup_locale`)
+    //! against tmp `ANVIL_CONFIG_HOME` directories so the persisted-config
+    //! tier can be verified end-to-end.
+    //!
+    //! All tests use `#[serial]` (per
+    //! `feedback-test-isolation-three-causes.md`) because they mutate
+    //! `LANG` / `LC_ALL` / `LC_MESSAGES` / `ANVIL_CONFIG_HOME`.
+    use super::*;
+    use serial_test::serial;
+
+    /// RAII guard: clear LC_ALL / LC_MESSAGES / LANG + redirect
+    /// ANVIL_CONFIG_HOME to a tmp dir on construction, restore everything
+    /// on drop.  All env mutation goes through this so a panic mid-test
+    /// can't leak state.
+    #[allow(unsafe_code)]
+    struct StartupGuard {
+        prev: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl StartupGuard {
+        fn new(home: &std::path::Path) -> Self {
+            const KEYS: &[&str] =
+                &["LC_ALL", "LC_MESSAGES", "LANG", "ANVIL_CONFIG_HOME"];
+            let mut prev = Vec::with_capacity(KEYS.len());
+            for k in KEYS {
+                prev.push((*k, std::env::var(k).ok()));
+                // SAFETY: serial_test serialises tests that touch env;
+                // paired restore on Drop.
+                unsafe { std::env::remove_var(k); }
+            }
+            // SAFETY: see above.
+            unsafe { std::env::set_var("ANVIL_CONFIG_HOME", home); }
+            Self { prev }
+        }
+
+        fn set(&self, key: &str, value: &str) {
+            // SAFETY: tests are serialised by `#[serial]`.
+            unsafe { std::env::set_var(key, value); }
+        }
+    }
+
+    impl Drop for StartupGuard {
+        fn drop(&mut self) {
+            for (k, saved) in self.prev.drain(..) {
+                match saved {
+                    Some(v) => unsafe { std::env::set_var(k, v) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
+    fn write_config(home: &std::path::Path, language: Option<&str>, setup_completed: bool) {
+        let mut map = serde_json::Map::new();
+        if let Some(lang) = language {
+            map.insert(
+                "language".to_string(),
+                serde_json::Value::String(lang.to_string()),
+            );
+        }
+        map.insert(
+            "setup_completed".to_string(),
+            serde_json::Value::Bool(setup_completed),
+        );
+        std::fs::create_dir_all(home).expect("create home");
+        std::fs::write(
+            home.join("config.json"),
+            serde_json::to_string_pretty(&serde_json::Value::Object(map))
+                .expect("serialize config"),
+        )
+        .expect("write config");
+    }
+
+    #[test]
+    #[serial]
+    fn fresh_install_with_setup_not_completed_uses_system_locale() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let g = StartupGuard::new(tmp.path());
+        g.set("LANG", "de_DE.UTF-8");
+        // No config.json at all => fresh install.
+        assert_eq!(resolve_startup_locale(&[]), "de");
+        // setup_completed=false also counts as fresh.
+        write_config(tmp.path(), Some("ja"), false);
+        assert_eq!(resolve_startup_locale(&[]), "de");
+    }
+
+    #[test]
+    #[serial]
+    fn existing_user_with_setup_completed_uses_config_language_even_if_lang_differs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let g = StartupGuard::new(tmp.path());
+        write_config(tmp.path(), Some("ja"), true);
+        g.set("LANG", "de_DE.UTF-8");
+        assert_eq!(resolve_startup_locale(&[]), "ja");
+    }
+
+    #[test]
+    #[serial]
+    fn flag_overrides_everything() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let g = StartupGuard::new(tmp.path());
+        write_config(tmp.path(), Some("ja"), true);
+        g.set("LANG", "de_DE.UTF-8");
+        let args = vec!["--lang".to_string(), "fr".to_string()];
+        assert_eq!(resolve_startup_locale(&args), "fr");
+        // Same flag in `--lang=value` form.
+        let args = vec!["--lang=es".to_string()];
+        assert_eq!(resolve_startup_locale(&args), "es");
+    }
+
+    #[test]
+    #[serial]
+    fn unsupported_system_locale_falls_back_to_en_silently_for_fresh_install() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let g = StartupGuard::new(tmp.path());
+        // Greenlandic — not in SUPPORTED_LANGUAGES.
+        g.set("LANG", "kl_GL.UTF-8");
+        assert_eq!(resolve_startup_locale(&[]), "en");
+    }
+
+    #[test]
+    #[serial]
+    fn unsupported_flag_falls_through_to_config_or_env() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let g = StartupGuard::new(tmp.path());
+        write_config(tmp.path(), Some("ja"), true);
+        g.set("LANG", "de_DE.UTF-8");
+        // --lang xx is unsupported -> ignored, config (ja) wins.
+        let args = vec!["--lang".to_string(), "xx".to_string()];
+        assert_eq!(resolve_startup_locale(&args), "ja");
+    }
+
+    #[test]
+    #[serial]
+    fn parse_cli_lang_flag_handles_both_spellings() {
+        assert_eq!(parse_cli_lang_flag(&[]), None);
+        let args = vec!["--lang".to_string(), "fr".to_string()];
+        assert_eq!(parse_cli_lang_flag(&args).as_deref(), Some("fr"));
+        let args = vec!["--lang=de".to_string()];
+        assert_eq!(parse_cli_lang_flag(&args).as_deref(), Some("de"));
+        // Missing value -> None (parse_args reports the error separately).
+        let args = vec!["--lang".to_string()];
+        assert_eq!(parse_cli_lang_flag(&args), None);
+        // Other args don't interfere.
+        let args = vec![
+            "--model".to_string(),
+            "sonnet".to_string(),
+            "--lang".to_string(),
+            "ja".to_string(),
+        ];
+        assert_eq!(parse_cli_lang_flag(&args).as_deref(), Some("ja"));
+    }
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -568,22 +775,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Phase A5 (task #645) — apply the runtime locale BEFORE any other
-    // startup code emits user-visible strings (wizard banners, REPL
-    // help text, status banners, error messages).  Two sources, in
-    // order of precedence:
-    //   1. `--lang <code>` / `--lang=<code>` — per-invocation override,
-    //      never persisted.  Unsupported codes are a hard error here
-    //      (exit 2) since they would otherwise silently fall back to
-    //      English on the first `t!()` call.
-    //   2. `~/.anvil/config.json::language` — the value /language and
-    //      the wizard write.  Fallback is "en" via `current_language_code`.
-    //
-    // The helper also strips the consumed `--lang` flag from the args
-    // vector so it does not bleed into `parse_args`' prompt-fallback
-    // path or accumulate in the resume-command list.
+    // Apply runtime locale BEFORE any other startup code emits user-visible
+    // strings.  Precedence: --lang flag → persisted config (if setup) →
+    // system $LANG → "en".  The helper also strips the consumed --lang
+    // flag from the args vector so it does not bleed into parse_args'
+    // prompt-fallback path or accumulate in the resume-command list.
     let args = apply_startup_locale(raw_args)?;
-
     match parse_args(&args)? {
         CliAction::DumpManifests => dump_manifests(),
         CliAction::BootstrapPlan => print_bootstrap_plan(),
@@ -1063,6 +1260,19 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                     .ok_or_else(|| "missing value for --allowedTools".to_string())?;
                 allowed_tool_values.push(value.clone());
                 index += 2;
+            }
+            // Locale override (task #750).  Actually applied by
+            // `apply_startup_locale` (called from `run()` before any t!()
+            // expansion); here we just consume the flag so it doesn't fall
+            // through to the prompt-rest collector below.
+            "--lang" => {
+                if args.get(index + 1).is_none() {
+                    return Err("missing value for --lang".to_string());
+                }
+                index += 2;
+            }
+            flag if flag.starts_with("--lang=") => {
+                index += 1;
             }
             flag if flag.starts_with("--allowedTools=") => {
                 allowed_tool_values.push(flag[15..].to_string());

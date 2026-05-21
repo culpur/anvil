@@ -416,6 +416,128 @@ pub(crate) fn current_language_code() -> String {
     "en".to_string()
 }
 
+/// Read `setup_completed` from `~/.anvil/config.json`.
+///
+/// Returns `true` only when the wizard explicitly wrote the flag, meaning the
+/// user has made an affirmative choice we should not override at startup.
+/// Defaults to `false` for fresh installs and malformed configs.
+pub(crate) fn config_setup_completed() -> bool {
+    let path = anvil_home_dir().join("config.json");
+    let Ok(data) = fs::read_to_string(&path) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&data)
+        .ok()
+        .and_then(|m| m.get("setup_completed").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// Detect the user's preferred language from the system locale.
+///
+/// Precedence on POSIX (and msys/cygwin/git-bash on Windows where these are
+/// set):
+///   1. `LC_ALL`
+///   2. `LC_MESSAGES`
+///   3. `LANG`
+///
+/// On Windows we additionally consult `LCID` (set by some shells) as a last
+/// resort.  We deliberately do NOT pull in `winapi` / `sys-locale` so this
+/// adds zero transitive dependencies; in exchange a fresh `cmd.exe` / native
+/// PowerShell user falls back to English, which is acceptable today and can
+/// be revisited if telemetry shows the gap matters.
+///
+/// Encoding suffixes (`.UTF-8`, `.utf8`) and `@modifier` tags are stripped.
+/// Region codes are normalized to rust-i18n's `lang-REGION` convention.  If
+/// the resulting code matches `SUPPORTED_LANGUAGES`, it is returned; failing
+/// that, we strip the region and try the bare language tag; failing that we
+/// return `None`.
+///
+/// This function does NOT mutate any global state — callers wire the result
+/// into `rust_i18n::set_locale` (see `main.rs::apply_startup_locale`).
+pub(crate) fn detect_system_locale() -> Option<String> {
+    let raw = read_system_locale_env()?;
+    let normalized = normalize_locale_tag(&raw)?;
+    match_supported_locale(&normalized)
+}
+
+/// Internal: read the first non-empty locale env var per POSIX precedence.
+///
+/// Public-in-crate for tests; the read order is `LC_ALL` -> `LC_MESSAGES` ->
+/// `LANG`, then `LCID` on Windows only.  An env var set to the empty string
+/// is treated as unset (matches `setlocale(3)` semantics).
+fn read_system_locale_env() -> Option<String> {
+    const KEYS: &[&str] = &["LC_ALL", "LC_MESSAGES", "LANG"];
+    for key in KEYS {
+        if let Ok(value) = env::var(key)
+            && !value.is_empty()
+        {
+            return Some(value);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(value) = env::var("LCID")
+            && !value.is_empty()
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Internal: strip encoding/modifier suffixes and normalize region casing.
+///
+/// `fr_FR.UTF-8`        -> `fr-FR`
+/// `en_DK.UTF-8@euro`   -> `en-DK`
+/// `pt_BR`              -> `pt-BR`
+/// `C` / `POSIX`        -> None (locale-less)
+fn normalize_locale_tag(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Strip `.encoding` suffix.
+    let head = trimmed.split('.').next().unwrap_or(trimmed);
+    // Strip `@modifier` suffix.
+    let head = head.split('@').next().unwrap_or(head);
+    let head = head.trim();
+    if head.is_empty() {
+        return None;
+    }
+    // POSIX-default "no locale" sentinels — treat as no detection.
+    if matches!(head, "C" | "POSIX") {
+        return None;
+    }
+    // Split language / region on `_` (POSIX) or `-` (BCP 47 / Windows).
+    let mut parts = head.splitn(2, |c| c == '_' || c == '-');
+    let lang = parts.next()?.to_ascii_lowercase();
+    if lang.is_empty() {
+        return None;
+    }
+    match parts.next() {
+        Some(region) if !region.is_empty() => {
+            Some(format!("{lang}-{}", region.to_ascii_uppercase()))
+        }
+        _ => Some(lang),
+    }
+}
+
+/// Internal: match a normalized BCP-47-ish tag against `SUPPORTED_LANGUAGES`.
+///
+/// First tries the full `lang-REGION` form (so `pt-BR` and `pt-PT` stay
+/// distinct), then falls back to the bare language code (`fr-CA` -> `fr`).
+fn match_supported_locale(normalized: &str) -> Option<String> {
+    if SUPPORTED_LANGUAGES.contains(&normalized) {
+        return Some(normalized.to_string());
+    }
+    if let Some((lang, _region)) = normalized.split_once('-')
+        && SUPPORTED_LANGUAGES.contains(&lang)
+    {
+        return Some(lang.to_string());
+    }
+    None
+}
+
 
 /// Static version of `/configure` for use in the `--resume` path, where no
 /// `LiveCli` instance is available.  Produces the same output as the live
@@ -1711,6 +1833,179 @@ pub(crate) fn build_system_prompt_with_identity(
     }
 
     Ok(sections)
+}
+
+// ─── Task #750: system locale detection tests ────────────────────────────
+#[cfg(test)]
+#[allow(non_snake_case)] // POSIX locale codes (de_DE, pt_BR, fr_CA…) are case-sensitive in their canonical form
+#[allow(unsafe_code)] // env::set_var/remove_var require unsafe in edition 2024
+mod locale_detect_tests {
+    //! Tests mutate process-wide env vars (`LANG`, `LC_ALL`, `LC_MESSAGES`).
+    //! Per `feedback-test-isolation-three-causes.md`, all such tests are
+    //! gated with `#[serial]` so we never interleave reads/writes across
+    //! threads.
+
+    use super::*;
+    use serial_test::serial;
+
+    /// RAII guard that snapshots LC_ALL / LC_MESSAGES / LANG on
+    /// construction and restores them on drop.
+    struct LocaleEnvGuard {
+        prev: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl LocaleEnvGuard {
+        fn new() -> Self {
+            const KEYS: &[&str] = &["LC_ALL", "LC_MESSAGES", "LANG"];
+            let mut prev = Vec::with_capacity(KEYS.len());
+            for k in KEYS {
+                let saved = std::env::var(k).ok();
+                // SAFETY: serial_test serialises tests that touch env.
+                unsafe { std::env::remove_var(k); }
+                prev.push((*k, saved));
+            }
+            Self { prev }
+        }
+
+        fn set(&self, key: &str, value: &str) {
+            // SAFETY: see new().
+            unsafe { std::env::set_var(key, value); }
+        }
+    }
+
+    impl Drop for LocaleEnvGuard {
+        fn drop(&mut self) {
+            for (k, saved) in self.prev.drain(..) {
+                match saved {
+                    Some(v) => unsafe { std::env::set_var(k, v) },
+                    None => unsafe { std::env::remove_var(k) },
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn lang_env_var_de_DE_maps_to_de() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "de_DE.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("de"));
+    }
+
+    #[test]
+    #[serial]
+    fn lang_env_var_pt_BR_maps_to_pt_BR() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "pt_BR.UTF-8");
+        let got = detect_system_locale();
+        if SUPPORTED_LANGUAGES.contains(&"pt-BR") {
+            assert_eq!(got.as_deref(), Some("pt-BR"));
+        } else if SUPPORTED_LANGUAGES.contains(&"pt") {
+            assert_eq!(got.as_deref(), Some("pt"));
+        } else {
+            assert_eq!(got, None);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn lang_env_var_pt_PT_maps_to_pt_PT() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "pt_PT.UTF-8");
+        let got = detect_system_locale();
+        if SUPPORTED_LANGUAGES.contains(&"pt-PT") {
+            assert_eq!(got.as_deref(), Some("pt-PT"));
+        } else if SUPPORTED_LANGUAGES.contains(&"pt") {
+            assert_eq!(got.as_deref(), Some("pt"));
+        } else {
+            assert_eq!(got, None);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn lang_env_var_fr_CA_strips_region_to_fr() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "fr_CA.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("fr"));
+    }
+
+    #[test]
+    #[serial]
+    fn lang_env_var_unsupported_returns_none() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "kl_GL.UTF-8"); // Kalaallisut/Greenlandic — not supported.
+        assert_eq!(detect_system_locale(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn lc_all_wins_over_lang() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "fr_FR.UTF-8");
+        g.set("LC_ALL", "de_DE.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("de"));
+    }
+
+    #[test]
+    #[serial]
+    fn lc_messages_wins_over_lang_but_loses_to_lc_all() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "fr_FR.UTF-8");
+        g.set("LC_MESSAGES", "ja_JP.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("ja"));
+        g.set("LC_ALL", "de_DE.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("de"));
+    }
+
+    #[test]
+    #[serial]
+    fn posix_locale_with_encoding_suffix_strips_correctly() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "fr_FR.UTF-8");
+        assert_eq!(detect_system_locale().as_deref(), Some("fr"));
+        assert_eq!(
+            normalize_locale_tag("fr_FR.UTF-8").as_deref(),
+            Some("fr-FR")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn posix_locale_with_at_modifier_strips_correctly() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "en_DK.UTF-8@euro");
+        assert_eq!(detect_system_locale().as_deref(), Some("en"));
+        assert_eq!(
+            normalize_locale_tag("en_DK.UTF-8@euro").as_deref(),
+            Some("en-DK")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn posix_c_and_posix_locales_return_none() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "C");
+        assert_eq!(detect_system_locale(), None);
+        g.set("LANG", "POSIX");
+        assert_eq!(detect_system_locale(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn empty_env_returns_none() {
+        let _g = LocaleEnvGuard::new();
+        assert_eq!(detect_system_locale(), None);
+    }
+
+    #[test]
+    #[serial]
+    fn empty_string_lang_is_treated_as_unset() {
+        let g = LocaleEnvGuard::new();
+        g.set("LANG", "");
+        assert_eq!(detect_system_locale(), None);
+    }
 }
 
 // ─── Task #567: NO_COLOR / FORCE_COLOR must not strip TUI colors ─────────
