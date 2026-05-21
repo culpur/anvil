@@ -1690,7 +1690,7 @@ pub fn handle_memory_command(action: Option<&str>, ctx: &MemoryContext<'_>) -> S
                 "forget"  => memory_forget(arg),
                 "why"     => memory_why(ctx),
                 "budget"  => memory_budget(ctx),
-                "prune"   => memory_prune(),
+                "prune"   => memory_prune(arg),
                 "clean"   => handle_memory_clean(arg, None),
                 // Task #731 — `/memory layer <N>` routes to the per-layer
                 // inspector view (currently only L1 is wired). The router
@@ -3139,7 +3139,51 @@ fn parse_flag_value(args: &str, flag: &str) -> Option<String> {
     None
 }
 
-fn memory_prune() -> String {
+/// Handle `/memory prune [<target>] [--dry-run]`.
+///
+/// `<target>` defaults to the legacy daily+nominations behaviour. Task #736
+/// (Layer 7 cache tier visibility) adds `cache` as a target that surfaces
+/// `file-cache` + `cmd-cache` candidates older than each manager's TTL.
+fn memory_prune(arg: &str) -> String {
+    let arg = arg.trim();
+    let dry_run = arg.split_whitespace().any(|t| t == "--dry-run");
+    // First non-flag token is the target. Defaults to legacy daily+nominations.
+    let target = arg
+        .split_whitespace()
+        .find(|t| !t.starts_with("--"))
+        .unwrap_or("");
+
+    match target {
+        // Task #736 — Layer 7 cache prune. `--dry-run` enumerates candidates;
+        // the non-dry-run path is intentionally a pointer (`/file-cache prune`
+        // and `/cmd-cache prune` already exist for the real deletion path).
+        "cache" => memory_prune_cache(dry_run),
+        // Task #732 — Layer 2 episodic prune with trash-bin safety net.
+        // Dry-run is the default; actual file moves require `--confirm`.
+        // Strip the leading `episodic` token before delegating so the
+        // episodic flag parser sees only flags (`--ttl <days>`, etc.).
+        "episodic" => {
+            let rest = arg
+                .strip_prefix("episodic")
+                .map(str::trim)
+                .unwrap_or("");
+            handle_memory_prune_episodic(rest)
+        }
+        "" => {
+            if dry_run {
+                memory_prune_legacy_dry_run()
+            } else {
+                memory_prune_legacy_apply()
+            }
+        }
+        other => format!(
+            "Unknown /memory prune target: {other}\n\
+             Usage: /memory prune [cache|episodic] [--dry-run]"
+        ),
+    }
+}
+
+fn memory_prune_legacy_apply() -> String {
     let home = anvil_home();
     let mut lines = vec!["Memory prune:".to_string()];
     let daily_pruned = prune_old_files(&home.join("daily"), 30);
@@ -3151,6 +3195,192 @@ fn memory_prune() -> String {
         "  nominations: removed {nom_pruned} decided nomination(s)"
     ));
     lines.join("\n")
+}
+
+fn memory_prune_legacy_dry_run() -> String {
+    let home = anvil_home();
+    let mut lines = vec!["Memory prune (dry-run):".to_string()];
+    let daily_candidates = count_old_files(&home.join("daily"), 30);
+    lines.push(format!(
+        "  daily:       {daily_candidates} file(s) older than 30 days would be removed"
+    ));
+    let nom_candidates = count_decided_nominations(&home.join("nominations"));
+    lines.push(format!(
+        "  nominations: {nom_candidates} decided nomination(s) would be removed"
+    ));
+    lines.push(String::new());
+    lines.push("Re-run without --dry-run to apply.".to_string());
+    lines.join("\n")
+}
+
+/// Task #736 — Layer 7 cache prune.
+///
+/// `--dry-run` enumerates candidates that exceed each manager's TTL but
+/// performs no deletion. The non-dry-run mode is intentionally a pointer
+/// to `/file-cache prune` / `/cmd-cache prune`, both of which already
+/// exist with their own permission gating; we don't want to silently
+/// duplicate that logic here.
+fn memory_prune_cache(dry_run: bool) -> String {
+    use runtime::{CommandCacheManager, FileCacheManager};
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut lines = if dry_run {
+        vec!["Memory prune cache (dry-run):".to_string()]
+    } else {
+        vec!["Memory prune cache:".to_string()]
+    };
+
+    // File-cache candidates: entries whose live file is gone or whose
+    // stored size/mtime differ. We don't re-hash large files here; only
+    // cheap stat-based mismatch counts.
+    let fc_candidates: Vec<String> = match FileCacheManager::new(cwd.clone()) {
+        Ok(mgr) => mgr
+            .list()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| !is_file_cache_entry_live(&e.path, e.size_bytes, e.mtime))
+            .map(|e| {
+                format!(
+                    "{}  ({} bytes, last_seen={})",
+                    e.path.display(),
+                    e.size_bytes,
+                    e.last_seen
+                )
+            })
+            .collect(),
+        Err(e) => {
+            lines.push(format!("  file-cache: failed to open ({e:?})"));
+            Vec::new()
+        }
+    };
+
+    // Cmd-cache candidates: stale-after-TTL entries.
+    let cc_candidates: Vec<String> = match CommandCacheManager::new(cwd.clone()) {
+        Ok(mgr) => {
+            let now = now_unix_secs();
+            mgr.list()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| now.saturating_sub(e.captured_at) >= e.stale_after_secs)
+                .map(|e| {
+                    let cmd: String = e.command.chars().take(60).collect();
+                    format!(
+                        "{cmd}  (captured_at={}, ttl={}s)",
+                        e.captured_at, e.stale_after_secs
+                    )
+                })
+                .collect()
+        }
+        Err(e) => {
+            lines.push(format!("  cmd-cache: failed to open ({e:?})"));
+            Vec::new()
+        }
+    };
+
+    lines.push(format!(
+        "  file-cache: {} candidate(s)",
+        fc_candidates.len()
+    ));
+    for c in fc_candidates.iter().take(10) {
+        lines.push(format!("    - {c}"));
+    }
+    if fc_candidates.len() > 10 {
+        lines.push(format!("    ... +{} more", fc_candidates.len() - 10));
+    }
+    lines.push(format!(
+        "  cmd-cache:  {} candidate(s)",
+        cc_candidates.len()
+    ));
+    for c in cc_candidates.iter().take(10) {
+        lines.push(format!("    - {c}"));
+    }
+    if cc_candidates.len() > 10 {
+        lines.push(format!("    ... +{} more", cc_candidates.len() - 10));
+    }
+
+    if dry_run {
+        lines.push(String::new());
+        lines.push(
+            "Re-run as `/file-cache prune` or `/cmd-cache prune` to apply (per-manager gates apply)."
+                .to_string(),
+        );
+    } else {
+        lines.push(String::new());
+        lines.push(
+            "Cache pruning is delegated to `/file-cache prune` and `/cmd-cache prune` \
+             so the per-manager permission gates remain authoritative. \
+             Re-run with --dry-run to preview candidates."
+                .to_string(),
+        );
+    }
+    lines.join("\n")
+}
+
+fn count_old_files(dir: &std::path::Path, max_age_days: u64) -> usize {
+    use std::time::{Duration, SystemTime};
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(max_age_days * 86_400))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(meta) = path.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if modified < cutoff {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn count_decided_nominations(nom_dir: &std::path::Path) -> usize {
+    use runtime::nominations::{NominationStatus, NominationStore};
+    NominationStore::with_dir(nom_dir.to_path_buf())
+        .list(None)
+        .into_iter()
+        .filter(|n| {
+            matches!(
+                n.status,
+                NominationStatus::Accepted | NominationStatus::Rejected
+            )
+        })
+        .count()
+}
+
+fn now_unix_secs() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Best-effort liveness check for a file-cache entry without re-hashing.
+/// Returns `true` when the file exists and its size+mtime still match the
+/// stored values. `false` means the entry is a prune candidate.
+fn is_file_cache_entry_live(path: &std::path::Path, size_bytes: u64, mtime: u64) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    if meta.len() != size_bytes {
+        return false;
+    }
+    let live_mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    live_mtime == mtime
 }
 
 fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
@@ -4270,6 +4500,77 @@ mod memory_tests {
         );
     }
 
+    // Task #736 — `/memory prune cache --dry-run` enumerates L7 candidates
+    // for both file-cache and cmd-cache. The default `--dry-run` form must
+    // not delete anything and must surface both sub-caches.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_prune_cache_dry_run_reports_both_sub_caches() {
+        let result = memory_prune("cache --dry-run");
+        assert!(
+            result.contains("dry-run"),
+            "dry-run mode should be advertised in the header"
+        );
+        assert!(
+            result.contains("file-cache"),
+            "should mention file-cache sub-cache"
+        );
+        assert!(
+            result.contains("cmd-cache"),
+            "should mention cmd-cache sub-cache"
+        );
+        assert!(
+            result.contains("candidate"),
+            "should describe candidate entries"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_prune_cache_dispatches_via_router() {
+        let result =
+            handle_memory_command(Some("prune cache --dry-run"), &MemoryContext::default());
+        assert!(
+            result.contains("file-cache") && result.contains("cmd-cache"),
+            "router should land on memory_prune_cache; got: {result}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_prune_default_dry_run_flag_still_works() {
+        let result = memory_prune("--dry-run");
+        assert!(
+            result.contains("dry-run") && result.contains("daily"),
+            "legacy dry-run path should be preserved; got: {result}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_prune_cache_dry_run_returns_zero_candidates_on_empty_caches() {
+        // Stand up a clean per-project file-cache + cmd-cache via tempdir-HOME
+        // and confirm the dry-run path executes end-to-end without panicking
+        // and reports zero candidates for both sub-caches.
+        use runtime::{CommandCacheManager, FileCacheManager};
+        let home_tmp = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+        unsafe { std::env::set_var("HOME", home_tmp.path()); }
+        let _fc = FileCacheManager::new(project.path().to_path_buf())
+            .expect("file-cache opens");
+        let _cc = CommandCacheManager::new(project.path().to_path_buf())
+            .expect("cmd-cache opens");
+        let result = memory_prune_cache(true);
+        assert!(
+            result.contains("file-cache: 0 candidate(s)"),
+            "expected zero file-cache candidates; got: {result}"
+        );
+        assert!(
+            result.contains("cmd-cache:  0 candidate(s)"),
+            "expected zero cmd-cache candidates; got: {result}"
+        );
+    }
+
     #[test]
     #[serial(anvil_config_home)]
     fn memory_inspect_empty_key_returns_usage() {
@@ -4910,7 +5211,7 @@ mod memory_tests {
     #[test]
     #[serial(anvil_config_home)]
     fn memory_prune_returns_summary_with_both_tiers() {
-        let result = memory_prune();
+        let result = memory_prune("");
         assert!(result.contains("daily"), "should mention daily pruning");
         assert!(result.contains("nominations"), "should mention nominations pruning");
     }
