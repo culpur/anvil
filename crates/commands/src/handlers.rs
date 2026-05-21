@@ -5812,6 +5812,244 @@ mod memory_tests {
         assert!(result.contains("unknown source"), "unknown source should show error: {result}");
         assert!(result.contains("claude-code"), "error should mention claude-code: {result}");
     }
+
+    // ── Task #732 — Memory Cohesion I.3 episodic tier ────────────────────────
+    //
+    // The episodic tier spans daily/, history/, and workspace sessions/. The
+    // tests below stage all three under temp dirs and assert that:
+    //   * `collect_episodic_entries` discovers entries from each source.
+    //   * `render_episodic_table` formats them with the documented columns.
+    //   * `handle_memory_prune_episodic_impl` honors dry-run by default,
+    //     respects `--ttl`, and moves expired files into the trash-bin only
+    //     under `--confirm`.
+    //
+    // Time-of-mtime is controlled by passing a fake-future `now` to the
+    // prune-impl helper rather than backdating file mtimes — this mirrors
+    // the strategy in `crates/runtime/src/history.rs` tests so the workspace
+    // does not gain a `filetime` / libc-utimensat dep just for testability.
+
+    fn write_file(path: &std::path::Path, body: &[u8]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn far_future_now() -> u64 {
+        now_unix_secs() + 365 * 86_400
+    }
+
+    #[test]
+    fn episodic_entries_discover_all_three_sources() {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        write_file(
+            &home.path().join("daily").join("2026-05-20.json"),
+            b"{\"date\":\"2026-05-20\"}",
+        );
+        write_file(
+            &home.path().join("history").join("session-1-12345.md"),
+            b"---\nsession_id: session-1\n---\n# arch",
+        );
+        write_file(
+            &project.path().join(".anvil").join("sessions").join("session-active.json"),
+            b"{}",
+        );
+
+        let entries = collect_episodic_entries(home.path(), project.path());
+        let sources: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.source).collect();
+        assert!(sources.contains("daily"), "daily missing from {entries:?}");
+        assert!(sources.contains("history"), "history missing from {entries:?}");
+        assert!(sources.contains("session"), "session missing from {entries:?}");
+    }
+
+    #[test]
+    fn episodic_table_renders_documented_columns() {
+        let entries = vec![
+            EpisodicEntry {
+                source: "daily",
+                date: "2026-05-20".into(),
+                title: "Daily summary 2026-05-20".into(),
+                size_bytes: 8_400,
+                path: std::path::PathBuf::from("/tmp/daily.json"),
+                mtime_secs: 1_000,
+            },
+            EpisodicEntry {
+                source: "session",
+                date: "2026-05-21".into(),
+                title: "session-active".into(),
+                size_bytes: 0,
+                path: std::path::PathBuf::from("/tmp/session.json"),
+                mtime_secs: 0,
+            },
+        ];
+        let out = render_episodic_table(&entries);
+        assert!(out.contains("Source"), "header column missing: {out}");
+        assert!(out.contains("Date"), "header column missing: {out}");
+        assert!(out.contains("Title"), "header column missing: {out}");
+        assert!(out.contains("Size"), "header column missing: {out}");
+        assert!(out.contains("daily"), "daily row missing: {out}");
+        assert!(out.contains("session"), "session row missing: {out}");
+        assert!(
+            out.contains("active"),
+            "active-session size label missing: {out}"
+        );
+    }
+
+    #[test]
+    fn episodic_prune_dry_run_lists_all_entries_under_far_future_clock() {
+        // Strategy: write three files with real-now mtime, then drive the
+        // prune helper with `now = far-future`. At that fake `now` every
+        // file is > 90 days old, so all three become candidates. The next
+        // test asserts the opposite direction (real `now`, all files
+        // skipped) — together they bracket the TTL behaviour.
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        write_file(&home.path().join("daily").join("2026-05-20.json"), b"{}");
+        write_file(&home.path().join("daily").join("2026-05-21.json"), b"{}");
+        write_file(&home.path().join("history").join("sess-a-100.md"), b"# arch a");
+
+        let now = far_future_now();
+        let result = handle_memory_prune_episodic_impl(
+            home.path(),
+            project.path(),
+            true, // dry-run
+            DEFAULT_EPISODIC_TTL_DAYS,
+            now,
+        );
+        assert!(result.contains("dry-run"), "header label missing: {result}");
+        assert!(
+            result.contains("Candidates: 3 file"),
+            "all three files should be candidates; got: {result}"
+        );
+        // Filesystem must be untouched after a dry-run.
+        assert!(
+            home.path().join("daily").join("2026-05-20.json").exists(),
+            "dry-run must not move files",
+        );
+        assert!(
+            !home.path().join("trash").exists(),
+            "dry-run must not create trash-bin",
+        );
+    }
+
+    #[test]
+    fn episodic_prune_real_clock_skips_fresh_files() {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        write_file(&home.path().join("daily").join("fresh.json"), b"{}");
+        write_file(&home.path().join("history").join("sess-fresh-1.md"), b"# arch");
+        write_file(
+            &project.path().join(".anvil").join("sessions").join("fresh.json"),
+            b"{}",
+        );
+
+        let result = handle_memory_prune_episodic_impl(
+            home.path(),
+            project.path(),
+            true,
+            DEFAULT_EPISODIC_TTL_DAYS,
+            now_unix_secs(),
+        );
+        assert!(
+            result.contains("0 candidate(s)"),
+            "fresh files must not be candidates; got: {result}"
+        );
+        assert!(home.path().join("daily").join("fresh.json").exists());
+    }
+
+    #[test]
+    fn episodic_prune_confirm_moves_files_to_trash_bin() {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        write_file(&home.path().join("daily").join("very-old.json"), b"{}");
+
+        let now = far_future_now();
+        let result = handle_memory_prune_episodic_impl(
+            home.path(),
+            project.path(),
+            false, // dry_run = false (confirm path)
+            DEFAULT_EPISODIC_TTL_DAYS,
+            now,
+        );
+        assert!(result.contains("Moved 1 file"), "expected move report; got: {result}");
+
+        // Source file gone.
+        assert!(
+            !home.path().join("daily").join("very-old.json").exists(),
+            "source file must have moved out of daily/",
+        );
+
+        // Trash bucket created and contains the moved file with the source prefix.
+        let trash_root = home.path().join("trash").join(format!("{now}"));
+        assert!(trash_root.is_dir(), "trash bucket must exist at {trash_root:?}");
+        let moved = trash_root.join("daily-very-old.json");
+        assert!(
+            moved.exists(),
+            "moved file must live at {moved:?} (source-prefixed name)",
+        );
+    }
+
+    #[test]
+    fn episodic_prune_custom_ttl_widens_window() {
+        // With a tiny ttl (1 day) and far-future `now`, every fresh file
+        // becomes a candidate. Confirms `--ttl` actually shifts the cutoff.
+        let home = tempfile::tempdir().expect("home tempdir");
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        write_file(&home.path().join("daily").join("just-written.json"), b"{}");
+
+        let result = handle_memory_prune_episodic_impl(
+            home.path(),
+            project.path(),
+            true,
+            1,                // ttl = 1 day
+            far_future_now(), // far-future → file looks ancient
+        );
+        assert!(
+            result.contains("Candidates: 1 file"),
+            "custom ttl must include the file; got: {result}"
+        );
+    }
+
+    #[test]
+    fn episodic_prune_flags_rejects_conflicting_dry_run_and_confirm() {
+        let r = handle_memory_prune_episodic("--dry-run --confirm");
+        assert!(
+            r.contains("Conflicting flags") || r.contains("ambiguous"),
+            "must refuse contradictory flags; got: {r}"
+        );
+    }
+
+    #[test]
+    fn episodic_prune_flags_rejects_invalid_ttl() {
+        let r = handle_memory_prune_episodic("--ttl abc");
+        assert!(
+            r.contains("Invalid --ttl"),
+            "must reject non-integer ttl; got: {r}"
+        );
+
+        let r2 = handle_memory_prune_episodic("--ttl 0");
+        assert!(
+            r2.contains("Invalid --ttl"),
+            "must reject zero ttl (would prune everything); got: {r2}"
+        );
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn episodic_prune_dispatches_through_memory_prune_router() {
+        // `/memory prune episodic` (no flags) must reach
+        // `handle_memory_prune_episodic` via `memory_prune("episodic")`.
+        let r = memory_prune("episodic");
+        assert!(
+            r.contains("episodic") && (r.contains("dry-run") || r.contains("0 candidate")),
+            "router must hand off to episodic handler; got: {r}"
+        );
+    }
 }
 
 // ─── /cursor handler tests ───────────────────────────────────────────────────
