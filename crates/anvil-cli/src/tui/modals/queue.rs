@@ -386,6 +386,22 @@ impl WizardChoiceModal {
         self
     }
 
+    /// Builder: pre-select the row at `index` so the modal opens on
+    /// the user's current value rather than always on row 0.  Added
+    /// for Phase A6 (task #645): the wizard's language picker opens
+    /// on the persisted locale so re-running the wizard does not
+    /// silently reset the language to "en" if the user just hits
+    /// Enter.  Out-of-range values clamp to 0.
+    #[allow(dead_code)]
+    pub(crate) fn with_default_index(mut self, index: usize) -> Self {
+        self.selected = if index < self.options.len().max(1) {
+            index
+        } else {
+            0
+        };
+        self
+    }
+
     /// Outcome of `handle_key`.
     pub(crate) fn handle_key(
         &mut self,

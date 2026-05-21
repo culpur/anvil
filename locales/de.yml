@@ -119,6 +119,12 @@ wizard.step.priority_title: "Provider-Priorität und Standardmodell"
 wizard.step.tui_layout_title: "TUI-Layout"
 wizard.step.tui_prefs_title: "TUI-Einstellungen"
 
+# Sprach-Schritt (Phase A6, task #645)
+wizard.language.title: "Wähle deine Sprache"
+wizard.language.body: "Die Anvil-TUI und der Ersteinrichtungs-Assistent verwenden diese Sprache. Du kannst sie später mit /language oder in /configure ändern."
+wizard.language.continue: "Weiter"
+wizard.language.skip: "Überspringen"
+
 # Tresor-Schritt
 wizard.vault.body_l1: "Anvil speichert deine API-Keys in einem mit AES-256-GCM verschlüsselten Tresor."
 wizard.vault.body_l2: "Du legst jetzt ein Master-Passwort fest — es wird nirgendwo gespeichert."

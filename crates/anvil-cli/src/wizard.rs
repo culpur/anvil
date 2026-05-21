@@ -1027,6 +1027,91 @@ where
 /// OAuth (step 3) renders inline — `OAuthFlow` draws into the same
 /// session's terminal and polls the callback channel each tick.  No
 /// drop to stdin, no second alt-screen, no flash.
+
+/// Phase A6 (task #645) — wizard language picker step.
+///
+/// Renders after the welcome card, before the vault / provider steps.
+/// User picks from the canonical Tier-1 language list using the
+/// matching native-name labels — the index aligns one-to-one with
+/// [`crate::utils::SUPPORTED_LANGUAGES`] so the picker has a single
+/// source of truth and can never drift from the runtime list (Phase
+/// A5's drift gate enforces that the YAML files match too).
+///
+/// On Enter, the helper:
+///   1. Writes `language: <code>` to `~/.anvil/config.json` via
+///      `utils::save_language` (the same helper /language uses), so
+///      the choice survives across runs without a redundant code path.
+///   2. Calls `rust_i18n::set_locale(&code)` so the REST of the
+///      wizard (provider picker labels, modal hints, post-wizard
+///      summary banner) renders in the chosen locale immediately.
+///
+/// On Esc (`ChoiceCancelled`) the helper is a no-op — the locale
+/// applied by `apply_startup_locale` at boot stays in effect.
+pub(crate) fn run_language_step_in_alt_screen<B, H, K>(
+    runner: &mut WizardModalRunner<'_, B, H, K>,
+) -> Result<(), RunnerError>
+where
+    B: ratatui::backend::Backend,
+    B::Error: std::fmt::Display,
+    H: crate::wizard_runner::TerminalHooks,
+    K: crate::wizard_runner::KeySource,
+{
+    use crate::tui::modals::queue::{ModalAnswer, WizardChoiceModal};
+
+    // Native-name labels — one entry per `SUPPORTED_LANGUAGES` index.
+    // Encoded inline (not via t!()) because each label MUST appear in
+    // its own language regardless of the current locale.  Keep this
+    // table in lock-step with `utils::SUPPORTED_LANGUAGES` (drift gate
+    // in tests).
+    const NATIVE_NAMES: &[(&str, &str)] = &[
+        ("en", "English"),
+        ("es", "Español"),
+        ("zh-CN", "简体中文"),
+        ("fr", "Français"),
+        ("pt-BR", "Português (Brasil)"),
+        ("ru", "Русский"),
+        ("ja", "日本語"),
+        ("de", "Deutsch"),
+    ];
+
+    // Render the step banner (title + body explanation).
+    runner.session.render_banner(
+        &t!("wizard.language.title"),
+        &[&t!("wizard.language.body")],
+        ratatui::style::Color::Cyan,
+    )?;
+
+    // Default selection — whatever locale is currently active.  If
+    // the persisted code is not one we recognise (e.g. user hand-edited
+    // config.json to an unsupported value), fall back to index 0
+    // ("en").  The picker still completes; the user can pick another
+    // entry and we re-anchor.
+    let current = crate::utils::current_language_code();
+    let default_index = NATIVE_NAMES
+        .iter()
+        .position(|(code, _)| *code == current.as_str())
+        .unwrap_or(0);
+
+    let labels: Vec<String> = NATIVE_NAMES.iter().map(|(_, name)| (*name).to_string()).collect();
+    let modal = WizardChoiceModal::new(t!("wizard.language.title").to_string(), labels)
+        .with_default_index(default_index);
+    let answer = runner.run_choice("step0b-language", modal)?;
+
+    if let ModalAnswer::Choice(idx) = answer {
+        if let Some((code, _)) = NATIVE_NAMES.get(idx) {
+            // Persist + apply.  If the write fails we still flip the
+            // in-process locale so this run uses the chosen language —
+            // the next /language invocation can retry the disk write.
+            if let Err(_err) = crate::utils::save_language(code) {
+                rust_i18n::set_locale(code);
+            }
+        }
+    }
+    // ChoiceCancelled / other variants: keep the boot-time locale.
+
+    Ok(())
+}
+
 pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, RunnerError> {
     use ratatui::Terminal;
     use ratatui::backend::CrosstermBackend;
@@ -1060,6 +1145,15 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
         // alt-screen exits cleanly before any inline output runs.
         return Err(RunnerError::Enter("user-skipped".to_string()));
     }
+
+    // Phase A6 (task #645) — language picker.  Renders BEFORE the
+    // vault / provider steps so the user can switch the wizard into
+    // their own language for the rest of the flow.  On selection, the
+    // call also persists `language: <code>` to ~/.anvil/config.json
+    // and applies the locale to `rust_i18n` so every subsequent t!()
+    // call in this run uses the chosen locale.  Esc keeps whatever
+    // locale was applied at startup.
+    run_language_step_in_alt_screen(&mut runner)?;
 
     // Steps 1-3.
     let steps123 = run_steps_1_to_3_in_alt_screen(&mut runner)?;
@@ -4148,5 +4242,112 @@ mod tests {
         let modal = PasswordModal::new("Vault", "Master password");
         let res = runner.run_password_capture(modal).expect("run_password_capture");
         assert!(res.is_none(), "Esc must produce a Cancel (None) outcome");
+    }
+
+    // ─── Phase A6 (task #645): wizard language picker ─────────────────
+    //
+    // Scenario the test pins down:
+    //   1. ANVIL_CONFIG_HOME points at a fresh temp dir (no config.json).
+    //   2. The picker runs via `run_language_step_in_alt_screen`.
+    //   3. The scripted key source presses Down once (en → es), then Enter.
+    //   4. After the step returns, config.json exists, contains `"language": "es"`,
+    //      AND `rust_i18n::locale()` is "es" (so the rest of the wizard
+    //      renders in the chosen locale immediately).
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_language_step_persists_choice_and_sets_locale() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        set_anvil_config_home(tmp.path());
+
+        // Sanity: no config.json yet — the picker must create one.
+        assert!(!tmp.path().join("config.json").exists());
+
+        // Persist the original rust-i18n locale so we can restore it
+        // after the test (parallel tests may also probe locale).
+        let prev_locale = rust_i18n::locale().to_string();
+
+        let mut session = make_session();
+        // Down arrow moves the highlight to index 1 ("es"), Enter commits.
+        let keys = ScriptedKeySource::from_keys(vec![
+            key(KeyCode::Down),
+            key(KeyCode::Enter),
+        ]);
+        let mut runner =
+            WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
+
+        run_language_step_in_alt_screen(&mut runner)
+            .expect("language step must complete");
+
+        drop(runner);
+        drop(session);
+
+        // Persistence assertions.
+        let config_path = tmp.path().join("config.json");
+        assert!(
+            config_path.exists(),
+            "language step must create config.json on first run"
+        );
+        let data = std::fs::read_to_string(&config_path).expect("read config.json");
+        let value: serde_json::Value =
+            serde_json::from_str(&data).expect("parse config.json");
+        assert_eq!(
+            value.get("language").and_then(|v| v.as_str()),
+            Some("es"),
+            "language step must persist the chosen code"
+        );
+
+        // Process-locale assertion — the picker must apply the locale
+        // mid-wizard so subsequent step banners are localised.
+        assert_eq!(
+            rust_i18n::locale().to_string(),
+            "es",
+            "language step must call rust_i18n::set_locale on commit"
+        );
+
+        // Restore env + locale so unrelated tests are not polluted.
+        rust_i18n::set_locale(&prev_locale);
+        restore_anvil_config_home(prev);
+    }
+
+    /// Esc on the language picker MUST NOT touch config.json or change
+    /// the live locale.  Matches the documented "skip keeps current
+    /// locale" behaviour.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn wizard_language_step_esc_is_noop() {
+        let _lock = env_lock();
+        let prev = std::env::var_os("ANVIL_CONFIG_HOME");
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        set_anvil_config_home(tmp.path());
+
+        let prev_locale = rust_i18n::locale().to_string();
+        rust_i18n::set_locale("en");
+
+        let mut session = make_session();
+        let keys = ScriptedKeySource::from_keys(vec![key(KeyCode::Esc)]);
+        let mut runner =
+            WizardModalRunner::new(&mut session, keys, ratatui::style::Color::Cyan);
+
+        run_language_step_in_alt_screen(&mut runner)
+            .expect("language step must complete on Esc");
+
+        drop(runner);
+        drop(session);
+
+        assert!(
+            !tmp.path().join("config.json").exists(),
+            "Esc on the picker must NOT create config.json"
+        );
+        assert_eq!(
+            rust_i18n::locale().to_string(),
+            "en",
+            "Esc must leave the live locale untouched"
+        );
+
+        rust_i18n::set_locale(&prev_locale);
+        restore_anvil_config_home(prev);
     }
 }

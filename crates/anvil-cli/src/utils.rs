@@ -1892,5 +1892,59 @@ mod supported_languages_drift_tests {
             assert_eq!(current_language_code(), "en");
         });
     }
+
+    // ─── Phase A6 (task #645): save_language round-trip ──────────────
+    //
+    // The single persistence path used by /language, the wizard, and
+    // /configure must:
+    //   1. Write `language: <code>` to config.json (preserving other keys),
+    //   2. Apply the locale to rust_i18n,
+    //   3. Be readable back by `current_language_code`.
+    //
+    // The wizard test in `wizard.rs` exercises the modal path on top of
+    // this; the configure-menu test in tests.rs exercises the
+    // ConfigureAction::SetLanguage dispatch.
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn save_language_writes_config_and_applies_locale() {
+        with_anvil_home("save-roundtrip", |dir| {
+            // Seed an existing key to verify preserve-other-keys semantics.
+            let path = dir.join("config.json");
+            std::fs::write(&path, r#"{"default_model": "claude-opus-4-6"}"#)
+                .expect("seed config.json");
+
+            super::save_language("pt-BR").expect("save_language pt-BR");
+
+            // Re-read and assert both fields survived.
+            let data = std::fs::read_to_string(&path).expect("read config.json");
+            let value: serde_json::Value =
+                serde_json::from_str(&data).expect("parse config.json");
+            assert_eq!(
+                value.get("language").and_then(|v| v.as_str()),
+                Some("pt-BR")
+            );
+            assert_eq!(
+                value.get("default_model").and_then(|v| v.as_str()),
+                Some("claude-opus-4-6")
+            );
+            assert_eq!(super::current_language_code(), "pt-BR");
+            assert_eq!(rust_i18n::locale().to_string(), "pt-BR");
+        });
+    }
+
+    #[test]
+    #[serial(anvil_config_home)]
+    fn save_language_creates_config_when_missing() {
+        with_anvil_home("save-fresh", |dir| {
+            let path = dir.join("config.json");
+            assert!(!path.exists(), "config.json should be absent for this case");
+
+            super::save_language("ja").expect("save_language ja");
+
+            assert!(path.exists(), "save_language must create config.json");
+            assert_eq!(super::current_language_code(), "ja");
+        });
+    }
 }
 

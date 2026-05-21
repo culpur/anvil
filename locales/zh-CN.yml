@@ -119,6 +119,12 @@ wizard.step.priority_title: "提供方优先级与默认模型"
 wizard.step.tui_layout_title: "TUI 布局"
 wizard.step.tui_prefs_title: "TUI 偏好设置"
 
+# 语言步骤 (Phase A6, task #645)
+wizard.language.title: "选择你的语言"
+wizard.language.body: "Anvil 的 TUI 和首次运行向导将使用此语言。你可以稍后通过 /language 或在 /configure 中更改。"
+wizard.language.continue: "继续"
+wizard.language.skip: "跳过"
+
 # Vault 步骤
 wizard.vault.body_l1: "Anvil 将你的 API key 保存在 AES-256-GCM 加密的 vault 中。"
 wizard.vault.body_l2: "你现在设置一个主密码 — 它不会保存到任何地方。"

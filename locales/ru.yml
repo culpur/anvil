@@ -119,6 +119,12 @@ wizard.step.priority_title: "Приоритет провайдеров и мод
 wizard.step.tui_layout_title: "Раскладка TUI"
 wizard.step.tui_prefs_title: "Настройки TUI"
 
+# Шаг выбора языка (Phase A6, task #645)
+wizard.language.title: "Выберите язык"
+wizard.language.body: "TUI Anvil и мастер первого запуска будут использовать этот язык. Вы можете изменить его позже через /language или в /configure."
+wizard.language.continue: "Продолжить"
+wizard.language.skip: "Пропустить"
+
 # Шаг vault
 wizard.vault.body_l1: "Anvil хранит ваши API key в vault, зашифрованном AES-256-GCM."
 wizard.vault.body_l2: "Вы задаёте мастер-пароль сейчас — он нигде не сохраняется."

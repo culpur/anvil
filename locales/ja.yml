@@ -119,6 +119,12 @@ wizard.step.priority_title: "プロバイダーの優先順位とデフォルト
 wizard.step.tui_layout_title: "TUI レイアウト"
 wizard.step.tui_prefs_title: "TUI 設定"
 
+# 言語ステップ (Phase A6, task #645)
+wizard.language.title: "言語を選択してください"
+wizard.language.body: "Anvil の TUI と初回起動ウィザードはこの言語で表示されます。後で /language または /configure から変更できます。"
+wizard.language.continue: "続ける"
+wizard.language.skip: "スキップ"
+
 # Vault ステップ
 wizard.vault.body_l1: "Anvil は API key を AES-256-GCM で暗号化された vault に保存します。"
 wizard.vault.body_l2: "ここでマスターパスワードを設定します — どこにも保存されません。"

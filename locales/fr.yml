@@ -119,6 +119,12 @@ wizard.step.priority_title: "Priorité des fournisseurs et modèle par défaut"
 wizard.step.tui_layout_title: "Disposition du TUI"
 wizard.step.tui_prefs_title: "Préférences du TUI"
 
+# Étape langue (Phase A6, task #645)
+wizard.language.title: "Sélectionnez votre langue"
+wizard.language.body: "Le TUI d'Anvil et l'assistant de première utilisation utiliseront cette langue. Vous pouvez la modifier plus tard avec /language ou depuis /configure."
+wizard.language.continue: "Continuer"
+wizard.language.skip: "Passer"
+
 # Étape coffre-fort
 wizard.vault.body_l1: "Anvil stocke vos clés API dans un coffre-fort chiffré en AES-256-GCM."
 wizard.vault.body_l2: "Vous définissez un mot de passe maître maintenant — il n'est stocké nulle part."

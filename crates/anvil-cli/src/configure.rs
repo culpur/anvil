@@ -1135,7 +1135,16 @@ impl LiveCli {
             }
             // ── Section 7: Language & Theme ───────────────────────────────
             ConfigureAction::SetLanguage { lang } => {
-                Self::save_anvil_ui_config_key("language", serde_json::Value::String(lang))
+                // Phase A6 (task #645): route through `utils::save_language`
+                // so the on-disk write + `rust_i18n::set_locale` happen
+                // atomically — same path /language and the wizard use.
+                // Without the `set_locale` call the persisted value would
+                // only take effect on the NEXT launch (Phase A5 boot-time
+                // applies it), confusing the user mid-session.
+                match crate::utils::save_language(&lang) {
+                    Ok(()) => format!("Language set to: {lang}"),
+                    Err(e) => format!("Failed to save language setting: {e}"),
+                }
             }
             ConfigureAction::SetTheme { theme } => {
                 Self::save_anvil_ui_config_key("theme", serde_json::Value::String(theme))

@@ -21,6 +21,12 @@ pub(crate) enum ConfigureState {
     Display { selected: usize },
     Integrations { selected: usize },
     LanguageTheme { selected: usize },
+    /// Phase A6 (task #645): real language picker — sub-state of
+    /// `LanguageTheme`. Entered by pressing Enter on the
+    /// "Language" row. Displays the canonical Tier-1 list in their
+    /// native names; Enter commits + persists + applies the locale,
+    /// Esc returns to LanguageTheme without changing anything.
+    LanguagePicker { selected: usize },
     Vault { selected: usize },
     Notifications { selected: usize },
     Failover { selected: usize },
@@ -205,6 +211,7 @@ pub(super) fn configure_breadcrumb(state: &ConfigureState) -> String {
         ConfigureState::Display { .. } => "Configure > Display".to_string(),
         ConfigureState::Integrations { .. } => "Configure > Integrations".to_string(),
         ConfigureState::LanguageTheme { .. } => "Configure > Language & Theme".to_string(),
+        ConfigureState::LanguagePicker { .. } => "Configure > Language & Theme > Language".to_string(),
         ConfigureState::Vault { .. } => "Configure > Vault".to_string(),
         ConfigureState::Notifications { .. } => "Configure > Notifications".to_string(),
         ConfigureState::Failover { .. } => "Configure > Failover".to_string(),
@@ -242,6 +249,7 @@ pub(super) const fn configure_selected(state: &ConfigureState) -> usize {
         | ConfigureState::Display { selected }
         | ConfigureState::Integrations { selected }
         | ConfigureState::LanguageTheme { selected }
+        | ConfigureState::LanguagePicker { selected }
         | ConfigureState::Vault { selected }
         | ConfigureState::Notifications { selected }
         | ConfigureState::Failover { selected }
@@ -268,6 +276,7 @@ pub(super) const fn configure_set_selected(state: &mut ConfigureState, new: usiz
         | ConfigureState::Display { selected }
         | ConfigureState::Integrations { selected }
         | ConfigureState::LanguageTheme { selected }
+        | ConfigureState::LanguagePicker { selected }
         | ConfigureState::Vault { selected }
         | ConfigureState::Notifications { selected }
         | ConfigureState::Failover { selected }
@@ -299,6 +308,7 @@ pub(super) fn configure_screen_tag(state: &ConfigureState) -> u8 {
         ConfigureState::Display { .. } => 8,
         ConfigureState::Integrations { .. } => 9,
         ConfigureState::LanguageTheme { .. } => 10,
+        ConfigureState::LanguagePicker { .. } => 19,
         ConfigureState::Vault { .. } => 11,
         ConfigureState::Notifications { .. } => 12,
         ConfigureState::Failover { .. } => 13,
@@ -335,6 +345,10 @@ pub(super) fn configure_item_count(state: &ConfigureState, data: &ConfigureData)
         | ConfigureState::Display { .. }
         | ConfigureState::LanguageTheme { .. }
         | ConfigureState::Database { .. } => 2,
+        // Phase A6 (task #645): one entry per Tier-1 language code.
+        // Keep in sync with `utils::SUPPORTED_LANGUAGES.len()` — the
+        // drift gate test catches divergence at build time.
+        ConfigureState::LanguagePicker { .. } => crate::utils::SUPPORTED_LANGUAGES.len(),
         ConfigureState::Context { .. }
         | ConfigureState::Permissions { .. }
         | ConfigureState::Integrations { .. }
@@ -527,5 +541,67 @@ pub(super) fn editing_value_handle_key(
         KeyCode::Home => *cursor = 0,
         KeyCode::End => *cursor = value.len(),
         _ => {}
+    }
+}
+
+// ─── Phase A6 (task #645): LanguagePicker invariants ─────────────────
+//
+// The LanguagePicker sub-state must:
+//   1. Report an item-count equal to `SUPPORTED_LANGUAGES.len()` so
+//      the configure menu's Up/Down navigation can reach every row
+//      (item_count clamps `selected` on key handlers).
+//   2. Carry its own breadcrumb so the user knows they are one level
+//      below `Language & Theme`.
+//   3. Have a unique `configure_screen_tag` so the TUI's scroll
+//      viewport resets when entering/leaving the picker (different
+//      screen, different scroll offset).
+#[cfg(test)]
+mod language_picker_invariants {
+    use super::*;
+
+    fn empty_data() -> ConfigureData {
+        ConfigureData {
+            language: "en".into(),
+            active_theme: "culpur-defense".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn language_picker_item_count_matches_supported_languages() {
+        let state = ConfigureState::LanguagePicker { selected: 0 };
+        assert_eq!(
+            configure_item_count(&state, &empty_data()),
+            crate::utils::SUPPORTED_LANGUAGES.len(),
+            "LanguagePicker must expose one row per supported language"
+        );
+    }
+
+    #[test]
+    fn language_picker_breadcrumb_reflects_nesting() {
+        let state = ConfigureState::LanguagePicker { selected: 0 };
+        let crumb = configure_breadcrumb(&state);
+        assert!(
+            crumb.contains("Language") && crumb.contains(">"),
+            "LanguagePicker breadcrumb must show its nesting under Language & Theme; got {crumb:?}"
+        );
+    }
+
+    #[test]
+    fn language_picker_screen_tag_distinct() {
+        let picker = ConfigureState::LanguagePicker { selected: 0 };
+        let theme = ConfigureState::LanguageTheme { selected: 0 };
+        assert_ne!(
+            configure_screen_tag(&picker),
+            configure_screen_tag(&theme),
+            "LanguagePicker must have its own screen tag to reset scroll on transition"
+        );
+    }
+
+    #[test]
+    fn language_picker_set_selected_updates() {
+        let mut state = ConfigureState::LanguagePicker { selected: 0 };
+        configure_set_selected(&mut state, 3);
+        assert_eq!(configure_selected(&state), 3);
     }
 }

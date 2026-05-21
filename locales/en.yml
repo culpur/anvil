@@ -119,6 +119,12 @@ wizard.step.priority_title: "Provider Priority & Default Model"
 wizard.step.tui_layout_title: "TUI Layout"
 wizard.step.tui_prefs_title: "TUI Preferences"
 
+# Language step (Phase A6, task #645)
+wizard.language.title: "Select your language"
+wizard.language.body: "Anvil's TUI and the first-run wizard will use this language. You can change it later with /language or in /configure."
+wizard.language.continue: "Continue"
+wizard.language.skip: "Skip"
+
 # Vault step
 wizard.vault.body_l1: "Anvil stores your API keys in an AES-256-GCM encrypted vault."
 wizard.vault.body_l2: "You set a master password now — it is never stored anywhere."

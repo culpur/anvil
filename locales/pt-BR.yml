@@ -119,6 +119,12 @@ wizard.step.priority_title: "Prioridade de provedores e modelo padrão"
 wizard.step.tui_layout_title: "Layout do TUI"
 wizard.step.tui_prefs_title: "Preferências do TUI"
 
+# Etapa de idioma (Phase A6, task #645)
+wizard.language.title: "Selecione seu idioma"
+wizard.language.body: "O TUI do Anvil e o assistente de primeira execução usarão este idioma. Você pode mudá-lo depois com /language ou em /configure."
+wizard.language.continue: "Continuar"
+wizard.language.skip: "Pular"
+
 # Etapa do cofre
 wizard.vault.body_l1: "O Anvil guarda suas API keys em um cofre criptografado com AES-256-GCM."
 wizard.vault.body_l2: "Você define uma senha mestra agora — ela não é guardada em lugar nenhum."

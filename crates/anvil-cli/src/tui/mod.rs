@@ -3963,15 +3963,20 @@ impl AnvilTui {
             ConfigureState::LanguageTheme { selected } => {
                 match selected {
                     0 => {
-                        let langs = ["en", "de", "es", "fr", "ja", "zh-CN", "ru"];
-                        let current = &self.configure_data.language;
-                        let idx = langs.iter().position(|l| *l == current.as_str()).unwrap_or(0);
-                        let next = langs[(idx + 1) % langs.len()];
-                        self.configure_data.language = next.to_string();
-                        self.configure_state = ConfigureState::Inactive;
-                        return Ok(ReadResult::ConfigureAction(ConfigureAction::SetLanguage {
-                            lang: next.to_string(),
-                        }));
+                        // Phase A6 (task #645): real language picker — push
+                        // into a sub-state that lists every Tier-1 code with
+                        // its native-name label. The previous cycle-on-Enter
+                        // behaviour (a) was an i18n migration plan placeholder,
+                        // (b) was missing pt-BR before A5, (c) gave no visual
+                        // feedback that there were 8 options to pick from.
+                        // Default-select the row matching the current locale.
+                        let langs = crate::utils::SUPPORTED_LANGUAGES;
+                        let current = self.configure_data.language.as_str();
+                        let default_idx =
+                            langs.iter().position(|l| *l == current).unwrap_or(0);
+                        self.configure_state =
+                            ConfigureState::LanguagePicker { selected: default_idx };
+                        return Ok(ReadResult::Continue);
                     }
                     1 => {
                         let themes = [
@@ -3989,6 +3994,21 @@ impl AnvilTui {
                     }
                     _ => {}
                 }
+            }
+            ConfigureState::LanguagePicker { selected } => {
+                // Phase A6 (task #645): commit the highlighted language.
+                // The list is `crate::utils::SUPPORTED_LANGUAGES`; out-of-range
+                // indices fall back to "en" so a stale state never crashes the
+                // TUI. `save_language` writes config.json AND calls
+                // `rust_i18n::set_locale` so every subsequent t!() call in
+                // this session honours the new locale on the next render.
+                let langs = crate::utils::SUPPORTED_LANGUAGES;
+                let code = langs.get(selected).copied().unwrap_or("en");
+                self.configure_data.language = code.to_string();
+                self.configure_state = ConfigureState::Inactive;
+                return Ok(ReadResult::ConfigureAction(ConfigureAction::SetLanguage {
+                    lang: code.to_string(),
+                }));
             }
             ConfigureState::Vault { selected } => {
                 match selected {
@@ -4366,6 +4386,10 @@ impl AnvilTui {
             | ConfigureState::Database { .. }
             | ConfigureState::MemoryArchive { .. }
             | ConfigureState::PluginsCron { .. } => ConfigureState::MainMenu { selected: 0 },
+            // Phase A6 (task #645): Esc from the LanguagePicker returns
+            // to the LanguageTheme overview (one level up), NOT all the
+            // way to MainMenu — matches the ProviderDetail behaviour.
+            ConfigureState::LanguagePicker { .. } => ConfigureState::LanguageTheme { selected: 0 },
             ConfigureState::ProviderDetail { .. } => ConfigureState::Providers { selected: 0 },
             ConfigureState::StatusLineEditor { sub, draft, .. } => {
                 use configure_types::StatusLineEditorSub;
@@ -4759,7 +4783,7 @@ pub(super) fn render_configure_menu(
         ConfigureState::LanguageTheme { .. } => {
             lines.push(make_row(
                 "Display language",
-                &format!("[{}]  — Enter to cycle", data.language),
+                &format!("[{}]  — Enter to pick", data.language),
                 sel == 0,
             ));
             lines.push(make_row(
@@ -4769,11 +4793,40 @@ pub(super) fn render_configure_menu(
             ));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "    Languages: en  de  es  fr  ja  zh-CN  ru",
+                "    Languages: en  es  zh-CN  fr  pt-BR  ru  ja  de",
                 Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
             )));
             lines.push(Line::from(Span::styled(
                 "    Themes: culpur-defense  cyberpunk  nord  solarized-dark  dracula  monokai  gruvbox  catppuccin",
+                Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
+            )));
+        }
+
+        ConfigureState::LanguagePicker { .. } => {
+            // Phase A6 (task #645): one row per `SUPPORTED_LANGUAGES`
+            // entry, label = native name.  Order matches the constant
+            // so the index from the enter-handler indexes both lists.
+            const NATIVE_NAMES: &[(&str, &str)] = &[
+                ("en", "English"),
+                ("es", "Español"),
+                ("zh-CN", "简体中文"),
+                ("fr", "Français"),
+                ("pt-BR", "Português (Brasil)"),
+                ("ru", "Русский"),
+                ("ja", "日本語"),
+                ("de", "Deutsch"),
+            ];
+            for (i, (code, label)) in NATIVE_NAMES.iter().enumerate() {
+                let marker = if data.language == *code { " (current)" } else { "" };
+                lines.push(make_row(
+                    label,
+                    &format!("{code}{marker}"),
+                    sel == i,
+                ));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "    Press Enter to apply. Esc returns to Language & Theme.",
                 Style::default().fg(Color::Rgb(0x66, 0x66, 0x88)),
             )));
         }
