@@ -386,6 +386,11 @@ pub struct PermissionsConfig {
     /// Session-scoped grants. Project/Global persistence happens only when
     /// the prompter returns those specific scopes.
     use_permission_memory: bool,
+    /// Task #717: patterns from `settings.json#/permissions/allow`.
+    /// The gate matches calls against this list BEFORE prompting so
+    /// allowlisted tools (MCP and otherwise) run without manual
+    /// approval. Unset / empty MUST NOT "allow all".
+    allow_patterns: Vec<String>,
 }
 
 impl PermissionsConfig {
@@ -398,6 +403,26 @@ impl PermissionsConfig {
     pub fn with_use_permission_memory(mut self, enabled: bool) -> Self {
         self.use_permission_memory = enabled;
         self
+    }
+
+    /// Task #717: read-only access to the parsed `permissions.allow`
+    /// patterns.
+    #[must_use]
+    pub fn allow_patterns(&self) -> &[String] {
+        &self.allow_patterns
+    }
+
+    /// Task #717: builder used by config parsing and tests.
+    #[must_use]
+    pub fn with_allow_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.allow_patterns = patterns;
+        self
+    }
+
+    /// Task #717: build the matcher used by the permission gate.
+    #[must_use]
+    pub fn allow_list(&self) -> crate::permission_allow::PermissionAllowList {
+        crate::permission_allow::PermissionAllowList::from_patterns(self.allow_patterns.iter())
     }
 }
 
@@ -1357,20 +1382,34 @@ fn parse_optional_permissions_config(
         return Ok(PermissionsConfig::default());
     };
 
-    let Some(value) = perm_obj.get("use_permission_memory") else {
-        // Key absent → stay at default (off). Reviewer-only configs land here.
-        return Ok(PermissionsConfig::default());
+    // Task #717: parse `permissions.allow` array. Missing or wrong shape
+    // → empty list. A user typo flipping rules into "allow all" would be
+    // a security regression, so non-array shapes silently zero out.
+    let allow_patterns = perm_obj
+        .get("allow")
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(JsonValue::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let use_permission_memory = match perm_obj.get("use_permission_memory") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| {
+            ConfigError::Parse(format!(
+                "permissions.use_permission_memory: expected boolean, got {value:?}"
+            ))
+        })?,
     };
 
-    let Some(enabled) = value.as_bool() else {
-        return Err(ConfigError::Parse(format!(
-            "permissions.use_permission_memory: expected boolean, got {value:?}"
-        )));
-    };
-
-    Ok(PermissionsConfig {
-        use_permission_memory: enabled,
-    })
+    Ok(PermissionsConfig::default()
+        .with_use_permission_memory(use_permission_memory)
+        .with_allow_patterns(allow_patterns))
 }
 
 /// Parse the `egress` block from the merged config JSON.
