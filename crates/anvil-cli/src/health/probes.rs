@@ -430,15 +430,44 @@ fn provider_has_credential(provider: &str, cfg: &Value) -> bool {
         return true;
     }
 
-    // 4. Anthropic OAuth path — config flag, deeper validation lives in
-    // auth.rs.
+    // 4. Anthropic OAuth path. Three on-disk shapes seen in the wild:
+    //   (a) `providers.anthropic.oauth: true`  — legacy flag (pre-#595).
+    //   (b) `providers.anthropic.auth_method: "oauth"`  — current shape
+    //       written by the post-#595 OAuth login flow.
+    //   (c) `~/.anvil/credentials.json` containing the OAuth token tuple —
+    //       this is the actual evidence of a successful login regardless
+    //       of what flags appear in config.json. The token may be expired
+    //       but the keep-alive ticker (#597) will refresh; "expired but
+    //       present" is not "missing".
+    //
+    // Treat ANY of the three as proof the user has authenticated. Probe
+    // task #745 — false-positive "anthropic key missing" was triggered
+    // because the probe only checked path (a).
     if provider == "anthropic" {
-        let oauth = cfg
+        let oauth_flag = cfg
             .pointer("/providers/anthropic/oauth")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if oauth {
+        if oauth_flag {
             return true;
+        }
+        let auth_method = cfg
+            .pointer("/providers/anthropic/auth_method")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if auth_method == "oauth" {
+            return true;
+        }
+        // Check the credentials.json file directly. We don't validate the
+        // token here (auth.rs owns refresh/expiry); presence-with-content
+        // is enough to keep the probe quiet.
+        if let Some(home) = dirs_next::home_dir() {
+            let creds = home.join(".anvil").join("credentials.json");
+            if let Ok(meta) = std::fs::metadata(&creds)
+                && meta.len() > 0
+            {
+                return true;
+            }
         }
     }
 
@@ -643,20 +672,49 @@ fn probe_completions(_state: Arc<SetupState>, _cancel: Arc<AtomicBool>) -> Probe
     let shell = std::env::var("SHELL").unwrap_or_default();
     let basename = shell.rsplit('/').next().unwrap_or("");
 
-    let (canonical, label): (Option<PathBuf>, &str) = match basename {
-        "bash" => (
-            dirs_next::home_dir()
-                .map(|h| h.join(".local/share/bash-completion/completions/anvil")),
-            "bash",
-        ),
-        "zsh" => (
-            dirs_next::home_dir().map(|h| h.join(".zsh/completions/_anvil")),
-            "zsh",
-        ),
-        "fish" => (
-            dirs_next::home_dir().map(|h| h.join(".config/fish/completions/anvil.fish")),
-            "fish",
-        ),
+    // Task #745: check ALL standard completion-load locations for the
+    // active shell, not just one canonical path. The original probe only
+    // looked at `~/.zsh/completions/_anvil` for zsh, but users who let
+    // Homebrew or the installer drop the file elsewhere (e.g.
+    // `/opt/homebrew/share/zsh/site-functions/_anvil`) got a false
+    // "missing" verdict.
+    let home = dirs_next::home_dir();
+    let candidate_paths: Vec<PathBuf> = match basename {
+        "bash" => {
+            let mut v = Vec::new();
+            if let Some(h) = &home {
+                v.push(h.join(".local/share/bash-completion/completions/anvil"));
+                v.push(h.join(".bash_completion.d/anvil"));
+            }
+            v.push(PathBuf::from("/usr/local/etc/bash_completion.d/anvil"));
+            v.push(PathBuf::from("/opt/homebrew/etc/bash_completion.d/anvil"));
+            v.push(PathBuf::from("/etc/bash_completion.d/anvil"));
+            v
+        }
+        "zsh" => {
+            let mut v = Vec::new();
+            if let Some(h) = &home {
+                v.push(h.join(".zsh/completions/_anvil"));
+                v.push(h.join(".zfunc/_anvil"));
+                v.push(h.join(".oh-my-zsh/completions/_anvil"));
+                v.push(h.join(".config/zsh/completions/_anvil"));
+            }
+            v.push(PathBuf::from("/usr/local/share/zsh/site-functions/_anvil"));
+            v.push(PathBuf::from("/opt/homebrew/share/zsh/site-functions/_anvil"));
+            v.push(PathBuf::from("/usr/share/zsh/site-functions/_anvil"));
+            v.push(PathBuf::from("/usr/share/zsh/vendor-completions/_anvil"));
+            v
+        }
+        "fish" => {
+            let mut v = Vec::new();
+            if let Some(h) = &home {
+                v.push(h.join(".config/fish/completions/anvil.fish"));
+            }
+            v.push(PathBuf::from("/usr/local/share/fish/vendor_completions.d/anvil.fish"));
+            v.push(PathBuf::from("/opt/homebrew/share/fish/vendor_completions.d/anvil.fish"));
+            v.push(PathBuf::from("/usr/share/fish/vendor_completions.d/anvil.fish"));
+            v
+        }
         _ => {
             return ProbeResult::not_applicable(
                 Component::Completions,
@@ -666,39 +724,47 @@ fn probe_completions(_state: Arc<SetupState>, _cancel: Arc<AtomicBool>) -> Probe
         }
     };
 
-    let Some(path) = canonical else {
+    let label = basename;
+
+    if candidate_paths.is_empty() {
         return ProbeResult::not_applicable(
             Component::Completions,
             "no HOME".to_string(),
             start.elapsed().as_millis() as u64,
         );
-    };
-
-    if !path.exists() {
-        let label_owned = label.to_string();
-        let path_clone = path.clone();
-        let repair: RepairFn = Arc::new(move || {
-            log::log_action(
-                "completions",
-                &format!("{label_owned}:reinstall"),
-                "skipped",
-                "stub — A4 wires this",
-            );
-            Err(format!(
-                "Reinstalling {} completions requires A4's install_completions hook (target was {}).",
-                label_owned,
-                path_clone.display()
-            ))
-        });
-        return ProbeResult::drift(
-            Component::Completions,
-            format!("{label} completions missing"),
-            start.elapsed().as_millis() as u64,
-        )
-        .with_repair(repair);
     }
 
-    ProbeResult::healthy(Component::Completions, start.elapsed().as_millis() as u64)
+    // Healthy if ANY known load location has the file.
+    if candidate_paths.iter().any(|p| p.exists()) {
+        return ProbeResult::healthy(
+            Component::Completions,
+            start.elapsed().as_millis() as u64,
+        );
+    }
+
+    // Truly missing — surface drift with repair stub against the
+    // preferred canonical path (first candidate, typically `~/.zsh/...`).
+    let primary_path = candidate_paths[0].clone();
+    let label_owned = label.to_string();
+    let repair: RepairFn = Arc::new(move || {
+        log::log_action(
+            "completions",
+            &format!("{label_owned}:reinstall"),
+            "skipped",
+            "stub — A4 wires this",
+        );
+        Err(format!(
+            "Reinstalling {} completions requires A4's install_completions hook (target was {}).",
+            label_owned,
+            primary_path.display()
+        ))
+    });
+    ProbeResult::drift(
+        Component::Completions,
+        format!("{label} completions missing"),
+        start.elapsed().as_millis() as u64,
+    )
+    .with_repair(repair)
 }
 
 // ── probe_binary ─────────────────────────────────────────────────────────────
