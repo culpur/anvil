@@ -716,4 +716,81 @@ mod tests {
         auto_set_title_if_missing(id, Some("hello world"), false);
         assert_eq!(get_session_name(id), None);
     }
+
+    // ── #727: theme color reset on first /rename (CC community #61082) ────
+    //
+    // The community report claimed that the first `/rename` invocation on a
+    // session replaced the user's custom theme colors with the default
+    // ("teal") palette. The regression vector is any code path that writes
+    // back ~/.anvil/theme.json (or otherwise mutates the on-disk theme)
+    // when handling a metadata-only rename. set_session_name MUST only
+    // touch the .meta.json sidecar; the theme file is independent.
+
+    #[test]
+    #[serial_test::serial(cwd_session_meta)]
+    fn rename_does_not_touch_theme_file() {
+        use runtime::theme::Theme;
+        // Redirect HOME to a temp dir so Theme::theme_path() points at our
+        // sandbox, then write a non-default theme and snapshot its bytes.
+        let tmp_home = tempfile::tempdir().expect("tempdir");
+        let orig_home = std::env::var_os("HOME");
+        // SAFETY: tests serialised via `serial_test::serial(cwd_session_meta)`.
+        // The same serialisation gates HOME usage here so no other test
+        // observes the temporary HOME.
+        unsafe {
+            std::env::set_var("HOME", tmp_home.path());
+        }
+
+        with_temp_workspace(|| {
+            // Pick a non-default theme so a reset-to-default would be
+            // observable. Dracula's accent (BD93F9) differs from
+            // culpur-defense's (0FBCFF).
+            let custom = Theme::builtin("dracula").expect("dracula theme");
+            custom.save().expect("save custom theme");
+
+            let theme_path = tmp_home.path().join(".anvil").join("theme.json");
+            let before = std::fs::read(&theme_path).expect("read theme before");
+            let loaded_before = Theme::load();
+
+            // The community-reported bug: first /rename resets the theme.
+            // Run rename and assert theme.json is byte-identical.
+            let id = "session-theme-rename-test";
+            set_session_name(id, "named-once").expect("first rename");
+
+            let after = std::fs::read(&theme_path).expect("read theme after");
+            let loaded_after = Theme::load();
+
+            assert_eq!(
+                before, after,
+                "~/.anvil/theme.json was mutated by /rename (CC #61082 regression)"
+            );
+            assert_eq!(
+                loaded_before.name, loaded_after.name,
+                "Theme::load().name diverged across /rename"
+            );
+            assert_eq!(
+                (loaded_before.accent.0, loaded_before.accent.1, loaded_before.accent.2),
+                (loaded_after.accent.0, loaded_after.accent.1, loaded_after.accent.2),
+                "Theme accent color reset by /rename — community bug regressed"
+            );
+
+            // Second /rename — the original report said only the FIRST
+            // one triggered the reset, so a second rename must also
+            // leave the theme intact.
+            set_session_name(id, "renamed-twice").expect("second rename");
+            let after_second = std::fs::read(&theme_path).expect("read theme after second rename");
+            assert_eq!(
+                before, after_second,
+                "second /rename mutated ~/.anvil/theme.json"
+            );
+        });
+
+        // Restore HOME so following tests aren't affected.
+        unsafe {
+            match orig_home {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
 }
