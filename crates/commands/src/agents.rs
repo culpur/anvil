@@ -1043,6 +1043,20 @@ const BUNDLED_SKILL_BODIES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Task #734 — Memory cohesion I.5 (Procedural tier consolidation).
+///
+/// Return the `(name, body_len_bytes)` pair for every bundled skill so
+/// the `/memory show procedural` handler can enumerate them without
+/// exposing the include_str!'d bodies. Crate-private — bundled bodies
+/// are still resolved via `load_skill_body` for execution.
+#[must_use]
+pub(crate) fn bundled_skill_inventory() -> Vec<(&'static str, usize)> {
+    BUNDLED_SKILL_BODIES
+        .iter()
+        .map(|(name, body)| (*name, body.len()))
+        .collect()
+}
+
 /// Resolve the full body of a named skill.
 ///
 /// Resolution order:

@@ -2148,7 +2148,7 @@ fn render_procedural_show(
     ctx: &MemoryContext<'_>,
     cwd: &std::path::Path,
 ) -> String {
-    use runtime::{cron::CronManager, GoalManager};
+    use runtime::GoalManager;
 
     match sub {
         Some("goals") => {
@@ -2160,80 +2160,209 @@ fn render_procedural_show(
             };
             format!("=== L4 Procedural — goals ===\n{body}")
         }
-        Some("skills") => render_procedural_skills(ctx),
+        Some("skills") => render_procedural_skills(ctx, cwd),
         Some("cron") => render_procedural_cron(),
         Some("routines") => "=== L4 Procedural — routines ===\n\
-            // TODO: routines archive will land with ROADMAP Tier 2 item 4\n\n\
+            // TODO: routines archive will land with ROADMAP Tier 2 item 4\n\
+            // Coming v3.x (see #657 routines tier).\n\n\
             The on-disk routines foundation shipped in v2.2.13 \
             (crates/runtime/src/routines/), but the daemon that writes the\n\
-            output archive arrives in v2.2.14. Until then this sub-view is a\n\
-            placeholder so the L4 vocabulary stays stable."
+            output archive is deferred to the v3.x routines tier (#657).\n\
+            Until then this sub-view is a placeholder so the L4 vocabulary\n\
+            stays stable."
             .to_string(),
         Some(other) => format!(
             "Unknown procedural sub-view: {other}\n\
              Known sub-views: goals, skills, cron, routines"
         ),
-        None => {
-            // Default view: one summary line per sub-source so the user
-            // can see all four at once before drilling in.
-            let goal_count = GoalManager::new(cwd.to_path_buf())
-                .list()
-                .map(|gs| gs.len())
-                .unwrap_or(0);
-            let skill_count = ctx.loaded_skill_names.len();
-            let cron_count = CronManager::global()
-                .lock()
-                .map(|m| m.list().len())
-                .unwrap_or(0);
-            let mut lines = vec![
-                "=== L4 Procedural memory ===".to_string(),
-                String::new(),
-                format!(
-                    "  goals       {} active goal(s)        \
-                    (see /memory show procedural goals)",
-                    goal_count
-                ),
-                format!(
-                    "  skills      {} loaded skill(s)       \
-                    (see /memory show procedural skills)",
-                    skill_count
-                ),
-                format!(
-                    "  cron        {} entr{}              \
-                    (see /memory show procedural cron)",
-                    cron_count,
-                    if cron_count == 1 { "y" } else { "ies" }
-                ),
-                "  routines    (stub — v2.2.14 daemon)    \
-                 (see /memory show procedural routines)"
-                    .to_string(),
-            ];
-            if !ctx.loaded_skill_names.is_empty() {
-                lines.push(String::new());
-                lines.push(format!(
-                    "Currently loaded: {}",
-                    ctx.loaded_skill_names.join(", ")
-                ));
-            }
-            lines.join("\n")
-        }
+        None => handle_memory_show_procedural(ctx, cwd),
     }
 }
 
-fn render_procedural_skills(ctx: &MemoryContext<'_>) -> String {
-    if ctx.working.is_none() {
-        return "No live working-memory snapshot available; \
-            skill list is empty in this context."
-            .to_string();
-    }
-    let mut lines = vec!["=== L4 Procedural — skills ===".to_string()];
-    if ctx.loaded_skill_names.is_empty() {
-        lines.push("No skills loaded — use /skill load <name> to add one.".to_string());
+/// Task #734 — Memory cohesion I.5 (Layer 4: Procedural).
+///
+/// Compose the four procedural sub-sources into one screen so users can
+/// see all of L4 in one place before drilling in via sub-views:
+///   1. `GoalManager::list()` — active goals for the workspace.
+///   2. `load_skills_from_roots(discover_skill_roots(cwd))` — on-disk skill
+///      inventory (workspace `.anvil/skills`, plugin dirs, home dir).
+///   3. `bundled_skill_inventory()` — compile-time skills shipped with Anvil.
+///   4. `CronManager::list()` — persistent cron entries from `~/.anvil/cron.json`.
+///
+/// Routines (the on-disk foundation from v2.2.13, see #657) are
+/// intentionally stubbed as "Coming v3.x" — they are NOT wired into
+/// procedural consolidation this release per the I.5 audit spec.
+fn handle_memory_show_procedural(
+    ctx: &MemoryContext<'_>,
+    cwd: &std::path::Path,
+) -> String {
+    use runtime::{cron::CronManager, GoalManager};
+
+    // ── 1. Goals ──────────────────────────────────────────────────────
+    let goals = GoalManager::new(cwd.to_path_buf()).list().unwrap_or_default();
+    let goal_count = goals.len();
+
+    // ── 2. On-disk skills ────────────────────────────────────────────
+    let disk_roots = crate::agents::discover_skill_roots(cwd);
+    let disk_skills = crate::agents::load_skills_from_roots(&disk_roots).unwrap_or_default();
+    let disk_skill_count = disk_skills.len();
+
+    // ── 3. Bundled skills ────────────────────────────────────────────
+    let bundled = crate::agents::bundled_skill_inventory();
+    let bundled_count = bundled.len();
+
+    // ── 4. Cron entries ──────────────────────────────────────────────
+    let cron_entries = CronManager::global()
+        .lock()
+        .map(|m| m.list())
+        .unwrap_or_default();
+    let cron_count = cron_entries.len();
+
+    let mut lines = vec![
+        "=== L4 Procedural memory ===".to_string(),
+        String::new(),
+        // Summary index — keep lowercase tier nouns so drill-down hints
+        // (and the existing `goals`/`skills`/`cron`/`routines` keyword
+        // assertions) stay accurate.
+        format!(
+            "  goals       {goal_count} active goal(s)              \
+             (see /memory show procedural goals)"
+        ),
+        format!(
+            "  skills      {disk_skill_count} on-disk + {bundled_count} bundled    \
+             (see /memory show procedural skills)"
+        ),
+        format!(
+            "  cron        {cron_count} entr{}                  \
+             (see /memory show procedural cron)",
+            if cron_count == 1 { "y" } else { "ies" }
+        ),
+        "  routines    Coming v3.x (see #657)        \
+         (see /memory show procedural routines)"
+            .to_string(),
+        String::new(),
+    ];
+
+    // ── Goals detail ──────────────────────────────────────────────────
+    lines.push(format!("Goals ({goal_count} active):"));
+    if goals.is_empty() {
+        lines.push("  (no goals — use /goal set <text> to add one)".to_string());
     } else {
-        for name in &ctx.loaded_skill_names {
-            lines.push(format!("  loaded: {name}"));
+        for (idx, g) in goals.iter().enumerate() {
+            lines.push(format!(
+                "  {}. [{}] {}",
+                idx + 1,
+                g.status,
+                g.description
+            ));
         }
     }
+    lines.push(String::new());
+
+    // ── On-disk skills detail ────────────────────────────────────────
+    lines.push(format!("Skills on disk ({disk_skill_count} found):"));
+    if disk_skills.is_empty() {
+        lines.push("  (no on-disk skills — drop a SKILL.md into .anvil/skills/<name>/)".to_string());
+    } else {
+        for skill in disk_skills.iter().take(20) {
+            let size_label = skill
+                .body_bytes
+                .map_or_else(|| "?".to_string(), |b| format!("{b}"));
+            lines.push(format!(
+                "  {}  bytes={}  origin={:?}",
+                skill.name, size_label, skill.origin
+            ));
+        }
+        if disk_skill_count > 20 {
+            lines.push(format!("  ... +{} more", disk_skill_count - 20));
+        }
+    }
+    lines.push(String::new());
+
+    // ── Bundled skills detail ────────────────────────────────────────
+    lines.push(format!("Bundled skills ({bundled_count}):"));
+    for (name, body_len) in &bundled {
+        lines.push(format!("  {name}  bytes={body_len}  origin=bundled"));
+    }
+    lines.push(String::new());
+
+    // ── Cron entries detail ──────────────────────────────────────────
+    lines.push(format!("Cron entries ({cron_count}):"));
+    if cron_entries.is_empty() {
+        lines.push("  (no cron entries — use /cron add to schedule one)".to_string());
+    } else {
+        for entry in &cron_entries {
+            let state = if entry.enabled { "enabled " } else { "disabled" };
+            let last = entry
+                .last_run
+                .map_or_else(|| "never".to_string(), |t| t.to_string());
+            lines.push(format!(
+                "  {}  {}  last={}  [{}]",
+                entry.name, entry.cron_expression, last, state
+            ));
+        }
+    }
+    lines.push(String::new());
+
+    // ── Routines stub (NOT wired this release — see #657) ────────────
+    lines.push("Routines: Coming v3.x (see #657 routines tier).".to_string());
+
+    // ── Loaded-this-session footer (working-memory snapshot) ─────────
+    if !ctx.loaded_skill_names.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "Currently loaded this session: {}",
+            ctx.loaded_skill_names.join(", ")
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_procedural_skills(ctx: &MemoryContext<'_>, cwd: &std::path::Path) -> String {
+    let disk_roots = crate::agents::discover_skill_roots(cwd);
+    let disk_skills = crate::agents::load_skills_from_roots(&disk_roots).unwrap_or_default();
+    let bundled = crate::agents::bundled_skill_inventory();
+
+    let mut lines = vec!["=== L4 Procedural — skills ===".to_string()];
+
+    // Currently-loaded skills (working-memory snapshot, if present).
+    if ctx.working.is_some() {
+        if ctx.loaded_skill_names.is_empty() {
+            lines.push(
+                "Currently loaded: none (use /skill load <name> to add one).".to_string(),
+            );
+        } else {
+            for name in &ctx.loaded_skill_names {
+                lines.push(format!("  loaded: {name}"));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    // On-disk inventory.
+    lines.push(format!("Skills on disk ({}):", disk_skills.len()));
+    if disk_skills.is_empty() {
+        lines.push("  (no on-disk skills found in .anvil/skills/, plugins, or ~/.anvil/skills)".to_string());
+    } else {
+        for skill in &disk_skills {
+            let size_label = skill
+                .body_bytes
+                .map_or_else(|| "?".to_string(), |b| format!("{b}"));
+            lines.push(format!(
+                "  {}  bytes={}  origin={:?}",
+                skill.name, size_label, skill.origin
+            ));
+        }
+    }
+    lines.push(String::new());
+
+    // Bundled inventory.
+    lines.push(format!("Bundled skills ({}):", bundled.len()));
+    for (name, body_len) in &bundled {
+        lines.push(format!("  {name}  bytes={body_len}  origin=bundled"));
+    }
+
     lines.join("\n")
 }
 
@@ -5877,6 +6006,188 @@ mod memory_tests {
         assert!(result.contains("Unknown procedural sub-view"), "got: {result}");
         assert!(result.contains("goals"));
         assert!(result.contains("routines"));
+    }
+
+    // ── Task #734 — Memory cohesion I.5 (Layer 4) ────────────────────
+    //
+    // The audit at docs/memory-cohesion-audit-2026-05-21.md §I.5 asked
+    // the default `/memory show procedural` view to consolidate all four
+    // procedural sub-sources: live goals, on-disk skills, compile-time
+    // bundled skills, and cron entries. Routines stay stubbed as
+    // "Coming v3.x (#657)" — see `feedback-no-silent-deferral.md` for
+    // why the stub is loud rather than missing.
+
+    /// Plant a goal under a temp ANVIL_CONFIG_HOME + a plain on-disk skill
+    /// under a temp HOME, then confirm the default view enumerates all
+    /// four sources (goals + on-disk + bundled + cron framing).
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_show_procedural_lists_goals_and_skills() {
+        use runtime::GoalManager;
+        use std::fs;
+
+        let home_tmp = tempfile::tempdir().expect("home tempdir");
+        let cfg_tmp = tempfile::tempdir().expect("config tempdir");
+
+        // SAFETY: test-only env mutation, serialised by serial(anvil_config_home).
+        let prev_home = std::env::var("HOME").ok();
+        let prev_cfg = std::env::var("ANVIL_CONFIG_HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", home_tmp.path());
+            std::env::set_var("ANVIL_CONFIG_HOME", cfg_tmp.path());
+        }
+
+        // 1. Plant a goal via the same constructor the production handler
+        //    uses (`GoalManager::new(cwd)`) so the project-path-hash
+        //    bucket lines up; the call here writes into
+        //    `ANVIL_CONFIG_HOME/goals/<hash(home_tmp)>/`.
+        let mut mgr = GoalManager::new(home_tmp.path().to_path_buf());
+        let _ = fs::create_dir_all(mgr.goals_dir());
+        mgr.create("ship the L4 procedural tier")
+            .expect("goal create");
+
+        // 2. Drop an on-disk skill under HOME/.anvil/skills/<name>/SKILL.md
+        //    so `discover_skill_roots(cwd)` picks it up via the HOME path.
+        let skill_dir = home_tmp
+            .path()
+            .join(".anvil")
+            .join("skills")
+            .join("procedural-test-skill");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: procedural-test-skill\ndescription: L4 test fixture\n---\nbody",
+        )
+        .expect("write SKILL.md");
+
+        // Call the handler directly with the goals_dir-rooted manager so
+        // the test does not race against current_dir().
+        let snap_ctx = MemoryContext::default();
+        let result = super::handle_memory_show_procedural(&snap_ctx, home_tmp.path());
+
+        // Restore env BEFORE assertions so a failure does not poison the
+        // pool.
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_cfg {
+                Some(v) => std::env::set_var("ANVIL_CONFIG_HOME", v),
+                None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+            }
+        }
+
+        // Section presence — all four labels appear in the rendered table.
+        assert!(
+            result.contains("L4 Procedural memory"),
+            "header missing; got: {result}"
+        );
+        assert!(result.contains("Goals ("), "goals section missing; got: {result}");
+        assert!(
+            result.contains("Skills on disk ("),
+            "on-disk skills section missing; got: {result}"
+        );
+        assert!(
+            result.contains("Bundled skills ("),
+            "bundled skills section missing; got: {result}"
+        );
+        assert!(
+            result.contains("Cron entries ("),
+            "cron section missing; got: {result}"
+        );
+        assert!(
+            result.contains("Routines: Coming v3.x"),
+            "routines stub missing; got: {result}"
+        );
+        // The bundled inventory must be non-empty (10 bundled skills as of
+        // v2.2.18; we only assert ≥ 1 so adds to the bundled list do not
+        // break the test).
+        assert!(
+            result.contains("origin=bundled"),
+            "at least one bundled skill must be enumerated; got: {result}"
+        );
+        // The on-disk skill we just dropped should appear by name.
+        assert!(
+            result.contains("procedural-test-skill"),
+            "on-disk skill name missing; got: {result}"
+        );
+    }
+
+    /// Empty homedir + empty workspace → all four sub-source counts read
+    /// as `0` (goals) / `0` (on-disk) / N (bundled, compile-time) / `0`
+    /// (cron) without panic.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_show_procedural_handles_empty_state() {
+        let home_tmp = tempfile::tempdir().expect("home tempdir");
+        let cfg_tmp = tempfile::tempdir().expect("config tempdir");
+
+        let prev_home = std::env::var("HOME").ok();
+        let prev_cfg = std::env::var("ANVIL_CONFIG_HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", home_tmp.path());
+            std::env::set_var("ANVIL_CONFIG_HOME", cfg_tmp.path());
+        }
+
+        let result =
+            super::handle_memory_show_procedural(&MemoryContext::default(), home_tmp.path());
+
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_cfg {
+                Some(v) => std::env::set_var("ANVIL_CONFIG_HOME", v),
+                None => std::env::remove_var("ANVIL_CONFIG_HOME"),
+            }
+        }
+
+        // Zero goals, zero on-disk skills, zero cron entries — but the
+        // bundled skills section is always populated (compile-time).
+        assert!(
+            result.contains("Goals (0 active)"),
+            "expected zero-goal framing; got: {result}"
+        );
+        assert!(
+            result.contains("Skills on disk (0 found)"),
+            "expected zero-on-disk-skill framing; got: {result}"
+        );
+        assert!(
+            result.contains("Cron entries (0)"),
+            "expected zero-cron framing; got: {result}"
+        );
+        // Bundled count should be > 0 (assert via origin marker).
+        assert!(
+            result.contains("origin=bundled"),
+            "bundled inventory should populate even on an empty system; got: {result}"
+        );
+        // Helpful hints surface for empty branches.
+        assert!(
+            result.contains("(no goals"),
+            "expected goals hint; got: {result}"
+        );
+        assert!(
+            result.contains("(no cron entries"),
+            "expected cron hint; got: {result}"
+        );
+    }
+
+    /// Routines sub-view advertises the v3.x deferral with the exact
+    /// "Coming v3.x" string the audit asked for.
+    #[test]
+    #[serial(anvil_config_home)]
+    fn memory_show_procedural_routines_subview_stub_message() {
+        let result = memory_show(Some("procedural routines"), &MemoryContext::default());
+        assert!(
+            result.contains("Coming v3.x"),
+            "routines sub-view must advertise v3.x deferral; got: {result}"
+        );
+        assert!(
+            result.contains("#657"),
+            "routines sub-view must reference the routines tier issue (#657); got: {result}"
+        );
     }
 
     #[test]
