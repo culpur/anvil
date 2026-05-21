@@ -224,6 +224,7 @@ mod tests {
     use super::*;
     use crate::routines::definition::{DeliveryTarget, RoutineDef};
     use crate::routines::schedule::Schedule;
+    use tempfile::TempDir;
 
     fn mk_def(name: &str, perm: RoutinePermissionMode) -> RoutineDef {
         RoutineDef {
@@ -241,22 +242,26 @@ mod tests {
         }
     }
 
-    fn tmp_home() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "anvil-proposal-test-{}-{}",
-            std::process::id(),
-            uuid_like()
-        ));
-        p
-    }
-
-    fn uuid_like() -> String {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        format!("{now:x}")
+    /// Allocate a per-test home directory backed by `tempfile::TempDir`.
+    ///
+    /// Earlier revisions of this module rolled their own name from
+    /// `process::id()` + `SystemTime::now().as_nanos()`. Under
+    /// `cargo test`'s parallel runner every test in the module shares
+    /// the same PID, and `SystemTime::now()` is not guaranteed to be
+    /// monotonically distinct across threads — two threads entering
+    /// `tmp_home()` at the same instant could collide on the same
+    /// path. When that happened, `drop_pending_only_targets_named_routine`
+    /// would see foreign proposals in the pending dir and the
+    /// `list_pending(..).len() == 1` assertion would fail (task #741).
+    ///
+    /// `TempDir` uses the OS RNG to build the suffix and the handle
+    /// auto-cleans on drop, eliminating both the collision risk and
+    /// the manual `fs::remove_dir_all` book-keeping.
+    fn tmp_home() -> TempDir {
+        tempfile::Builder::new()
+            .prefix("anvil-proposal-test-")
+            .tempdir()
+            .expect("create tempdir for proposal test")
     }
 
     #[test]
@@ -264,12 +269,11 @@ mod tests {
         let home = tmp_home();
         let def = mk_def("nightly-deploy", RoutinePermissionMode::Danger);
         let p = RoutineProposal::from_def(&def, 1_000_000, 1_000_005);
-        let path = write_proposal(&home, &p).expect("write");
+        let path = write_proposal(home.path(), &p).expect("write");
         assert!(path.exists());
-        let listed = list_pending(&home, 1_000_005);
+        let listed = list_pending(home.path(), 1_000_005);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0], p);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -277,17 +281,16 @@ mod tests {
         let home = tmp_home();
         let def = mk_def("old-job", RoutinePermissionMode::Accept);
         let p = RoutineProposal::from_def(&def, 1_000_000, 1_000_000);
-        write_proposal(&home, &p).unwrap();
+        write_proposal(home.path(), &p).unwrap();
         // 25h later
         let now = 1_000_000 + 25 * 60 * 60;
-        let listed = list_pending(&home, now);
+        let listed = list_pending(home.path(), now);
         assert!(listed.is_empty());
         // Files removed from disk too.
-        let leftover: Vec<_> = fs::read_dir(pending_dir(&home))
+        let leftover: Vec<_> = fs::read_dir(pending_dir(home.path()))
             .map(|d| d.flatten().collect())
             .unwrap_or_default();
         assert!(leftover.is_empty());
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -303,14 +306,13 @@ mod tests {
             1_000_000,
             1_000_000,
         );
-        write_proposal(&home, &a).unwrap();
-        write_proposal(&home, &b).unwrap();
-        let removed = drop_pending_for(&home, "a").unwrap();
+        write_proposal(home.path(), &a).unwrap();
+        write_proposal(home.path(), &b).unwrap();
+        let removed = drop_pending_for(home.path(), "a").unwrap();
         assert_eq!(removed, 1);
-        let listed = list_pending(&home, 1_000_001);
+        let listed = list_pending(home.path(), 1_000_001);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].routine, "b");
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -318,18 +320,17 @@ mod tests {
         let home = tmp_home();
         let def = mk_def("recurring", RoutinePermissionMode::Danger);
         write_proposal(
-            &home,
+            home.path(),
             &RoutineProposal::from_def(&def, 1_000_000, 1_000_000),
         )
         .unwrap();
         write_proposal(
-            &home,
+            home.path(),
             &RoutineProposal::from_def(&def, 1_001_800, 1_001_800),
         )
         .unwrap();
-        let removed = drop_pending_for(&home, "recurring").unwrap();
+        let removed = drop_pending_for(home.path(), "recurring").unwrap();
         assert_eq!(removed, 2);
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -337,13 +338,12 @@ mod tests {
         let home = tmp_home();
         let def = mk_def("watch", RoutinePermissionMode::Accept);
         write_proposal(
-            &home,
+            home.path(),
             &RoutineProposal::from_def(&def, 1_000_000, 1_000_000),
         )
         .unwrap();
-        assert!(has_pending_for(&home, "watch"));
-        assert!(!has_pending_for(&home, "other"));
-        let _ = fs::remove_dir_all(&home);
+        assert!(has_pending_for(home.path(), "watch"));
+        assert!(!has_pending_for(home.path(), "other"));
     }
 
     #[test]
@@ -363,19 +363,18 @@ mod tests {
     #[test]
     fn list_pending_skips_malformed_files() {
         let home = tmp_home();
-        let dir = pending_dir(&home);
+        let dir = pending_dir(home.path());
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("garbage-0000001000.json"), "{ not valid json").unwrap();
         let def = mk_def("valid", RoutinePermissionMode::Danger);
         write_proposal(
-            &home,
+            home.path(),
             &RoutineProposal::from_def(&def, 1_000_000, 1_000_000),
         )
         .unwrap();
-        let listed = list_pending(&home, 1_000_005);
+        let listed = list_pending(home.path(), 1_000_005);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].routine, "valid");
-        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
