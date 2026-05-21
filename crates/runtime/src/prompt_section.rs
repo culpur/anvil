@@ -266,6 +266,15 @@ pub trait PromptSectionsExt {
     /// Remove ALL sections matching `kind` regardless of label. Returns the
     /// number removed. Used by `/skill clear` and reset operations.
     fn remove_all_by_kind(&mut self, kind: &PromptSectionKind) -> usize;
+
+    /// Iterate `(kind, body)` pairs in injection order.
+    ///
+    /// Task #731 / Layer 1 — `/memory layer 1` walks this iterator to render
+    /// the live working-memory inventory rather than the hand-written static
+    /// text it used before. Yielding `(PromptSectionKind, &str)` keeps the
+    /// caller free from re-walking labels separately; labels live on the
+    /// underlying `PromptSection` when the consumer needs them.
+    fn iter_by_kind(&self) -> Box<dyn Iterator<Item = (&PromptSectionKind, &str)> + '_>;
 }
 
 impl PromptSectionsExt for Vec<PromptSection> {
@@ -322,6 +331,10 @@ impl PromptSectionsExt for Vec<PromptSection> {
         let before = self.len();
         self.retain(|s| &s.kind != kind);
         before - self.len()
+    }
+
+    fn iter_by_kind(&self) -> Box<dyn Iterator<Item = (&PromptSectionKind, &str)> + '_> {
+        Box::new(self.iter().map(|s| (&s.kind, s.body.as_str())))
     }
 }
 
@@ -504,6 +517,28 @@ mod tests {
         assert_eq!(PromptSectionKind::FastMode.as_tag(), "fast_mode");
         assert_eq!(PromptSectionKind::OutputStyleCustom.as_tag(), "output_style_custom");
         assert_eq!(PromptSectionKind::DailySummary.as_tag(), "daily_summary");
+    }
+
+    #[test]
+    fn iter_by_kind_yields_pairs_in_injection_order() {
+        // Task #731 / L1: the iterator backs `/memory layer 1`'s live
+        // working-memory render. Order must match `to_strings()` so the
+        // displayed inventory matches the order the API client sends.
+        let v = vec![
+            PromptSection::new(PromptSectionKind::Environment, "env body"),
+            PromptSection::new(PromptSectionKind::RetrievalOrder, "retrieval body"),
+            PromptSection::labeled(PromptSectionKind::Skill, "skill body", "alpha"),
+        ];
+        let collected: Vec<(PromptSectionKind, String)> = v
+            .iter_by_kind()
+            .map(|(k, body)| (k.clone(), body.to_string()))
+            .collect();
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, PromptSectionKind::Environment);
+        assert_eq!(collected[0].1, "env body");
+        assert_eq!(collected[1].0, PromptSectionKind::RetrievalOrder);
+        assert_eq!(collected[2].0, PromptSectionKind::Skill);
+        assert_eq!(collected[2].1, "skill body");
     }
 
     #[test]
