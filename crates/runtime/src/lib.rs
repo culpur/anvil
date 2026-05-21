@@ -53,6 +53,7 @@ mod mcp;
 mod mcp_client;
 mod mcp_stdio;
 mod oauth;
+pub mod permission_allow;
 mod permission_memory;
 mod permissions;
 mod prompt;
@@ -192,6 +193,7 @@ pub use import::{
     otel_import_completed,
 };
 pub use auto_mode::AutoModeConfig;
+pub use permission_allow::PermissionAllowList;
 pub use auto_promote::{
     install_default as install_auto_promote_default, install_global as install_auto_promote,
     is_installed as auto_promote_is_installed, observe as auto_promote_observe,
