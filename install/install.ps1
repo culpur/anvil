@@ -468,6 +468,24 @@ try {
 }
 Remove-Item -Recurse -Force $TmpDir -ErrorAction SilentlyContinue
 
+# ── anvild sibling (task #766) ────────────────────────────────────────────────
+# Hardlink anvild.exe next to anvil.exe so Task Manager / tasklist show the
+# daemon under a distinct process name. The Scheduled Task XML written by
+# `anvil daemon install-service` references the anvild path; Task Scheduler
+# execs it, argv[0] propagates, and the daemon naturally identifies as anvild.
+# Hardlink (no admin needed for same-volume NTFS), fallback to Copy-Item.
+$AnvildExe = Join-Path $InstallDir "anvild.exe"
+try {
+    if (Test-Path $AnvildExe) { Remove-Item -Force $AnvildExe -ErrorAction SilentlyContinue }
+    New-Item -ItemType HardLink -Path $AnvildExe -Target $DestExe -Force -ErrorAction Stop | Out-Null
+} catch {
+    try { Copy-Item -Path $DestExe -Destination $AnvildExe -Force } catch {
+        # Best-effort. If we can't create anvild.exe, the daemon will still
+        # run via anvil.exe — just with a less distinct process name.
+        if ($IsVerbose) { Write-Host "  anvild link skipped: $_" -ForegroundColor DarkGray }
+    }
+}
+
 # ── Add to user PATH ──────────────────────────────────────────────────────────
 $CurrentPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $PathHint = $null

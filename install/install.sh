@@ -585,6 +585,21 @@ else
     sudo cp "$TMP_BINARY" "$INSTALL_PATH" || die "$(t err_install_failed "$INSTALL_PATH")"
 fi
 
+# ── anvild sibling (task #766) ────────────────────────────────────────────────
+# Create an `anvild` symlink/hardlink next to anvil so the daemon shows up as a
+# separately-named process in `ps`/`top`/`launchctl`/`systemctl`. The OS
+# supervisor units (LaunchAgent / systemd / rc.d / Task Scheduler) reference
+# the anvild path; argv[0] propagates from the supervisor's exec call, so the
+# daemon naturally identifies as "anvild" with zero Rust dispatch logic.
+ANVILD_PATH="${INSTALL_DIR}/anvild"
+if [[ -w "$INSTALL_DIR" ]]; then
+    ln -sf "$INSTALL_PATH" "$ANVILD_PATH" 2>/dev/null || cp -f "$INSTALL_PATH" "$ANVILD_PATH" 2>/dev/null || true
+else
+    sudo ln -sf "$INSTALL_PATH" "$ANVILD_PATH" 2>/dev/null \
+        || sudo cp -f "$INSTALL_PATH" "$ANVILD_PATH" 2>/dev/null \
+        || true
+fi
+
 # ── PATH hint (only if actually needed, and only once) ────────────────────────
 PATH_HINT=""
 if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then

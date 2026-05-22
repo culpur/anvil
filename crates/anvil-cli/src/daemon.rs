@@ -1266,7 +1266,45 @@ pub fn install_service(home: &Path, anvil_binary: &Path) -> i32 {
         println!("  Unregister: schtasks /Delete /TN Anvild /F");
         return 0;
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "freebsd")]
+    {
+        let rc = build_freebsd_rc(anvil_binary, home);
+        let path = home.join("run").join("anvild.rc");
+        if let Err(e) = fs::write(&path, rc) {
+            eprintln!("anvil daemon: write {} failed: {e}", path.display());
+            return 3;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+        println!("anvil daemon: wrote {}", path.display());
+        println!("  Install: sudo cp {} /usr/local/etc/rc.d/anvild", path.display());
+        println!("  Enable:  sudo sysrc anvild_enable=YES");
+        println!("  Start:   sudo service anvild start");
+        return 0;
+    }
+    #[cfg(target_os = "netbsd")]
+    {
+        let rc = build_netbsd_rc(anvil_binary, home);
+        let path = home.join("run").join("anvild.rc");
+        if let Err(e) = fs::write(&path, rc) {
+            eprintln!("anvil daemon: write {} failed: {e}", path.display());
+            return 3;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+        println!("anvil daemon: wrote {}", path.display());
+        println!("  Install: sudo cp {} /etc/rc.d/anvild", path.display());
+        println!("  Enable:  echo 'anvild=YES' | sudo tee -a /etc/rc.conf");
+        println!("  Start:   sudo service anvild start");
+        return 0;
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )))]
     {
         let _ = (home, anvil_binary);
         eprintln!("anvil daemon: install-service not supported on this platform");
@@ -1304,7 +1342,22 @@ fn uninstall_service(home: &Path) -> i32 {
         println!("anvil daemon: removed Anvild task");
         return 0;
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(any(target_os = "freebsd", target_os = "netbsd"))]
+    {
+        let path = home.join("run").join("anvild.rc");
+        let _ = fs::remove_file(&path);
+        println!("anvil daemon: removed user-space {}", path.display());
+        println!("  Also run: sudo service anvild stop && sudo rm /usr/local/etc/rc.d/anvild  (FreeBSD)");
+        println!("            sudo service anvild stop && sudo rm /etc/rc.d/anvild           (NetBSD)");
+        return 0;
+    }
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "freebsd",
+        target_os = "netbsd"
+    )))]
     {
         let _ = home;
         eprintln!("anvil daemon: uninstall-service not supported on this platform");
@@ -1319,11 +1372,36 @@ fn launchagent_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("net.culpur.anvild.plist"))
 }
 
+/// Compute the anvild sibling path next to the anvil binary (task #766).
+///
+/// `/usr/local/bin/anvil` -> `/usr/local/bin/anvild`.
+/// `C:\foo\anvil.exe` -> `C:\foo\anvild.exe`.
+/// The anvild file is created at install time as a symlink (Unix) or
+/// hardlink (Windows) by `install/install.sh` / `install.ps1`. Unit-file
+/// generators MUST reference this path, not the anvil path, so the OS
+/// supervisor execs argv[0]="anvild" — ps/top/launchctl show the daemon
+/// as a separately-named process.
+pub(crate) fn anvild_path_from(anvil_binary: &Path) -> PathBuf {
+    let parent = anvil_binary.parent().unwrap_or_else(|| Path::new(""));
+    let file_name = anvil_binary
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "anvil".to_string());
+    // Preserve .exe extension on Windows.
+    let new_name = if let Some(stem) = file_name.strip_suffix(".exe") {
+        format!("{stem}d.exe")
+    } else {
+        format!("{file_name}d")
+    };
+    parent.join(new_name)
+}
+
 /// LaunchAgent plist generator.  Public for the tests below.
 #[cfg(any(target_os = "macos", test))]
 pub fn build_launchagent_plist(home: &Path, binary: &Path) -> String {
     let home_s = home.to_string_lossy();
-    let bin_s = binary.to_string_lossy();
+    let anvild = anvild_path_from(binary);
+    let bin_s = anvild.to_string_lossy();
     let log_s = home.join("run").join("anvild.log");
     let log_s = log_s.to_string_lossy();
     format!(
@@ -1368,7 +1446,8 @@ fn systemd_unit_path() -> PathBuf {
 /// systemd --user unit generator.  Public for the tests below.
 #[cfg(any(target_os = "linux", test))]
 pub fn build_systemd_unit(binary: &Path) -> String {
-    let bin_s = binary.to_string_lossy();
+    let anvild = anvild_path_from(binary);
+    let bin_s = anvild.to_string_lossy();
     format!(
         r#"[Unit]
 Description=Anvil routines daemon (anvild)
@@ -1393,7 +1472,8 @@ WantedBy=default.target
 /// Windows Task Scheduler XML generator.  Public for the tests below.
 #[cfg(any(target_os = "windows", test))]
 pub fn build_taskscheduler_xml(binary: &Path) -> String {
-    let bin_s = binary.to_string_lossy();
+    let anvild = anvild_path_from(binary);
+    let bin_s = anvild.to_string_lossy();
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -1431,6 +1511,75 @@ pub fn build_taskscheduler_xml(binary: &Path) -> String {
     )
 }
 
+/// FreeBSD rc.d script generator (task #766).
+///
+/// Written to `<home>/run/anvild.rc` from user space. User then copies it
+/// to `/usr/local/etc/rc.d/anvild` with sudo, `sysrc anvild_enable=YES`,
+/// `service anvild start`. The anvild path (not anvil) so `ps aux` shows
+/// "anvild" as the process name.
+#[cfg(any(target_os = "freebsd", test))]
+pub fn build_freebsd_rc(binary: &Path, home: &Path) -> String {
+    let anvild = anvild_path_from(binary);
+    let bin_s = anvild.to_string_lossy();
+    let home_s = home.to_string_lossy();
+    format!(
+        r#"#!/bin/sh
+# PROVIDE: anvild
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following to /etc/rc.conf to enable:
+#   anvild_enable="YES"
+#   anvild_user="<your-username>"
+
+. /etc/rc.subr
+
+name="anvild"
+rcvar="anvild_enable"
+command="{bin_s}"
+command_args="daemon foreground"
+pidfile="{home_s}/run/anvild.pid"
+anvild_env="ANVIL_CONFIG_HOME={home_s}"
+
+load_rc_config $name
+: ${{anvild_enable:=NO}}
+
+run_rc_command "$1"
+"#
+    )
+}
+
+/// NetBSD rc.d script generator (task #766).
+///
+/// Written to `<home>/run/anvild.rc`. Install: `sudo cp ... /etc/rc.d/anvild`,
+/// `echo 'anvild=YES' >> /etc/rc.conf`, `sudo service anvild start`.
+#[cfg(any(target_os = "netbsd", test))]
+pub fn build_netbsd_rc(binary: &Path, home: &Path) -> String {
+    let anvild = anvild_path_from(binary);
+    let bin_s = anvild.to_string_lossy();
+    let home_s = home.to_string_lossy();
+    format!(
+        r#"#!/bin/sh
+# PROVIDE: anvild
+# REQUIRE: NETWORK
+# KEYWORD: shutdown
+#
+# Add to /etc/rc.conf:  anvild=YES
+
+. /etc/rc.subr
+
+name="anvild"
+rcvar=$name
+command="{bin_s}"
+command_args="daemon foreground"
+pidfile="{home_s}/run/anvild.pid"
+
+load_rc_config $name
+run_rc_command "$1"
+"#
+    )
+}
+
 // ─── Misc helpers ────────────────────────────────────────────────────────────
 
 fn unix_now() -> u64 {
@@ -1450,6 +1599,83 @@ fn _force_path_link(_p: &Path, _w: &mut dyn Write) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Task #766: anvild process-name across 7 platforms ─────────────────
+
+    #[test]
+    fn anvild_path_from_unix_no_extension() {
+        let bin = std::path::PathBuf::from("/usr/local/bin/anvil");
+        assert_eq!(anvild_path_from(&bin), std::path::PathBuf::from("/usr/local/bin/anvild"));
+    }
+
+    #[test]
+    fn anvild_path_from_windows_exe() {
+        let bin = std::path::PathBuf::from("C:\\Users\\soul\\anvil.exe");
+        let got = anvild_path_from(&bin);
+        let got_s = got.to_string_lossy().replace('/', "\\");
+        assert!(got_s.ends_with("anvild.exe"), "expected ...anvild.exe, got {got_s}");
+    }
+
+    #[test]
+    fn launchagent_plist_uses_anvild_not_anvil() {
+        let home = std::path::PathBuf::from("/tmp/test-home");
+        let bin = std::path::PathBuf::from("/usr/local/bin/anvil");
+        let plist = build_launchagent_plist(&home, &bin);
+        assert!(
+            plist.contains("<string>/usr/local/bin/anvild</string>"),
+            "plist must reference anvild path, got:\n{plist}"
+        );
+        assert!(
+            !plist.contains("<string>/usr/local/bin/anvil</string>"),
+            "plist must NOT have bare anvil path under ProgramArguments, got:\n{plist}"
+        );
+    }
+
+    #[test]
+    fn systemd_unit_uses_anvild_not_anvil() {
+        let bin = std::path::PathBuf::from("/usr/local/bin/anvil");
+        let unit = build_systemd_unit(&bin);
+        assert!(
+            unit.contains("ExecStart=/usr/local/bin/anvild daemon foreground"),
+            "systemd unit must use anvild, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn taskscheduler_xml_uses_anvild_exe() {
+        let bin = std::path::PathBuf::from("C:\\Users\\soul\\anvil.exe");
+        let xml = build_taskscheduler_xml(&bin);
+        assert!(
+            xml.contains("anvild.exe"),
+            "task scheduler xml must reference anvild.exe, got:\n{xml}"
+        );
+    }
+
+    #[test]
+    fn freebsd_rc_uses_anvild_path_and_name() {
+        let home = std::path::PathBuf::from("/home/user/.anvil");
+        let bin = std::path::PathBuf::from("/usr/local/bin/anvil");
+        let rc = build_freebsd_rc(&bin, &home);
+        assert!(
+            rc.contains("command=\"/usr/local/bin/anvild\""),
+            "freebsd rc must use anvild command path, got:\n{rc}"
+        );
+        assert!(rc.contains("name=\"anvild\""), "freebsd rc must declare name=anvild");
+    }
+
+    #[test]
+    fn netbsd_rc_uses_anvild_path_and_name() {
+        let home = std::path::PathBuf::from("/home/user/.anvil");
+        let bin = std::path::PathBuf::from("/usr/local/bin/anvil");
+        let rc = build_netbsd_rc(&bin, &home);
+        assert!(
+            rc.contains("command=\"/usr/local/bin/anvild\""),
+            "netbsd rc must use anvild command path, got:\n{rc}"
+        );
+        assert!(rc.contains("name=\"anvild\""), "netbsd rc must declare name=anvild");
+    }
+
+    // ── Original tests ──────────────────────────────────────────────────────
 
     #[test]
     fn parse_no_args_returns_status() {
@@ -1532,16 +1758,18 @@ mod tests {
 
     #[test]
     fn systemd_unit_contains_bin_and_restart() {
+        // Task #766: unit must execute the anvild symlink, not anvil itself.
         let u = build_systemd_unit(Path::new("/usr/local/bin/anvil"));
-        assert!(u.contains("/usr/local/bin/anvil daemon foreground"));
+        assert!(u.contains("/usr/local/bin/anvild daemon foreground"));
         assert!(u.contains("Restart=on-failure"));
         assert!(u.contains("[Install]"));
     }
 
     #[test]
     fn taskscheduler_xml_contains_bin_and_logon_trigger() {
+        // Task #766: Task Scheduler must launch anvild.exe (sibling hardlink).
         let x = build_taskscheduler_xml(Path::new(r"C:\Program Files\Anvil\anvil.exe"));
-        assert!(x.contains(r"C:\Program Files\Anvil\anvil.exe"));
+        assert!(x.contains(r"C:\Program Files\Anvil\anvild.exe"));
         assert!(x.contains("<LogonTrigger>"));
         assert!(x.contains("daemon foreground"));
     }
