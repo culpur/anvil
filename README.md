@@ -101,7 +101,7 @@ Anvil's `/mcp builder` TUI wizard from v2.2.18 now has a web counterpart. The `a
 
 **Security.** The operator OAuth token is loaded from the Anvil vault at startup, never from `.env`. The service exits 1 if vault is locked or the entry is missing; token is cached in process memory only and redacted from all log output. The sandbox endpoint &mdash; which runs `npm install` / `pip install` per request &mdash; is gated on publisher standing: user must be in the `anvilhub-publishers` Authentik group OR have at least one HubPackage already published. The check hits AnvilHub's `/api/users/<email>/publisher-status` with a 5-minute Map cache and falls closed on backend error.
 
-### Claude Code parity sweep &mdash; v2.1.144 → v2.1.146
+### CC parity sweep &mdash; v2.1.144 → v2.1.146
 
 A complete CC parity audit covered the 4-day window since v2.1.143 across 3 CC releases. 15 fixes filed and shipped this release &mdash; 3 P0, 5 P1, 7 P2. Highlights:
 
@@ -138,155 +138,11 @@ Net +50 tests across the workspace: i18n drift gate + picker invariant + 8 local
 
 v2.2.19 is a drop-in upgrade from v2.2.18. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. New locale key in `config.json` is optional (defaults to `$LANG` then `en`). The `anvild` rename is supervisor-unit-level only; existing daemons keep running until next restart, at which point the new unit definitions take effect.
 
-### Install
-
-Seven platforms, SHA256-verified, single binary, no runtime required.
-
 ---
-
-## What's new in v2.2.18 &mdash; The Web Viewer Lands, Autocompact Gets Honest, Mouse Capture Off by Default
-
-**v2.2.18 makes the web viewer real.** The `passage` relay and AnvilHub viewer get a tab-routing rewrite that matches the TUI&rsquo;s per-tab architecture exactly &mdash; `/tab new`, `/tab rename`, `/tab switch`, `Ctrl+T`, per-tab `user_message` and `slash_result` routing, and a default layout of `vertical_split + tabs` so the viewer opens with the same shape as a fresh TUI. Sitting alongside the viewer rewrite are two quiet correctness fixes that have been silently burning users for weeks: the autocompact threshold was measuring against the output cap (8K&ndash;16K) instead of the context window (64K&ndash;200K+), and mouse capture defaulted on when it should have defaulted off. Both fixed. Plus a release-pipeline hardening pass so Phase&nbsp;6 can no longer exit silently mid-deploy.
-
-### The Web Viewer &mdash; full TUI parity
-
-`/tab new`, `/tab rename <name>`, and `/tab switch <n>` are now first-class slash commands and the relay routes each tab&rsquo;s `user_message` and `slash_result` events to the originating tab&rsquo;s stream, not a broadcast. `Ctrl+T` opens a new tab from anywhere. Tab IDs are stable from creation forward, which kills the bug where a `/tab` command would appear to succeed in the TUI but have no effect in the viewer. The `paired_count` gate that incorrectly blocked routing after the first paired connection is gone &mdash; legitimate single-viewer reconnects work again.
-
-Fresh sessions open with the rail on the left and the main deck on the right, matching the TUI default introduced in v2.2.16. Cost labels in the viewer&rsquo;s status footer show the real `cost_type` chip (OAuth&nbsp;/&nbsp;local&nbsp;/&nbsp;cloud) instead of a fabricated dollar figure. `MemorySnapshot` events are cached and broadcast so the memory rail populates correctly on every reconnect. `SessionMeta` carries `context_max` and `build_sha` so the viewer can draw an accurate context-window progress bar.
-
-Default-allow forwarding means viewer messages that don&rsquo;t match a specific handler now reach the TUI&rsquo;s active tab instead of being silently dropped. Slash completion responses flow back to the originating viewer connection. Collapsible tool cards reduce visual noise on long agentic runs. The viewer&rsquo;s slash-command bar is now always visible in the header (was: hidden until you typed `/`), and `Cmd+K` opens the command palette from any state.
-
-### Autocompact threshold &mdash; the silent-burner is fixed (#697)
-
-`maybe_auto_compact` was computing its trigger against `max_output_tokens` (typically 8K&ndash;16K) instead of `context_window` (64K&ndash;200K+ depending on model). On `claude-sonnet-4-5` with a 200K window, that meant autocompact fired around 6K input tokens &mdash; sessions that should hold 100K of context were getting compacted after a handful of turns. The fix reads `session.context_window` (populated from the provider&rsquo;s `/models` response or your config override) and ignores `max_output_tokens` entirely. The 80% default trigger is unchanged; only what it measures against. Long-context users will see sessions running dramatically longer before compaction.
-
-`/compact why` now prints the full threshold calculation so you can verify it&rsquo;s using the right window size. A new OTel span `anvil.autocompact.threshold` emits `context_window`, `used_tokens`, `threshold_pct`, and `triggered` for auditability.
-
-### Mouse capture &mdash; off by default, everywhere (#696)
-
-Mouse capture is now disabled by default on all platforms, matching `feedback-cross-platform-ux-defaults.md`. The previous default-on behavior broke terminal copy-paste (Cmd+C, Ctrl+Shift+C, or Ctrl+C depending on terminal and OS) for users who hadn&rsquo;t opted in. A one-time toast on first run shows you how to enable it: `/config mouse_capture true` or `--mouse`. The `mouse_capture_default_off_regression` test asserts the default at the type level so a future drift can&rsquo;t silently regress.
-
-### Wizard polish &mdash; bracketed paste in textareas (#685)
-
-Multi-line paste inside a textarea modal (the input used by `/mcp builder` and other wizard steps) now works correctly. Previously, pasting a multi-line block would collapse to a single line or corrupt the cursor depending on the terminal. The fix wires `tui::paste::handle_paste` into the textarea event loop &mdash; the same bracketed-paste detection and `\r\n` &rarr; `\n` normalization that has been protecting the main input box now applies to every textarea field.
-
-### TUI fixes &mdash; the long tail
-
-- **MemorySnapshot rail parity (#695).** The vertical-split rail uses `layouts::common` helpers instead of a hand-rolled draw path so the snapshot renders at the same fidelity as the classic inline view.
-- **Per-tab relay routing (#696).** `relay::user_message` and `relay::slash_result` route to the active `Tab.id` instead of broadcasting. No more cross-tab leakage when two tabs have concurrent inference in flight.
-- **OAuth&nbsp;/&nbsp;local&nbsp;/&nbsp;cloud cost label (#696 P1).** The TUI status footer shows a semantic chip instead of a fabricated dollar figure for providers where per-token cost is not knowable.
-- **Alt-screen raw mode restore (#688).** `restore_alt_screen` re-enables raw mode on return from inline operations &mdash; this was the root cause of &ldquo;keyboard stops working after `/mcp builder` cancel&rdquo; in v2.2.17.
-- **`FORCE_FULL_REDRAW` consumption (#688).** Consumed inside `handle_repl_command_tui` so the blank-screen-after-cancel regression cannot recur.
-- **Mouse capture + alt-screen pairing (#688).** Mouse capture state is paired with alt-screen state, so enabling mouse capture outside the alt-screen no longer leaves the terminal inconsistent after exit.
-- **Force full redraw after inline-op restore (#687).** Any inline operation that restores the alt-screen now forces a full redraw, eliminating partial-frame artifacts.
-- **Textarea keybinds (#686).** `Enter` submits, `Ctrl+N` inserts a newline. The previous inversion made single-line submission require `Ctrl+N`.
-- **`/mcp builder` long-description textarea (#684).** The long-description field is a multi-line textarea modal instead of a single-line input.
-
-### PermissionPrompt regression test (#677)
-
-End-to-end round-trip test for `PermissionPrompt`: fire a tool call that requires a permission prompt, verify the prompt renders, send the approval, assert the turn completes. Guards the class of bug where permission-prompt state can desync from the turn loop.
-
-### Release-pipeline hardening (#654)
-
-Phase&nbsp;6 of `scripts/release.sh` now guards every SSH hop against `set -e` silent-exit. A failed remote call in Phase&nbsp;6 used to terminate the script with exit&nbsp;0, leaving subsequent surface updates unrun while reporting success. Every SSH call is now wrapped in an explicit `|| { echo "Phase 6 SSH failed: ..."; exit 1; }` guard so failures surface immediately.
-
-### Compatibility
-
-v2.2.18 is binary-compatible with v2.2.17 sessions. `anvil --continue` and `anvil --resume <id>` work across the upgrade. The two new config keys (`mouse_capture`, `mouse_capture_toast_seen`) are optional &mdash; existing `~/.anvil/settings.json` files continue to parse. The autocompact fix is transparent: no config change required, and sessions that were over-compacting on long-context models will automatically use the correct threshold after upgrade.
 
 ### Install
 
 Seven platforms, SHA256-verified, single binary, no runtime required.
-
----
-
-## What's new in v2.2.17 &mdash; The Setup Wizard, Reflection, Sandboxing, and the Source Viewer
-
-**v2.2.17 lands the new first-run wizard.** Welcome card &rarr; nine modal steps &rarr; zero-seam vault unlock &rarr; main TUI handoff &mdash; all inside a single alt-screen with one entry and one exit. OAuth waits stream the elapsed counter in real time, the CC migration step lives inside the wizard, and the grey font got bumped to a brighter readable RGB. Plus a new autonomous reflection loop, the sandbox-runner companion binary, an AnvilHub source viewer for every package, and a structural fix that prevents ratatui from ever leaving the rail blank again after a wizard exit.
-
-### The new setup wizard
-
-A single alt-screen owns the entire first-run experience. The welcome card explains what the wizard will do before it asks for anything. Nine modal steps follow &mdash; vault password, provider login, defaults &mdash; each with a tight per-step description so you always know why a question is being asked. OAuth callbacks now poll a 100&nbsp;ms timeout (was: blocking on keypress) so the elapsed counter ticks live and the callback completes the moment your browser redirects, no extra keystroke required.
-
-Step 9 is the CC migration handoff, also in-modal: import memory, instructions, settings, skills, plugins, sessions from `~/.claude` if present. When the wizard finishes it hands directly to the password modal for vault unlock, then drops into the TUI &mdash; one alt-screen, one teardown, zero seam.
-
-### Autonomous reflection loop
-
-Long-running turns now get a stuck-detector. If a turn loops without progress, the reflection layer switches strategy and writes a multi-attempt scratchpad so the next iteration sees what didn't work. No more silent dead-ends in deep agent runs.
-
-### `anvil-sandbox-runner` companion binary
-
-Hub-install detonation now runs in a separate binary so a malicious plugin cannot escape into the main anvil process. Ships alongside `anvil` on all seven platforms.
-
-### AnvilHub source viewer
-
-Every one of the 558 HubPackages now has a viewable source archive on `anvilhub.culpur.net`. A backfill seeded archives for all packages that were missing them, and `Documentation` tabs are populated for all 547 packages that had a NULL readme. Verified badges + AnvilHub-Official grants live across the catalog.
-
-### TUI rendering &mdash; the rail-stays-paint fix
-
-`#648` traced a ratatui contract violation in the region-gated repaint optimization from `#574`. Layouts must paint every band every frame because `swap_buffers` zeros the inactive buffer between draws. All three layouts now always paint every region, with no perceptual cost &mdash; the cell-level frame diff still handles the actual terminal write economy.
-
-### TUI bug fixes &mdash; the long tail
-
-- Vertical-split rail no longer goes blank/garbage on first prompt after wizard exit (#648)
-- TUI flash on Gnome Terminal eliminated &mdash; unconditional full-screen `Clear()` widget gated on `DirtyRegions::ALL` (#622, #629). This was a photosensitivity hazard during streaming output.
-- Wizard mouse-capture default flipped to **off** so native text selection works cross-platform on Mac, Linux, and Windows Terminal (#623)
-- `/agent compose` and `/agent traits` rewired to push through the TUI &mdash; no more `println!` corrupting the alt-screen (#624). Cross-binary clippy lint `#![deny(clippy::print_stdout, clippy::print_stderr)]` prevents the regression (#626).
-- Shift+drag on vertical-split now selects deck text only, not the rail (#625)
-- Vertical-split rail keybinds (g / d / s / a / Ctrl+R) wired through (#634), plus a drift gate to keep them wired
-
-### In-TUI ConfirmModal and PasswordModal
-
-The two TUI primitives that bridge the wizard to the main session now have real in-screen modals. Vault unlock for returning users is a PasswordModal inside the existing alt-screen, not a CLI prompt. ConfirmModal supports the two-button confirmation pattern used by destructive actions.
-
-### Reactive compaction and Stop hook
-
-Reactive compaction now seeds its summary-size budget from the actual overflow delta, not a fixed token guess. `ANVIL_STOP_HOOK_BLOCK_CAP` caps Stop-hook blocking to prevent an infinite loop if a hook mis-fires.
-
-### Session and compaction polish
-
-`derive_title_from_first_message()` is now wired to the actual session auto-titling trigger. Hook paths refresh after `EnterWorktree` so PWD-relative hooks don't go stale. The welcome banner names the active provider, not hardcoded Anthropic, for 3P users.
-
-### Quality bar
-
-Every TUI-touching file (cmd_provider, cmd_ai, cmd_static, providers, remote_control, tui/, utils, vault, commands/handlers, commands/skill_chaining) gets `#![deny(clippy::print_stdout, clippy::print_stderr)]`. 23 BUG sites fixed, full audit at `audit/println-tui-reachability-2026-05-18.md`. A regression test in `anvil-cli/src/tests.rs` blocks future drift. `release-surfaces.yaml` at repo root is the single source of truth for release surfaces; `scripts/verify-release-surfaces.sh` is the gate.
-
-### Cross-fleet ops
-
-Passage prod migration unblocked: HAProxy patroni_rw routing wired, ownership reconciled (passage_dev/prod role rename across 63 prod tables), F1 prisma migrate green, sequential deploy clean. P0 incident closed: Patroni replication that had been silently dead since 2026-05-08 restored on f1+f2.
-
-### Compatibility
-
-Anvil v2.2.17 is a drop-in upgrade from v2.2.16. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. `anvil upgrade` works on every platform now (the Windows `windows-msvc` regression was fixed in v2.2.16).
-
-### Install
-
-Seven platforms, SHA256-verified, single binary, no runtime required.
----
-
-## Parallel work, transparent tools
-
-**Per-tab inference, tool-call cards, and SSH terminals all live in the same window.**
-
-### Per-tab parallel inference
-
-Each tab owns its own runtime. Fire a prompt in tab 1, switch to tab 2, fire another &mdash; both stream concurrently and independently. The `*` (unread) and `&#9888;` (pending permission) markers in the tab bar update live. You navigate tabs with F2/F3, Ctrl+arrow, Alt+digit, or a click. None of it waits for a turn to finish.
-
-### Tool-call cards
-
-Every tool call &mdash; Glob, Grep, Read, Write, Edit, Bash, WebSearch, any MCP tool &mdash; renders as a bordered card showing the exact input the model sent (pattern, path, command) the moment it fires. Not a summary after the fact. Ctrl+O expands any card to the full input JSON and full result. You see exactly what the model is doing, as it's doing it.
-
-### SSH tabs
-
-`/ssh host` opens a modal connection form &mdash; host, port, user, auth method, key file, passphrase, and an alias to save the connection to your vault. The default key root is `~/.ssh`; Ctrl+F opens a bare-name key picker. Sessions run via russh with vt100 rendering and Ctrl+B prefix keys (tmux-style). An AI session and a live terminal to your server, side by side, in the same window.
-
-### Mid-turn responsiveness
-
-Ctrl+T (new tab), tab switching, `/ssh`, and submitting prompts in other tabs all respond immediately during streaming. The app is interactive throughout a turn &mdash; no waiting for the model to finish before the interface moves.
-
----
-
-## Install
 
 ```bash
 # Homebrew (macOS & Linux)
