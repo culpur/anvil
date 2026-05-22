@@ -179,6 +179,13 @@ pub(crate) enum ModalAnswer {
     /// abort the wizard step.
     #[allow(dead_code)]
     TextareaInputCancelled,
+    /// Task #767: Ctrl+B pressed on a Choice or Confirm modal. The
+    /// wizard orchestrator's per-step caller should treat this as a
+    /// signal to re-run the previous step. Caller must decide whether
+    /// to honor it (cheap steps) or fall through to default
+    /// (irreversible steps).
+    #[allow(dead_code)]
+    GoBack,
 }
 
 /// FIFO queue of pending modals plus a parallel log of recorded answers.
@@ -407,12 +414,19 @@ impl WizardChoiceModal {
         &mut self,
         key: crossterm::event::KeyEvent,
     ) -> ChoiceAction {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
         if self.options.is_empty() {
             return match key.code {
                 KeyCode::Esc => ChoiceAction::Cancelled,
                 _ => ChoiceAction::Continue,
             };
+        }
+        // Task #767: Ctrl+B is the global Back keybind across all
+        // wizard modals. We don't use Shift+Tab/BackTab because
+        // ConfirmModal already uses Tab/BackTab for Yes/No toggle;
+        // Ctrl+B has no existing binding in the wizard modal flow.
+        if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return ChoiceAction::GoBack;
         }
         match key.code {
             KeyCode::Up => {
@@ -539,7 +553,7 @@ impl WizardChoiceModal {
         let footer = self
             .footer_hint
             .as_deref()
-            .unwrap_or("↑↓ navigate · Enter select · 1-9 jump · Esc cancel");
+            .unwrap_or("↑↓ navigate · Enter select · 1-9 jump · Ctrl+B back · Esc cancel");
         if !footer.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("  {footer}"),
@@ -561,6 +575,9 @@ pub(crate) enum ChoiceAction {
     Committed(usize),
     /// Esc pressed — wizard should abort the current chain.
     Cancelled,
+    /// Shift+Tab pressed (task #767): wizard should re-run the previous
+    /// step. The orchestrator pops the history stack and re-enters.
+    GoBack,
 }
 
 #[cfg(test)]

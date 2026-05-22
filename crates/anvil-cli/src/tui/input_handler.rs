@@ -361,6 +361,16 @@ impl AnvilTui {
                     // No pending action (defensive — shouldn't happen).
                     return Ok(super::ReadResult::Continue);
                 }
+                ConfirmAction::GoBack => {
+                    // Task #767: GoBack is meaningful only inside the
+                    // wizard's modal queue. Outside the wizard (e.g.
+                    // permission prompts, /provider confirms) it has no
+                    // step-history to pop, so we ignore it and let the
+                    // modal stay open. Future per-callsite wiring can
+                    // override this if a host gains Back semantics.
+                    self.redraw.request(super::redraw::DirtyRegions::ALL);
+                    return Ok(super::ReadResult::Continue);
+                }
             }
         }
 

@@ -1031,6 +1031,8 @@ where
                         ChoiceAction::Continue => continue,
                         ChoiceAction::Committed(idx) => return Ok(ModalAnswer::Choice(idx)),
                         ChoiceAction::Cancelled => return Ok(ModalAnswer::ChoiceCancelled),
+                        // Task #767: Ctrl+B → wizard re-runs previous step.
+                        ChoiceAction::GoBack => return Ok(ModalAnswer::GoBack),
                     }
                 }
                 QueuedModal::Confirm { modal, .. } => {
@@ -1040,6 +1042,8 @@ where
                         ConfirmAction::Committed(choice) => {
                             return Ok(ModalAnswer::Confirm(choice));
                         }
+                        // Task #767: Ctrl+B → wizard re-runs previous step.
+                        ConfirmAction::GoBack => return Ok(ModalAnswer::GoBack),
                     }
                 }
                 QueuedModal::Password { modal, .. } => {
@@ -1245,6 +1249,12 @@ where
                             cancel_pending = true;
                         }
                         ConfirmAction::Committed(ConfirmChoice::No) => {
+                            modal.cancel_confirm = None;
+                        }
+                        // Task #767: Ctrl+B on the cancel-confirm during
+                        // a streaming subprocess just dismisses the
+                        // cancel dialog (no step-history to pop).
+                        ConfirmAction::GoBack => {
                             modal.cancel_confirm = None;
                         }
                     }

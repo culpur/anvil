@@ -39,6 +39,9 @@ pub(crate) enum ConfirmAction {
     Continue,
     /// User committed a choice (via `y`/`n`, Enter, or Esc).
     Committed(ConfirmChoice),
+    /// Task #767: user pressed Ctrl+B — re-run the previous wizard
+    /// step. The orchestrator pops the history stack and re-enters.
+    GoBack,
 }
 
 /// The yes/no confirmation modal.
@@ -62,6 +65,13 @@ impl ConfirmModal {
     /// Process a key event.  Returns `Committed(choice)` when the modal
     /// should close, `Continue` otherwise.
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> ConfirmAction {
+        use crossterm::event::KeyModifiers;
+        // Task #767: Ctrl+B = global Back keybind across all wizard
+        // modals. Checked first so Ctrl+B doesn't get consumed by
+        // the `Char('b')` arm (no plain `b` handler exists today).
+        if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return ConfirmAction::GoBack;
+        }
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 self.selected = ConfirmChoice::Yes;
@@ -170,7 +180,7 @@ impl ConfirmRenderSnapshot {
         }
         lines.push(button_row(self.selected, accent));
         lines.push(Line::from(Span::styled(
-            "  y / n   Enter: confirm   Tab: switch   Esc: cancel",
+            "  y / n   Enter: confirm   Tab: switch   Ctrl+B: back   Esc: cancel",
             Style::default().fg(super::modal_secondary_color()),
         )));
 
