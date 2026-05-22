@@ -928,9 +928,18 @@ pub fn spawn_detached(home: &Path, anvil_binary: &Path) -> i32 {
         }
     };
 
-    // Spawn ourselves as `anvil daemon foreground` so the child runs the
+    // Spawn ourselves as `anvild daemon foreground` so the child runs the
     // exact same code path as `--foreground` and writes its own PID file.
-    let mut cmd = std::process::Command::new(anvil_binary);
+    // Task #766: prefer the anvild sibling so ps/top show "anvild" as the
+    // process name. Fall back to the anvil binary if the symlink is missing
+    // (older installs, custom layouts, dev builds).
+    let anvild_binary = anvild_path_from(anvil_binary);
+    let exec_binary: &Path = if anvild_binary.exists() {
+        &anvild_binary
+    } else {
+        anvil_binary
+    };
+    let mut cmd = std::process::Command::new(exec_binary);
     cmd.arg("daemon")
         .arg("foreground")
         .env("ANVIL_CONFIG_HOME", home)
