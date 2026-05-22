@@ -59,6 +59,12 @@ pub enum KeepaliveEvent {
     /// No Anthropic OAuth credential is present — ticker idles at MIN and
     /// checks again later (covers "user logs in mid-session" flow).
     NoCredential,
+    /// Task #763 (v2.2.20): heartbeat event emitted on every tick where the
+    /// credential is valid but not yet at the refresh threshold.  Without
+    /// this, a freshly-issued token (hours of validity left) keeps the
+    /// ticker silent for hours, making proof-of-life impossible.  Carries
+    /// the observed `expires_at` so observers can render countdown UIs.
+    Heartbeat { expires_at: Option<u64> },
     /// The ticker has been cancelled and the task is about to exit.
     Stopped,
 }
@@ -194,6 +200,12 @@ async fn run_loop<R: OAuthRefresher>(
                         }
                     }
                 } else {
+                    // Task #763 (v2.2.20): emit a heartbeat so observers
+                    // see proof-of-life on every tick, not just at refresh
+                    // boundaries.
+                    let _ = events.send(KeepaliveEvent::Heartbeat {
+                        expires_at: token.expires_at,
+                    });
                     next_refresh_delay_secs(token, now)
                 }
             }

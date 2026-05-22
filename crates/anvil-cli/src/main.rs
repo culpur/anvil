@@ -3755,9 +3755,11 @@ fn run_repl_tui(mut cli: LiveCli) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     runtime::KeepaliveEvent::Refreshed { .. }
                     | runtime::KeepaliveEvent::NoCredential
+                    | runtime::KeepaliveEvent::Heartbeat { .. }
                     | runtime::KeepaliveEvent::Stopped => {
-                        // Silent: successful refreshes are routine, and the
-                        // NoCredential / Stopped signals are diagnostic only.
+                        // Silent: successful refreshes + heartbeats are
+                        // routine, and NoCredential / Stopped signals are
+                        // diagnostic only.
                     }
                 }
             }

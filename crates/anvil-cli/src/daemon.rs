@@ -116,6 +116,33 @@ pub struct DaemonStatus {
     /// no errors.
     pub last_error: Option<String>,
     pub anvil_version: String,
+    // ── Task #763 (v2.2.20): OAuth keep-alive observability ─────────────────
+    /// Unix seconds when the OAuth keepalive thread last successfully
+    /// refreshed the Anthropic access token.  `None` until the first
+    /// refresh — for a freshly-logged-in token with hours of validity left,
+    /// this stays `None` until the first scheduled tick fires near expiry.
+    #[serde(default)]
+    pub last_oauth_refresh_at: Option<u64>,
+    /// Unix seconds for the expires_at of the currently-cached token, as
+    /// seen by the keepalive thread on its most recent observation.
+    /// Lets `anvil daemon status` answer "is the daemon watching a healthy
+    /// token?" without re-reading credentials.json.
+    #[serde(default)]
+    pub oauth_expires_at: Option<u64>,
+    /// Set if the keepalive's most recent event was a `RefreshFailed`.
+    /// Cleared on the next successful tick.
+    #[serde(default)]
+    pub last_oauth_error: Option<String>,
+    /// True once the keepalive side-thread has reported at least one event
+    /// (any of NoCredential / Refreshed / RefreshFailed).  Proves the thread
+    /// is alive even when there is nothing to refresh.
+    #[serde(default)]
+    pub oauth_keepalive_alive: bool,
+    /// Unix seconds when the keepalive most recently checked credentials
+    /// (regardless of refresh outcome).  This is the "heartbeat" reviewers
+    /// want when diagnosing "is the daemon actually doing OAuth work?"
+    #[serde(default)]
+    pub last_oauth_check_at: Option<u64>,
 }
 
 fn status_path(home: &Path) -> PathBuf {
@@ -273,22 +300,52 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
     let stop = Arc::new(AtomicBool::new(false));
     install_signal_handler(Arc::clone(&stop));
 
-    // Task #761 (v2.2.20): spawn the OAuth keep-alive ticker on a side
-    // thread.  This is the same code path `bg_handlers::spawn_oauth_keepalive`
-    // uses for the in-TUI fallback — sharing the implementation keeps the
-    // refresh semantics identical whether the daemon or the TUI is in
-    // charge.  When the daemon is up, the TUI bg_handler should *not*
-    // also spawn; that gate lives in `bg_handlers.rs` via
-    // `daemon::anvild_running()`.
+    // Task #763 (v2.2.20): shared OAuth observability slot.  The keepalive
+    // side-thread writes into this on every event; the main tick reads it
+    // and serializes the latest values into anvild.status.json so external
+    // observers (`anvil daemon status`, future Wazuh probes, the TUI rail)
+    // can prove the keepalive is alive.
+    #[derive(Default, Clone)]
+    struct OAuthObs {
+        last_refresh_at: Option<u64>,
+        expires_at: Option<u64>,
+        last_error: Option<String>,
+        alive: bool,
+        last_check_at: Option<u64>,
+    }
+    let oauth_obs: Arc<std::sync::Mutex<OAuthObs>> =
+        Arc::new(std::sync::Mutex::new(OAuthObs::default()));
+
+    // Task #761 (v2.2.20) + #763 (v2.2.20): spawn the OAuth keep-alive
+    // ticker on a side thread.  Same code path as the in-TUI fallback
+    // (`bg_handlers::spawn_oauth_keepalive`) so refresh semantics are
+    // identical regardless of which path is in charge.  When daemon is
+    // alive the TUI gate at `daemon::anvild_running()` suppresses the
+    // in-TUI ticker so the two don't race.
+    //
+    // Observability: every event the ticker emits is (a) written to
+    // `anvild.log` and (b) merged into `oauth_obs` so the next main-loop
+    // tick can serialize it into `anvild.status.json`.  Without this the
+    // thread was an opaque black box — "trust me, it's running" — and the
+    // user rightly demanded proof.
     let oauth_stop_flag = Arc::clone(&stop);
+    let oauth_obs_writer = Arc::clone(&oauth_obs);
+    let oauth_home = home.to_path_buf();
     std::thread::spawn(move || {
         let runtime_handle = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
             Ok(rt) => rt,
-            Err(_) => return,
+            Err(e) => {
+                daemon_log(
+                    &oauth_home,
+                    &format!("oauth-keepalive: tokio runtime build failed: {e}"),
+                );
+                return;
+            }
         };
+        daemon_log(&oauth_home, "oauth-keepalive: starting");
         runtime_handle.block_on(async move {
             let refresher = Arc::new(api::AnthropicKeepaliveRefresher);
             let (tx, mut rx) =
@@ -297,13 +354,82 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
             while !oauth_stop_flag.load(Ordering::Relaxed) {
                 tokio::select! {
                     maybe = rx.recv() => match maybe {
-                        Some(runtime::KeepaliveEvent::Stopped) => break,
-                        Some(_) => continue,
-                        None => break,
+                        Some(event) => {
+                            let now = unix_now();
+                            let mut obs = oauth_obs_writer
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            obs.alive = true;
+                            obs.last_check_at = Some(now);
+                            match &event {
+                                runtime::KeepaliveEvent::Refreshed { new_expires_at } => {
+                                    obs.last_refresh_at = Some(now);
+                                    obs.expires_at = *new_expires_at;
+                                    obs.last_error = None;
+                                    daemon_log(
+                                        &oauth_home,
+                                        &format!(
+                                            "oauth-keepalive: refreshed (expires_at={:?})",
+                                            new_expires_at
+                                        ),
+                                    );
+                                }
+                                runtime::KeepaliveEvent::RefreshFailed { reason } => {
+                                    obs.last_error = Some(reason.clone());
+                                    daemon_log(
+                                        &oauth_home,
+                                        &format!("oauth-keepalive: refresh failed: {reason}"),
+                                    );
+                                }
+                                runtime::KeepaliveEvent::NoCredential => {
+                                    obs.last_error = Some(
+                                        "no Anthropic OAuth credential present".to_string(),
+                                    );
+                                    obs.expires_at = None;
+                                    daemon_log(
+                                        &oauth_home,
+                                        "oauth-keepalive: no credential present (idle)",
+                                    );
+                                }
+                                runtime::KeepaliveEvent::Heartbeat { expires_at } => {
+                                    obs.expires_at = *expires_at;
+                                    obs.last_error = None;
+                                    daemon_log(
+                                        &oauth_home,
+                                        &format!(
+                                            "oauth-keepalive: heartbeat (expires_at={:?})",
+                                            expires_at
+                                        ),
+                                    );
+                                }
+                                runtime::KeepaliveEvent::Stopped => {
+                                    daemon_log(&oauth_home, "oauth-keepalive: stopped");
+                                    drop(obs);
+                                    break;
+                                }
+                            }
+                            // On any event that's not a refresh, snapshot
+                            // the current credential's expiry so the status
+                            // sidecar reflects the *observed* state, not
+                            // just the last refresh outcome.
+                            if !matches!(event, runtime::KeepaliveEvent::Refreshed { .. })
+                                && let Ok(Some(t)) = runtime::load_oauth_credentials()
+                            {
+                                obs.expires_at = t.expires_at;
+                            }
+                        }
+                        None => {
+                            daemon_log(
+                                &oauth_home,
+                                "oauth-keepalive: event channel closed",
+                            );
+                            break;
+                        }
                     },
                     _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 }
             }
+            daemon_log(&oauth_home, "oauth-keepalive: thread exiting");
         });
     });
 
@@ -318,6 +444,11 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         pending_proposals_total: 0,
         last_error: None,
         anvil_version: anvil_version.to_string(),
+        last_oauth_refresh_at: None,
+        oauth_expires_at: None,
+        last_oauth_error: None,
+        oauth_keepalive_alive: false,
+        last_oauth_check_at: None,
     };
     write_status(home, &status);
 
@@ -437,6 +568,17 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         // Refresh the on-disk pending count once per tick (expiry sweep
         // also happens here as a side effect).
         status.pending_proposals_total = proposal::list_pending(home, now).len();
+
+        // Task #763 (v2.2.20): snapshot the OAuth observability slot into
+        // the status sidecar so external observers see proof-of-life.
+        {
+            let obs = oauth_obs.lock().unwrap_or_else(|p| p.into_inner());
+            status.last_oauth_refresh_at = obs.last_refresh_at;
+            status.oauth_expires_at = obs.expires_at;
+            status.last_oauth_error = obs.last_error.clone();
+            status.oauth_keepalive_alive = obs.alive;
+            status.last_oauth_check_at = obs.last_check_at;
+        }
 
         status.last_tick_at = now;
         write_status(home, &status);
@@ -656,15 +798,53 @@ fn print_status(home: &Path) -> i32 {
                 .and_then(|s| serde_json::from_str::<DaemonStatus>(&s).ok());
             match status {
                 Some(s) => {
-                    let uptime = unix_now().saturating_sub(s.started_at);
+                    let now = unix_now();
+                    let uptime = now.saturating_sub(s.started_at);
                     println!(
                         "; uptime {}; routines loaded {}; last tick {}s ago",
                         fmt_duration(uptime),
                         s.last_tick_routines_loaded,
-                        unix_now().saturating_sub(s.last_tick_at),
+                        now.saturating_sub(s.last_tick_at),
                     );
                     if let Some(err) = &s.last_error {
                         println!("  last error: {err}");
+                    }
+                    // Task #763 (v2.2.20): OAuth keepalive proof-of-life.
+                    println!(
+                        "  oauth keepalive: {}",
+                        if s.oauth_keepalive_alive {
+                            "alive"
+                        } else {
+                            "no events yet (still in initial sleep)"
+                        }
+                    );
+                    if let Some(exp) = s.oauth_expires_at {
+                        let delta = exp as i64 - now as i64;
+                        let pretty = if delta >= 0 {
+                            format!("in {}", fmt_duration(delta as u64))
+                        } else {
+                            format!("{} ago (EXPIRED)", fmt_duration((-delta) as u64))
+                        };
+                        println!("  oauth token expires_at: {exp} ({pretty})");
+                    } else {
+                        println!("  oauth token expires_at: (unknown)");
+                    }
+                    if let Some(at) = s.last_oauth_refresh_at {
+                        println!(
+                            "  last oauth refresh: {}s ago",
+                            now.saturating_sub(at)
+                        );
+                    } else {
+                        println!("  last oauth refresh: (none since daemon start)");
+                    }
+                    if let Some(at) = s.last_oauth_check_at {
+                        println!(
+                            "  last oauth check: {}s ago",
+                            now.saturating_sub(at)
+                        );
+                    }
+                    if let Some(err) = &s.last_oauth_error {
+                        println!("  last oauth error: {err}");
                     }
                 }
                 None => println!(" (status file missing)"),
