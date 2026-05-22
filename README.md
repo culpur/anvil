@@ -77,6 +77,73 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.19 &mdash; 18 Languages, Memory Cohesion Complete, Web MCP Builder
+
+**v2.2.19 closes two long-running arcs.** The internationalization commitment that started in v2.2.18 ships in 18 languages with a wizard picker, live runtime switching, OS locale auto-detect on first launch, and a soft drift gate so any locale that diverges from `en` is visible immediately. The seven-layer memory architecture promised since v2.2.14 finally has every layer wired end-to-end &mdash; including the three RED layers (Semantic, Reflective, Cache) that were still stubs. Plus a new web-based MCP Builder lands on AnvilHub at [/build](https://anvilhub.culpur.net/build), a full Claude Code parity sweep (CC v2.1.144 → v2.1.146) lands 15 concrete fixes including 3 P0 security/correctness items, and the release pipeline grows per-phase START/OK/FAIL gates that catch silent exits like the v2.2.18 Phase&nbsp;6 incident.
+
+### Internationalization &mdash; 18 locales
+
+The TUI, wizard, slash-command output, and remote-control viewer all flow through `rust-i18n` v4 in Rust and the new `viewer.locales.js` runtime in the browser. **Tier-1** ships English, Spanish, Simplified Chinese, French, Brazilian Portuguese, Russian, Japanese, German &mdash; 264 keys each. **Tier-2** adds Korean, Italian, Turkish, Vietnamese, Polish, Indonesian, Dutch, Swedish, Norwegian Bokmål, Ukrainian. Locale selection persists to `~/.anvil/config.json`, falls back to `$LANG` on first launch, and applies immediately to every wizard step.
+
+The in-TUI `/configure` menu has a Language Picker submenu rendering all 18 locales in their native script (한국어, Русский, 中文, العربية support is excluded by scope &mdash; RTL ships in a future release). The viewer ships 176 fully-wired keys covering chrome plus `vault.*` (entry forms, master-key modal) and `config.*` (SSH, Database, Plugins+MCP, Layout, Status-line editor) panels &mdash; all routed through `data-i18n-key` attributes that the live re-render walker translates on locale switch with no page reload.
+
+### Seven-layer memory &mdash; all GREEN
+
+The 2026-05-21 cohesion audit found that Layer 3 (Semantic), Layer 6 (Reflective), and Layer 7 (Cache) were still partial. v2.2.19 closes all three.
+
+- **Layer 3 &mdash; Semantic.** `/memory promote <nomination-id>` now actually persists nominated facts to disk. The v2.2.14 stub flipped a status flag without ever calling `MemoryManager::save()` &mdash; nominated facts never reached `ANVIL.md`. The full chain now writes the fact and appends provenance comments (`# nominated_at`, `# source: nomination/<id>`) before marking the nomination accepted. New `--target <file>` flag routes a nomination to a specific file with relative, absolute, and `~`-expanded path support.
+- **Layer 7 &mdash; Cache.** The file-cache path-discovery bug is fixed: previously `memory_budget` checked a directory that no longer exists in the project-scoped layout, so cache counts always reported zero. Now uses `FileCacheManager::new(cwd)` to discover the actual per-project path. `/memory show cache` enumerates file-cache, command-cache, and QMD-cache stats; `/memory prune cache --dry-run` walks both `FileCacheManager` and `CommandCacheManager` for stale candidates without mutating anything.
+- **Layer 1, 2, 4 &mdash; live introspection.** `/memory layer 1` renders a live snapshot of the working-memory inventory via `PromptSectionsExt::iter_by_kind()`. `/memory show episodic` unifies daily summaries, history archives, and workspace sessions; `/memory prune episodic` adds TTL-based retention with a trash-bin safety net so candidates move to `~/.anvil/trash/<unix-ts>/...` rather than being deleted. `/memory show procedural` consolidates GoalManager state, on-disk skills, bundled skills, and CronManager schedule into one view.
+
+### AnvilHub `/build` page + `anvil-mcp-builder` micro-service
+
+Anvil's `/mcp builder` TUI wizard from v2.2.18 now has a web counterpart. The `anvil-mcp-builder` micro-service runs at `127.0.0.1:4090` on the AnvilHub host and exposes three endpoints: `POST /api/builder/spec` (LLM-generated spec from free-text prompt, SSE-streamed response), `POST /api/builder/generate` (turns spec into a base64 tarball &mdash; Node.js, TypeScript, or Python templates), and `POST /api/builder/sandbox` (extracts the tarball and runs `anvil-sandbox-runner` network-cut).
+
+**Security.** The operator OAuth token is loaded from the Anvil vault at startup, never from `.env`. The service exits 1 if vault is locked or the entry is missing; token is cached in process memory only and redacted from all log output. The sandbox endpoint &mdash; which runs `npm install` / `pip install` per request &mdash; is gated on publisher standing: user must be in the `anvilhub-publishers` Authentik group OR have at least one HubPackage already published. The check hits AnvilHub's `/api/users/<email>/publisher-status` with a 5-minute Map cache and falls closed on backend error.
+
+### Claude Code parity sweep &mdash; v2.1.144 → v2.1.146
+
+A complete CC parity audit covered the 4-day window since v2.1.143 across 3 CC releases. 15 fixes filed and shipped this release &mdash; 3 P0, 5 P1, 7 P2. Highlights:
+
+- **P0 &mdash; MCP pagination (CC v2.1.144-B6 / v2.1.146-B2).** The MCP client now consumes the full `nextCursor` / `has_more` pagination chain for `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`. Previously MCP servers with paginated responses had everything beyond page 1 silently dropped.
+- **P0 &mdash; Spinner/elapsed-time freeze (CC v2.1.145-B3).** The TUI render queue wakes from a wall-clock timer in addition to input events. After a terminal refocus or resize, the spinner and elapsed-time display no longer freeze until next keypress.
+- **P0 SECURITY &mdash; MCP `permissions.allow` not honored (CC community #61077).** `permissions.allow` rules with patterns like `mcp__server__tool` or `mcp__server__*` are now consulted at MCP tool dispatch time. Previously the allowlist was loaded but the MCP dispatch path bypassed it and always prompted.
+- **P1 SECURITY &mdash; Bash env-var assignment permission bypass (CC v2.1.145-B1).** Bash patterns of the form `KEY=VALUE command` are now decomposed and the command portion checked against the allowlist.
+- **P1 &mdash; Skill fork-context recursion guard (CC v2.1.145-B4).** A skill cannot transitively invoke itself; the recursion check uses the full skill ancestry chain, not just the immediate parent.
+- **P1 &mdash; Resume session model preservation (CC community #61068).** `anvil --resume` restores the model that was active when the session was saved, not the global default.
+
+Plus 7 P2 fixes covering API startup timeout, mime-type fallback in `Read`, `/branch` history recovery post-EnterWorktree, MCP image fallback for unsupported MIME, skill watcher FD exhaustion prevention, theme color reset on first `/session rename`, and EnterWorktree MCP config preservation.
+
+### `anvild` &mdash; separate process name on 7 platforms
+
+The background OAuth-refresh + routines daemon now runs as `anvild`, not `anvil daemon foreground`. A new `anvild_path_from(anvil_binary)` helper rewrites the binary path used by every supervisor unit &mdash; macOS LaunchAgent, Linux user-systemd, FreeBSD/NetBSD rc.d, Windows Task Scheduler &mdash; plus the in-TUI `daemon::spawn_detached` fallback. `ps -ef | grep daemon` now shows `anvild` rather than masquerading as the foreground TUI binary. `install.sh` and `install.ps1` create the `anvild` symlink (Unix) or hardlink (Windows NTFS) alongside the main binary.
+
+### Wizard P0 bundle
+
+Three wizard bugs surfaced during preview-binary testing and landed before tag:
+
+- **Ollama choice modal clipped (#767).** `ConfirmModal` had a hardcoded 9-row height. On the Ollama wizard's "already_running" modal where the body embeds a multi-model list, body wrap consumed all 7 inner rows and the Yes/No buttons + key hint were clipped invisible. Now derives `modal_h` from `wrap_body(body, width).len() + 6` so buttons stay visible regardless of body length. New `Ctrl+B` Back keybind on Choice + Confirm modals.
+- **Daemon-install prompt broke alt-screen (#768).** The "Install anvild as background service?" prompt was running as `println!` + `io::stdin().read_line()` from `anvild_bootstrap::ensure_anvild_for_session` *after* the wizard exited its alt-screen, breaking the rule that the wizard never drops to CLI. New `wizard_daemon::run_daemon_step` runs inside the same alt-screen as Step&nbsp;8 of 9 with three choices (Install / Ask later / Never) and persists `anvild.autostart` to `config.json`.
+- **Vertical-split column selection hint (#769).** A normal click-drag in the deck column pulls in left-rail text because terminal emulators select at pixel coordinates with no awareness of Anvil's columns. v2.2.19 renders a 1-line hint above the BUILD section in the rail bottom group: `⌥+drag deck only` on macOS, `Alt+drag deck only` on Linux/Windows/BSD. i18n keys added across all 18 supported locales.
+
+### Release-pipeline hardening (#714, #730)
+
+`scripts/release.sh` now wraps every phase in `step "PN: <description>"` + `ok "PN"` / `fail "PN"` markers. The new `scripts/release-helpers/step-gates.sh` provides primitives + JSON status persistence + an EXIT-trap silent-exit detector that marks any RUNNING phase as FAIL on premature script exit. This closes the v2.2.18 Phase&nbsp;6 silent-exit class of bugs &mdash; the `set +e` / `SSH_RC=$?` / `set -e` pattern now wraps every SSH call so heredoc-style remote work surfaces its exit code instead of cascading into a `set -e` silent kill. `scripts/test-release-gates.sh` is the regression harness; runs release.sh in `--dry-run` mode and asserts every expected phase fires START + terminal marker exactly once.
+
+### Quality bar
+
+Net +50 tests across the workspace: i18n drift gate + picker invariant + 8 locale-load tests, +9 episodic / +6 promote / +6 cache / +5 working / +3 procedural for memory cohesion, +35 across all 15 CC-parity fixes, +7 publisher-standing tests in the new micro-service. One pre-existing flake fixed: `routines::proposal::drop_pending_only_targets_named_routine` now uses `tempfile::TempDir` for guaranteed per-thread isolation.
+
+### Compatibility
+
+v2.2.19 is a drop-in upgrade from v2.2.18. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. New locale key in `config.json` is optional (defaults to `$LANG` then `en`). The `anvild` rename is supervisor-unit-level only; existing daemons keep running until next restart, at which point the new unit definitions take effect.
+
+### Install
+
+Seven platforms, SHA256-verified, single binary, no runtime required.
+
+---
+
 ## What's new in v2.2.18 &mdash; The Web Viewer Lands, Autocompact Gets Honest, Mouse Capture Off by Default
 
 **v2.2.18 makes the web viewer real.** The `passage` relay and AnvilHub viewer get a tab-routing rewrite that matches the TUI&rsquo;s per-tab architecture exactly &mdash; `/tab new`, `/tab rename`, `/tab switch`, `Ctrl+T`, per-tab `user_message` and `slash_result` routing, and a default layout of `vertical_split + tabs` so the viewer opens with the same shape as a fresh TUI. Sitting alongside the viewer rewrite are two quiet correctness fixes that have been silently burning users for weeks: the autocompact threshold was measuring against the output cap (8K&ndash;16K) instead of the context window (64K&ndash;200K+), and mouse capture defaulted on when it should have defaulted off. Both fixed. Plus a release-pipeline hardening pass so Phase&nbsp;6 can no longer exit silently mid-deploy.
