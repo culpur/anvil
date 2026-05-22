@@ -217,3 +217,39 @@ surfaces:
       session.context_window, NOT max_output_tokens, for threshold computation.
       If this grep returns 0, the fix was reverted — sessions on long-context
       models will over-compact (fire at 3% of available window instead of 80%).
+
+  - id: installer_sh_i18n
+    type: code_constant
+    url: "(source-only — no public URL)"
+    deploy_path: "install/install.sh (detect_lang + t() + SUPPORTED_LANGS)"
+    verify_curl: "grep -c 'detect_lang\\|SUPPORTED_LANGS' install/install.sh 2>/dev/null"
+    verify_expect: ">= 2"
+    notes: |
+      v2.2.19 #751: install.sh detects LANG_CODE from LC_ALL > LC_MESSAGES > LANG
+      and looks up status strings via t() with English fallback. 10 Tier-1
+      priority languages (en, es, zh-CN, fr, pt-BR, ru, ja, de, ko, it).
+      Coverage test: install/test_install_sh.sh (13/13 must PASS).
+      Falling back to English silently is acceptable; reverting i18n is not.
+
+  - id: installer_ps1_i18n
+    type: code_constant
+    url: "(source-only — no public URL)"
+    deploy_path: "install/install.ps1 (Resolve-LangCode + T() + $Strings)"
+    verify_curl: "grep -c 'Resolve-LangCode\\|SupportedLangs' install/install.ps1 2>/dev/null"
+    verify_expect: ">= 2"
+    notes: |
+      v2.2.19 #751: install.ps1 detects locale from $PSCulture (BCP-47), looks up
+      via T() with English fallback. Same 10 Tier-1 priority languages as
+      install.sh. Manual smoke gate at install/test_install_ps1.ps1 for Windows
+      (CI runs from Mac/Linux so this is a developer-run test).
+
+  - id: installer_public_copy_parity
+    type: api_endpoint
+    url: "https://anvilhub.culpur.net/install.sh"
+    verify_curl: "curl -fsSL https://anvilhub.culpur.net/install.sh | grep -c 'detect_lang\\|SUPPORTED_LANGS' 2>/dev/null"
+    verify_expect: ">= 2"
+    notes: |
+      v2.2.19 #751: the publicly served install.sh on anvilhub.culpur.net must
+      match the in-repo install.sh i18n layer (silent-by-default fallback to
+      English is acceptable). If this drops to 0, the public surface is serving
+      a pre-i18n copy — re-deploy from install-arc HEAD.
