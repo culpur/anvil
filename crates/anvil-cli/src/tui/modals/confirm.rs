@@ -115,12 +115,21 @@ impl ConfirmRenderSnapshot {
     /// Draw a centered popup at most 70 cols wide.  Caller passes the
     /// theme accent color so the highlight matches the rest of the TUI.
     pub fn render(&self, frame: &mut Frame, area: Rect, accent: Color) {
-        // Body is rendered word-wrapped inside the inner block.  Reserve
-        // 2 rows for the body + 1 row for spacing + 1 row for buttons +
-        // 1 row for top/bottom padding + 2 rows for the border (= 7).
+        // Width budget first; height adapts to the wrapped body so the
+        // Yes/No buttons + key hint are never pushed off-screen when the
+        // body is long (e.g. Ollama wizard's `already_running` modal with
+        // a multi-model list).  Pre-task-#767 this was hardcoded to 9
+        // rows; long bodies hid the buttons because the Paragraph clip
+        // dropped the last 2 lines.
         let modal_w = area.width.saturating_sub(8).min(70).max(30);
-        let modal_h: u16 = 9;
-        if area.width < 12 || area.height < modal_h {
+        let usable_body_width = modal_w.saturating_sub(4).max(10) as usize;
+        let body_rows = wrap_body(&self.body, usable_body_width).len() as u16;
+        // 1 top pad + body + 1 spacer + 1 buttons + 1 hint + 2 borders = body + 6
+        let needed_h: u16 = body_rows.saturating_add(6);
+        // Clamp into the area; fall back to 9 if extremely small.
+        let min_h: u16 = 9;
+        let modal_h: u16 = needed_h.max(min_h).min(area.height.saturating_sub(2).max(min_h));
+        if area.width < 12 || area.height < min_h {
             // Terminal too small — bail rather than crash.  The caller
             // can keep the modal open until the user resizes.
             return;
