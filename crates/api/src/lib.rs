@@ -52,7 +52,13 @@ pub use providers::ollama_tool_parser::{
 };
 pub use ollama_tune::{OllamaConfig, OllamaModelOverride};
 pub use providers::bedrock::sigv4_testable;
-pub use providers::copilot::{run_device_flow as copilot_run_device_flow, save_copilot_token, CopilotTokenSet};
+pub use providers::copilot::{
+    run_device_flow as copilot_run_device_flow, save_copilot_token, load_copilot_token,
+    CopilotTokenSet,
+};
+pub use providers::gemini_oauth::{
+    GeminiKeepaliveRefresher, load_gemini_keepalive_snapshot, save_gemini_keepalive_snapshot,
+};
 pub use providers::openai_compat::{OpenAiCompatClient, OpenAiCompatConfig};
 pub use providers::{
     detect_provider_kind, known_models, max_tokens_for_model, provider_display_name,

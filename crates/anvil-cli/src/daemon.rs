@@ -143,6 +143,26 @@ pub struct DaemonStatus {
     /// want when diagnosing "is the daemon actually doing OAuth work?"
     #[serde(default)]
     pub last_oauth_check_at: Option<u64>,
+    // ── Task #764 (v2.2.20): Gemini OAuth keep-alive fields ─────────────────
+    #[serde(default)]
+    pub last_gemini_refresh_at: Option<u64>,
+    #[serde(default)]
+    pub gemini_expires_at: Option<u64>,
+    #[serde(default)]
+    pub last_gemini_error: Option<String>,
+    #[serde(default)]
+    pub gemini_keepalive_alive: bool,
+    #[serde(default)]
+    pub last_gemini_check_at: Option<u64>,
+    // ── Task #764 (v2.2.20): Copilot monitor fields ──────────────────────────
+    #[serde(default)]
+    pub copilot_expires_at: Option<u64>,
+    #[serde(default)]
+    pub last_copilot_error: Option<String>,
+    #[serde(default)]
+    pub copilot_monitor_alive: bool,
+    #[serde(default)]
+    pub last_copilot_check_at: Option<u64>,
 }
 
 fn status_path(home: &Path) -> PathBuf {
@@ -433,6 +453,222 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         });
     });
 
+    // Task #764 (v2.2.20): Gemini keep-alive — same OAuthObs pattern, only
+    // started when a Gemini OAuth token is present on disk at daemon startup.
+    #[derive(Default, Clone)]
+    struct GeminiObs {
+        last_refresh_at: Option<u64>,
+        expires_at: Option<u64>,
+        last_error: Option<String>,
+        alive: bool,
+        last_check_at: Option<u64>,
+    }
+    let gemini_obs: Arc<std::sync::Mutex<GeminiObs>> =
+        Arc::new(std::sync::Mutex::new(GeminiObs::default()));
+
+    if api::load_gemini_keepalive_snapshot().is_some() {
+        let gemini_stop_flag = Arc::clone(&stop);
+        let gemini_obs_writer = Arc::clone(&gemini_obs);
+        let gemini_home = home.to_path_buf();
+        std::thread::spawn(move || {
+            let runtime_handle = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    daemon_log(
+                        &gemini_home,
+                        &format!("gemini-keepalive: tokio runtime build failed: {e}"),
+                    );
+                    return;
+                }
+            };
+            daemon_log(&gemini_home, "gemini-keepalive: starting");
+            runtime_handle.block_on(async move {
+                let refresher = Arc::new(api::GeminiKeepaliveRefresher);
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::unbounded_channel::<runtime::KeepaliveEvent>();
+                let _handle = runtime::spawn_gemini_keepalive(
+                    refresher,
+                    || api::load_gemini_keepalive_snapshot(),
+                    |snap| api::save_gemini_keepalive_snapshot(snap),
+                    tx,
+                );
+                while !gemini_stop_flag.load(Ordering::Relaxed) {
+                    tokio::select! {
+                        maybe = rx.recv() => match maybe {
+                            Some(event) => {
+                                let now = unix_now();
+                                let mut obs = gemini_obs_writer
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner());
+                                obs.alive = true;
+                                obs.last_check_at = Some(now);
+                                match &event {
+                                    runtime::KeepaliveEvent::Refreshed { new_expires_at } => {
+                                        obs.last_refresh_at = Some(now);
+                                        obs.expires_at = *new_expires_at;
+                                        obs.last_error = None;
+                                        daemon_log(
+                                            &gemini_home,
+                                            &format!(
+                                                "gemini-keepalive: refreshed (expires_at={:?})",
+                                                new_expires_at
+                                            ),
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::RefreshFailed { reason } => {
+                                        obs.last_error = Some(reason.clone());
+                                        daemon_log(
+                                            &gemini_home,
+                                            &format!("gemini-keepalive: refresh failed: {reason}"),
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::NoCredential => {
+                                        daemon_log(
+                                            &gemini_home,
+                                            "gemini-keepalive: no credential (idle)",
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::Heartbeat { expires_at } => {
+                                        obs.expires_at = *expires_at;
+                                        obs.last_error = None;
+                                        daemon_log(
+                                            &gemini_home,
+                                            &format!(
+                                                "gemini-keepalive: heartbeat (expires_at={:?})",
+                                                expires_at
+                                            ),
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::Stopped => {
+                                        daemon_log(&gemini_home, "gemini-keepalive: stopped");
+                                        drop(obs);
+                                        break;
+                                    }
+                                }
+                            }
+                            None => {
+                                daemon_log(
+                                    &gemini_home,
+                                    "gemini-keepalive: event channel closed",
+                                );
+                                break;
+                            }
+                        },
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    }
+                }
+                daemon_log(&gemini_home, "gemini-keepalive: thread exiting");
+            });
+        });
+    }
+
+    // Task #764 (v2.2.20): Copilot monitor — pure file-watch, no HTTP calls.
+    // Only started when a Copilot token exists on disk at daemon startup.
+    #[derive(Default, Clone)]
+    struct CopilotObs {
+        expires_at: Option<u64>,
+        last_error: Option<String>,
+        alive: bool,
+        last_check_at: Option<u64>,
+    }
+    let copilot_obs: Arc<std::sync::Mutex<CopilotObs>> =
+        Arc::new(std::sync::Mutex::new(CopilotObs::default()));
+
+    if matches!(api::load_copilot_token(), Ok(Some(_))) {
+        let copilot_stop_flag = Arc::clone(&stop);
+        let copilot_obs_writer = Arc::clone(&copilot_obs);
+        let copilot_home = home.to_path_buf();
+        std::thread::spawn(move || {
+            let runtime_handle = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    daemon_log(
+                        &copilot_home,
+                        &format!("copilot-monitor: tokio runtime build failed: {e}"),
+                    );
+                    return;
+                }
+            };
+            daemon_log(&copilot_home, "copilot-monitor: starting");
+            runtime_handle.block_on(async move {
+                let (tx, mut rx) =
+                    tokio::sync::mpsc::unbounded_channel::<runtime::KeepaliveEvent>();
+                let _handle = runtime::spawn_copilot_monitor(
+                    || {
+                        api::load_copilot_token().ok().flatten().map(|t| {
+                            runtime::CopilotTokenSnapshot {
+                                access_token: t.access_token,
+                                expires_at: t.expires_at,
+                            }
+                        })
+                    },
+                    tx,
+                );
+                while !copilot_stop_flag.load(Ordering::Relaxed) {
+                    tokio::select! {
+                        maybe = rx.recv() => match maybe {
+                            Some(event) => {
+                                let now = unix_now();
+                                let mut obs = copilot_obs_writer
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner());
+                                obs.alive = true;
+                                obs.last_check_at = Some(now);
+                                match &event {
+                                    runtime::KeepaliveEvent::Heartbeat { expires_at } => {
+                                        obs.expires_at = *expires_at;
+                                        obs.last_error = None;
+                                        daemon_log(
+                                            &copilot_home,
+                                            &format!(
+                                                "copilot-monitor: heartbeat (expires_at={:?})",
+                                                expires_at
+                                            ),
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::RefreshFailed { reason } => {
+                                        obs.last_error = Some(reason.clone());
+                                        daemon_log(
+                                            &copilot_home,
+                                            &format!("copilot-monitor: expiry warning: {reason}"),
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::NoCredential => {
+                                        daemon_log(
+                                            &copilot_home,
+                                            "copilot-monitor: token gone (idle)",
+                                        );
+                                    }
+                                    runtime::KeepaliveEvent::Stopped => {
+                                        daemon_log(&copilot_home, "copilot-monitor: stopped");
+                                        drop(obs);
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            None => {
+                                daemon_log(
+                                    &copilot_home,
+                                    "copilot-monitor: event channel closed",
+                                );
+                                break;
+                            }
+                        },
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    }
+                }
+                daemon_log(&copilot_home, "copilot-monitor: thread exiting");
+            });
+        });
+    }
+
     let started_at = unix_now();
     let mut status = DaemonStatus {
         pid,
@@ -449,6 +685,16 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
         last_oauth_error: None,
         oauth_keepalive_alive: false,
         last_oauth_check_at: None,
+        // Task #764: Gemini + Copilot — start empty, populated by their threads.
+        last_gemini_refresh_at: None,
+        gemini_expires_at: None,
+        last_gemini_error: None,
+        gemini_keepalive_alive: false,
+        last_gemini_check_at: None,
+        copilot_expires_at: None,
+        last_copilot_error: None,
+        copilot_monitor_alive: false,
+        last_copilot_check_at: None,
     };
     write_status(home, &status);
 
@@ -578,6 +824,22 @@ fn run_foreground(home: &Path, anvil_binary: &Path, anvil_version: &str) -> i32 
             status.last_oauth_error = obs.last_error.clone();
             status.oauth_keepalive_alive = obs.alive;
             status.last_oauth_check_at = obs.last_check_at;
+        }
+        // Task #764 (v2.2.20): snapshot Gemini + Copilot obs.
+        {
+            let obs = gemini_obs.lock().unwrap_or_else(|p| p.into_inner());
+            status.last_gemini_refresh_at = obs.last_refresh_at;
+            status.gemini_expires_at = obs.expires_at;
+            status.last_gemini_error = obs.last_error.clone();
+            status.gemini_keepalive_alive = obs.alive;
+            status.last_gemini_check_at = obs.last_check_at;
+        }
+        {
+            let obs = copilot_obs.lock().unwrap_or_else(|p| p.into_inner());
+            status.copilot_expires_at = obs.expires_at;
+            status.last_copilot_error = obs.last_error.clone();
+            status.copilot_monitor_alive = obs.alive;
+            status.last_copilot_check_at = obs.last_check_at;
         }
 
         status.last_tick_at = now;
@@ -845,6 +1107,82 @@ fn print_status(home: &Path) -> i32 {
                     }
                     if let Some(err) = &s.last_oauth_error {
                         println!("  last oauth error: {err}");
+                    }
+                    // Task #764 (v2.2.20): Gemini section — only shown when a token
+                    // was present at daemon start (alive flag set by the thread).
+                    if s.gemini_keepalive_alive || s.gemini_expires_at.is_some() {
+                        println!(
+                            "  gemini keepalive: {}",
+                            if s.gemini_keepalive_alive {
+                                "alive"
+                            } else {
+                                "no events yet (still in initial sleep)"
+                            }
+                        );
+                        if let Some(exp) = s.gemini_expires_at {
+                            let delta = exp as i64 - now as i64;
+                            let pretty = if delta >= 0 {
+                                format!("in {}", fmt_duration(delta as u64))
+                            } else {
+                                format!("{} ago (EXPIRED)", fmt_duration((-delta) as u64))
+                            };
+                            println!("  gemini token expires_at: {exp} ({pretty})");
+                        } else {
+                            println!("  gemini token expires_at: (unknown)");
+                        }
+                        if let Some(at) = s.last_gemini_refresh_at {
+                            println!(
+                                "  last gemini refresh: {}s ago",
+                                now.saturating_sub(at)
+                            );
+                        } else {
+                            println!("  last gemini refresh: (none since daemon start)");
+                        }
+                        if let Some(at) = s.last_gemini_check_at {
+                            println!(
+                                "  last gemini check: {}s ago",
+                                now.saturating_sub(at)
+                            );
+                        }
+                        if let Some(err) = &s.last_gemini_error {
+                            println!("  last gemini error: {err}");
+                        }
+                    }
+                    // Task #764 (v2.2.20): Copilot section — monitor-only (no refresh).
+                    if s.copilot_monitor_alive || s.copilot_expires_at.is_some() {
+                        println!(
+                            "  copilot monitor: {}",
+                            if s.copilot_monitor_alive {
+                                "alive"
+                            } else {
+                                "no events yet (still in initial sleep)"
+                            }
+                        );
+                        if let Some(exp) = s.copilot_expires_at {
+                            let delta = exp as i64 - now as i64;
+                            let pretty = if delta >= 0 {
+                                format!("in {}", fmt_duration(delta as u64))
+                            } else {
+                                format!("{} ago (EXPIRED)", fmt_duration((-delta) as u64))
+                            };
+                            println!("  copilot token expires_at: {exp} ({pretty})");
+                            if delta < 86_400 && delta >= 0 {
+                                println!(
+                                    "  copilot warning: token expires in less than 24h — run: anvil provider login copilot"
+                                );
+                            }
+                        } else {
+                            println!("  copilot token expires_at: (unknown)");
+                        }
+                        if let Some(at) = s.last_copilot_check_at {
+                            println!(
+                                "  last copilot check: {}s ago",
+                                now.saturating_sub(at)
+                            );
+                        }
+                        if let Some(err) = &s.last_copilot_error {
+                            println!("  copilot warning: {err}");
+                        }
                     }
                 }
                 None => println!(" (status file missing)"),
@@ -1221,6 +1559,23 @@ mod tests {
             pending_proposals_total: 2,
             last_error: Some("bad routine".into()),
             anvil_version: "2.2.18-test".into(),
+            // Task #763 fields
+            last_oauth_refresh_at: Some(150),
+            oauth_expires_at: Some(9999),
+            last_oauth_error: None,
+            oauth_keepalive_alive: true,
+            last_oauth_check_at: Some(200),
+            // Task #764 Gemini fields
+            last_gemini_refresh_at: Some(160),
+            gemini_expires_at: Some(8888),
+            last_gemini_error: None,
+            gemini_keepalive_alive: true,
+            last_gemini_check_at: Some(200),
+            // Task #764 Copilot fields
+            copilot_expires_at: Some(7777),
+            last_copilot_error: Some("expires soon".into()),
+            copilot_monitor_alive: true,
+            last_copilot_check_at: Some(200),
         };
         write_status(tmp.path(), &s);
         let raw = fs::read_to_string(status_path(tmp.path())).unwrap();
@@ -1229,5 +1584,41 @@ mod tests {
         assert_eq!(back.last_tick_routines_fired, 1);
         assert_eq!(back.last_tick_proposals_written, 1);
         assert_eq!(back.pending_proposals_total, 2);
+        // Task #763 round-trip
+        assert_eq!(back.last_oauth_refresh_at, Some(150));
+        assert_eq!(back.oauth_expires_at, Some(9999));
+        assert!(back.oauth_keepalive_alive);
+        // Task #764 Gemini round-trip
+        assert_eq!(back.last_gemini_refresh_at, Some(160));
+        assert_eq!(back.gemini_expires_at, Some(8888));
+        assert!(back.gemini_keepalive_alive);
+        // Task #764 Copilot round-trip
+        assert_eq!(back.copilot_expires_at, Some(7777));
+        assert_eq!(back.last_copilot_error.as_deref(), Some("expires soon"));
+        assert!(back.copilot_monitor_alive);
+    }
+
+    /// Verify that a status JSON written by an older daemon (missing Task #764
+    /// fields) still deserialises successfully — the `#[serde(default)]`
+    /// attributes must cover all new fields.
+    #[test]
+    fn status_file_backwards_compat_missing_new_fields() {
+        let legacy_json = r#"{
+            "pid": 999,
+            "started_at": 1,
+            "last_tick_at": 2,
+            "last_tick_routines_loaded": 0,
+            "last_tick_routines_fired": 0,
+            "last_error": null,
+            "anvil_version": "2.2.18"
+        }"#;
+        let back: DaemonStatus = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(back.pid, 999);
+        assert!(!back.oauth_keepalive_alive);
+        assert!(back.oauth_expires_at.is_none());
+        assert!(!back.gemini_keepalive_alive);
+        assert!(back.gemini_expires_at.is_none());
+        assert!(!back.copilot_monitor_alive);
+        assert!(back.copilot_expires_at.is_none());
     }
 }

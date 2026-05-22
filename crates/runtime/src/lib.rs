@@ -152,6 +152,9 @@ pub use oauth::{
 pub use oauth::keepalive::{
     persist_refreshed_token, spawn as spawn_oauth_keepalive, KeepaliveEvent, KeepaliveHandle,
     OAuthRefresher,
+    // Task #764 (v2.2.20): Gemini refresh + Copilot monitor keepalives.
+    GeminiRefresher, GeminiTokenSnapshot, spawn_gemini_keepalive,
+    CopilotTokenSnapshot, spawn_copilot_monitor,
 };
 pub use permissions::{
     BlockAction, PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,

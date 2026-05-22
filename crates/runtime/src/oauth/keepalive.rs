@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 
 use super::{
     load_oauth_credentials, next_refresh_delay_secs, save_oauth_credentials,
-    unix_now_seconds, OAuthTokenSet, KEEPALIVE_MIN_DELAY_SECS,
+    unix_now_seconds, OAuthTokenSet, KEEPALIVE_MAX_DELAY_SECS, KEEPALIVE_MIN_DELAY_SECS,
 };
 
 /// System-event payload emitted by the keep-alive ticker.  The TUI loop
@@ -244,6 +244,281 @@ pub fn persist_refreshed_token(token: OAuthTokenSet) -> Result<OAuthTokenSet, St
     Ok(token)
 }
 
+// ── Gemini OAuth keepalive ───────────────────────────────────────────────────
+
+/// Trait for Gemini-specific token refresh, injected at daemon startup so
+/// this module stays free of HTTP-client dependencies.
+pub trait GeminiRefresher: Send + Sync + 'static {
+    /// Refresh the Gemini OAuth token and persist the result.
+    /// Returns `(new_access_token, new_expires_at)` on success.
+    fn refresh(
+        &self,
+        refresh_token: String,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(String, Option<u64>), String>> + Send>,
+    >;
+}
+
+/// Token snapshot passed between the Gemini keepalive and its observers.
+#[derive(Debug, Clone)]
+pub struct GeminiTokenSnapshot {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub expires_at: Option<u64>,
+}
+
+/// Spawn the Gemini OAuth keep-alive ticker (Task #764 / v2.2.20).
+///
+/// Mirrors the Anthropic keepalive loop but typed for `GeminiTokenSnapshot`.
+/// The `load_token` closure is called on every tick to get the current on-disk
+/// state; the `save_token` closure is called after a successful refresh.
+/// Both closures are invoked from inside the async loop so they must be
+/// `Send + 'static`.
+///
+/// Emits the same `KeepaliveEvent` variants as the Anthropic path for
+/// uniformity — observers use the same event consumer regardless of provider.
+#[must_use]
+pub fn spawn_gemini_keepalive<R, L, S>(
+    refresher: Arc<R>,
+    load_token: L,
+    save_token: S,
+    events: mpsc::UnboundedSender<KeepaliveEvent>,
+) -> KeepaliveHandle
+where
+    R: GeminiRefresher,
+    L: Fn() -> Option<GeminiTokenSnapshot> + Send + Sync + 'static,
+    S: Fn(&GeminiTokenSnapshot) -> Result<(), String> + Send + Sync + 'static,
+{
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let join = tokio::spawn(async move {
+        gemini_run_loop(refresher, load_token, save_token, events, cancel_rx).await;
+    });
+    KeepaliveHandle {
+        cancel: cancel_tx,
+        join: Some(join),
+    }
+}
+
+async fn gemini_run_loop<R, L, S>(
+    refresher: Arc<R>,
+    load_token: L,
+    save_token: S,
+    events: mpsc::UnboundedSender<KeepaliveEvent>,
+    mut cancel_rx: watch::Receiver<bool>,
+) where
+    R: GeminiRefresher,
+    L: Fn() -> Option<GeminiTokenSnapshot>,
+    S: Fn(&GeminiTokenSnapshot) -> Result<(), String>,
+{
+    loop {
+        if *cancel_rx.borrow() {
+            let _ = events.send(KeepaliveEvent::Stopped);
+            return;
+        }
+
+        let token = load_token();
+        let delay_secs = match &token {
+            None => {
+                let _ = events.send(KeepaliveEvent::NoCredential);
+                KEEPALIVE_MIN_DELAY_SECS
+            }
+            Some(tok) => {
+                let now = unix_now_seconds();
+                let until_expiry = tok
+                    .expires_at
+                    .map(|exp| exp.saturating_sub(now))
+                    .unwrap_or(0);
+
+                let should_refresh =
+                    until_expiry <= KEEPALIVE_MIN_DELAY_SECS * 2
+                    && tok.refresh_token.is_some();
+
+                if should_refresh {
+                    let rt = tok.refresh_token.clone().unwrap();
+                    match refresher.refresh(rt).await {
+                        Ok((new_access, new_expires)) => {
+                            let new_snap = GeminiTokenSnapshot {
+                                access_token: new_access,
+                                refresh_token: tok.refresh_token.clone(),
+                                expires_at: new_expires,
+                            };
+                            let persist_err = save_token(&new_snap).err();
+                            if let Some(e) = persist_err {
+                                let _ = events.send(KeepaliveEvent::RefreshFailed {
+                                    reason: format!("gemini refresh succeeded but persist failed: {e}"),
+                                });
+                                KEEPALIVE_MIN_DELAY_SECS
+                            } else {
+                                let _ = events.send(KeepaliveEvent::Refreshed {
+                                    new_expires_at: new_expires,
+                                });
+                                // Compute next delay based on the new expiry.
+                                let fake = OAuthTokenSet {
+                                    access_token: new_snap.access_token.clone(),
+                                    refresh_token: new_snap.refresh_token.clone(),
+                                    expires_at: new_expires,
+                                    scopes: vec![],
+                                };
+                                next_refresh_delay_secs(&fake, unix_now_seconds())
+                            }
+                        }
+                        Err(reason) => {
+                            let _ = events.send(KeepaliveEvent::RefreshFailed { reason });
+                            KEEPALIVE_MIN_DELAY_SECS
+                        }
+                    }
+                } else {
+                    let _ = events.send(KeepaliveEvent::Heartbeat {
+                        expires_at: tok.expires_at,
+                    });
+                    // Compute delay from a dummy OAuthTokenSet so we can reuse
+                    // the existing helper.
+                    let fake = OAuthTokenSet {
+                        access_token: tok.access_token.clone(),
+                        refresh_token: tok.refresh_token.clone(),
+                        expires_at: tok.expires_at,
+                        scopes: vec![],
+                    };
+                    next_refresh_delay_secs(&fake, now)
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(delay_secs)) => {}
+            res = cancel_rx.changed() => {
+                if res.is_err() || *cancel_rx.borrow() {
+                    let _ = events.send(KeepaliveEvent::Stopped);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// ── Copilot token monitor ────────────────────────────────────────────────────
+
+/// Token snapshot for Copilot (device-flow; no refresh path).
+#[derive(Debug, Clone)]
+pub struct CopilotTokenSnapshot {
+    pub access_token: String,
+    pub expires_at: Option<u64>,
+}
+
+/// How many seconds before expiry to start emitting the "token expires soon"
+/// warning.  24 hours: gives the user plenty of time to re-login.
+const COPILOT_WARN_BEFORE_EXPIRY_SECS: u64 = 86_400;
+
+/// Spawn the Copilot token monitor (Task #764 / v2.2.20).
+///
+/// Copilot device-flow tokens cannot be refreshed; this is a pure
+/// file-watch + expiry-countdown loop.  No HTTP calls are made.
+///
+/// Events emitted:
+/// - `Heartbeat` while the token is valid and not within the warning window.
+/// - `RefreshFailed { reason }` once we're within 24 h of expiry (or already
+///   expired).  The "reason" text includes a `anvil provider login copilot`
+///   call-to-action.  This matches what the Anthropic path emits on a failed
+///   refresh so observers can render a uniform banner.
+/// - `NoCredential` if the token disappears from disk mid-session.
+/// - `Stopped` on cancellation.
+#[must_use]
+pub fn spawn_copilot_monitor<L>(
+    load_token: L,
+    events: mpsc::UnboundedSender<KeepaliveEvent>,
+) -> KeepaliveHandle
+where
+    L: Fn() -> Option<CopilotTokenSnapshot> + Send + Sync + 'static,
+{
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let join = tokio::spawn(async move {
+        copilot_run_loop(load_token, events, cancel_rx).await;
+    });
+    KeepaliveHandle {
+        cancel: cancel_tx,
+        join: Some(join),
+    }
+}
+
+async fn copilot_run_loop<L>(
+    load_token: L,
+    events: mpsc::UnboundedSender<KeepaliveEvent>,
+    mut cancel_rx: watch::Receiver<bool>,
+) where
+    L: Fn() -> Option<CopilotTokenSnapshot>,
+{
+    loop {
+        if *cancel_rx.borrow() {
+            let _ = events.send(KeepaliveEvent::Stopped);
+            return;
+        }
+
+        let delay_secs = match load_token() {
+            None => {
+                let _ = events.send(KeepaliveEvent::NoCredential);
+                KEEPALIVE_MIN_DELAY_SECS
+            }
+            Some(tok) => {
+                let now = unix_now_seconds();
+                match tok.expires_at {
+                    None => {
+                        // No expiry — token is likely a classic PAT (never expires).
+                        // Emit a heartbeat and sleep the max interval.
+                        let _ = events.send(KeepaliveEvent::Heartbeat { expires_at: None });
+                        KEEPALIVE_MAX_DELAY_SECS
+                    }
+                    Some(exp) => {
+                        let remaining = exp.saturating_sub(now);
+                        if remaining == 0 || now >= exp {
+                            // Already expired.
+                            let _ = events.send(KeepaliveEvent::RefreshFailed {
+                                reason: "Copilot device token has expired. \
+                                         Run `anvil provider login copilot` to re-authenticate."
+                                    .to_string(),
+                            });
+                            KEEPALIVE_MAX_DELAY_SECS
+                        } else if remaining <= COPILOT_WARN_BEFORE_EXPIRY_SECS {
+                            // Within warning window.
+                            let hours = remaining / 3600;
+                            let mins = (remaining % 3600) / 60;
+                            let human = if hours > 0 {
+                                format!("{hours}h{mins:02}m")
+                            } else {
+                                format!("{mins}m")
+                            };
+                            let _ = events.send(KeepaliveEvent::RefreshFailed {
+                                reason: format!(
+                                    "Copilot device token expires in {human}. \
+                                     Run `anvil provider login copilot` to refresh."
+                                ),
+                            });
+                            // Re-check every MIN interval while in warning window.
+                            KEEPALIVE_MIN_DELAY_SECS
+                        } else {
+                            let _ = events.send(KeepaliveEvent::Heartbeat {
+                                expires_at: Some(exp),
+                            });
+                            // Sleep until we enter the warning window or MAX, whichever first.
+                            let until_warn = remaining.saturating_sub(COPILOT_WARN_BEFORE_EXPIRY_SECS);
+                            until_warn.clamp(KEEPALIVE_MIN_DELAY_SECS, KEEPALIVE_MAX_DELAY_SECS)
+                        }
+                    }
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(delay_secs)) => {}
+            res = cancel_rx.changed() => {
+                if res.is_err() || *cancel_rx.borrow() {
+                    let _ = events.send(KeepaliveEvent::Stopped);
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +696,287 @@ mod tests {
         // SAFETY: tests serialize on the env_lock above.
         unsafe { std::env::remove_var("ANVIL_CONFIG_HOME"); }
         let _ = std::fs::remove_dir_all(&temp_home);
+    }
+
+    // ── Gemini keepalive unit tests ──────────────────────────────────────────
+
+    struct ScriptedGeminiRefresher {
+        calls: AtomicUsize,
+        new_expires_in: u64,
+        should_fail: bool,
+    }
+
+    impl ScriptedGeminiRefresher {
+        fn new(new_expires_in: u64) -> Self {
+            Self { calls: AtomicUsize::new(0), new_expires_in, should_fail: false }
+        }
+        fn failing() -> Self {
+            Self { calls: AtomicUsize::new(0), new_expires_in: 3600, should_fail: true }
+        }
+    }
+
+    impl GeminiRefresher for ScriptedGeminiRefresher {
+        fn refresh(
+            &self,
+            _refresh_token: String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(String, Option<u64>), String>> + Send>,
+        > {
+            let _n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let expires_in = self.new_expires_in;
+            let fail = self.should_fail;
+            Box::pin(async move {
+                if fail {
+                    Err("simulated gemini refresh failure".to_string())
+                } else {
+                    Ok((
+                        format!("ya29.refreshed-{_n}"),
+                        Some(unix_now_seconds() + expires_in),
+                    ))
+                }
+            })
+        }
+    }
+
+    /// Gemini keepalive emits Refreshed when token is near expiry.
+    #[tokio::test]
+    async fn gemini_keepalive_emits_refreshed_on_near_expiry() {
+        let refresher = Arc::new(ScriptedGeminiRefresher::new(3600));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // near-expiry token (10s left — well within 2*MIN threshold)
+        let near_expires = unix_now_seconds() + 10;
+        let snap = std::sync::Arc::new(std::sync::Mutex::new(GeminiTokenSnapshot {
+            access_token: "ya29.old".to_string(),
+            refresh_token: Some("rt-old".to_string()),
+            expires_at: Some(near_expires),
+        }));
+        let snap_load = std::sync::Arc::clone(&snap);
+        let snap_save = std::sync::Arc::clone(&snap);
+
+        let _handle = spawn_gemini_keepalive(
+            refresher,
+            move || Some(snap_load.lock().unwrap().clone()),
+            move |new| {
+                let mut s = snap_save.lock().unwrap();
+                *s = new.clone();
+                Ok(())
+            },
+            tx,
+        );
+
+        let got = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::Refreshed { new_expires_at } = ev {
+                    return Some(new_expires_at);
+                }
+            }
+            None
+        })
+        .await
+        .expect("must receive Refreshed before timeout");
+        assert!(got.is_some(), "Refreshed must carry new_expires_at");
+    }
+
+    /// Gemini keepalive emits RefreshFailed when the refresher returns Err.
+    #[tokio::test]
+    async fn gemini_keepalive_emits_refresh_failed_on_error() {
+        let refresher = Arc::new(ScriptedGeminiRefresher::failing());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        let near_expires = unix_now_seconds() + 10;
+        let snap = GeminiTokenSnapshot {
+            access_token: "ya29.old".to_string(),
+            refresh_token: Some("rt-old".to_string()),
+            expires_at: Some(near_expires),
+        };
+
+        let _handle = spawn_gemini_keepalive(
+            refresher,
+            move || Some(snap.clone()),
+            |_| Ok(()),
+            tx,
+        );
+
+        let got = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::RefreshFailed { reason } = ev {
+                    return Some(reason);
+                }
+            }
+            None
+        })
+        .await
+        .expect("must receive RefreshFailed before timeout");
+        let reason = got.expect("must be RefreshFailed with reason");
+        assert!(reason.contains("simulated gemini"), "reason: {reason}");
+    }
+
+    /// Gemini keepalive emits NoCredential when loader returns None.
+    #[tokio::test]
+    async fn gemini_keepalive_emits_no_credential_when_no_token() {
+        let refresher = Arc::new(ScriptedGeminiRefresher::new(3600));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        let _handle = spawn_gemini_keepalive(
+            refresher,
+            || None,
+            |_| Ok(()),
+            tx,
+        );
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if matches!(ev, KeepaliveEvent::NoCredential) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(got, "must emit NoCredential when loader returns None");
+    }
+
+    /// Gemini keepalive emits Heartbeat when token is fresh (not near expiry).
+    #[tokio::test]
+    async fn gemini_keepalive_emits_heartbeat_for_fresh_token() {
+        let refresher = Arc::new(ScriptedGeminiRefresher::new(3600));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // Token valid for 2 hours — well outside the refresh threshold.
+        let fresh_expires = unix_now_seconds() + 7200;
+        let snap = GeminiTokenSnapshot {
+            access_token: "ya29.fresh".to_string(),
+            refresh_token: Some("rt-fresh".to_string()),
+            expires_at: Some(fresh_expires),
+        };
+
+        let _handle = spawn_gemini_keepalive(
+            refresher,
+            move || Some(snap.clone()),
+            |_| Ok(()),
+            tx,
+        );
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::Heartbeat { .. } = ev {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(got, "must emit Heartbeat for a fresh token");
+    }
+
+    // ── Copilot monitor unit tests ────────────────────────────────────────────
+
+    /// Copilot monitor emits Heartbeat when token is valid with plenty of time.
+    #[tokio::test]
+    async fn copilot_monitor_heartbeat_for_fresh_token() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // Token valid for 48 hours — outside the 24h warning window.
+        let exp = unix_now_seconds() + 172_800;
+        let snap = CopilotTokenSnapshot {
+            access_token: "ghp_test".to_string(),
+            expires_at: Some(exp),
+        };
+        let _handle = spawn_copilot_monitor(move || Some(snap.clone()), tx);
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::Heartbeat { .. } = ev {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+        assert!(got, "Copilot monitor must emit Heartbeat for a token with >24h remaining");
+    }
+
+    /// Copilot monitor emits RefreshFailed when token is within 24h of expiry.
+    #[tokio::test]
+    async fn copilot_monitor_warns_within_24h_of_expiry() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // Token expires in 2 hours — inside the 24h warning window.
+        let exp = unix_now_seconds() + 7_200;
+        let snap = CopilotTokenSnapshot {
+            access_token: "ghp_soon".to_string(),
+            expires_at: Some(exp),
+        };
+        let _handle = spawn_copilot_monitor(move || Some(snap.clone()), tx);
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::RefreshFailed { reason } = ev {
+                    return Some(reason);
+                }
+            }
+            None
+        })
+        .await
+        .expect("must receive event before timeout");
+        let reason = got.expect("must be RefreshFailed with reason");
+        assert!(
+            reason.contains("anvil provider login copilot"),
+            "reason must include CTA: {reason}"
+        );
+    }
+
+    /// Copilot monitor emits RefreshFailed (expired) when token is past expiry.
+    #[tokio::test]
+    async fn copilot_monitor_warns_for_expired_token() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let exp = unix_now_seconds().saturating_sub(60); // 60s in the past
+        let snap = CopilotTokenSnapshot {
+            access_token: "ghp_expired".to_string(),
+            expires_at: Some(exp),
+        };
+        let _handle = spawn_copilot_monitor(move || Some(snap.clone()), tx);
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::RefreshFailed { reason } = ev {
+                    return Some(reason);
+                }
+            }
+            None
+        })
+        .await
+        .expect("must receive event before timeout");
+        let reason = got.expect("expired token must produce RefreshFailed");
+        assert!(reason.contains("expired"), "reason must mention expiry: {reason}");
+    }
+
+    /// Copilot monitor emits Heartbeat for a token with no expiry (classic PAT).
+    #[tokio::test]
+    async fn copilot_monitor_heartbeat_for_no_expiry() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let snap = CopilotTokenSnapshot {
+            access_token: "ghp_pat".to_string(),
+            expires_at: None,
+        };
+        let _handle = spawn_copilot_monitor(move || Some(snap.clone()), tx);
+
+        let got = tokio::time::timeout(Duration::from_secs(2), async {
+            while let Some(ev) = rx.recv().await {
+                if let KeepaliveEvent::Heartbeat { expires_at } = ev {
+                    return Some(expires_at);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+        assert!(got.is_some(), "no-expiry token must emit Heartbeat");
+        assert!(
+            got.unwrap().is_none(),
+            "Heartbeat expires_at must be None for no-expiry token"
+        );
     }
 }

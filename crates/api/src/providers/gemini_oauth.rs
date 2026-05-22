@@ -49,6 +49,8 @@ use crate::types::{
 use super::common::next_sse_frame;
 use super::openai_compat::resolve_stream_dead_air_timeout;
 use super::{Provider, ProviderFuture};
+// Task #764 (v2.2.20): runtime types for GeminiKeepaliveRefresher.
+extern crate runtime;
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -393,6 +395,63 @@ async fn parse_token_response(resp: reqwest::Response) -> Result<GeminiOAuthToke
         refresh_token: body.refresh_token,
         expires_at,
     })
+}
+
+// ---------------------------------------------------------------------------
+// GeminiKeepaliveRefresher — runtime::GeminiRefresher implementation
+// ---------------------------------------------------------------------------
+
+/// Concrete `runtime::GeminiRefresher` implementation (Task #764 / v2.2.20).
+///
+/// Used by both the daemon keepalive thread and the in-TUI fallback thread to
+/// refresh Gemini OAuth tokens proactively before expiry.
+#[derive(Debug, Clone, Default)]
+pub struct GeminiKeepaliveRefresher;
+
+impl runtime::GeminiRefresher for GeminiKeepaliveRefresher {
+    fn refresh(
+        &self,
+        refresh_token: String,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(String, Option<u64>), String>> + Send>,
+    > {
+        Box::pin(async move {
+            let new_tok = refresh_access_token(&refresh_token)
+                .await
+                .map_err(|e| format!("{e}"))?;
+            // Persist before returning so a crash between refresh + save
+            // doesn't lose the new bearer.
+            let persisted = GeminiOAuthToken {
+                access_token: new_tok.access_token.clone(),
+                refresh_token: new_tok.refresh_token.or(Some(refresh_token)),
+                expires_at: new_tok.expires_at,
+            };
+            save_gemini_oauth_token(&persisted)
+                .map_err(|e| format!("gemini persist failed: {e}"))?;
+            Ok((persisted.access_token, persisted.expires_at))
+        })
+    }
+}
+
+/// Load a `runtime::GeminiTokenSnapshot` from `~/.anvil/credentials.json`.
+/// Returns `None` if no token is saved (same semantics as
+/// `load_gemini_oauth_token`).
+pub fn load_gemini_keepalive_snapshot() -> Option<runtime::GeminiTokenSnapshot> {
+    load_gemini_oauth_token().ok().flatten().map(|tok| runtime::GeminiTokenSnapshot {
+        access_token: tok.access_token,
+        refresh_token: tok.refresh_token,
+        expires_at: tok.expires_at,
+    })
+}
+
+/// Persist a `runtime::GeminiTokenSnapshot` back to disk.
+pub fn save_gemini_keepalive_snapshot(snap: &runtime::GeminiTokenSnapshot) -> Result<(), String> {
+    let tok = GeminiOAuthToken {
+        access_token: snap.access_token.clone(),
+        refresh_token: snap.refresh_token.clone(),
+        expires_at: snap.expires_at,
+    };
+    save_gemini_oauth_token(&tok).map_err(|e| format!("{e}"))
 }
 
 // ---------------------------------------------------------------------------
