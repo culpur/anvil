@@ -19,7 +19,6 @@ expression: rendered
 
 
 
-
  MEMORY
  working            6t / 2000tok
  episodic            12 sessions
@@ -50,5 +49,6 @@ expression: rendered
  Ctrl+W close · Ctrl+R deck
  ? help · /quit exit
 
+⌥+drag deck only
  BUILD
  v2.2.16 · deadbee

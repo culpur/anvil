@@ -648,3 +648,7 @@ slash.clear.resume_cleared: "再開セッションファイル %{path} をクリ
 
 # /quit, /exit
 slash.quit.drained_workers: "終了前に進行中の %{count} 件のターンを排出しました。"
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"

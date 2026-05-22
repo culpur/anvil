@@ -648,3 +648,7 @@ slash.clear.resume_cleared: "Archivo de sesión reanudada %{path} limpiado."
 
 # /quit, /exit
 slash.quit.drained_workers: "Se vaciaron %{count} turno(s) en curso antes de salir."
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"

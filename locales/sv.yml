@@ -513,3 +513,7 @@ tui.palette.status: "sessionsstatus"
 tui.palette.config: "konfiguration"
 tui.palette.cost: "tokenkostnadssammanfattning"
 tui.palette.exit: "avsluta Anvil"
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"

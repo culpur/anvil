@@ -647,3 +647,7 @@ slash.clear.resume_cleared: "File sessione ripresa %{path} cancellato."
 
 # /quit, /exit
 slash.quit.drained_workers: "Drenati %{count} turn(i) in corso prima di uscire."
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"

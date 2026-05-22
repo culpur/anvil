@@ -648,3 +648,7 @@ slash.clear.resume_cleared: "Fichier de session reprise %{path} effacé."
 
 # /quit, /exit
 slash.quit.drained_workers: "%{count} tour(s) en cours vidés avant la sortie."
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"

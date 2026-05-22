@@ -407,6 +407,13 @@ tui.rail.build: "BUILD"
 tui.rail.none_active: "none active"
 tui.rail.deck_label: "DECK: %{mode}"
 tui.rail.on_tab: " on %{name}"
+# Task #769: vertical-split selection hint — surfaces the column-only
+# drag modifier so users learn how to copy deck text without picking
+# up rail content. macOS uses ⌥ (Option) glyph; other platforms use
+# the literal word "Alt" since most Linux/Windows terminals honor
+# Alt+drag for rectangle/column selection.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"
 
 # Status — bottom status footer + STATUS rail block
 tui.status.tab_count_one: "1 tab"

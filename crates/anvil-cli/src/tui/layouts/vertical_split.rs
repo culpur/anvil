@@ -712,6 +712,25 @@ fn build_rail_bottom(snap: &LayoutSnapshot, w: usize) -> Vec<Line<'static>> {
         )));
     }
 
+    // ── SELECTION HINT (task #769) ────────────────────────────────────────────
+    // The rail and the deck live in the same terminal screen, so a normal
+    // click-drag selection spans both columns and the user's clipboard ends
+    // up with mashed-together rail + deck text. The honest fix is the
+    // modifier the OS already supports — Option+drag on macOS, Alt+drag on
+    // Linux/Windows Terminal — which performs a rectangle (column-only)
+    // selection that respects Anvil's column structure. Surface that as a
+    // 1-line hint anchored right above BUILD so the user discovers it.
+    let select_hint = if cfg!(target_os = "macos") {
+        t!("tui.rail.select_hint_macos").to_string()
+    } else {
+        t!("tui.rail.select_hint_other").to_string()
+    };
+    let select_hint_truncated = truncate(select_hint, w);
+    lines.push(Line::from(Span::styled(
+        select_hint_truncated,
+        Style::default().fg(Color::Rgb(0x66, 0x66, 0x66)),
+    )));
+
     // ── BUILD section ─────────────────────────────────────────────────────────
     lines.push(section_header_line_owned(
         t!("tui.rail.build").to_string(),

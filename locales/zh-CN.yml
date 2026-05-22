@@ -648,3 +648,7 @@ slash.clear.resume_cleared: "已清除恢复的会话文件 %{path}。"
 
 # /quit, /exit
 slash.quit.drained_workers: "退出前清空了 %{count} 个进行中的轮次。"
+
+# Task #769 (v2.2.19): vertical-split rail selection hint.
+tui.rail.select_hint_macos: "⌥+drag deck only"
+tui.rail.select_hint_other: "Alt+drag deck only"
