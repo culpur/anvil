@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.18-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.19-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -333,6 +333,10 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 
 
+
+### v2.2.19 &mdash; May 22, 2026
+
+See the [release notes](https://github.com/culpur/anvil/releases/tag/v2.2.19) for full details.
 ### v2.2.18 &mdash; May 20, 2026
 
 **The Web Viewer Lands. Autocompact Gets Honest. Mouse Capture Off by Default.**
