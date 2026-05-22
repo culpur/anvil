@@ -1245,6 +1245,22 @@ pub(crate) fn run_full_wizard_in_alt_screen() -> Result<FullWizardResult, Runner
         &runtime::default_config_home(),
     )?;
 
+    // Task #768: daemon install step — runs INSIDE the alt-screen so the
+    // first-run wizard never drops back to a plain terminal for the
+    // anvild prompt.  The step presents a three-choice WizardChoiceModal,
+    // persists the result to config.json, and writes the OS service unit
+    // (LaunchAgent / systemd / Task Scheduler) when the user chooses
+    // Install.  The return value is discarded here; the config on disk
+    // is the authoritative record.  `anvild_bootstrap::ensure_anvild_for_session`
+    // reads that config and skips `prompt_user()` because `autostart` is
+    // now definitively `Yes` or `No` (never `Ask` after wizard completion).
+    let _ = crate::wizard_daemon::run_daemon_step(
+        &mut runner,
+        &runtime::default_config_home(),
+        8,
+        9,
+    )?;
+
     // Step 9 — optional CC migration. Stays inside the same alt-screen
     // session so the wizard → Anvil TUI handoff has ZERO inline stdin
     // moments (#643, v2.2.17). The step is silent when ~/.claude/ is

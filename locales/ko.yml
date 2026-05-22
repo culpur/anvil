@@ -293,6 +293,14 @@ wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — 최고의 범용 코
 wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — 작고 빠름 (~2.0 GB)"
 wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — 8 GB RAM에서 작동 (~1.0 GB)"
 
+# ─── 백그라운드 서비스 설치 단계 ────────────────────────────────────────
+wizard.daemon_modal.step_header: "Step %{step} of %{total}: Background service"
+wizard.daemon_modal.intro: "anvild keeps your OAuth tokens refreshed and runs scheduled routines while no terminal is open."
+wizard.daemon_modal.title: "Install background service?"
+wizard.daemon_modal.choice_install: "Install (recommended) — anvild runs in the background"
+wizard.daemon_modal.choice_later: "Not now, ask me next time"
+wizard.daemon_modal.choice_never: "Never ask me again"
+
 # ─── TUI — 모달 레이블 ────────────────────────────────────────────────────
 tui.modal.permission_required: " 권한 필요 "
 tui.modal.edit_lines: "줄 편집"

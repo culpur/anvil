@@ -293,6 +293,14 @@ wizard.ollama_model.qwen_7b: "Qwen2.5 Coder 7B (q4_K_M) — la mejor opción gen
 wizard.ollama_model.llama_3b: "Llama 3.2 3B (q4_K_M) — pequeño y rápido (~2,0 GB)"
 wizard.ollama_model.qwen_1_5b: "Qwen2.5 Coder 1.5B (q4_K_M) — funciona con 8 GB de RAM (~1,0 GB)"
 
+# ─── Paso de instalación del servicio en segundo plano ───────────────────
+wizard.daemon_modal.step_header: "Step %{step} of %{total}: Background service"
+wizard.daemon_modal.intro: "anvild keeps your OAuth tokens refreshed and runs scheduled routines while no terminal is open."
+wizard.daemon_modal.title: "Install background service?"
+wizard.daemon_modal.choice_install: "Install (recommended) — anvild runs in the background"
+wizard.daemon_modal.choice_later: "Not now, ask me next time"
+wizard.daemon_modal.choice_never: "Never ask me again"
+
 # ─── TUI — etiquetas de modales ───────────────────────────────────────────
 tui.modal.permission_required: " Permiso requerido "
 tui.modal.edit_lines: "Editar líneas"

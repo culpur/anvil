@@ -141,6 +141,23 @@ enum UserChoice {
 /// Print a plain-terminal prompt (safe: this runs before alt-screen).
 ///
 /// NOT-TTY path: callers must guard with `io::stdout().is_terminal()`.
+///
+/// # Alt-screen callers
+///
+/// Do NOT invoke this function from inside the wizard alt-screen or any
+/// other ratatui context.  Any `println!`/`print!` call while ratatui's
+/// alt-screen is active goes BEHIND the alt-screen and corrupts the
+/// back-buffer — see `feedback-tui-stdout-anti-pattern.md`.
+///
+/// First-run users reach this function only when `autostart == Ask` AND
+/// the first-run wizard did not run (e.g. upgrade from an older version
+/// that predates v2.2.19).  The wizard now handles the first-run case
+/// via `wizard_daemon::run_daemon_step`, which leaves `autostart` as
+/// either `Yes` or `No` — both of which short-circuit before this
+/// function is called.  For upgrade users who skipped the wizard entirely,
+/// `autostart` remains `Ask`, this function fires on the NEXT plain-
+/// terminal startup (before `run_repl_tui` enters alt-screen), and that
+/// is safe.
 fn prompt_user() -> UserChoice {
     println!();
     println!("\x1b[1;36m┌─ Anvil background service (anvild) ─────────────────────────┐\x1b[0m");

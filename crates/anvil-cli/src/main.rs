@@ -107,6 +107,15 @@ mod wizard_ollama;
 #[allow(dead_code)]
 mod wizard_qmd;
 
+/// In-wizard anvild background-service install step (task #768).
+///
+/// Presents a three-choice WizardChoiceModal (Install / Ask later / Never)
+/// inside the running alt-screen, persists the result to config.json, and
+/// writes the OS service unit (LaunchAgent / systemd / Task Scheduler) when
+/// the user chooses Install — all without dropping back to a plain terminal.
+#[allow(dead_code)]
+mod wizard_daemon;
+
 // Re-export utilities so that existing call sites throughout this file
 // (handle_repl_command, run_command_for_tui, etc.) continue to resolve without changes.
 pub(crate) use utils::{command_exists, detect_project_type_for_pipeline, extract_notebook_cell, git_output, git_status_ok, lsp_binary_for_lang, parse_line_range, parse_titled_body, recent_user_context, run_test_suite, sanitize_generated_message, shell_output_or_err, shell_quote, truncate_for_prompt, write_temp_text_file, anvil_home_dir, anvil_pinned_path, dirs_next_home, json_escape, load_pinned_paths, regex_escape, render_teleport_report, run_language_command_static, save_pinned_paths, send_desktop_notification, format_number, parse_token_count, run_init, append_slash_command_suggestions, normalize_permission_mode, render_version_report, render_repl_help, format_status_report, status_context, render_config_report, set_config_bool_value, render_memory_report, init_anvil_md, render_diff_report, resolve_export_path, render_export_text, render_export_markdown, render_configure_static, build_system_prompt, build_system_prompt_with_identity, friendly_provider_label, run_theme_command, is_local_or_git_install_source, render_mode_unavailable, render_unknown_repl_command, run_git_stash_list, run_git_stash_op, render_last_tool_debug_report, save_output_style, load_output_style};
