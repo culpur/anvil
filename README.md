@@ -77,6 +77,50 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.20 &mdash; Signed Provenance, Anti-Skills, Event Routines, A/B Curator, Memory Federation + Forge Screensaver
+
+**v2.2.20 is the five-feature arc.** Anvil's self-improvement foundation grows up: every skill now carries a signed ed25519 lineage ledger (**F1**), the curator learns from failures and not just successes via the new anti-skill pool (**F4**), routines can fire on FileWatch / Webhook / Process / Log events in addition to schedules (**F6**), the curator runs A/B passes between candidate skill versions with winner promotion + report surfacing (**F3**), and memory can finally federate across machines with x25519&nbsp;+&nbsp;HKDF-SHA256&nbsp;+&nbsp;AES-256-GCM encryption and trust-on-first-use peer pinning (**F2**). Sitting alongside the five-feature arc is a complete rewrite of the screensaver as a video-driven two-phase forge animation: every visible character gets sucked into a glowing crucible, then a real blacksmith video loops as truecolor ASCII with sparks and smoke and a top-left identity panel.
+
+### F1 &mdash; Signed skill provenance
+
+Every skill carries a signed lineage ledger. When a skill is created, modified, or imported, the runtime writes a `provenance.jsonl` entry signed by an ed25519 keypair at `~/.anvil/keys/skill_signing.ed25519` (mode 0600 on Unix). The verifier walks the ledger forward from genesis on every load; a broken chain or signature mismatch surfaces as a P0 warning in `/skill why <name>`. Trust-on-first-use: an imported skill's first signature pins the agent's pubkey; subsequent updates must match. New headless commands `anvil skill why`, `anvil skill pubkey`, `anvil skill verify`.
+
+### F4 &mdash; Anti-skills (negative learning)
+
+The curator now records anti-skills: failure modes that were proposed and rejected, or skills that scored worse than baseline in A/B evaluation. These live as `MemoryType::AntiPattern` entries with their own retrieval-order block in prompt assembly. Anti-skills do NOT block the skill they tag &mdash; they annotate. The proposal flow shows the matching anti-skill as a "you tried something similar on YYYY-MM-DD and it scored N% worse" footnote so the user can override with eyes open. Cross-session repeated-error detection is on the v2.2.21 roadmap.
+
+### F6 &mdash; Event-triggered routines
+
+Anvild routines accept event triggers in addition to cron schedules. Four trigger families: **FileWatch** (mtime change), **Webhook** (HTTP POST to `127.0.0.1:9876`, localhost-only by default), **Process** (named process start/exit), **Log** (regex match). The webhook listener is axum 0.8 over a 1-thread tokio runtime; it's a thin HTTP frontend over the same `WebhookRegistry` the daemon uses internally. Bind failures fall through to stderr and the daemon keeps polling routines without the HTTP front door &mdash; no hard dependency. `tick_routines()` is now a pure function pulled out of the daemon loop, taking explicit `&mut next_fire_cache` and `&mut event_watchers` arguments. Four integration tests cover the webhook fire path, disabled-routine GC, the Ask-mode proposal path, and schedule re-arming.
+
+### F3 &mdash; Curator A/B evaluation
+
+When a new skill is proposed (via review_fork or the routine-creator), the curator queues an A/B pass that runs both versions against a held-out task batch and records the score delta. Winners get promoted; losers go to the anti-skill pool (F4). Decisions surface in `REPORT.md` as an "A/B evaluations" section with 12-char short hashes for readability, and in `run.json` as a structured `ab_decisions` array. The harness is **additive, escalate-only**: a worse-scoring candidate cannot replace a better-scoring incumbent. Drift down requires explicit user override via `/skill restore <hash>`.
+
+### F2 &mdash; Cross-machine memory federation
+
+Memory entries can be encrypted, signed, and exchanged across devices on the same trust circle. **x25519** for ephemeral key agreement, **HKDF-SHA256** for per-entry key derivation, **AES-256-GCM** for symmetric encryption with a fresh `OsRng` nonce per call (never reused), **ed25519** for entry signatures (shared with F1), **trust-on-first-use** for peer pubkey pinning. CLI: `anvil memory sync`, `anvil memory peer add <pubkey>`, `anvil memory peer list`. The AnvilHub UI halves (F1 lineage panel + F2 `/v1/memory/sync` endpoint) ship in a follow-up AnvilHub deploy independent of the Rust binary.
+
+### Forge screensaver &mdash; video-driven two-phase
+
+The legacy multi-phase furnace screensaver is replaced by a video-driven design. **Phase 1 &mdash; Suction (~3.2 s)**: every non-space cell from the captured TUI buffer animates toward the warmest cell of the first forge frame, easing in with a cubic curve, picking up a small spiral on approach, and heating up the heat-ramp as it nears the crucible. Closes with an 8-frame bright pulse. **Phase 2 &mdash; Forge loop (until wake)**: plays back a baked blacksmith video (145 frames, 240&times;72 cells) at ~24 fps as truecolor ASCII. Sparks emit from the forge anchor; smoke rises above it; a top-left identity box (`ANVIL / v2.2.20 / idle since HH:MM`) emits 0..2 sparks per frame from its top-left corner; a bottom-center `[ press any key to wake ]` hint pulses at 2.5 Hz.
+
+The asset pipeline is **pure-Rust at runtime**: the source mp4 is baked once into a 665 KB gzipped cell-grid bundle that's `include_bytes!`-d into the binary. No ffmpeg or H.264 decoder runs at build or run time of the released binary. Wake-key behavior matches the previous screensaver &mdash; any keypress or mouse event wakes; Ctrl-C / Ctrl-D still exits. Falls back to overlay-only (identity box + wake hint on black) if the baked asset is missing or corrupt &mdash; the binary always launches.
+
+### Polishing
+
+Three parallel-test flakes in `crates/commands/src/agents.rs` + `handlers.rs` are pinned to a `serial_test::serial(anvil_config_home)` token, eliminating the 2-3-in-15 flake rate. The unwired `--layer` arg was removed from the `/memory sync` SubcommandSpec. **3061 tests passing, 0 failing** across runtime + commands + anvil-cli; up from 2922 at the start of this arc (+139 new tests).
+
+### Compatibility
+
+v2.2.20 is a drop-in upgrade from v2.2.19. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. The skill signing keypair is created on first use; existing skills are pinned at v2.2.20-genesis. Anvild webhook listener is localhost-only by default and disabled if `anvild` itself isn't running &mdash; no behavior change for users who don't enable routines.
+
+### Install
+
+Seven platforms, SHA256-verified, single binary, no runtime required.
+
+---
+
 ## What's new in v2.2.19 &mdash; 18 Languages, Memory Cohesion Complete, Web MCP Builder
 
 **v2.2.19 closes two long-running arcs.** The internationalization commitment that started in v2.2.18 ships in 18 languages with a wizard picker, live runtime switching, OS locale auto-detect on first launch, and a soft drift gate so any locale that diverges from `en` is visible immediately. The seven-layer memory architecture promised since v2.2.14 finally has every layer wired end-to-end &mdash; including the three RED layers (Semantic, Reflective, Cache) that were still stubs. Plus a new web-based MCP Builder lands on AnvilHub at [/build](https://anvilhub.culpur.net/build), a full Claude Code parity sweep (CC v2.1.144 → v2.1.146) lands 15 concrete fixes including 3 P0 security/correctness items, and the release pipeline grows per-phase START/OK/FAIL gates that catch silent exits like the v2.2.18 Phase&nbsp;6 incident.
