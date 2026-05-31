@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.19-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.20-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -284,7 +284,9 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; **Web viewer &mdash; full TUI parity (#680, #681, #683, #692, #695, #696)** &mdash; `passage` relay and AnvilHub viewer get a tab-routing rewrite matching the TUI&rsquo;s per-tab architecture. `/tab new`, `/tab rename`, `/tab switch`, `Ctrl+T`. Per-tab `user_message` and `slash_result` routing (no more cross-tab leakage). Default layout `vertical_split + tabs`. Cost-type chip (OAuth / local / cloud) instead of fabricated dollar figures. Cached + broadcast `MemorySnapshot` so the memory rail populates on reconnect. `SessionMeta` carries `context_max` and `build_sha`. Default-allow forwarding for unhandled viewer messages. Collapsible tool cards. Always-visible slash bar with `Cmd+K` palette.
 - &#10003; **Autocompact threshold fix (#697 CRITICAL)** &mdash; `maybe_auto_compact` was measuring against `max_output_tokens` (8K&ndash;16K) instead of `context_window` (64K&ndash;200K+). Sessions on long-context models were compacting at roughly 6K input tokens. Now reads `session.context_window` and ignores `max_output_tokens` entirely. New OTel span `anvil.autocompact.threshold` emits `context_window`, `used_tokens`, `threshold_pct`, `triggered`. `/compact why` prints the full threshold calculation.
 - &#10003; **Mouse capture default OFF (#696 P4)** &mdash; mouse capture disabled by default on all platforms, restoring terminal copy-paste (Cmd+C / Ctrl+Shift+C / Ctrl+C) for users who hadn&rsquo;t opted in. One-time first-run toast shows `/config mouse_capture true` and `--mouse`. `mouse_capture_default_off_regression` test asserts the default at the type level.
-- &#10003; **Bracketed paste in textarea modals (#685)** &mdash; multi-line paste now works inside `/mcp builder` and other wizard textareas. Wires `tui::paste::handle_paste` into the textarea event loop with `\r\n` &rarr; `\n` normalization.
+- &#10003; **Bracketed paste in textarea modals (#685)** &mdash; multi-line paste now works inside `/mcp builder` and other wizard textareas. Wires `tui::paste::handle_paste` into the textarea event loop with `
+` &rarr; `
+` normalization.
 - &#10003; **Per-tab relay routing (#696)** &mdash; `relay::user_message` and `relay::slash_result` route to active `Tab.id` rather than broadcasting. Concurrent inference in two tabs no longer leaks between them.
 - &#10003; **OAuth / local / cloud cost label (#696 P1)** &mdash; TUI status footer shows a semantic cost-type chip instead of a fabricated dollar amount for providers where per-token cost is not knowable.
 - &#10003; **`MemorySnapshot` rail parity (#695)** &mdash; vertical-split rail uses `layouts::common` helpers instead of a hand-rolled draw path. Same fidelity as the classic inline view.
