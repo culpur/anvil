@@ -77,110 +77,41 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
-## What's new in v2.2.20 &mdash; Signed Provenance, Anti-Skills, Event Routines, A/B Curator, Memory Federation + Forge Screensaver
+## What's new in v2.2.21 &mdash; Durable Daemon Sessions, the Relay Bridge, and the Big Modularization
 
-**v2.2.20 is the five-feature arc.** Anvil's self-improvement foundation grows up: every skill now carries a signed ed25519 lineage ledger (**F1**), the curator learns from failures and not just successes via the new anti-skill pool (**F4**), routines can fire on FileWatch / Webhook / Process / Log events in addition to schedules (**F6**), the curator runs A/B passes between candidate skill versions with winner promotion + report surfacing (**F3**), and memory can finally federate across machines with x25519&nbsp;+&nbsp;HKDF-SHA256&nbsp;+&nbsp;AES-256-GCM encryption and trust-on-first-use peer pinning (**F2**). Sitting alongside the five-feature arc is a complete rewrite of the screensaver as a video-driven two-phase forge animation: every visible character gets sucked into a glowing crucible, then a real blacksmith video loops as truecolor ASCII with sparks and smoke and a top-left identity panel.
+**v2.2.21 is the largest single-release reshape since v2.0.** Session execution moves out of the TUI and into the `anvild` daemon &mdash; close your terminal and the session keeps running; reopen anywhere and reattach. A browser can pair to a live session over an encrypted relay and drive it. Underneath, the biggest modularization pass in project history split the codebase into **31 focused crates**, three of the planned performance wins landed, and a cluster of P0 daemon bugs were found and fixed under live verification. FreeBSD x86_64 and NetBSD x86_64 now ship as prebuilt binaries.
 
-### F1 &mdash; Signed skill provenance
+### Durable daemon sessions (D.1&ndash;D.4)
 
-Every skill carries a signed lineage ledger. When a skill is created, modified, or imported, the runtime writes a `provenance.jsonl` entry signed by an ed25519 keypair at `~/.anvil/keys/skill_signing.ed25519` (mode 0600 on Unix). The verifier walks the ledger forward from genesis on every load; a broken chain or signature mismatch surfaces as a P0 warning in `/skill why <name>`. Trust-on-first-use: an imported skill's first signature pins the agent's pubkey; subsequent updates must match. New headless commands `anvil skill why`, `anvil skill pubkey`, `anvil skill verify`.
+Session execution now lives in `anvild`, not the TUI process. The session protocol contract (`SessionRequest` / `SessionEvent`) defines the on-wire types; a `SessionActor` hosts the conversation inside the daemon; the TUI is repointed as a thin viewer over a Unix socket. Close the TUI &mdash; the session keeps running. Reopen it, or attach from elsewhere, and you reattach to the same live session. Crash the daemon, restart it, and the session replays from the journal. Multi-client attach means more than one viewer can watch the same session, with peer-attach / peer-detach events.
 
-### F4 &mdash; Anti-skills (negative learning)
+### Named, multi-tab sessions (#911)
 
-The curator now records anti-skills: failure modes that were proposed and rejected, or skills that scored worse than baseline in A/B evaluation. These live as `MemoryType::AntiPattern` entries with their own retrieval-order block in prompt assembly. Anti-skills do NOT block the skill they tag &mdash; they annotate. The proposal flow shows the matching anti-skill as a "you tried something similar on YYYY-MM-DD and it scored N% worse" footnote so the user can override with eyes open. Cross-session repeated-error detection is on the v2.2.21 roadmap.
+Daemon sessions became first-class and human-addressable. The session manifest gained a `name` and `last_active_at_ns`; a `Rename` IPC verb carries it on the wire. The TUI drives the full lifecycle &mdash; `/session list|rename|kill` over one-shot IPC, then `/session new|open|load|close` mapped onto TUI tabs with per-tab daemon routing. The capstone is **same-cwd auto-resume**: reopen Anvil in a directory that already has a live daemon session and it reattaches instead of starting cold.
 
-### F6 &mdash; Event-triggered routines
+### Relay bridge &mdash; attach from the browser (#914, #917, #919&ndash;#921)
 
-Anvild routines accept event triggers in addition to cron schedules. Four trigger families: **FileWatch** (mtime change), **Webhook** (HTTP POST to `127.0.0.1:9876`, localhost-only by default), **Process** (named process start/exit), **Log** (regex match). The webhook listener is axum 0.8 over a 1-thread tokio runtime; it's a thin HTTP frontend over the same `WebhookRegistry` the daemon uses internally. Bind failures fall through to stderr and the daemon keeps polling routines without the HTTP front door &mdash; no hard dependency. `tick_routines()` is now a pure function pulled out of the daemon loop, taking explicit `&mut next_fire_cache` and `&mut event_watchers` arguments. Four integration tests cover the webhook fire path, disabled-routine GC, the Ask-mode proposal path, and schedule re-arming.
+`anvil routined relay start` pairs a browser viewer to a live daemon session over a passage WebSocket and auto-opens it; pairing returns a full PIN. #917 (P0) fixed a daemon-side tool-dispatch name-drift bug where every tool fell through to a stub &mdash; daemon-hosted sessions now execute real tools. #919 adds viewer UX (input echo, thinking spinner, live context). #920 wires `/permissions` end-to-end over the relay. #921 adds a ring recorder so resume/replay carries the actual conversation &mdash; a viewer pairing mid-session sees history, not a blank pane.
 
-### F3 &mdash; Curator A/B evaluation
+### Performance &mdash; pooling, parallel tools, faster search (#898, #899, #900)
 
-When a new skill is proposed (via review_fork or the routine-creator), the curator queues an A/B pass that runs both versions against a held-out task batch and records the score delta. Winners get promoted; losers go to the anti-skill pool (F4). Decisions surface in `REPORT.md` as an "A/B evaluations" section with 12-char short hashes for readability, and in `run.json` as a structured `ab_decisions` array. The harness is **additive, escalate-only**: a worse-scoring candidate cannot replace a better-scoring incumbent. Drift down requires explicit user override via `/skill restore <hash>`.
+A shared `reqwest::Client` across the workspace ends the per-call TLS handshake + DNS lookup and keeps HTTP/2 connections warm (#898). Read-only tools now run in parallel: when the model requests two or more read-only tools in one batch (`read_file`, `grep_search`, `glob_search`, web fetches), they fan out across worker threads and merge back in original order; mutating tools still run sequentially through the permission gate (#899). `grep_search` is now gitignore-aware and streams &mdash; it walks and searches simultaneously, respects `.gitignore`, and skips binaries, so it no longer drowns in `node_modules/` or `target/` (#900).
 
-### F2 &mdash; Cross-machine memory federation
+### The big modularization &mdash; 31 crates
 
-Memory entries can be encrypted, signed, and exchanged across devices on the same trust circle. **x25519** for ephemeral key agreement, **HKDF-SHA256** for per-entry key derivation, **AES-256-GCM** for symmetric encryption with a fresh `OsRng` nonce per call (never reused), **ed25519** for entry signatures (shared with F1), **trust-on-first-use** for peer pubkey pinning. CLI: `anvil memory sync`, `anvil memory peer add <pubkey>`, `anvil memory peer list`. The AnvilHub UI halves (F1 lineage panel + F2 `/v1/memory/sync` endpoint) ship in a follow-up AnvilHub deploy independent of the Rust binary.
+`anvil-cli` was split into `anvil-ollama`, `anvil-mcp-builder`, `anvil-tui`, and `anvil-wizard`. Thirteen crates were extracted from `runtime` across two rounds &mdash; `anvil-vault`, `anvil-journal`, `anvil-permissions`, `anvil-oauth`, `anvil-hooks`, `anvil-mcp`, `anvil-memory`, `anvil-curator`, `anvil-search`, `anvil-relay`, `anvil-reflection`, `anvil-skill-chain-exec`, `anvil-routines` &mdash; with intermediate crates breaking the dependency cycles. `runtime` shrank from roughly 70K to about 57.7K lines; the workspace now has **31 crates**. Supporting work: an `anvil-e2e` integration-test crate and compile-time locale-key drift detection.
 
-### Forge screensaver &mdash; video-driven two-phase
+### Daemon hardening &mdash; P0 fixes (#902&ndash;#917)
 
-The legacy multi-phase furnace screensaver is replaced by a video-driven design. **Phase 1 &mdash; Suction (~3.2 s)**: every non-space cell from the captured TUI buffer animates toward the warmest cell of the first forge frame, easing in with a cubic curve, picking up a small spiral on approach, and heating up the heat-ramp as it nears the crucible. Closes with an 8-frame bright pulse. **Phase 2 &mdash; Forge loop (until wake)**: plays back a baked blacksmith video (145 frames, 240&times;72 cells) at ~24 fps as truecolor ASCII. Sparks emit from the forge anchor; smoke rises above it; a top-left identity box (`ANVIL / v2.2.20 / idle since HH:MM`) emits 0..2 sparks per frame from its top-left corner; a bottom-center `[ press any key to wake ]` hint pulses at 2.5 Hz.
+The daemon execution path was load-bearing for the first time, and live verification surfaced a cluster of P0s &mdash; every one fixed: wiring the real provider runtime into the daemon (#905), connecting the attach forwarder task (#906, with an e2e gate in #910), binding REPL session I/O to the long-lived runtime (#903), reading the correct PID file (#904), and a `/heal` probe that checks actual process liveness (#902). Auto-compaction now actually compacts (#913). And the security P0: anvild binary downgrade-prevention (#827).
 
-The asset pipeline is **pure-Rust at runtime**: the source mp4 is baked once into a 665 KB gzipped cell-grid bundle that's `include_bytes!`-d into the binary. No ffmpeg or H.264 decoder runs at build or run time of the released binary. Wake-key behavior matches the previous screensaver &mdash; any keypress or mouse event wakes; Ctrl-C / Ctrl-D still exits. Falls back to overlay-only (identity box + wake hint on black) if the baked asset is missing or corrupt &mdash; the binary always launches.
+### Quality
 
-### Polishing
-
-Three parallel-test flakes in `crates/commands/src/agents.rs` + `handlers.rs` are pinned to a `serial_test::serial(anvil_config_home)` token, eliminating the 2-3-in-15 flake rate. The unwired `--layer` arg was removed from the `/memory sync` SubcommandSpec. **3061 tests passing, 0 failing** across runtime + commands + anvil-cli; up from 2922 at the start of this arc (+139 new tests).
+**3,926 tests passing, zero failures.** Several latent shared-state test races (process-global locale, env-var, and atomic flags that only flaked under specific parallel scheduling) were tracked down and serialized. IPC gained a dual-transport abstraction (Unix sockets + Windows named pipes) so the daemon runs natively on all seven platforms.
 
 ### Compatibility
 
-v2.2.20 is a drop-in upgrade from v2.2.19. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. The skill signing keypair is created on first use; existing skills are pinned at v2.2.20-genesis. Anvild webhook listener is localhost-only by default and disabled if `anvild` itself isn't running &mdash; no behavior change for users who don't enable routines.
-
-### Install
-
-Seven platforms, SHA256-verified, single binary, no runtime required.
-
----
-
-## What's new in v2.2.19 &mdash; 18 Languages, Memory Cohesion Complete, Web MCP Builder
-
-**v2.2.19 closes two long-running arcs.** The internationalization commitment that started in v2.2.18 ships in 18 languages with a wizard picker, live runtime switching, OS locale auto-detect on first launch, and a soft drift gate so any locale that diverges from `en` is visible immediately. The seven-layer memory architecture promised since v2.2.14 finally has every layer wired end-to-end &mdash; including the three RED layers (Semantic, Reflective, Cache) that were still stubs. Plus a new web-based MCP Builder lands on AnvilHub at [/build](https://anvilhub.culpur.net/build), a full Claude Code parity sweep (CC v2.1.144 → v2.1.146) lands 15 concrete fixes including 3 P0 security/correctness items, and the release pipeline grows per-phase START/OK/FAIL gates that catch silent exits like the v2.2.18 Phase&nbsp;6 incident.
-
-### Internationalization &mdash; 18 locales
-
-The TUI, wizard, slash-command output, and remote-control viewer all flow through `rust-i18n` v4 in Rust and the new `viewer.locales.js` runtime in the browser. **Tier-1** ships English, Spanish, Simplified Chinese, French, Brazilian Portuguese, Russian, Japanese, German &mdash; 264 keys each. **Tier-2** adds Korean, Italian, Turkish, Vietnamese, Polish, Indonesian, Dutch, Swedish, Norwegian Bokmål, Ukrainian. Locale selection persists to `~/.anvil/config.json`, falls back to `$LANG` on first launch, and applies immediately to every wizard step.
-
-The in-TUI `/configure` menu has a Language Picker submenu rendering all 18 locales in their native script (한국어, Русский, 中文, العربية support is excluded by scope &mdash; RTL ships in a future release). The viewer ships 176 fully-wired keys covering chrome plus `vault.*` (entry forms, master-key modal) and `config.*` (SSH, Database, Plugins+MCP, Layout, Status-line editor) panels &mdash; all routed through `data-i18n-key` attributes that the live re-render walker translates on locale switch with no page reload.
-
-### Seven-layer memory &mdash; all GREEN
-
-The 2026-05-21 cohesion audit found that Layer 3 (Semantic), Layer 6 (Reflective), and Layer 7 (Cache) were still partial. v2.2.19 closes all three.
-
-- **Layer 3 &mdash; Semantic.** `/memory promote <nomination-id>` now actually persists nominated facts to disk. The v2.2.14 stub flipped a status flag without ever calling `MemoryManager::save()` &mdash; nominated facts never reached `ANVIL.md`. The full chain now writes the fact and appends provenance comments (`# nominated_at`, `# source: nomination/<id>`) before marking the nomination accepted. New `--target <file>` flag routes a nomination to a specific file with relative, absolute, and `~`-expanded path support.
-- **Layer 7 &mdash; Cache.** The file-cache path-discovery bug is fixed: previously `memory_budget` checked a directory that no longer exists in the project-scoped layout, so cache counts always reported zero. Now uses `FileCacheManager::new(cwd)` to discover the actual per-project path. `/memory show cache` enumerates file-cache, command-cache, and QMD-cache stats; `/memory prune cache --dry-run` walks both `FileCacheManager` and `CommandCacheManager` for stale candidates without mutating anything.
-- **Layer 1, 2, 4 &mdash; live introspection.** `/memory layer 1` renders a live snapshot of the working-memory inventory via `PromptSectionsExt::iter_by_kind()`. `/memory show episodic` unifies daily summaries, history archives, and workspace sessions; `/memory prune episodic` adds TTL-based retention with a trash-bin safety net so candidates move to `~/.anvil/trash/<unix-ts>/...` rather than being deleted. `/memory show procedural` consolidates GoalManager state, on-disk skills, bundled skills, and CronManager schedule into one view.
-
-### AnvilHub `/build` page + `anvil-mcp-builder` micro-service
-
-Anvil's `/mcp builder` TUI wizard from v2.2.18 now has a web counterpart. The `anvil-mcp-builder` micro-service runs at `127.0.0.1:4090` on the AnvilHub host and exposes three endpoints: `POST /api/builder/spec` (LLM-generated spec from free-text prompt, SSE-streamed response), `POST /api/builder/generate` (turns spec into a base64 tarball &mdash; Node.js, TypeScript, or Python templates), and `POST /api/builder/sandbox` (extracts the tarball and runs `anvil-sandbox-runner` network-cut).
-
-**Security.** The operator OAuth token is loaded from the Anvil vault at startup, never from `.env`. The service exits 1 if vault is locked or the entry is missing; token is cached in process memory only and redacted from all log output. The sandbox endpoint &mdash; which runs `npm install` / `pip install` per request &mdash; is gated on publisher standing: user must be in the `anvilhub-publishers` Authentik group OR have at least one HubPackage already published. The check hits AnvilHub's `/api/users/<email>/publisher-status` with a 5-minute Map cache and falls closed on backend error.
-
-### CC parity sweep &mdash; v2.1.144 → v2.1.146
-
-A complete CC parity audit covered the 4-day window since v2.1.143 across 3 CC releases. 15 fixes filed and shipped this release &mdash; 3 P0, 5 P1, 7 P2. Highlights:
-
-- **P0 &mdash; MCP pagination (CC v2.1.144-B6 / v2.1.146-B2).** The MCP client now consumes the full `nextCursor` / `has_more` pagination chain for `tools/list`, `resources/list`, `resources/templates/list`, and `prompts/list`. Previously MCP servers with paginated responses had everything beyond page 1 silently dropped.
-- **P0 &mdash; Spinner/elapsed-time freeze (CC v2.1.145-B3).** The TUI render queue wakes from a wall-clock timer in addition to input events. After a terminal refocus or resize, the spinner and elapsed-time display no longer freeze until next keypress.
-- **P0 SECURITY &mdash; MCP `permissions.allow` not honored (CC community #61077).** `permissions.allow` rules with patterns like `mcp__server__tool` or `mcp__server__*` are now consulted at MCP tool dispatch time. Previously the allowlist was loaded but the MCP dispatch path bypassed it and always prompted.
-- **P1 SECURITY &mdash; Bash env-var assignment permission bypass (CC v2.1.145-B1).** Bash patterns of the form `KEY=VALUE command` are now decomposed and the command portion checked against the allowlist.
-- **P1 &mdash; Skill fork-context recursion guard (CC v2.1.145-B4).** A skill cannot transitively invoke itself; the recursion check uses the full skill ancestry chain, not just the immediate parent.
-- **P1 &mdash; Resume session model preservation (CC community #61068).** `anvil --resume` restores the model that was active when the session was saved, not the global default.
-
-Plus 7 P2 fixes covering API startup timeout, mime-type fallback in `Read`, `/branch` history recovery post-EnterWorktree, MCP image fallback for unsupported MIME, skill watcher FD exhaustion prevention, theme color reset on first `/session rename`, and EnterWorktree MCP config preservation.
-
-### `anvild` &mdash; separate process name on 7 platforms
-
-The background OAuth-refresh + routines daemon now runs as `anvild`, not `anvil daemon foreground`. A new `anvild_path_from(anvil_binary)` helper rewrites the binary path used by every supervisor unit &mdash; macOS LaunchAgent, Linux user-systemd, FreeBSD/NetBSD rc.d, Windows Task Scheduler &mdash; plus the in-TUI `daemon::spawn_detached` fallback. `ps -ef | grep daemon` now shows `anvild` rather than masquerading as the foreground TUI binary. `install.sh` and `install.ps1` create the `anvild` symlink (Unix) or hardlink (Windows NTFS) alongside the main binary.
-
-### Wizard P0 bundle
-
-Three wizard bugs surfaced during preview-binary testing and landed before tag:
-
-- **Ollama choice modal clipped (#767).** `ConfirmModal` had a hardcoded 9-row height. On the Ollama wizard's "already_running" modal where the body embeds a multi-model list, body wrap consumed all 7 inner rows and the Yes/No buttons + key hint were clipped invisible. Now derives `modal_h` from `wrap_body(body, width).len() + 6` so buttons stay visible regardless of body length. New `Ctrl+B` Back keybind on Choice + Confirm modals.
-- **Daemon-install prompt broke alt-screen (#768).** The "Install anvild as background service?" prompt was running as `println!` + `io::stdin().read_line()` from `anvild_bootstrap::ensure_anvild_for_session` *after* the wizard exited its alt-screen, breaking the rule that the wizard never drops to CLI. New `wizard_daemon::run_daemon_step` runs inside the same alt-screen as Step&nbsp;8 of 9 with three choices (Install / Ask later / Never) and persists `anvild.autostart` to `config.json`.
-- **Vertical-split column selection hint (#769).** A normal click-drag in the deck column pulls in left-rail text because terminal emulators select at pixel coordinates with no awareness of Anvil's columns. v2.2.19 renders a 1-line hint above the BUILD section in the rail bottom group: `⌥+drag deck only` on macOS, `Alt+drag deck only` on Linux/Windows/BSD. i18n keys added across all 18 supported locales.
-
-### Release-pipeline hardening (#714, #730)
-
-`scripts/release.sh` now wraps every phase in `step "PN: <description>"` + `ok "PN"` / `fail "PN"` markers. The new `scripts/release-helpers/step-gates.sh` provides primitives + JSON status persistence + an EXIT-trap silent-exit detector that marks any RUNNING phase as FAIL on premature script exit. This closes the v2.2.18 Phase&nbsp;6 silent-exit class of bugs &mdash; the `set +e` / `SSH_RC=$?` / `set -e` pattern now wraps every SSH call so heredoc-style remote work surfaces its exit code instead of cascading into a `set -e` silent kill. `scripts/test-release-gates.sh` is the regression harness; runs release.sh in `--dry-run` mode and asserts every expected phase fires START + terminal marker exactly once.
-
-### Quality bar
-
-Net +50 tests across the workspace: i18n drift gate + picker invariant + 8 locale-load tests, +9 episodic / +6 promote / +6 cache / +5 working / +3 procedural for memory cohesion, +35 across all 15 CC-parity fixes, +7 publisher-standing tests in the new micro-service. One pre-existing flake fixed: `routines::proposal::drop_pending_only_targets_named_routine` now uses `tempfile::TempDir` for guaranteed per-thread isolation.
-
-### Compatibility
-
-v2.2.19 is a drop-in upgrade from v2.2.18. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. New locale key in `config.json` is optional (defaults to `$LANG` then `en`). The `anvild` rename is supervisor-unit-level only; existing daemons keep running until next restart, at which point the new unit definitions take effect.
+v2.2.21 is a drop-in upgrade from v2.2.20. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. The daemon-default execution path is opt-in for now: sessions run in-process unless you pass `anvil --daemon`. If you have stale `anvild` processes from binaries you've moved or trashed, kill them before upgrading &mdash; `anvil --update` refuses to run while stale daemons are alive and prints the exact PIDs.
 
 ---
 
@@ -300,6 +231,32 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 
 
 
+
+### v2.2.21 &mdash; June 15, 2026
+
+**Durable Daemon Sessions, the Relay Bridge, and the Big Modularization.**
+
+- &#10003; **Durable daemon sessions (D.1&ndash;D.4, #841&ndash;#844)** &mdash; session execution moves out of the TUI into `anvild`. `SessionRequest` / `SessionEvent` define the on-wire contract; a `SessionActor` hosts the conversation in the daemon; the TUI is a thin viewer over a Unix socket. Close the TUI and the session keeps running; reopen or attach from elsewhere and reattach to the same live session; crash and restart the daemon and the session replays from the journal. Multi-client attach with peer-attach / peer-detach events.
+- &#10003; **Named, multi-tab sessions + same-cwd auto-resume (#911)** &mdash; the session manifest gains `name` + `last_active_at_ns`; a `Rename` IPC verb carries it. `/session list|rename|kill` over one-shot IPC; `/session new|open|load|close` mapped onto TUI tabs with per-tab daemon routing. Reopen Anvil in a directory with a live daemon session and it reattaches instead of starting cold.
+- &#10003; **Relay bridge &mdash; attach from the browser (#914, #917, #919&ndash;#921)** &mdash; `anvil routined relay start` pairs a browser viewer to a live session over a passage WebSocket and auto-opens it. #917 (P0) fixed a daemon tool-dispatch name-drift bug where every tool hit a stub. #919 viewer UX (input echo, thinking spinner, live context). #920 `/permissions` end-to-end over the relay. #921 ring recorder so resume/replay carries the actual conversation.
+- &#10003; **Performance: shared HTTP client + parallel tools + gitignore search (#898, #899, #900)** &mdash; one shared `reqwest::Client` ends per-call TLS handshakes (#898); read-only tools in a batch fan out across worker threads and merge in original order, mutating tools still gated sequentially (#899); `grep_search` walks-and-searches simultaneously, respects `.gitignore`, and skips binaries (#900).
+- &#10003; **The big modularization &mdash; 31 crates (#867, #873&ndash;#896)** &mdash; `anvil-cli` split into `anvil-ollama` / `anvil-mcp-builder` / `anvil-tui` / `anvil-wizard`; thirteen crates extracted from `runtime` (`anvil-vault`, `anvil-journal`, `anvil-permissions`, `anvil-oauth`, `anvil-hooks`, `anvil-mcp`, `anvil-memory`, `anvil-curator`, `anvil-search`, `anvil-relay`, `anvil-reflection`, `anvil-skill-chain-exec`, `anvil-routines`) with intermediate crates breaking cycles. `runtime` shrank ~70K &rarr; ~57.7K lines; workspace now 31 crates. Plus an `anvil-e2e` test crate and compile-time locale-key drift detection.
+- &#10003; **Daemon hardening &mdash; P0 fixes (#902&ndash;#917, #827)** &mdash; wire the real provider runtime into the daemon (#905); connect the attach forwarder task (#906, e2e gate #910); bind REPL session I/O to the long-lived runtime (#903); read the correct PID file (#904); `/heal` checks actual process liveness (#902); auto-compaction now actually compacts (#913); anvild binary downgrade-prevention (#827, P0 security).
+- &#10003; **3,926 tests passing, zero failures** &mdash; latent shared-state test races (process-global locale, env-var, atomic flags) tracked down and serialized. IPC gained a dual-transport abstraction (Unix sockets + Windows named pipes) so the daemon runs natively on all seven platforms.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
+
+### v2.2.20 &mdash; May 31, 2026
+
+**Signed Provenance, Anti-Skills, Event Routines, A/B Curator, Memory Federation + Forge Screensaver.**
+
+- &#10003; **F1 &mdash; Signed skill provenance** &mdash; every skill carries a signed `provenance.jsonl` ledger keyed by an ed25519 keypair at `~/.anvil/keys/skill_signing.ed25519` (0600). The verifier walks the ledger from genesis on every load; a broken chain surfaces as a P0 in `/skill why <name>`. Trust-on-first-use pins an imported skill's pubkey. New `anvil skill why|pubkey|verify`.
+- &#10003; **F4 &mdash; Anti-skills (negative learning)** &mdash; the curator records failure modes as `MemoryType::AntiPattern` entries with their own retrieval-order block. Anti-skills annotate rather than block; the proposal flow shows a "you tried something similar on YYYY-MM-DD and it scored N% worse" footnote.
+- &#10003; **F6 &mdash; Event-triggered routines** &mdash; anvild routines accept FileWatch / Webhook / Process / Log triggers in addition to cron. Webhook listener is axum 0.8, localhost-only by default. `tick_routines()` pulled out as a pure function; four integration tests cover fire/GC/Ask/re-arm.
+- &#10003; **F3 &mdash; Curator A/B evaluation** &mdash; new skills run an A/B pass against a held-out batch; winners promote, losers go to the anti-skill pool. Additive, escalate-only: a worse candidate cannot replace a better incumbent. Surfaced in `REPORT.md` + `run.json` (`ab_decisions`).
+- &#10003; **F2 &mdash; Cross-machine memory federation** &mdash; x25519 key agreement, HKDF-SHA256 derivation, AES-256-GCM (fresh nonce per call), ed25519 signatures, trust-on-first-use peer pinning. `anvil memory sync|peer add|peer list`.
+- &#10003; **Forge screensaver** &mdash; video-driven two-phase animation; the source mp4 is baked once into a 665 KB gzipped cell-grid bundle `include_bytes!`-d into the binary, no ffmpeg at build or run time. Falls back to overlay-only if the asset is missing.
+- &#10003; **3,061 tests passing, 0 failing** &mdash; up from 2,922 at the start of the arc (+139). Three `crates/commands/` parallel-test flakes pinned to a `serial_test::serial` token.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.19 &mdash; May 22, 2026
 
