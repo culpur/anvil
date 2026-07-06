@@ -92,6 +92,29 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 
 
+### v2.2.24 &mdash; July 6, 2026
+
+**The Stability &amp; xAI Release.**
+
+- &#10003; **Sessions connect reliably** &mdash; fixed a daemon crash that dropped sessions on connect (`early eof`); the provider runtime is now shut down off the async worker so sessions start, run, and tear down cleanly. An older daemon can no longer shadow a newer build (build-timestamp recency guard).
+- &#10003; **Text selection copies from the right place** &mdash; drag-to-copy now starts exactly at your cursor even when lines above it wrap, with correct wide/emoji-character handling.
+- &#10003; **xAI / Grok refresh + Live Search** &mdash; `grok` targets grok-4.3, retired ids removed, grok-build-0.1 added, and Grok Live Search via the `x_search` Responses-API tool (`ANVIL_XAI_LIVE_SEARCH=1`).
+- &#10003; **Sandbox policy gate** &mdash; `sandbox.require = strict | preferred | off` with real macOS `sandbox-exec` seatbelt enforcement; the active backend shows in `anvil daemon status`.
+- &#10003; **AskUserQuestion over the daemon** &mdash; questions fan out over the relay so a daemon-attached or web viewer can answer, with an opt-in idle timeout. Sub-agent partial output is preserved with an `[incomplete response]` marker when a stream fails.
+- &#10003; **Terminal hygiene, paste, and the daemon-leak fix** &mdash; the terminal is restored on every exit (quit, Ctrl+C, panic); large pastes land once. Autostart is suppressed under test/headless, the singleton PID lock is atomic, an idle orphan self-exits, and `anvil daemon reap` clears runaway daemons.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
+
+### v2.2.23 &mdash; June 29, 2026
+
+**The Voice &amp; Reach Release.**
+
+- &#10003; **Voice entry** &mdash; `/voice` or `Ctrl+E` for live in-terminal dictation; words transcribe into the input box as you speak. Toggle on/off, `Ctrl+C` interrupts, type while recording. Cloud (your key) by default, or a local whisper.cpp backend the wizard can install.
+- &#10003; **Remote MCP servers** &mdash; Streamable HTTP/SSE transport (not just local stdio) with `anvil mcp login <server>` browser OAuth (PKCE, RFC 8414 discovery) + per-server refreshable tokens.
+- &#10003; **Claude-Code parity** &mdash; inline `!`-bash, `/config key=value`, `/permissions` denial reasons, `autoMode.classifyAllShell`, org model allow/deny, MEMORY.md compaction reminder, and a shared action spinner that labels every action.
+- &#10003; **Security &amp; login** &mdash; `sandbox.credentials` blocks commands from reading credential files or dumping secret env; destructive-command guards flag hard resets and force-cleans; `anvil login` runs the OAuth flow then launches straight into Anvil.
+- &#10003; **Routine email delivery** &mdash; a self-contained email path with a machine-bound system-secret store.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
+
 ### v2.2.22 &mdash; June 26, 2026
 
 **The Memory Release: a browsable/manageable memory system, `/local-control`, full web parity.**
