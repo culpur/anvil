@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.23-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.24-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -76,6 +76,10 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 *Perfect for pair programming, teaching, demos, monitoring long-running tasks, or coding from your phone while your workstation does the heavy lifting.*
 
 ---
+
+## What's new in v2.2.24 &mdash; The Stability &amp; xAI Release
+
+**v2.2.24 makes sessions connect reliably and brings xAI up to date.** A daemon crash that dropped sessions the instant you connected (`early eof`) is fixed &mdash; the provider runtime is now shut down off the async worker so sessions start, run, and tear down cleanly, and an older daemon can no longer shadow a newer build. Text selection now copies from **exactly** where your cursor is, even when lines above it wrap. xAI/Grok is refreshed to the current line: `grok` targets **grok-4.3**, the retired ids are gone, **grok-build-0.1** is available, and Grok's real-time **Live Search** is supported through an isolated Responses-API path. A new **sandbox policy gate** (`sandbox.require = strict | preferred | off`) with real **macOS seatbelt enforcement** lets you set an isolation floor. `AskUserQuestion` is now answerable over the daemon (with an opt-in idle timeout), a sub-agent's **partial output is preserved** when a stream fails, and the terminal is restored cleanly on every exit. Underneath: a daemon-leak fix (atomic singleton, orphan/idle self-exit, and a new `anvil daemon reap`) that stops runaway background processes.
 
 ## What's new in v2.2.22 &mdash; The Memory Release
 
