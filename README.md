@@ -6,7 +6,7 @@
 
 ### The only AI coding assistant that doesn't lock you in.
 
-[![Version](https://img.shields.io/badge/version-2.2.24-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![Version](https://img.shields.io/badge/version-2.2.25-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
@@ -77,6 +77,10 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.25 &mdash; The Security Hardening Release
+
+**v2.2.25 is a focused security patch** that closes fifteen findings from a deep, adversarially-verified audit of the codebase (no criticals). It strengthens the relay pairing model (the daemon now re-verifies pairing at the Rust layer before acting on any privileged message &mdash; CWE-306/862 &mdash; and the pairing-code attempt limit can no longer be reset by reconnecting, CWE-307), locks down Windows credential storage (owner-only ACLs on secret files + the daemon capability token, and a client-identity check on the named pipe &mdash; CWE-732/284), and hardens the sandbox (deny-by-default read access to credential directories + secret-env scrubbing, network-deny under `sandbox.require = strict`, and a consolidated macOS seatbelt profile &mdash; CWE-522/668/1059). The remote-MCP transport is now bounded (response and line size caps, CWE-400) and SSRF-guarded (URLs checked against their resolved IP, refusing private/link-local/metadata ranges by default, CWE-918). Rounding it out: owner-only secret and run directories (CWE-732/367), a normalization-hardened command reviewer (CWE-697), and an allowlisted `/perf` argument (CWE-77). No feature changes, no config migration; behavior with `sandbox.require = off` (the default) is byte-for-byte unchanged. **Recommended upgrade for every user.**
+
 ## What's new in v2.2.24 &mdash; The Stability &amp; xAI Release
 
 **v2.2.24 makes sessions connect reliably and brings xAI up to date.** A daemon crash that dropped sessions the instant you connected (`early eof`) is fixed &mdash; the provider runtime is now shut down off the async worker so sessions start, run, and tear down cleanly, and an older daemon can no longer shadow a newer build. Text selection now copies from **exactly** where your cursor is, even when lines above it wrap. xAI/Grok is refreshed to the current line: `grok` targets **grok-4.3**, the retired ids are gone, **grok-build-0.1** is available, and Grok's real-time **Live Search** is supported through an isolated Responses-API path. A new **sandbox policy gate** (`sandbox.require = strict | preferred | off`) with real **macOS seatbelt enforcement** lets you set an isolation floor. `AskUserQuestion` is now answerable over the daemon (with an opt-in idle timeout), a sub-agent's **partial output is preserved** when a stream fails, and the terminal is restored cleanly on every exit. Underneath: a daemon-leak fix (atomic singleton, orphan/idle self-exit, and a new `anvil daemon reap`) that stops runaway background processes.
@@ -91,6 +95,18 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 
 
+
+### v2.2.25 &mdash; July 8, 2026
+
+**The Security Hardening Release.**
+
+- &#10003; **Fifteen audit findings closed** &mdash; a deep, adversarially-verified security review (2 High, 6 Medium, 6 Low, 1 Info; no criticals). Recommended upgrade for all users; no feature changes, no config migration.
+- &#10003; **Relay pairing enforced locally** &mdash; the daemon re-verifies pairing at the Rust layer before acting on any privileged message (CWE-306/862); the pairing-code attempt limit can no longer be reset by reconnecting (CWE-307).
+- &#10003; **Windows credential storage locked down** &mdash; secret files and the daemon capability token get an owner-only ACL bound at creation, and the daemon named pipe verifies the connecting client's identity (CWE-732 / CWE-284).
+- &#10003; **Sandbox deny-by-default** &mdash; an active sandbox denies read access to credential directories and scrubs secret env; `sandbox.require = strict` denies outbound network; the macOS seatbelt profile is consolidated to one canonical implementation (CWE-522 / 668 / 1059).
+- &#10003; **Remote MCP bounded &amp; SSRF-guarded** &mdash; HTTP/SSE body and stdio line sizes are capped (CWE-400), and MCP URLs are checked against their resolved IP, refusing private/link-local/metadata ranges by default with an `ssrfAllowlist` opt-in (CWE-918).
+- &#10003; **Additional hardening** &mdash; owner-only secret and run directories (CWE-732/367), a normalization-hardened command reviewer (CWE-697), and an allowlisted `/perf` argument (CWE-77). Behavior with `sandbox.require = off` (the default) is byte-for-byte unchanged.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.24 &mdash; July 6, 2026
 
