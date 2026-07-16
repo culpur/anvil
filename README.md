@@ -77,6 +77,10 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.27 &mdash; The Mind Map Release
+
+**v2.2.27 gives Anvil a living, visual map of your thinking.** Run `/mindmap` (alias `/mm`) to open a daily-thoughts map &mdash; a collapsible outline you drive from the terminal, and a full interactive graph you drive from the web viewer (local-control and remote-control alike). The web canvas is force-directed: nodes are aware of each other and repel so they never overlap, you drag any node and its neighbors move out of the way, zoom has no lower limit so the whole map stays in view (and the wheel zooms about the cursor), and a click shows a node's full notes. Colorize nodes, pick link styles, attach images, and view a day / week / month / year of interconnections. Opt in and the map learns what Anvil learns: today's memories mirror into a tidy collapsible branch (tagged by type, tasks marked open/closed), a separate **Memory Graph** view projects your whole memory system as a color-coded graph with its `[[links]]`, and thought suggestions reach into QMD + memories. Also new: an opt-in **live-session overlay** that shows a calm "live session in browser" screen on the terminal while a web session drives it, with the full conversation intact when you wake it. Everything above is off by default and toggled in `/configure`.
+
 ## What's new in v2.2.25 &mdash; The Security Hardening Release
 
 **v2.2.25 is a focused security patch** that closes fifteen findings from a deep, adversarially-verified audit of the codebase (no criticals). It strengthens the relay pairing model (the daemon now re-verifies pairing at the Rust layer before acting on any privileged message &mdash; CWE-306/862 &mdash; and the pairing-code attempt limit can no longer be reset by reconnecting, CWE-307), locks down Windows credential storage (owner-only ACLs on secret files + the daemon capability token, and a client-identity check on the named pipe &mdash; CWE-732/284), and hardens the sandbox (deny-by-default read access to credential directories + secret-env scrubbing, network-deny under `sandbox.require = strict`, and a consolidated macOS seatbelt profile &mdash; CWE-522/668/1059). The remote-MCP transport is now bounded (response and line size caps, CWE-400) and SSRF-guarded (URLs checked against their resolved IP, refusing private/link-local/metadata ranges by default, CWE-918). Rounding it out: owner-only secret and run directories (CWE-732/367), a normalization-hardened command reviewer (CWE-697), and an allowlisted `/perf` argument (CWE-77). No feature changes, no config migration; behavior with `sandbox.require = off` (the default) is byte-for-byte unchanged. **Recommended upgrade for every user.**
@@ -95,6 +99,18 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 
 
+
+### v2.2.27 &mdash; July 16, 2026
+
+**The Mind Map Release.**
+
+- &#10003; **`/mindmap` (alias `/mm`)** &mdash; a daily-thoughts mind map, rendered as a collapsible outline in the TUI and a full interactive graph in the web viewer. One shared document; edits and captures sync live between the terminal and the web.
+- &#10003; **Force-directed web canvas** &mdash; nodes repel so they never overlap; free-drag a node and neighbors move aside; +/&minus;/fit zoom with no lower limit (whole map always in view) and cursor-anchored wheel zoom; click a node for its full notes.
+- &#10003; **Style &amp; time** &mdash; colorize nodes, choose link line-types, attach images, and view a day / week / month / year of interconnections.
+- &#10003; **Learns what Anvil learns (opt-in)** &mdash; today's memories mirror into a collapsible "memories" branch (tagged by type, tasks open/closed); a separate read-only **Memory Graph** view projects the whole memory system, grouped by kind with its `[[links]]`; thought suggestions reach into QMD + memories.
+- &#10003; **Live-session overlay (opt-in)** &mdash; when a web client drives the session, the terminal can show a calm "live session in browser" screen with live context/token counts; the full conversation is intact when you wake it.
+- &#10003; **Remote &amp; local viewers unified** &mdash; the AnvilHub remote-control viewer serves the same mind map and features as local-control.
+- &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64 (MSVC), FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.25 &mdash; July 8, 2026
 
