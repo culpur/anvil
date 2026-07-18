@@ -77,6 +77,10 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.28 &mdash; The Vivid Viewer
+
+**v2.2.28 makes the whole web viewer worth looking at.** The force-directed mind map from 2.2.27 keeps its layout and behavior, but now it sits on a lit stage &mdash; nodes glow in their own color, curved/dashed/dotted links pop, and a sparse ambient starfield (with the occasional shooting star) drifts behind the graph. The conversation is no longer a flat terminal dump: your turns and Anvil's render as distinct message cards, fenced code becomes its own glowing panel with a language chip, inline `code` and **bold** render properly, and long context collapses to a single chip you can expand. The seven-layer memory readout in the rail is now interactive &mdash; click any layer to open the **memory browser**, every stored memory a card with a colored type badge. Settings moved out of the scroll into their own floating **window**. And the atmosphere isn't web-only: a new **`/atmosphere on|off`** command carries the same starfield behind the terminal conversation, mind map, and memory (on by default). Everything here lives in the viewer's presentation layer &mdash; no engine, protocol, or crypto changes &mdash; so it's identical in commercial and FIPS builds.
+
 ## What's new in v2.2.27 &mdash; The Mind Map Release
 
 **v2.2.27 gives Anvil a living, visual map of your thinking.** Run `/mindmap` (alias `/mm`) to open a daily-thoughts map &mdash; a collapsible outline you drive from the terminal, and a full interactive graph you drive from the web viewer (local-control and remote-control alike). The web canvas is force-directed: nodes are aware of each other and repel so they never overlap, you drag any node and its neighbors move out of the way, zoom has no lower limit so the whole map stays in view (and the wheel zooms about the cursor), and a click shows a node's full notes. Colorize nodes, pick link styles, attach images, and view a day / week / month / year of interconnections. Opt in and the map learns what Anvil learns: today's memories mirror into a tidy collapsible branch (tagged by type, tasks marked open/closed), a separate **Memory Graph** view projects your whole memory system as a color-coded graph with its `[[links]]`, and thought suggestions reach into QMD + memories. Also new: an opt-in **live-session overlay** that shows a calm "live session in browser" screen on the terminal while a web session drives it, with the full conversation intact when you wake it. Everything above is off by default and toggled in `/configure`.
@@ -99,6 +103,18 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 
 
+
+### v2.2.28 &mdash; July 18, 2026
+
+**The Vivid Viewer.**
+
+- &#10003; **Mind map, lit up** &mdash; nodes glow in their own color, curved/dashed/dotted links pop, and a sparse ambient starfield (with occasional shooting stars) drifts behind the graph.
+- &#10003; **A conversation worth reading** &mdash; distinct message cards, fenced code as glowing panels with a language chip, real inline `code` and **bold**, and long context collapsed to an expandable chip.
+- &#10003; **Browse memory by layer** &mdash; the seven-layer rail readout is interactive; click a layer to open the memory browser, every memory a card with a colored type badge.
+- &#10003; **Settings in a window** &mdash; Configuration is a floating window (pinned header, clean scroll, aligned fields) instead of scrolling inline.
+- &#10003; **`/atmosphere on|off`** &mdash; the same starfield behind the terminal conversation, mind map, and memory; on by default, toggled by command.
+- &#10003; **One visual language** &mdash; rail, header, bars, composer, and top bar all share the glass-and-glow look; nothing moved.
+- &#10003; **Presentation-layer only** &mdash; no engine, protocol, or crypto changes, so the viewer is identical in commercial and FIPS builds.
 
 ### v2.2.27 &mdash; July 16, 2026
 
