@@ -128,6 +128,16 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 - &#10003; **Remote &amp; local viewers unified** &mdash; the AnvilHub remote-control viewer serves the same mind map and features as local-control.
 - &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64 (MSVC), FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
+### v2.2.26 &mdash; July 14, 2026
+
+**The Convergence Release.**
+
+- &#10003; **Learns your recurring workflows** &mdash; when you repeat the same multi-step workflow across sessions, Anvil offers to capture it as a reusable skill; run `/skills capture` to draft one from your exemplar (or `--never` to dismiss).
+- &#10003; **Corporate TLS proxies out of the box** &mdash; `ANVIL_TLS_TRUST=system` trusts your OS system trust store, so TLS-inspecting proxies (Zscaler, Palo Alto, etc.) with a locally-installed MITM CA just work.
+- &#10003; **Audit log (opt-in, on by default)** &mdash; a tamper-evident log of security-relevant actions, verifiable with `anvil audit verify`; disable with `ANVIL_AUDIT=off`.
+- &#10003; **Build &amp; supply-chain hardening** &mdash; every binary built with explicit anti-exploitation flags, each release ships a CycloneDX **SBOM**, and a `cargo deny` policy gates licenses, sources, and advisories &mdash; converged from the regulated edition into every build.
+- &#10003; **Windows OAuth fixed** &mdash; browser sign-in on Windows now completes reliably (PKCE via `OsRng`, single browser launch, `dirs_next` home resolution); the Windows asset is the MSVC wizard-fix build.
+
 ### v2.2.25 &mdash; July 8, 2026
 
 **The Security Hardening Release.**
