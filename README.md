@@ -77,6 +77,10 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ---
 
+## What's new in v2.2.29 &mdash; Manage Your Anvil
+
+**v2.2.29 turns AnvilHub into mission control for every Anvil you run.** Claim a deployment and manage it from the web: give it a name and a persona, pick its primary agent, and see its live status. **Install and remove capabilities straight from the marketplace** &mdash; add or remove skills, plugins, and agents on a claimed Anvil, applied live when it's online and queued when it's asleep. **Build &rarr; sync &rarr; publish:** build a capability locally, sync it up as a *private draft*, review it, then publish it to the marketplace in one click &mdash; your Anvil packs and uploads it under your identity, and nothing leaves your machine until you say so. The **chain builder** now ships curated starter templates wired from real store skills, so you compose from a working chain instead of a blank canvas. Under the hood: the model defaults refresh to the current flagships (**Claude Opus 5**, GPT-5.6, Grok 4.5, Gemini 3.6 Flash &mdash; the `/model` picker already live-fetches every provider), and the first-run setup is leaner &mdash; the wizard no longer installs external dependencies (native memory, voice, and media are the default), with a guided browser option at `anvil setup --web`.
+
 ## What's new in v2.2.28 &mdash; The Vivid Viewer
 
 **v2.2.28 makes the whole web viewer worth looking at.** The force-directed mind map from 2.2.27 keeps its layout and behavior, but now it sits on a lit stage &mdash; nodes glow in their own color, curved/dashed/dotted links pop, and a sparse ambient starfield (with the occasional shooting star) drifts behind the graph. The conversation is no longer a flat terminal dump: your turns and Anvil's render as distinct message cards, fenced code becomes its own glowing panel with a language chip, inline `code` and **bold** render properly, and long context collapses to a single chip you can expand. The seven-layer memory readout in the rail is now interactive &mdash; click any layer to open the **memory browser**, every stored memory a card with a colored type badge. Settings moved out of the scroll into their own floating **window**. And the atmosphere isn't web-only: a new **`/atmosphere on|off`** command carries the same starfield behind the terminal conversation, mind map, and memory (on by default). Everything here lives in the viewer's presentation layer &mdash; no engine, protocol, or crypto changes &mdash; so it's identical in commercial and FIPS builds.
@@ -103,6 +107,17 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 
 
+
+### v2.2.29 &mdash; July 26, 2026
+
+**Manage Your Anvil.**
+
+- &#10003; **AnvilHub is now mission control** &mdash; claim a deployment and manage it from the web: name it, give it a persona, pick its primary agent, see its live status.
+- &#10003; **Install &amp; remove capabilities from the marketplace** &mdash; add or remove skills, plugins, and agents on a claimed Anvil; applied live when it's online, queued when it's asleep.
+- &#10003; **Build &rarr; sync &rarr; publish** &mdash; build locally, sync as a private draft, review, then publish to the marketplace in one click.
+- &#10003; **Starter chain templates** &mdash; the chain builder ships curated templates wired from real store skills.
+- &#10003; **Latest models** &mdash; defaults refreshed to Claude Opus 5, GPT-5.6, Grok 4.5, Gemini 3.6 Flash; the `/model` picker live-fetches every provider.
+- &#10003; **Leaner first run** &mdash; no in-wizard dependency installs; native memory/voice/media by default. Prefer a guided setup? `anvil setup --web`.
 
 ### v2.2.28 &mdash; July 18, 2026
 
