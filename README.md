@@ -145,7 +145,23 @@ Or run `/local-control` and get the identical console bound to loopback — no r
 
 ## What's new in v2.2.30 &mdash; Ask More Than One
 
-**v2.2.30 stops treating one model's answer as the answer.** `/consult` puts the same question to a panel of models at once &mdash; each through its own client and its own key &mdash; then reports where they agree, where they diverge, and asks the minority what it saw that the others missed. It never picks a winner for you. `/relay` takes the other shape: one problem handed down a chain of models in order, each seeing the real transcript of the work before it, redacted at every vendor boundary. Neither command will fake it &mdash; a consult of one is not a consult, and a single model working alone is a normal turn, not a relay. Spend became something you can actually see: every turn is priced against a live pricing registry and booked per seat, and a budget cap now refuses *before* the provider call rather than reporting the overspend afterwards &mdash; and when a turn cannot be priced, Anvil says the total is unknown instead of quietly calling it zero. Credentials pasted into a session are detected, moved into the vault, and replaced with a handle the host resolves only when a tool actually runs, so Anvil can use a secret it never reads, and lend one to another seat for a bounded time without handing over the value. The command registry is now **138 commands**, all of them discoverable and runnable from the web and mobile viewers, not just the terminal.
+**v2.2.30 stops treating one model's answer as the answer &mdash; and stops treating "the session" as the thing that acted.**
+
+**Ask more than one.** `/consult` puts the same question to a panel of models at once, each through its own client and its own key, then reports where they agree, where they diverge, and asks the minority what it saw that the others missed. It never picks a winner for you. `/relay` takes the other shape: one problem handed down a chain of models in order, each seeing the real transcript of the work before it, redacted at every vendor boundary. Neither will fake it &mdash; a consult of one is not a consult, and a single model working alone is a normal turn, not a relay.
+
+**Somebody did that, and Anvil knows who.** Every action now carries a verified identity: a subject, a display name, an org, a role, an explicit capability set, a workspace scope, and a credential scope. Actions are attributed to the **seat** that took them rather than to the session &mdash; a peer's message is labelled as the peer's, and tool calls name the seat that caused them on the durable record, not just in the live view. Permissions are enforced at the point of effect, so a role that cannot write cannot write, whichever surface it is sitting at. Nothing is unrestricted by omission: an empty scope grants nothing, and whole-machine reach is a flag somebody had to set on purpose.
+
+**Say no, then offer a door.** When a scoped seat is refused, it can ask for a one-time or a permanent increase instead of simply failing; the request reaches AnvilHub and the decision comes back to the running session. `/scope` shows what is pending.
+
+**Work as an organization.** Organizations, membership, invitations and org-scoped roles live on AnvilHub, with a seat cap enforced when an invitation is accepted &mdash; not merely displayed. Credentials can be lent between seats: a loan carries the vault **label**, never the value, names the lender in the audit line, and dies on a clock rather than lingering.
+
+**Run every Anvil from one place.** Claim a deployment from the web and manage it there &mdash; give it a name and a persona, choose its primary agent, watch its live status. Install and remove skills, plugins and agents on a claimed Anvil, applied live when it is online and queued when it is asleep. Build a capability locally, sync it up as a private draft, review it, then publish it to the marketplace under your own identity &mdash; nothing leaves your machine until you say so. `/fleet` sends one task to every live host you own and collects the answers.
+
+**Spend you can see before you pay it.** Every turn is priced against a live pricing registry and booked per seat, and a budget cap now refuses *before* the provider call rather than reporting the overspend afterwards. When a turn cannot be priced, Anvil says the total is unknown instead of quietly calling it zero.
+
+**Use a secret without seeing it.** Credentials pasted into a session are detected, moved into the vault, and replaced with a handle the host resolves only when a tool actually runs &mdash; so Anvil can use a secret it never reads.
+
+The command registry is now **138 commands**, all discoverable and runnable from the web and mobile viewers, not just the terminal.
 
 ## What's new in v2.2.28 &mdash; The Vivid Viewer
 
