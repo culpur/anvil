@@ -55,8 +55,10 @@ Three problems the single-vendor model can't solve:
 | &#128100; **Know who did what** | Actions are attributed to the **seat** that took them, not to "the session". A peer's message is labelled as the peer's. Roles carry real scope, and a viewer-role seat gets a disabled composer rather than a hidden button. |
 | &#127760; **Run it anywhere you look** | The same session in the terminal, a browser, or a phone — full slash-command surface on every one, not a read-only mirror. `/local-control` serves the whole console over loopback with no cloud round-trip. |
 | &#129517; **Give it a memory and a map** | A seven-layer memory system you can browse, edit, and re-scope, with `[[links]]` between entries. `/mindmap` renders your thinking as a force-directed graph you can drive from the terminal or the browser. |
-| &#129302; **Put a team on it** | `/team` delegates to parallel sub-agents; `/chain` runs multi-step chains end-to-end; `/fleet` fans one task out across every live host you own and collects the results. Agents are filed into **12 built-in squads** (security, infra, compliance, quality, delivery, build, legal, finance, healthcare, education, busops, research) — and an unstaffed squad **refuses** rather than quietly running a general-purpose agent instead. |
-| &#128268; **Extend it** | MCP client with local **and** remote transports (Streamable HTTP/SSE, browser OAuth). Six built-in sub-agent types plus anything you install. Skills, plugins, themes, and agents — build locally, sync as a private draft, publish to the AnvilHub marketplace under your own identity when you're ready. |
+| &#129302; **A team, not a tool** | `/team` delegates to parallel sub-agents; `/chain` runs multi-step chains end-to-end. Specialists are filed into **12 squads** (security, infra, compliance, quality, delivery, build, legal, finance, healthcare, education, busops, research) — and an unstaffed squad **refuses** rather than quietly running a general-purpose agent instead. |
+| &#129518; **Expertise that costs nothing until used** | A real agent library is dozens of specialists. Naming them all to the model is thousands of tokens of roster on **every turn**, spent before any work happens — and it grows as you add agents. Anvil shows the model **twelve squad names and a one-line brief** (~300 tokens, fixed) and resolves the concrete specialist host-side. The model asks for a *capability*; individual agent slugs never enter its context. Add a hundred agents and the per-turn cost does not move. |
+| &#128225; **Every machine you own** | `/fleet` sends one task to every eligible Anvil on your account and collects the answers, routing by `--capability` so a job lands on a host that can actually run it. It reports what was sent, what refused, and who was never eligible — no silent partial fan-out. |
+| &#128268; **Extend it, then share it** | MCP client with local **and** remote transports (Streamable HTTP/SSE, browser OAuth). Build a skill, plugin, theme or agent locally, sync it up as a private draft, review it, then publish to the AnvilHub marketplace under your own identity — nothing leaves your machine until you say so. Install or remove capabilities on any claimed Anvil from the web: applied live when it is online, queued when it is asleep. |
 
 ---
 
@@ -96,6 +98,45 @@ Each model sees the real transcript of the work before it, redacted at every ven
 ```
 
 The cap refuses the next call **before** it goes out, not after the money is gone.
+
+**Ask for a capability, not a name.** This &mdash; and nothing more &mdash; is
+what the model is told about your agent library:
+
+```
+Delegate by capability; the host picks the specialist:
+  security    — offensive testing, vulnerability assessment, auth/crypto review, incident response
+  infra       — kubernetes, virtualization, networking, proxies, linux administration, CI/CD
+  compliance  — NIST, FISMA, PCI-DSS, STIG, GDPR, governance and audit evidence
+  quality     — code review, test authoring, QA strategy, defect triage
+  delivery    — planning, coordination, release management, operations, technical writing
+  build       — frontend, backend, APIs, databases, data modelling — writing the product itself
+  legal       — contract review, privacy law, IP and licensing, employment terms, contract drafting
+  finance     — financial analysis, budgets and forecasts, bookkeeping, tax, procurement and TCO
+  healthcare  — clinical documentation and coding, HIPAA, medical writing, revenue cycle
+  education   — curriculum and objectives, assessment and rubrics, course design, academic editing
+  busops      — process mapping and SOPs, HR practice, executive briefing and decision memos
+  research    — market research, literature review, fact-checking, turning analysis into a decision
+```
+
+No slugs, no counts. Ask for security testing and the host resolves the actual
+specialist from the full roster and loads it for that job. Install another
+fifty agents &mdash; or a whole thirteenth squad from the marketplace, which is
+routable with no Anvil release &mdash; and this block does not grow by one line.
+
+**Send one task to every machine you own:**
+
+```
+> /fleet --capability docker rebuild and push the base image
+
+2 host(s) selected, 2 skipped: laptop — does not have the `docker`
+capability; bench-02 — last reported 4210s ago (limit 300s)
+
+Sent to 2 host(s): build-01, build-02
+Results arrive as each host finishes; run /fleet again to collect them.
+```
+
+It names who was skipped and why. A fan-out that reports only its successes is
+indistinguishable from one that quietly lost half the fleet.
 
 **Use a key you never expose:**
 
@@ -155,7 +196,9 @@ Or run `/local-control` and get the identical console bound to loopback — no r
 
 **Work as an organization.** Organizations, membership, invitations and roles live on AnvilHub. Roles are authored, not chosen from a fixed list &mdash; an admin can define one with its own capabilities and workspace scope, while the seeded roles stay immutable. A seat limit is checked when an invitation is *accepted*, not only when it is sent, because an org four-fifths full can otherwise issue twenty invitations that were each legal the moment they were raised. Joining an org grants other people access; it never transfers ownership, which stays with one person. Credentials can be lent between people: a loan carries the vault **label**, never the value, names the lender in the audit line, and expires in minutes &mdash; and the borrower can use it without reading it and cannot lend it onward.
 
-**Run every Anvil from one place.** Claim a deployment from the web and manage it there &mdash; give it a name and a persona, choose its primary agent, watch its live status. Install and remove skills, plugins and agents on a claimed Anvil, applied live when it is online and queued when it is asleep. Build a capability locally, sync it up as a private draft, review it, then publish it to the marketplace under your own identity &mdash; nothing leaves your machine until you say so. `/fleet` sends one task to every live host you own and collects the answers.
+**A team whose expertise costs nothing until it is used.** A host with a real agent library carries dozens of specialists, and the obvious approach &mdash; tell the model about all of them &mdash; spends thousands of tokens of roster on every single turn, before any work happens, and gets worse as the library grows. Anvil inverts it: the model sees **twelve squad names and a one-line brief each**, about 300 tokens, and that cost is *fixed*. It asks for a capability; the host resolves the concrete specialist from the full roster and loads only what the job needs. Individual agent slugs never enter model context. Add a hundred agents and the per-turn cost does not move.
+
+**Run every Anvil from one place.** Claim a deployment from the web and manage it there &mdash; give it a name and a persona, choose its primary agent, watch its live status. Install and remove skills, plugins and agents on a claimed Anvil, applied live when it is online and queued when it is asleep. Build a capability locally, sync it up as a private draft, review it, then publish it to the marketplace under your own identity &mdash; nothing leaves your machine until you say so. And `/fleet` reaches past one machine: it sends a task to every eligible Anvil on your account, routes by capability so the work lands somewhere that can actually run it, and reports what was sent, what refused, and who was never eligible &mdash; never a silent partial fan-out.
 
 **Spend you can see before you pay it.** Every turn is priced against a live pricing registry and booked per principal, and a budget cap now refuses *before* the provider call rather than reporting the overspend afterwards. When a turn cannot be priced, Anvil says the total is unknown instead of quietly calling it zero.
 
@@ -511,7 +554,7 @@ Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
 - &#10003; **`/mcp builder` long-description textarea (#684)** &mdash; long-description field is now a multi-line textarea modal instead of a single-line input.
 - &#10003; **PermissionPrompt round-trip regression test (#677)** &mdash; end-to-end test fires a tool call that requires a permission prompt, verifies the prompt renders, sends the approval, asserts the turn completes. Guards permission-prompt state from desyncing with the turn loop.
 - &#10003; **Release-pipeline Phase 6 silent-exit guard (#654)** &mdash; `scripts/release.sh` Phase 6 wraps every SSH hop in an explicit `|| { echo "Phase 6 SSH failed"; exit 1; }` guard. Previously a failed remote call could terminate the script with exit 0, leaving subsequent surface updates unrun.
-- &#10003; **anvil-release MCP host targeting fix (#698 CRITICAL)** &mdash; `anvilhub_pm2_host` reverted to `dev0001` after `#655` incorrectly routed pm2 ops to CT 113 (which is dead). Apache vhost has always proxied `anvilhub.culpur.net` to `dev0001:3100`.
+- &#10003; **anvil-release MCP host targeting fix (#698 CRITICAL)** &mdash; release automation was routing service-restart operations at a decommissioned target after `#655`; the host mapping is corrected so deploys reach the node actually serving traffic.
 - &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.17 &mdash; May 18, 2026
