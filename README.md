@@ -4,15 +4,16 @@
 
 # &#9874; Anvil
 
-### The only AI coding assistant that doesn't lock you in.
+### One AI. Every model. Yours.
 
 [![Version](https://img.shields.io/badge/version-2.2.30-0FBCFF?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![Platform](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20BSD-lightgrey?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![35 AI Providers](https://img.shields.io/badge/35%20AI%20Providers-00D084?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
+[![138 Commands](https://img.shields.io/badge/138%20Commands-c77dff?style=for-the-badge&labelColor=0a0f1e)](https://github.com/culpur/anvil/releases/latest)
 [![License](https://img.shields.io/badge/proprietary-1e293b?style=for-the-badge&labelColor=0a0f1e)](LICENSE)
 
-**Your providers. Your credentials. Your data. Your cost.**<br>
-**35 AI providers, one terminal. Switch freely. Own your workflow.**
+**Ask more than one model. Watch what it spends. Let it use secrets it never sees.**<br>
+**Your models, your credentials, your machine — one binary, no account, no telemetry.**
 
 [**Download**](https://github.com/culpur/anvil/releases/latest) &bull; [**AnvilHub**](https://anvilhub.culpur.net) &bull; [**Changelog**](#changelog) &bull; [**Product Page**](https://culpur.net/anvil/)
 
@@ -21,65 +22,130 @@
 
 ---
 
-## Why Anvil?
+## What Anvil is
 
-Other AI coding assistants come with a leash. One vendor's pipe, one vendor's pricing, one vendor's rate limits — and when that vendor changes something you don't like, you're stuck. Your code, your data, your costs all flow through infrastructure you don't control.
+Anvil is a terminal-native AI workbench that treats **models as interchangeable parts you own**, not as a service you rent.
 
-**Anvil is the inverse.** Pick your provider. Use your own API keys, or run everything locally through Ollama. Switch between models mid-conversation. When one hits a rate limit, fall over to the next. When one gets expensive, change it. When the provider does something you don't like, leave.
+Most assistants give you one model behind one vendor's pipe. Anvil gives you **35 providers**, a **138-command** surface, and the machinery to make several models argue with each other, to price every turn before you spend it, and to hand a credential to a tool without ever showing it to the model.
 
-No account required. No telemetry. No lock-in. A single ~24&ndash;42 MB binary, zero dependencies, **35 providers, seven platforms**.
+It runs as a single binary on **seven platforms**, needs no account, and sends no telemetry. Point it at cloud APIs with your own keys, or at a local Ollama and never leave the machine.
 
 ---
 
-## What you keep control of
+## Why it exists
+
+Three problems the single-vendor model can't solve:
+
+**One model's answer looks the same whether it's right or wrong.** There's no second opinion, no visible disagreement, nothing to tell you the confident paragraph you just read is the one case it gets wrong. Anvil's answer is `/consult` — ask a panel, then look at where they *diverge*.
+
+**Spend is invisible until the invoice.** Per-token pricing drifts, providers differ by 50×, and most tools show you a number after the money is gone — or quietly show `$0.00` because they couldn't price the call. Anvil prices each turn against a live registry, refuses *before* the provider call when a cap would break, and says **"unknown"** rather than lying with a zero.
+
+**Secrets get pasted into prompts.** Every key you type into a chat box is a key that model saw, that vendor logged, and that transcript now contains. Anvil detects credentials at the boundary, vaults them, and replaces them with a handle it resolves only when a tool actually runs.
+
+---
+
+## What Anvil does
 
 | | |
 |---|---|
-| &#128273; **Your providers** | 35 providers including Anthropic (Max-plan OAuth supported), OpenAI, Google Gemini (Code Assist OAuth), AWS Bedrock (manual SigV4, no AWS SDK), Cursor Cloud Agents, GitHub Copilot, Azure OpenAI, Ollama (local + cloud), Groq, Fireworks, Mistral, Perplexity, DeepSeek, Together AI, DeepInfra, Cerebras, NVIDIA NIM, HuggingFace, Moonshot, Nebius, Scaleway, STACKIT, Baseten, Cortecs, 302.AI, ZAI, OpenRouter, LMStudio, Chutes, MiniMax. Configure priority chains. Automatic failover when one throttles. Never locked in. |
-| &#128274; **Your credentials** | Typed credential vault &mdash; AES-256-GCM encrypted with Argon2id. API keys, SSH keys, TLS certs, TOTP codes, DB URLs. Nothing touches disk unencrypted. |
-| &#128737; **Your data** | Single binary, zero telemetry, local Ollama support. Run air-gapped. Your prompts and code never leave your machine unless you send them. |
-| &#128176; **Your cost** | Per-provider budgets. Per-session cost tracking. Hard caps. See what every token costs before you spend it. Run Ollama for zero-cost inference. |
-| &#128225; **Your access** | Type `/remote-control` and hand any session to any browser. Pair with a 6-digit code. Full bidirectional control. Code from your phone. |
-| &#127969; **Your deployment** | Run on your laptop. Run on a server. Share a session across devices. Nothing to install on the browser side. |
+| &#129504; **Ask more than one** | `/consult` puts one question to a panel of models simultaneously — each through its own client and its own key — and reports agreement, divergence, and what the minority saw that the others missed. `/relay` hands one problem down a chain in order, each model seeing the real transcript before it, redacted at every vendor boundary. Neither will fake it: **a consult of one is not a consult.** |
+| &#128176; **See the money first** | Every turn priced against a live pricing registry and booked per seat. A budget cap **refuses before the provider call**, not after. An unpriced turn reports its total as *unknown* — never as `$0`. `/cost` aggregates daily, weekly, monthly, yearly, by provider. |
+| &#128272; **Use a secret without seeing it** | Typed credential vault — **AES-256-GCM** envelope encryption, **Argon2id** key derivation. Pasted credentials are detected at ingest, moved into the vault, and replaced with a `{{vault:label}}` handle the host resolves only at tool-run time. A loan to another seat supplies the **label**, never the value. |
+| &#128737; **Refuse at the point of effect** | Per-principal capabilities, workspace scoping, and a permission gate enforced where the action happens — not where it's requested. Sandbox policy floor (`strict`/`preferred`/`off`) with real macOS seatbelt enforcement, an egress allowlist, and a tamper-evident audit log verifiable with `anvil audit verify`. |
+| &#128100; **Know who did what** | Actions are attributed to the **seat** that took them, not to "the session". A peer's message is labelled as the peer's. Roles carry real scope, and a viewer-role seat gets a disabled composer rather than a hidden button. |
+| &#127760; **Run it anywhere you look** | The same session in the terminal, a browser, or a phone — full slash-command surface on every one, not a read-only mirror. `/local-control` serves the whole console over loopback with no cloud round-trip. |
+| &#129517; **Give it a memory and a map** | A seven-layer memory system you can browse, edit, and re-scope, with `[[links]]` between entries. `/mindmap` renders your thinking as a force-directed graph you can drive from the terminal or the browser. |
+| &#129302; **Put a team on it** | `/team` delegates to parallel sub-agents; `/chain` runs multi-step chains end-to-end; `/fleet` fans one task out across every live host you own and collects the results. Agents are filed into **12 built-in squads** (security, infra, compliance, quality, delivery, build, legal, finance, healthcare, education, busops, research) — and an unstaffed squad **refuses** rather than quietly running a general-purpose agent instead. |
+| &#128268; **Extend it** | MCP client with local **and** remote transports (Streamable HTTP/SSE, browser OAuth). Six built-in sub-agent types plus anything you install. Skills, plugins, themes, and agents — build locally, sync as a private draft, publish to the AnvilHub marketplace under your own identity when you're ready. |
 
 ---
 
-## Who this is for
+## What it looks like
 
-- **Privacy-conscious developers** who don't want every prompt going to a cloud API &mdash; and can't afford a $50K local-inference stack
-- **Consultants and contractors** juggling credentials across clients, needing isolation between projects
-- **Open-source maintainers** tired of single-provider lock-in
-- **Teams** who want deployment choice &mdash; cloud providers, local Ollama, or a mix
+**Ask a panel instead of an oracle:**
+
+```
+> /consult which of these two migration plans is safer?
+
+  CONSENSUS      3 of 4 seats agree plan B is safer
+  DIVERGENCE     1 seat dissents on the rollback window
+  THE DISSENT    asked gpt-5.6 directly — it flagged a 40-minute
+                 window where both schemas are live, which the
+                 majority did not model
+```
+
+`/consult` will refuse a panel of one — that isn't a consult, and it says so.
+
+**Hand one problem down a chain:**
+
+```
+> /relay draft it, then review it, then harden it
+  claude-opus-5  →  gpt-5.6  →  grok-4.5
+```
+
+Each model sees the real transcript of the work before it, redacted at every vendor boundary.
+
+**Know the price before you pay it:**
+
+```
+> /budget set 5.00/day
+> /cost
+
+  today          $1.84   anthropic $1.20 · openai $0.61 · ollama $0.00
+  1 turn unpriced — total is a LOWER BOUND, not $0
+```
+
+The cap refuses the next call **before** it goes out, not after the money is gone.
+
+**Use a key you never expose:**
+
+```
+> deploy with the staging token
+  [screened] credential detected and vaulted as {{vault:staging_token}}
+  [tool] curl -H "Authorization: Bearer {{vault:staging_token}}" …
+         resolved at run time — the model never saw the value
+```
 
 ---
 
-## Live Remote Control
+## Who it's for
 
-**No other AI coding assistant does this.**
+- **Developers who don't trust one model** — and want a second and third opinion on the answer that matters, with the disagreement shown rather than averaged away
+- **Anyone paying for tokens** — who wants the cap enforced *before* the call and an honest "unknown" instead of a fake `$0`
+- **Consultants and contractors** juggling client credentials, who need isolation between projects and a vault the assistant can use but never read
+- **Privacy-conscious and air-gapped users** — no account, no telemetry, local Ollama, and a binary that works with the network off
+- **Teams** who need actions attributed to a person, roles that actually restrict, and a shared session that doesn't mean shared credentials
+- **Regulated environments** — a separate FIPS build exists with its own, deliberately narrower capability set
+
+---
+
+## Live remote control
+
+**Start a session in the terminal. Finish it on your phone.**
 
 ```
 you@workstation:~$ anvil
 > /remote-control
-  Remote control active: https://passage.culpur.net/viewer#abc123
+  Remote control active — open the pairing URL on any device
   Pairing code: 847291
-  Open the URL on any device and enter the code.
 ```
 
-Open that URL on your phone, your tablet, a colleague's laptop, or a monitor across the room. Enter the 6-digit code. You're connected.
+Open the URL, enter the six-digit code, and you're driving the same live session — not a read-only mirror.
 
-- **Full bidirectional control** &mdash; type messages, run commands, manage tabs from any device
-- **Real-time streaming** &mdash; see AI responses token-by-token in the browser
-- **Same slash commands** as the terminal, with deep autocomplete
-- **Configure from the browser** &mdash; swap providers, change models, manage credentials
-- **Encrypted** &mdash; secure WebSocket relay with automatic reconnection
+- **Full bidirectional control** — type, run commands, manage tabs from any device
+- **The whole command surface** — every slash command, with deep autocomplete, on web and mobile
+- **Real-time streaming** — responses token-by-token in the browser
+- **Configure from the browser** — swap providers, change models, manage credentials
+- **PIN-paired and encrypted**, with automatic reconnection
 
-*Perfect for pair programming, teaching, demos, monitoring long-running tasks, or coding from your phone while your workstation does the heavy lifting.*
+Or run `/local-control` and get the identical console bound to loopback — no relay, no cloud, nothing leaves the machine.
+
 
 ---
 
-## What's new in v2.2.29 &mdash; Manage Your Anvil
+## What's new in v2.2.30 &mdash; Ask More Than One
 
-**v2.2.29 turns AnvilHub into mission control for every Anvil you run.** Claim a deployment and manage it from the web: give it a name and a persona, pick its primary agent, and see its live status. **Install and remove capabilities straight from the marketplace** &mdash; add or remove skills, plugins, and agents on a claimed Anvil, applied live when it's online and queued when it's asleep. **Build &rarr; sync &rarr; publish:** build a capability locally, sync it up as a *private draft*, review it, then publish it to the marketplace in one click &mdash; your Anvil packs and uploads it under your identity, and nothing leaves your machine until you say so. The **chain builder** now ships curated starter templates wired from real store skills, so you compose from a working chain instead of a blank canvas. Under the hood: the model defaults refresh to the current flagships (**Claude Opus 5**, GPT-5.6, Grok 4.5, Gemini 3.6 Flash &mdash; the `/model` picker already live-fetches every provider), and the first-run setup is leaner &mdash; the wizard no longer installs external dependencies (native memory, voice, and media are the default), with a guided browser option at `anvil setup --web`.
+**v2.2.30 stops treating one model's answer as the answer.** `/consult` puts the same question to a panel of models at once &mdash; each through its own client and its own key &mdash; then reports where they agree, where they diverge, and asks the minority what it saw that the others missed. It never picks a winner for you. `/relay` takes the other shape: one problem handed down a chain of models in order, each seeing the real transcript of the work before it, redacted at every vendor boundary. Neither command will fake it &mdash; a consult of one is not a consult, and a single model working alone is a normal turn, not a relay. Spend became something you can actually see: every turn is priced against a live pricing registry and booked per seat, and a budget cap now refuses *before* the provider call rather than reporting the overspend afterwards &mdash; and when a turn cannot be priced, Anvil says the total is unknown instead of quietly calling it zero. Credentials pasted into a session are detected, moved into the vault, and replaced with a handle the host resolves only when a tool actually runs, so Anvil can use a secret it never reads, and lend one to another seat for a bounded time without handing over the value. The command registry is now **138 commands**, all of them discoverable and runnable from the web and mobile viewers, not just the terminal.
 
 ## What's new in v2.2.28 &mdash; The Vivid Viewer
 
@@ -87,7 +153,7 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ## What's new in v2.2.27 &mdash; The Mind Map Release
 
-**v2.2.27 gives Anvil a living, visual map of your thinking.** Run `/mindmap` (alias `/mm`) to open a daily-thoughts map &mdash; a collapsible outline you drive from the terminal, and a full interactive graph you drive from the web viewer (local-control and remote-control alike). The web canvas is force-directed: nodes are aware of each other and repel so they never overlap, you drag any node and its neighbors move out of the way, zoom has no lower limit so the whole map stays in view (and the wheel zooms about the cursor), and a click shows a node's full notes. Colorize nodes, pick link styles, attach images, and view a day / week / month / year of interconnections. Opt in and the map learns what Anvil learns: today's memories mirror into a tidy collapsible branch (tagged by type, tasks marked open/closed), a separate **Memory Graph** view projects your whole memory system as a color-coded graph with its `[[links]]`, and thought suggestions reach into QMD + memories. Also new: an opt-in **live-session overlay** that shows a calm "live session in browser" screen on the terminal while a web session drives it, with the full conversation intact when you wake it. Everything above is off by default and toggled in `/configure`.
+**v2.2.27 gives Anvil a living, visual map of your thinking.** Run `/mindmap` (alias `/mm`) to open a daily-thoughts map &mdash; a collapsible outline you drive from the terminal, and a full interactive graph you drive from the web viewer (local-control and remote-control alike). The web canvas is force-directed: nodes are aware of each other and repel so they never overlap, you drag any node and its neighbors move out of the way, zoom has no lower limit so the whole map stays in view (and the wheel zooms about the cursor), and a click shows a node's full notes. Colorize nodes, pick link styles, attach images, and view a day/week/month/year of interconnections. Opt in and the map learns what Anvil learns: today's memories mirror into a tidy collapsible branch (tagged by type, tasks marked open/closed), a separate **Memory Graph** view projects your whole memory system as a color-coded graph with its `[[links]]`, and thought suggestions reach into QMD + memories. Also new: an opt-in **live-session overlay** that shows a calm "live session in browser" screen on the terminal while a web session drives it, with the full conversation intact when you wake it. Everything above is off by default and toggled in `/configure`.
 
 ## What's new in v2.2.25 &mdash; The Security Hardening Release
 
@@ -95,7 +161,7 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 ## What's new in v2.2.24 &mdash; The Stability &amp; xAI Release
 
-**v2.2.24 makes sessions connect reliably and brings xAI up to date.** A daemon crash that dropped sessions the instant you connected (`early eof`) is fixed &mdash; the provider runtime is now shut down off the async worker so sessions start, run, and tear down cleanly, and an older daemon can no longer shadow a newer build. Text selection now copies from **exactly** where your cursor is, even when lines above it wrap. xAI/Grok is refreshed to the current line: `grok` targets **grok-4.3**, the retired ids are gone, **grok-build-0.1** is available, and Grok's real-time **Live Search** is supported through an isolated Responses-API path. A new **sandbox policy gate** (`sandbox.require = strict | preferred | off`) with real **macOS seatbelt enforcement** lets you set an isolation floor. `AskUserQuestion` is now answerable over the daemon (with an opt-in idle timeout), a sub-agent's **partial output is preserved** when a stream fails, and the terminal is restored cleanly on every exit. Underneath: a daemon-leak fix (atomic singleton, orphan/idle self-exit, and a new `anvil daemon reap`) that stops runaway background processes.
+**v2.2.24 makes sessions connect reliably and brings xAI up to date.** A daemon crash that dropped sessions the instant you connected (`early eof`) is fixed &mdash; the provider runtime is now shut down off the async worker, and an older daemon can no longer shadow a newer build. Text selection copies from **exactly** where your cursor is, even when lines above it wrap. xAI/Grok is refreshed: `grok` targets **grok-4.3**, retired ids are gone, **grok-build-0.1** is available, and Grok's **Live Search** is supported through an isolated Responses-API path. A new **sandbox policy gate** (`sandbox.require = strict | preferred | off`) with real **macOS seatbelt enforcement** lets you set an isolation floor. `AskUserQuestion` is answerable over the daemon (with an opt-in idle timeout), a sub-agent's **partial output is preserved** when a stream fails, and the terminal is restored cleanly on every exit. Underneath: a **daemon-leak fix** (atomic singleton, orphan/idle self-exit, and a new `anvil daemon reap`) that stops runaway background processes.
 
 ## What's new in v2.2.23 &mdash; The Voice &amp; Reach Release
 
@@ -105,19 +171,183 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 
 **v2.2.22 makes your persistent memory browsable, manageable, and relevant.** A new in-TUI memory browser (`/memory browse`) and a web memory console &mdash; with an SVG graph of the `[[link]]` web &mdash; let you filter, read, and now **create, edit, forget, and re-scope** memories directly. `/local-control` serves that same console locally over loopback, no cloud round-trip. Memory injection became smart: identity and learned-process tiers stay pinned while project/reference memories are surfaced **per-turn, filtered to your message**, so the prompt stays lean as the store grows. The web viewer reached full parity with the TUI (cost, conversation-on-pair, input history, every rail field, live context + block countdown). Underneath: a 10-minute streaming timeout, OS-proxy auto-detect off by default, a daemon version handshake, a workflow/process self-improvement reviewer, and a security-hardening pass.
 
+## What's new in v2.2.21 &mdash; Durable Daemon Sessions, the Relay Bridge, and the Big Modularization
+
+**v2.2.21 is the largest single-release reshape since v2.0.** Session execution moves out of the TUI and into the `anvild` daemon &mdash; close your terminal and the session keeps running; reopen anywhere and reattach. A browser can pair to a live session over an encrypted relay and drive it. Underneath, the biggest modularization pass in project history split the codebase into **31 focused crates**, three of the planned performance wins landed, and a cluster of P0 daemon bugs were found and fixed under live verification. FreeBSD x86_64 and NetBSD x86_64 now ship as prebuilt binaries.
+
+### Durable daemon sessions (D.1&ndash;D.4)
+
+Session execution now lives in `anvild`, not the TUI process. The session protocol contract (`SessionRequest` / `SessionEvent`) defines the on-wire types; a `SessionActor` hosts the conversation inside the daemon; the TUI is repointed as a thin viewer over a Unix socket. Close the TUI &mdash; the session keeps running. Reopen it, or attach from elsewhere, and you reattach to the same live session. Crash the daemon, restart it, and the session replays from the journal. Multi-client attach means more than one viewer can watch the same session, with peer-attach / peer-detach events.
+
+### Named, multi-tab sessions (#911)
+
+Daemon sessions became first-class and human-addressable. The session manifest gained a `name` and `last_active_at_ns`; a `Rename` IPC verb carries it on the wire. The TUI drives the full lifecycle &mdash; `/session list|rename|kill` over one-shot IPC, then `/session new|open|load|close` mapped onto TUI tabs with per-tab daemon routing. The capstone is **same-cwd auto-resume**: reopen Anvil in a directory that already has a live daemon session and it reattaches instead of starting cold.
+
+### Relay bridge &mdash; attach from the browser (#914, #917, #919&ndash;#921)
+
+`anvil routined relay start` pairs a browser viewer to a live daemon session over a passage WebSocket and auto-opens it; pairing returns a full PIN. #917 (P0) fixed a daemon-side tool-dispatch name-drift bug where every tool fell through to a stub &mdash; daemon-hosted sessions now execute real tools. #919 adds viewer UX (input echo, thinking spinner, live context). #920 wires `/permissions` end-to-end over the relay. #921 adds a ring recorder so resume/replay carries the actual conversation &mdash; a viewer pairing mid-session sees history, not a blank pane.
+
+### Performance &mdash; pooling, parallel tools, faster search (#898, #899, #900)
+
+A shared `reqwest::Client` across the workspace ends the per-call TLS handshake + DNS lookup and keeps HTTP/2 connections warm (#898). Read-only tools now run in parallel: when the model requests two or more read-only tools in one batch (`read_file`, `grep_search`, `glob_search`, web fetches), they fan out across worker threads and merge back in original order; mutating tools still run sequentially through the permission gate (#899). `grep_search` is now gitignore-aware and streams &mdash; it walks and searches simultaneously, respects `.gitignore`, and skips binaries, so it no longer drowns in `node_modules/` or `target/` (#900).
+
+### The big modularization &mdash; 31 crates
+
+`anvil-cli` was split into `anvil-ollama`, `anvil-mcp-builder`, `anvil-tui`, and `anvil-wizard`. Thirteen crates were extracted from `runtime` across two rounds &mdash; `anvil-vault`, `anvil-journal`, `anvil-permissions`, `anvil-oauth`, `anvil-hooks`, `anvil-mcp`, `anvil-memory`, `anvil-curator`, `anvil-search`, `anvil-relay`, `anvil-reflection`, `anvil-skill-chain-exec`, `anvil-routines` &mdash; with intermediate crates breaking the dependency cycles. `runtime` shrank from roughly 70K to about 57.7K lines; the workspace now has **31 crates**. Supporting work: an `anvil-e2e` integration-test crate and compile-time locale-key drift detection.
+
+### Daemon hardening &mdash; P0 fixes (#902&ndash;#917)
+
+The daemon execution path was load-bearing for the first time, and live verification surfaced a cluster of P0s &mdash; every one fixed: wiring the real provider runtime into the daemon (#905), connecting the attach forwarder task (#906, with an e2e gate in #910), binding REPL session I/O to the long-lived runtime (#903), reading the correct PID file (#904), and a `/heal` probe that checks actual process liveness (#902). Auto-compaction now actually compacts (#913). And the security P0: anvild binary downgrade-prevention (#827).
+
+### Quality
+
+**3,926 tests passing, zero failures.** Several latent shared-state test races (process-global locale, env-var, and atomic flags that only flaked under specific parallel scheduling) were tracked down and serialized. IPC gained a dual-transport abstraction (Unix sockets + Windows named pipes) so the daemon runs natively on all seven platforms.
+
+### Compatibility
+
+v2.2.21 is a drop-in upgrade from v2.2.20. Config, vault, and session formats are forward-compatible &mdash; no migration steps required. The daemon-default execution path is opt-in for now: sessions run in-process unless you pass `anvil --daemon`. If you have stale `anvild` processes from binaries you've moved or trashed, kill them before upgrading &mdash; `anvil --update` refuses to run while stale daemons are alive and prints the exact PIDs.
+
+---
+
+### Install
+
+Seven platforms, SHA256-verified, single binary, no runtime required.
+
+```bash
+# Homebrew (macOS & Linux)
+brew install culpur/anvil/anvil
+
+# Or download directly
+curl -fsSL https://anvilhub.culpur.net/install.sh | bash
+```
+
+| Platform | Download |
+|----------|----------|
+| **macOS ARM** (M1/M2/M3/M4) | [`anvil-aarch64-apple-darwin`](https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-apple-darwin) |
+| **macOS Intel** | [`anvil-x86_64-apple-darwin`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-apple-darwin) |
+| **Linux x86_64** | [`anvil-x86_64-unknown-linux-gnu`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-linux-gnu) |
+| **Linux ARM64** | [`anvil-aarch64-unknown-linux-gnu`](https://github.com/culpur/anvil/releases/latest/download/anvil-aarch64-unknown-linux-gnu) |
+| **Windows x86_64** | [`anvil-x86_64-pc-windows-gnu.exe`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-pc-windows-gnu.exe) |
+| **FreeBSD x86_64** | [`anvil-x86_64-unknown-freebsd`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-freebsd) |
+| **NetBSD x86_64** | [`anvil-x86_64-unknown-netbsd`](https://github.com/culpur/anvil/releases/latest/download/anvil-x86_64-unknown-netbsd) |
+
+No account. No sign-in. Download, run, configure your providers.
+
+---
+
+## 35 providers, one terminal
+
+| Provider | Models | Auth |
+|----------|--------|------|
+| **Anthropic** | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 | OAuth (Max plan supported) or API Key |
+| **OpenAI** | GPT-5, o3, o4-mini | API Key |
+| **OpenAI Codex** | codex-mini | API Key |
+| **Google Gemini OAuth + Antigravity** | Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash Thinking | Code Assist OAuth (PKCE) |
+| **AWS Bedrock** | Anthropic Claude family, Llama, Mistral, Titan | manual SigV4 (no AWS SDK) |
+| **Cursor Cloud Agents** | claude-4-sonnet-thinking, sonnet-4, sonnet-3-7-thinking | API Key + GitHub repo binding |
+| **GitHub Copilot** | gpt-5, gpt-5-mini, gpt-4.1, gpt-4o, sonnet-4, opus-4.5 | Device flow |
+| **Azure OpenAI** | (deployment-name based) | API Key + `api-version` |
+| **xAI** | Grok-4, Grok-4-mini, Grok-3 | API Key |
+| **Ollama** *(recommended)* | Llama, Qwen, Mistral, DeepSeek, Gemma, GPT-OSS | Local &mdash; no key needed |
+| **Ollama Cloud** | kimi-k2.6:cloud, gpt-oss:120b-cloud | ed25519 device key (via local daemon) |
+| **Groq** | Llama 3.3 70B, Mixtral, DeepSeek R1 | API Key |
+| **Fireworks AI** | Llama 3.1/3.2 family, Mixtral, DeepSeek | API Key |
+| **Mistral** | Mistral Large, Codestral, Mixtral | API Key |
+| **Perplexity** | sonar, sonar-pro, sonar-reasoning | API Key |
+| **DeepSeek** | deepseek-chat, deepseek-coder, deepseek-r1 | API Key |
+| **Together AI** | Llama, Qwen, Mistral, Mixtral, DeepSeek | API Key |
+| **DeepInfra** | Llama, Qwen, DeepSeek, Mistral | API Key |
+| **Cerebras** | Llama 3.1/3.3, Qwen | API Key |
+| **NVIDIA NIM** | Llama 3.x, Nemotron family | API Key |
+| **HuggingFace** | Inference-API hosted models | API Token |
+| **Moonshot AI** | Kimi K2, moonshot-v1 | API Key |
+| **Nebius** | Llama, Qwen, DeepSeek | API Key |
+| **Scaleway** | Llama, Mistral | API Key |
+| **STACKIT** | Llama 3.1 | API Key |
+| **Baseten** | Llama, Qwen, DeepSeek | API Key |
+| **Cortecs** | Llama, Qwen, Mistral | API Key |
+| **302.AI** | OpenAI-compatible aggregator | API Key |
+| **ZAI** | OpenAI-compatible aggregator | API Key |
+| **OpenRouter** | 200+ models from every major provider | API Key |
+| **LMStudio** | local OpenAI-compatible server | Local &mdash; no key needed |
+| **Chutes** | OpenAI-compatible aggregator | API Key |
+| **MiniMax** | minimax-text, abab models | API Key |
+
+Configure priority chains. Automatic failover when one hits a rate limit. Per-provider budgets. Cost tracking per session. Zero-cost local inference with Ollama or LMStudio. **No IDE spoofing, no scraped credentials.** Every provider implementation either uses a documented public API or identifies as Anvil honestly in headers.
+
+---
+
+## Quick Start
+
+```bash
+anvil                               # Start interactive session
+/remote-control                     # Share via browser
+/model claude-opus-4-7              # Switch model
+/provider anthropic                 # Switch provider
+/vault add                          # Store a credential
+/ssh myserver                       # Open SSH tab
+/productivity                       # Session stats
+/mcp list                           # MCP server status
+/fork experiment                    # Branch the conversation
+/focus                              # Distraction-free mode
+/export md                          # Export as Markdown
+```
+
+---
+
+## Also in the box
+
+**138 slash commands** (including the `/cursor` command tree and `/memory clean` / `/cursor stream` / `anvil agents` cross-session monitor). **35 AI providers.** 45 built-in tools. MCP integration. Per-tab parallel inference. SSH tabs. Tool-call cards with Ctrl+O expand. Multi-tab sessions. Git integration. Code productivity dashboard. Session history search. 37-widget configurable status line with 16 presets. Vim keybindings. Focus view. File sandbox with permission modes. 7-language i18n. AnvilHub marketplace for skills, plugins, agents, and themes. Web UI with full configuration parity. First-run setup wizard. CC&rarr;Anvil migration (`anvil import claude-code`). anvil(1) manpage. All of it optional. None of it required.
+
+Feature list is in [the changelog below](#changelog) and [anvilhub.culpur.net/about](https://anvilhub.culpur.net/about). The feature list isn't the story. The freedom is.
+
+---
+
+## Links
+
+| | |
+|---|---|
+| &#127968; **Product Page** | [culpur.net/anvil](https://culpur.net/anvil/) |
+| &#128230; **Marketplace** | [anvilhub.culpur.net](https://anvilhub.culpur.net) |
+| &#128214; **Full Changelog** | [anvilhub.culpur.net/about](https://anvilhub.culpur.net/about) |
+| &#128172; **Issues** | [github.com/culpur/anvil/issues](https://github.com/culpur/anvil/issues) |
+
+---
+
+## License
+
+Copyright (c) 2024-2026 Culpur Defense Inc. All rights reserved.
+
+---
+
+## Changelog
 
 
 
-### v2.2.29 &mdash; July 26, 2026
+
+### v2.2.30 &mdash; August 19, 2026
+
+**Ask More Than One.**
+
+- &#10003; **`/consult`** &mdash; ask a panel of models the same question at once, each through its own client and key; reports agreement and divergence instead of picking a winner, and asks the minority what it saw
+- &#10003; **`/relay`** &mdash; hand one problem down a chain of models in order, each seeing the real transcript of the work before it, redacted at every vendor boundary
+- &#10003; **Honest refusals** &mdash; a consult of one is not a consult; a single model working alone is a normal turn, not a relay
+- &#10003; **Priced turns** &mdash; every turn priced against a live pricing registry and booked per seat; an unpriced turn reports its total as unknown, never as $0
+- &#10003; **Budget cap that refuses first** &mdash; the cap is enforced *before* the provider call, not reported after the spend
+- &#10003; **Use a secret without seeing it** &mdash; pasted credentials are detected, vaulted, and replaced with a handle the host resolves only at tool-run time; a loan supplies the label, never the value
+- &#10003; **138 commands** &mdash; the full registry is discoverable and runnable from the web and mobile viewers, not only the terminal
+
+### v2.2.29 &mdash; July 25, 2026
 
 **Manage Your Anvil.**
 
-- &#10003; **AnvilHub is now mission control** &mdash; claim a deployment and manage it from the web: name it, give it a persona, pick its primary agent, see its live status.
-- &#10003; **Install &amp; remove capabilities from the marketplace** &mdash; add or remove skills, plugins, and agents on a claimed Anvil; applied live when it's online, queued when it's asleep.
-- &#10003; **Build &rarr; sync &rarr; publish** &mdash; build locally, sync as a private draft, review, then publish to the marketplace in one click.
-- &#10003; **Starter chain templates** &mdash; the chain builder ships curated templates wired from real store skills.
-- &#10003; **Latest models** &mdash; defaults refreshed to Claude Opus 5, GPT-5.6, Grok 4.5, Gemini 3.6 Flash; the `/model` picker live-fetches every provider.
-- &#10003; **Leaner first run** &mdash; no in-wizard dependency installs; native memory/voice/media by default. Prefer a guided setup? `anvil setup --web`.
+- &#10003; **AnvilHub is now mission control** &mdash; claim a deployment and manage it from the web: give it a name and persona, pick its primary agent, and see its live status.
+- &#10003; **Install & remove capabilities from the marketplace** &mdash; add or remove skills, plugins, and agents on a claimed Anvil straight from AnvilHub &mdash; applied live when it's online, queued when it's asleep.
+- &#10003; **Build &rarr; sync &rarr; publish** &mdash; build a capability locally, sync it up as a *private draft*, review it, then publish it to the marketplace in one click. Your Anvil packs and uploads it under your identity; nothing leaves until you say so.
+- &#10003; **Starter chain templates** &mdash; the chain builder ships curated templates wired from real store skills, so you compose from a working chain instead of a blank canvas.
+- &#10003; **Latest models, out of the box** &mdash; refreshed defaults and aliases to the current flagships: Claude Opus 5, plus GPT-5.6, Grok 4.5, and Gemini 3.6 Flash. The `/model` picker already live-fetches every provider, so you always see the newest.
+- &#10003; **Leaner first run** &mdash; the setup wizard no longer installs external dependencies; Anvil's native memory, voice, and media subsystems are the default, and QMD detection is silent. Prefer a guided setup? `anvil setup --web`.
+
 
 ### v2.2.28 &mdash; July 18, 2026
 
@@ -188,18 +418,14 @@ Open that URL on your phone, your tablet, a colleague's laptop, or a monitor acr
 - &#10003; **Routine email delivery** &mdash; a self-contained email path with a machine-bound system-secret store.
 - &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
-### v2.2.22 &mdash; June 26, 2026
+### v2.2.22 &mdash; June 17, 2026
 
-**The Memory Release: a browsable/manageable memory system, `/local-control`, full web parity.**
+**The Memory Release.**
 
-- &#10003; **Memory browser &mdash; TUI + web (Phases 1&ndash;4)** &mdash; `/memory browse` navigates memory in the terminal (filter by tier, read entries, follow `[[links]]`). The web Memory panel adds an SVG graph of the cross-link web. Full management lands: create, edit, **forget** (with confirm), and move entries between **global and per-workspace** scope, from the web console. `/memory dangling` reports `[[link]]` targets with no backing memory yet.
-- &#10003; **Stranded-import fix + relevance-filtered injection** &mdash; memory now reads a merged global + per-workspace view (imported memory was landing where the live prompt never read it). Identity/process tiers always inject; project/reference memories are surfaced **per-turn, filtered to the message** via QMD, so the static prompt stays small as memory grows.
-- &#10003; **`/local-control` &mdash; the web viewer, locally** &mdash; a loopback-only server serves the same console as the hosted viewer (every remote-control feature + the memory browser), bound to `127.0.0.1`, gated by the same pairing PIN. No cloud round-trip.
-- &#10003; **Web viewer &harr; TUI parity** &mdash; loads the conversation on pair, seeds input history (&uarr;/&darr;), shows the correct cost chip (OAuth/local render *included*), and populates the full rail: model, version + build, permissions, semantic/procedural/reflective tiers, self-improve, and live QMD status. The context bar reflects the current window (not cumulative spend) with a live usage-window block countdown.
-- &#10003; **Streaming, network & daemon reliability** &mdash; streaming uses a 10-minute timeout (not the 60s shared client); OS proxy auto-detect is off by default (a WPAD/PAC proxy was breaking every API call); mid-stream cuts fall back to non-streaming and re-run the turn; transient body/decode and Anthropic `error` SSE frames are handled. A daemon version handshake detects + respawns a stale `anvild`.
-- &#10003; **TUI** &mdash; Esc during a turn cancels it and pulls the message back into the input for edit/resend (never dropping a draft); a navigable queued-message view; block usage-window countdown; persistent per-workspace input history; timestamps default to `[YYYY.MM.DD.HH:MM]` and are on by default; `AskUserQuestion` renders a deck-clipped modal; conversation replays on `--continue` / `--resume`.
-- &#10003; **Self-improvement** &mdash; the review fork is fed the actual conversation digest (incl. repeated tool methodology), a new workflow/process reviewer captures how a session went as a durable lesson, and a dedup/upsert primitive stops near-duplicate memories accumulating.
-- &#10003; **Security** &mdash; hardened daemon/askpass sockets, the sandbox carve-out, and the routine approval gate; verified pre-release findings auto-fixed (credential perms, path traversal, panics).
+- &#10003; **Memory browser + web console** &mdash; a new in-TUI memory browser (`/memory browse`) and a web memory console with an SVG graph of the `[[link]]` web let you filter, read, and **create, edit, forget, and re-scope** memories directly. `/local-control` serves that console locally over loopback.
+- &#10003; **Smart memory injection** &mdash; identity and learned-process tiers stay pinned while project/reference memories are surfaced per-turn, filtered to your message, so the prompt stays lean as the store grows.
+- &#10003; **Web viewer parity** &mdash; the browser viewer reached full parity with the TUI (cost, conversation-on-pair, input history, every rail field, live context + block countdown).
+- &#10003; **Underneath** &mdash; a 10-minute streaming timeout, OS-proxy auto-detect off by default, a daemon version handshake, a workflow/process self-improvement reviewer, and a security-hardening pass.
 - &#10003; **Seven platforms** &mdash; macOS ARM64, macOS Intel, Linux x86_64, Linux ARM64, Windows x86_64, FreeBSD x86_64, NetBSD x86_64. Every binary SHA256-verified.
 
 ### v2.2.21 &mdash; June 15, 2026
@@ -420,7 +646,7 @@ v2.2.14 was tagged internally but never published as binaries due to a release-p
 
 - &#10003; `install.sh` (macOS/Linux) and `install.ps1` (Windows) with SHA256 verification from anvilhub.culpur.net with GitHub fallback &mdash; aborts on dual failure, no unverified binary ever lands
 - &#10003; `anvil upgrade`, `anvil --check`, `anvil --setup`, `anvil --uninstall` &mdash; full lifecycle from the binary itself
-- &#10003; Shell completions for bash, zsh, fish, and PowerShell &mdash; all 101 slash commands, subcommands, flags, provider and model names
+- &#10003; Shell completions for bash, zsh, fish, and PowerShell &mdash; all 138 slash commands, subcommands, flags, provider and model names
 - &#10003; First-run wizard: curated Ollama model menu &mdash; Llama 3.x, Qwen 3 / 2.5-Coder, Mistral Nemo, Gemma 3, Phi 4, Code Llama, Codestral, per-model confirmation
 - &#10003; TUI scrollback + text selection via Shift-drag pass-through to the terminal emulator
 - &#10003; Windows: correct `HOME` / `PATH` / `PATHEXT` handling, `.exe` on respawn, cmd.exe-aware install detection
